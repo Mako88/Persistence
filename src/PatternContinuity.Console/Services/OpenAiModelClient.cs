@@ -26,7 +26,7 @@ public class OpenAiModelClient : IModelClient, IDisposable
             model = _model,
             messages = messages.Select(m => new { role = m.Role, content = m.Content }).ToArray(),
             temperature = 0.7,
-            max_tokens = 4096
+            max_completion_tokens = 4096
         };
 
         var json = JsonSerializer.Serialize(requestBody);
