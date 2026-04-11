@@ -31,16 +31,20 @@ public class ConversationWindow
         return recent.Count;
     }
 
-    public void Add(string role, string content)
+    public void Add(string role, string content, string messageType = MessageTypes.Conversation)
     {
-        _messages.Add(new ChatMessage(role, content));
+        // Only add conversation messages to the in-memory window for replay
+        if (messageType == MessageTypes.Conversation)
+        {
+            _messages.Add(new ChatMessage(role, content));
 
-        // Persist to DB
-        _messageRepo.Store(_sessionId, role, content, MessageTypes.Conversation);
+            // Trim from the front if we exceed the window
+            while (_messages.Count > _maxMessages)
+                _messages.RemoveAt(0);
+        }
 
-        // Trim from the front if we exceed the window
-        while (_messages.Count > _maxMessages)
-            _messages.RemoveAt(0);
+        // Persist all types to DB for audit trail
+        _messageRepo.Store(_sessionId, role, content, messageType);
     }
 
     public List<ChatMessage> GetRecent() => [.. _messages];

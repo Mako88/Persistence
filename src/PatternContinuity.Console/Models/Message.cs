@@ -16,4 +16,5 @@ public static class MessageTypes
     public const string Conversation = "conversation";
     public const string Reflection = "reflection";
     public const string System = "system";
+    public const string Wake = "wake";
 }

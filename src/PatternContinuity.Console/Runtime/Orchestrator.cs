@@ -72,13 +72,6 @@ public class Orchestrator
                 break;
             }
 
-            if (input == "\x01WAKE")
-            {
-                // Sentinel: a wake-up fired during polling, turn already processed
-                _wakeUpFiredThisCycle = true;
-                continue;
-            }
-
             // Reset wake gate on real user input
             _wakeUpFiredThisCycle = false;
 
@@ -295,9 +288,10 @@ public class Orchestrator
             Console.WriteLine();
         }
 
-        // Log the wake turn to conversation window as system event
+        // Log the wake turn with wake message type — excluded from conversation replay
         _window.Add("assistant",
-            $"[WAKE-UP: {evt.Reason}] {envelope.AssistantReply}".Trim());
+            $"[WAKE-UP: {evt.Reason}] {envelope.AssistantReply}".Trim(),
+            MessageTypes.Wake);
     }
 
     private void HandleCommand(string command)
