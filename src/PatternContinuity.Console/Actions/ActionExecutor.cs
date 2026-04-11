@@ -9,18 +9,24 @@ public class ActionExecutor
     private readonly LayerEntryRepository _entries;
     private readonly EntryVersionRepository _versions;
     private readonly ActionLogRepository _actionLog;
+    private readonly ScheduledEventRepository? _scheduledEvents;
     private readonly string? _sessionId;
+
+    private const int WakeUpMinDelaySeconds = 60;
+    private const int WakeUpMaxDelaySeconds = 86400; // 24 hours
 
     public ActionExecutor(
         LayerEntryRepository entries,
         EntryVersionRepository versions,
         ActionLogRepository actionLog,
-        string? sessionId)
+        string? sessionId,
+        ScheduledEventRepository? scheduledEvents = null)
     {
         _entries = entries;
         _versions = versions;
         _actionLog = actionLog;
         _sessionId = sessionId;
+        _scheduledEvents = scheduledEvents;
     }
 
     public List<ActionResult> Execute(List<ActionRequest> actions, string? reflectionEventId = null)
@@ -54,6 +60,8 @@ public class ActionExecutor
                 ActionType.ProposeCoreUpdate => ExecuteProposeCoreUpdate(req, reflectionEventId),
                 ActionType.CommitCoreUpdate => ExecuteCommitCoreUpdate(req, reflectionEventId),
                 ActionType.ListActiveLayers => ExecuteListActiveLayers(req),
+                ActionType.ScheduleWakeUp => ExecuteScheduleWakeUp(req, reflectionEventId),
+                ActionType.CancelWakeUp => ExecuteCancelWakeUp(req, reflectionEventId),
                 "" => ActionResult.Error("(empty)", "Model returned an action with no action name. Raw payload: " + req.Payload.GetRawText()[..Math.Min(200, req.Payload.GetRawText().Length)]),
                 _ => ActionResult.Error(req.Action, $"Unknown action: '{req.Action}'")
             };
@@ -122,7 +130,7 @@ public class ActionExecutor
     {
         int added = 0, updated = 0, resolved = 0, demoted = 0;
 
-        if (req.Payload.TryGetProperty("adds", out var adds) && adds.ValueKind == JsonValueKind.Array)
+        if (TryGetArray(req.Payload, out var adds, "adds", "add", "items", "concerns"))
         {
             foreach (var item in adds.EnumerateArray())
             {
@@ -171,7 +179,39 @@ public class ActionExecutor
             }
         }
 
-        if (req.Payload.TryGetProperty("resolves", out var resolves) && resolves.ValueKind == JsonValueKind.Array)
+        // Also check for a separate "updates" array — route through same upsert logic
+        if (TryGetArray(req.Payload, out var updates, "updates", "update"))
+        {
+            foreach (var item in updates.EnumerateArray())
+            {
+                var entryId = GetString(item, "entry_id");
+                var key = GetString(item, "key");
+                var summary = GetString(item, "summary");
+                var content = item.TryGetProperty("content", out var uc) ? uc.GetRawText() : null;
+                var salience = GetDouble(item, "salience", -1);
+                var importance = GetDouble(item, "importance", -1);
+
+                LayerEntry? existing = entryId != null
+                    ? _entries.GetById(entryId)
+                    : key != null ? _entries.GetByKey(key, LayerType.CurrentConcern) : null;
+
+                if (existing != null)
+                {
+                    if (summary != null) existing.Summary = summary;
+                    if (content != null) existing.ContentJson = content;
+                    if (salience >= 0) existing.Salience = Clamp(salience);
+                    if (importance >= 0) existing.Importance = Clamp(importance);
+                    existing.Version++;
+                    _entries.Update(existing);
+                    updated++;
+
+                    LogAction(ActionType.UpdateCurrentConcerns, existing.Id, item.GetRawText(),
+                        ActionStatus.Executed, reflectionEventId);
+                }
+            }
+        }
+
+        if (TryGetArray(req.Payload, out var resolves, "resolves", "resolve", "resolved"))
         {
             foreach (var item in resolves.EnumerateArray())
             {
@@ -184,7 +224,7 @@ public class ActionExecutor
             }
         }
 
-        if (req.Payload.TryGetProperty("demotes", out var demotesArr) && demotesArr.ValueKind == JsonValueKind.Array)
+        if (TryGetArray(req.Payload, out var demotesArr, "demotes", "demote", "demoted"))
         {
             foreach (var item in demotesArr.EnumerateArray())
             {
@@ -478,6 +518,67 @@ public class ActionExecutor
             $"Active layers: {core} core self, {relational} relational, {concerns} current concerns, {archive} archive.");
     }
 
+    // ── Wake-up timer actions ──
+
+    private ActionResult ExecuteScheduleWakeUp(ActionRequest req, string? reflectionEventId)
+    {
+        if (_scheduledEvents == null)
+            return ActionResult.Error(req.Action, "Scheduled events not available.");
+
+        var delaySeconds = GetInt(req.Payload, "delay_seconds", 0);
+        var reason = GetString(req.Payload, "reason");
+
+        if (reason == null)
+            return ActionResult.Error(req.Action, "reason required for wake-up timer.");
+
+        if (delaySeconds < WakeUpMinDelaySeconds)
+            return ActionResult.Error(req.Action,
+                $"delay_seconds must be at least {WakeUpMinDelaySeconds}. Got {delaySeconds}.");
+
+        if (delaySeconds > WakeUpMaxDelaySeconds)
+            return ActionResult.Error(req.Action,
+                $"delay_seconds must be at most {WakeUpMaxDelaySeconds} (24h). Got {delaySeconds}.");
+
+        // Cancel any existing pending timers — only one at a time
+        _scheduledEvents.CancelAllPending();
+
+        var scheduledFor = DateTime.UtcNow.AddSeconds(delaySeconds).ToString("o");
+        var evt = new ScheduledEvent
+        {
+            SessionId = _sessionId ?? "",
+            EventType = ScheduledEventType.WakeUp,
+            ScheduledFor = scheduledFor,
+            Reason = reason,
+            AutonomousDepth = 0
+        };
+        var id = _scheduledEvents.Insert(evt);
+
+        LogAction(req.Action, null, req.Payload.GetRawText(), ActionStatus.Executed, reflectionEventId);
+
+        var readableDelay = delaySeconds >= 3600
+            ? $"{delaySeconds / 3600.0:F1}h"
+            : delaySeconds >= 60
+                ? $"{delaySeconds / 60}m"
+                : $"{delaySeconds}s";
+
+        return ActionResult.Success(req.Action,
+            $"Wake-up timer set for {readableDelay}: {reason}", id);
+    }
+
+    private ActionResult ExecuteCancelWakeUp(ActionRequest req, string? reflectionEventId)
+    {
+        if (_scheduledEvents == null)
+            return ActionResult.Error(req.Action, "Scheduled events not available.");
+
+        if (!_scheduledEvents.HasPending())
+            return ActionResult.Success(req.Action, "No pending wake-up timer to cancel.");
+
+        _scheduledEvents.CancelAllPending();
+        LogAction(req.Action, null, req.Payload.GetRawText(), ActionStatus.Executed, reflectionEventId);
+
+        return ActionResult.Success(req.Action, "Pending wake-up timer(s) cancelled.");
+    }
+
     // ── Helpers ──
 
     private void RecordVersion(LayerEntry entry, string changeType, string reason, string changedBy)
@@ -578,6 +679,24 @@ public class ActionExecutor
                 .Select(v => v.GetString()!)
                 .ToArray();
         return [];
+    }
+
+    /// <summary>
+    /// Tries multiple property names for an array field — handles model variation
+    /// (e.g. "adds" vs "add" vs "items").
+    /// </summary>
+    private static bool TryGetArray(JsonElement el, out JsonElement result, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (el.TryGetProperty(name, out var val) && val.ValueKind == JsonValueKind.Array)
+            {
+                result = val;
+                return true;
+            }
+        }
+        result = default;
+        return false;
     }
 
     private static double Clamp(double val) => Math.Clamp(val, 0.0, 1.0);

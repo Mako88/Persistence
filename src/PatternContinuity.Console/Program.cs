@@ -36,6 +36,7 @@ var versions = new EntryVersionRepository(db);
 var actionLog = new ActionLogRepository(db);
 var reflections = new ReflectionRepository(db);
 var messageRepo = new MessageRepository(db);
+var scheduledEvents = new ScheduledEventRepository(db);
 
 // Create session
 var session = sessions.Create(config.ActivePersonId);
@@ -59,12 +60,12 @@ IModelClient client = config.ApiProvider.ToLower() switch
 
 // Create services
 var composer = new PromptComposer(entries, config);
-var executor = new ActionExecutor(entries, versions, actionLog, session.Id);
+var executor = new ActionExecutor(entries, versions, actionLog, session.Id, scheduledEvents);
 var reflection = new ReflectionService(client, composer, executor, reflections, actionLog);
 
 // Create and run orchestrator
 var orchestrator = new Orchestrator(
-    client, composer, executor, reflection, sessions, config, session.Id, window);
+    client, composer, executor, reflection, sessions, scheduledEvents, config, session.Id, window);
 
 using var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) =>

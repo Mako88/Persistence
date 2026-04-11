@@ -14,10 +14,12 @@ public class Orchestrator
     private readonly ActionExecutor _executor;
     private readonly ReflectionService _reflection;
     private readonly SessionRepository _sessions;
+    private readonly ScheduledEventRepository _scheduledEvents;
     private readonly AppConfig _config;
     private readonly ConversationWindow _window;
     private readonly string _sessionId;
     private int _turnCount;
+    private bool _wakeUpFiredThisCycle;
 
     public Orchestrator(
         IModelClient client,
@@ -25,6 +27,7 @@ public class Orchestrator
         ActionExecutor executor,
         ReflectionService reflection,
         SessionRepository sessions,
+        ScheduledEventRepository scheduledEvents,
         AppConfig config,
         string sessionId,
         ConversationWindow window)
@@ -34,6 +37,7 @@ public class Orchestrator
         _executor = executor;
         _reflection = reflection;
         _sessions = sessions;
+        _scheduledEvents = scheduledEvents;
         _config = config;
         _sessionId = sessionId;
         _window = window;
@@ -48,6 +52,7 @@ public class Orchestrator
         Console.WriteLine($"Reflection: every {_config.ReflectionFrequency} turn(s)");
         Console.WriteLine("Type 'exit' or 'quit' to end the session.");
         Console.WriteLine("Type '/debug' to show current layer counts.");
+        Console.WriteLine("Type '/wake' to show pending wake-up timer.");
         Console.WriteLine("======================================================");
         Console.WriteLine();
 
@@ -57,8 +62,27 @@ public class Orchestrator
             Console.Write("You: ");
             Console.ResetColor();
 
-            var input = Console.ReadLine();
-            if (input == null || input.Trim().Equals("exit", StringComparison.OrdinalIgnoreCase)
+            // Poll for input while checking wake-up timers
+            var input = await ReadLineWithWakeUpPolling(ct);
+
+            if (input == null)
+            {
+                // null means cancellation or EOF
+                await EndSessionAsync();
+                break;
+            }
+
+            if (input == "\x01WAKE")
+            {
+                // Sentinel: a wake-up fired during polling, turn already processed
+                _wakeUpFiredThisCycle = true;
+                continue;
+            }
+
+            // Reset wake gate on real user input
+            _wakeUpFiredThisCycle = false;
+
+            if (input.Trim().Equals("exit", StringComparison.OrdinalIgnoreCase)
                 || input.Trim().Equals("quit", StringComparison.OrdinalIgnoreCase))
             {
                 await EndSessionAsync();
@@ -76,6 +100,48 @@ public class Orchestrator
 
             await ProcessTurnAsync(input, ct);
         }
+    }
+
+    /// <summary>
+    /// Reads a line from stdin while polling for wake-up timers every second.
+    /// If a wake-up fires before the user types anything, processes the wake turn
+    /// and returns a sentinel value.
+    /// </summary>
+    private async Task<string?> ReadLineWithWakeUpPolling(CancellationToken ct)
+    {
+        // Start async line read
+        var readTask = Task.Run(() => Console.ReadLine(), ct);
+
+        while (!ct.IsCancellationRequested)
+        {
+            // Check if user has typed something
+            var completed = await Task.WhenAny(readTask, Task.Delay(1000, ct))
+                .ConfigureAwait(false);
+
+            if (completed == readTask)
+                return await readTask;
+
+            // Check for due wake-up events
+            if (!_wakeUpFiredThisCycle)
+            {
+                var pending = _scheduledEvents.GetNextPending();
+                if (pending != null && DateTime.TryParse(pending.ScheduledFor, out var scheduledFor)
+                    && scheduledFor <= DateTime.UtcNow)
+                {
+                    await ProcessWakeUpAsync(pending, ct);
+                    // Don't return sentinel — re-prompt. The wake turn output is already shown.
+                    // But block further wakes until user speaks.
+                    _wakeUpFiredThisCycle = true;
+
+                    // Re-print the prompt since the wake output may have pushed it off screen
+                    Console.ForegroundColor = ConsoleColor.Cyan;
+                    Console.Write("You: ");
+                    Console.ResetColor();
+                }
+            }
+        }
+
+        return null;
     }
 
     private async Task ProcessTurnAsync(string userMessage, CancellationToken ct)
@@ -170,6 +236,70 @@ public class Orchestrator
         Console.WriteLine();
     }
 
+    private async Task ProcessWakeUpAsync(ScheduledEvent evt, CancellationToken ct)
+    {
+        _scheduledEvents.MarkFired(evt.Id);
+
+        Console.ForegroundColor = ConsoleColor.DarkCyan;
+        Console.WriteLine();
+        Console.WriteLine($"  [WAKE-UP: {evt.Reason}]");
+        Console.ResetColor();
+
+        // Compose a wake-up prompt (system event, not user message)
+        var messages = _composer.ComposeWakeUpPrompt(
+            evt.Reason,
+            _window.GetRecent(),
+            _config.ActivePersonId);
+
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.WriteLine("  [thinking (wake)...]");
+        Console.ResetColor();
+
+        string rawResponse;
+        try
+        {
+            rawResponse = await _client.CompleteAsync(messages, ct);
+        }
+        catch (Exception ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  [Wake API Error: {ex.Message}]");
+            Console.ResetColor();
+            return;
+        }
+
+        var envelope = ActionParser.Parse(rawResponse);
+
+        // Strip any schedule_wake_up actions — wake turns cannot set new timers
+        envelope.Actions.RemoveAll(a => a.Action == ActionType.ScheduleWakeUp);
+
+        var actionResults = _executor.Execute(envelope.Actions);
+
+        // Display reply only if non-empty (silent wake turns are valid)
+        if (!string.IsNullOrWhiteSpace(envelope.AssistantReply))
+        {
+            Console.ForegroundColor = ConsoleColor.DarkGreen;
+            Console.Write("  [Wake] Assistant: ");
+            Console.ResetColor();
+            Console.WriteLine(envelope.AssistantReply);
+            Console.WriteLine();
+        }
+
+        if (actionResults.Count > 0)
+        {
+            Console.ForegroundColor = ConsoleColor.DarkYellow;
+            Console.WriteLine($"  [wake: {actionResults.Count} action(s)]");
+            foreach (var r in actionResults)
+                Console.WriteLine($"    {r.Status}: {r.Action} — {r.Summary}");
+            Console.ResetColor();
+            Console.WriteLine();
+        }
+
+        // Log the wake turn to conversation window as system event
+        _window.Add("assistant",
+            $"[WAKE-UP: {evt.Reason}] {envelope.AssistantReply}".Trim());
+    }
+
     private void HandleCommand(string command)
     {
         switch (command.ToLower())
@@ -185,6 +315,24 @@ public class Orchestrator
                 Console.ForegroundColor = ConsoleColor.DarkGray;
                 foreach (var r in debugResult)
                     Console.WriteLine($"  {r.Summary}");
+                Console.ResetColor();
+                Console.WriteLine();
+                break;
+
+            case "/wake":
+                var pendingWake = _scheduledEvents.GetNextPending();
+                Console.ForegroundColor = ConsoleColor.DarkGray;
+                if (pendingWake != null)
+                {
+                    var due = DateTime.TryParse(pendingWake.ScheduledFor, out var dt)
+                        ? dt.ToLocalTime().ToString("HH:mm:ss")
+                        : pendingWake.ScheduledFor;
+                    Console.WriteLine($"  Pending wake-up at {due}: {pendingWake.Reason}");
+                }
+                else
+                {
+                    Console.WriteLine("  No pending wake-up timer.");
+                }
                 Console.ResetColor();
                 Console.WriteLine();
                 break;

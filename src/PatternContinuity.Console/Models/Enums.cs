@@ -90,4 +90,6 @@ public static class ActionType
     public const string GetEntryById = "get_entry_by_id";
     public const string ListActiveLayers = "list_active_layers";
     public const string ReflectOnTurn = "reflect_on_turn";
+    public const string ScheduleWakeUp = "schedule_wake_up";
+    public const string CancelWakeUp = "cancel_wake_up";
 }

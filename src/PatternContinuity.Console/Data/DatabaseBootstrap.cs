@@ -142,6 +142,21 @@ public static class DatabaseBootstrap
             CREATE INDEX IF NOT EXISTS idx_messages_session_seq ON messages(session_id, sequence_number);
             CREATE INDEX IF NOT EXISTS idx_messages_message_type ON messages(message_type);
             CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
+
+            CREATE TABLE IF NOT EXISTS scheduled_events (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                scheduled_for TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                reason TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                fired_at TEXT NULL,
+                autonomous_depth INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_scheduled_events_status ON scheduled_events(status);
+            CREATE INDEX IF NOT EXISTS idx_scheduled_events_scheduled_for ON scheduled_events(scheduled_for);
             """);
     }
 
