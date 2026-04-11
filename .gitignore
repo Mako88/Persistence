@@ -7,8 +7,8 @@ obj/
 *.sln.docstates
 .vs/
 
-## SQLite
-*.db
+## SQLite (un-ignored temporarily for inspection)
+# *.db
 *.db-shm
 *.db-wal
 

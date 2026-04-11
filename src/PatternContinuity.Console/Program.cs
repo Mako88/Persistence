@@ -35,9 +35,20 @@ var entries = new LayerEntryRepository(db);
 var versions = new EntryVersionRepository(db);
 var actionLog = new ActionLogRepository(db);
 var reflections = new ReflectionRepository(db);
+var messageRepo = new MessageRepository(db);
 
 // Create session
 var session = sessions.Create(config.ActivePersonId);
+
+// Create conversation window and warm from recent history
+var window = new ConversationWindow(messageRepo, session.Id, config.MaxRecentMessages);
+var warmed = window.WarmFromHistory(maxAgeHours: 24);
+if (warmed > 0)
+{
+    Console.ForegroundColor = ConsoleColor.DarkGray;
+    Console.WriteLine($"  [Restored {warmed} recent message(s) from previous session]");
+    Console.ResetColor();
+}
 
 // Create model client
 IModelClient client = config.ApiProvider.ToLower() switch
@@ -53,7 +64,7 @@ var reflection = new ReflectionService(client, composer, executor, reflections, 
 
 // Create and run orchestrator
 var orchestrator = new Orchestrator(
-    client, composer, executor, reflection, sessions, config, session.Id);
+    client, composer, executor, reflection, sessions, config, session.Id, window);
 
 using var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) =>

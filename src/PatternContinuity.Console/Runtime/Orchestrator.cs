@@ -26,7 +26,8 @@ public class Orchestrator
         ReflectionService reflection,
         SessionRepository sessions,
         AppConfig config,
-        string sessionId)
+        string sessionId,
+        ConversationWindow window)
     {
         _client = client;
         _composer = composer;
@@ -35,7 +36,7 @@ public class Orchestrator
         _sessions = sessions;
         _config = config;
         _sessionId = sessionId;
-        _window = new ConversationWindow(config.MaxRecentMessages);
+        _window = window;
     }
 
     public async Task RunAsync(CancellationToken ct = default)

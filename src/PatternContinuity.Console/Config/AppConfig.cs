@@ -8,7 +8,7 @@ public class AppConfig
     public string ApiProvider { get; set; } = "openai";
     public string ApiKey { get; set; } = "";
     public string ApiBaseUrl { get; set; } = "https://api.openai.com/v1";
-    public string ModelName { get; set; } = "gpt-4o";
+    public string ModelName { get; set; } = "gpt-5.4";
     public int ReflectionFrequency { get; set; } = 1;
     public int MaxCurrentConcerns { get; set; } = 5;
     public int MaxRelationalEntries { get; set; } = 3;

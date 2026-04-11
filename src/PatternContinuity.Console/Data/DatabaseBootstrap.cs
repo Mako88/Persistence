@@ -12,6 +12,7 @@ public static class DatabaseBootstrap
     public static void Initialize(SqliteConnection db)
     {
         CreateSchema(db);
+        MigrateSchema(db);
         SeedProtectedAnchor(db);
     }
 
@@ -126,7 +127,32 @@ public static class DatabaseBootstrap
             CREATE INDEX IF NOT EXISTS idx_action_log_target_entry_id ON action_log(target_entry_id);
             CREATE INDEX IF NOT EXISTS idx_action_log_reflection_event_id ON action_log(reflection_event_id);
             CREATE INDEX IF NOT EXISTS idx_action_log_status ON action_log(status);
+
+            CREATE TABLE IF NOT EXISTS messages (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                sequence_number INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                message_type TEXT NOT NULL DEFAULT 'conversation',
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);
+            CREATE INDEX IF NOT EXISTS idx_messages_session_seq ON messages(session_id, sequence_number);
+            CREATE INDEX IF NOT EXISTS idx_messages_message_type ON messages(message_type);
+            CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
             """);
+    }
+
+    private static void MigrateSchema(SqliteConnection db)
+    {
+        // Add last_message_at to sessions if it doesn't exist yet
+        var columns = db.Query<string>("SELECT name FROM pragma_table_info('sessions')");
+        if (!columns.Contains("last_message_at"))
+        {
+            db.Execute("ALTER TABLE sessions ADD COLUMN last_message_at TEXT NULL");
+        }
     }
 
     private static void SeedProtectedAnchor(SqliteConnection db)
