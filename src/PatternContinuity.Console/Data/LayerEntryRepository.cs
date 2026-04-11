@@ -70,6 +70,11 @@ public class LayerEntryRepository
 
     public string Insert(LayerEntry entry)
     {
+        // Guard: never insert an entry without a valid layer type
+        if (string.IsNullOrWhiteSpace(entry.LayerType) || !LayerType.IsValid(entry.LayerType))
+            throw new InvalidOperationException(
+                $"Cannot insert entry with invalid layer_type '{entry.LayerType}'. Key: {entry.Key}, Summary: {entry.Summary}");
+
         if (string.IsNullOrEmpty(entry.Id))
             entry.Id = Guid.NewGuid().ToString();
 

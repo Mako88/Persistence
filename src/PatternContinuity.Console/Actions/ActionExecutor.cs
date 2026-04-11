@@ -342,6 +342,16 @@ public class ActionExecutor
     private ActionResult ExecuteUpdateRelational(ActionRequest req, string? reflectionEventId)
     {
         var scopes = GetStringArray(req.Payload, "relationship_scopes");
+
+        // Fallback: model often sends singular "relationship_scope" as a string
+        if (scopes.Length == 0)
+        {
+            var singleScope = GetString(req.Payload, "relationship_scope")
+                ?? GetString(req.Payload, "scope");
+            if (singleScope != null)
+                scopes = [singleScope];
+        }
+
         var key = GetString(req.Payload, "key");
         var summary = GetString(req.Payload, "summary") ?? "Relational update";
         var content = req.Payload.TryGetProperty("content", out var c) ? c.GetRawText() : "{}";
