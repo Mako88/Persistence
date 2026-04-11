@@ -85,14 +85,24 @@ public static partial class ActionParser
 
     /// <summary>
     /// Attempts to extract assistant_reply from truncated JSON.
-    /// Looks for "assistant_reply":"..." and extracts the string value.
+    /// Looks for "assistant_reply":"..." and extracts the string value,
+    /// then unescapes JSON string escape sequences.
     /// </summary>
     private static string? TrySalvageReply(string json)
     {
         var match = AssistantReplyRegex().Match(json);
-        if (match.Success)
-            return match.Groups[1].Value;
-        return null;
+        if (!match.Success) return null;
+
+        var raw = match.Groups[1].Value;
+
+        // Unescape JSON string sequences
+        raw = raw.Replace("\\n", "\n")
+                 .Replace("\\r", "\r")
+                 .Replace("\\t", "\t")
+                 .Replace("\\\"", "\"")
+                 .Replace("\\\\", "\\");
+
+        return raw;
     }
 
     private static string Truncate(string s, int max) =>
