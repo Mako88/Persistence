@@ -133,36 +133,84 @@ public class Orchestrator
     /// </summary>
     private async Task<string?> ReadLineWithWakeUpPolling(CancellationToken ct)
     {
-        // Start async line read
-        var readTask = Task.Run(() => Console.ReadLine(), ct);
+        // Buffer keystrokes manually so we can poll for wake-ups between checks
+        var inputBuffer = new System.Text.StringBuilder();
 
         while (!ct.IsCancellationRequested)
         {
-            // Check if user has typed something
-            var completed = await Task.WhenAny(readTask, Task.Delay(1000, ct))
-                .ConfigureAwait(false);
+            // Drain any available keystrokes
+            while (Console.KeyAvailable)
+            {
+                var key = Console.ReadKey(intercept: true);
 
-            if (completed == readTask)
-                return await readTask;
+                if (key.Key == ConsoleKey.Enter)
+                {
+                    Console.WriteLine();
+                    return inputBuffer.ToString();
+                }
+                else if (key.Key == ConsoleKey.Backspace)
+                {
+                    if (inputBuffer.Length > 0)
+                    {
+                        inputBuffer.Remove(inputBuffer.Length - 1, 1);
+                        Console.Write("\b \b");
+                    }
+                }
+                else if (key.Key == ConsoleKey.Escape)
+                {
+                    // Clear current input
+                    while (inputBuffer.Length > 0)
+                    {
+                        inputBuffer.Remove(inputBuffer.Length - 1, 1);
+                        Console.Write("\b \b");
+                    }
+                }
+                else if (!char.IsControl(key.KeyChar))
+                {
+                    inputBuffer.Append(key.KeyChar);
+                    Console.Write(key.KeyChar);
+                }
+            }
 
             // Check for due wake-up events
             if (!_wakeUpFiredThisCycle)
             {
                 var pending = _scheduledEvents.GetNextPending();
-                if (pending != null && DateTime.TryParse(pending.ScheduledFor, out var scheduledFor)
-                    && scheduledFor <= DateTime.UtcNow)
+                if (pending != null)
                 {
-                    await ProcessWakeUpAsync(pending, ct);
-                    // Don't return sentinel — re-prompt. The wake turn output is already shown.
-                    // But block further wakes until user speaks.
-                    _wakeUpFiredThisCycle = true;
+                    // Parse with RoundtripKind to preserve UTC from the "o" format
+                    if (DateTimeOffset.TryParse(pending.ScheduledFor, out var scheduledFor)
+                        && scheduledFor <= DateTimeOffset.UtcNow)
+                    {
+                        // Save any partial input, clear the line
+                        var partialInput = inputBuffer.ToString();
+                        if (partialInput.Length > 0)
+                        {
+                            // Erase the partial input from display
+                            Console.Write(new string('\b', partialInput.Length));
+                            Console.Write(new string(' ', partialInput.Length));
+                            Console.Write(new string('\b', partialInput.Length));
+                        }
+                        // Erase the "You: " prompt
+                        Console.Write("\r");
+                        Console.Write(new string(' ', 5 + partialInput.Length));
+                        Console.Write("\r");
 
-                    // Re-print the prompt since the wake output may have pushed it off screen
-                    Console.ForegroundColor = ConsoleColor.Cyan;
-                    Console.Write("You: ");
-                    Console.ResetColor();
+                        await ProcessWakeUpAsync(pending, ct);
+                        _wakeUpFiredThisCycle = true;
+
+                        // Re-print prompt and restore any partial input
+                        Console.ForegroundColor = ConsoleColor.Cyan;
+                        Console.Write("You: ");
+                        Console.ResetColor();
+                        if (partialInput.Length > 0)
+                            Console.Write(partialInput);
+                    }
                 }
             }
+
+            // Brief sleep to avoid busy-spinning
+            await Task.Delay(500, ct).ConfigureAwait(false);
         }
 
         return null;
