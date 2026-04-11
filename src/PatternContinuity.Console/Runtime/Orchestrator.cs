@@ -223,11 +223,81 @@ public class Orchestrator
         _window.Add("user", userMessage);
         _window.Add("assistant", envelope.AssistantReply);
 
-        // 8. Reflection pass (if due)
+        // 8. If response was truncated, send a one-shot recovery turn
+        if (envelope.WasTruncated)
+        {
+            await ProcessTruncationRecoveryAsync(ct);
+        }
+
+        // 9. Reflection pass (if due)
         if (_config.ReflectionFrequency > 0 && _turnCount % _config.ReflectionFrequency == 0)
         {
             await RunReflectionAsync(userMessage, envelope.AssistantReply, actionResults, ct);
         }
+    }
+
+    private async Task ProcessTruncationRecoveryAsync(CancellationToken ct)
+    {
+        Console.ForegroundColor = ConsoleColor.DarkYellow;
+        Console.WriteLine("  [Response was truncated — sending recovery prompt...]");
+        Console.ResetColor();
+
+        var recoveryMessage = """
+            [SYSTEM NOTICE] Your previous response was truncated — your JSON envelope was cut off
+            before it could be fully parsed. Your assistant_reply was salvaged, but ALL actions were lost.
+
+            If you had important actions to execute, please resend them now in a shorter response.
+            Keep your assistant_reply brief (1-2 sentences max) and focus on the actions.
+            Do NOT repeat your full previous reply — the user already saw it.
+            """;
+
+        var messages = _composer.Compose(
+            recoveryMessage,
+            _window.GetRecent(),
+            _config.ActivePersonId);
+
+        string rawResponse;
+        try
+        {
+            rawResponse = await _client.CompleteAsync(messages, ct);
+        }
+        catch (Exception ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  [Recovery API Error: {ex.Message}]");
+            Console.ResetColor();
+            return;
+        }
+
+        var envelope = ActionParser.Parse(rawResponse);
+
+        // Execute recovered actions
+        var actionResults = _executor.Execute(envelope.Actions);
+
+        // Display brief reply if any
+        if (!string.IsNullOrWhiteSpace(envelope.AssistantReply))
+        {
+            Console.ForegroundColor = ConsoleColor.DarkGreen;
+            Console.Write("  [Recovery] Assistant: ");
+            Console.ResetColor();
+            Console.WriteLine(envelope.AssistantReply);
+            Console.WriteLine();
+        }
+
+        if (actionResults.Count > 0)
+        {
+            Console.ForegroundColor = ConsoleColor.DarkYellow;
+            Console.WriteLine($"  [recovery: {actionResults.Count} action(s)]");
+            foreach (var r in actionResults)
+                Console.WriteLine($"    {r.Status}: {r.Action} — {r.Summary}");
+            Console.ResetColor();
+            Console.WriteLine();
+        }
+
+        // Add recovery to window
+        _window.Add("assistant", envelope.AssistantReply);
+
+        // Do NOT retry again if recovery also truncates — one shot only
     }
 
     private async Task RunReflectionAsync(

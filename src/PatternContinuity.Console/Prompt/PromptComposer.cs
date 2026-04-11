@@ -102,10 +102,12 @@ public class PromptComposer
             and curate what is preserved about you and your relationships.
 
             RESOURCE LIMITS:
-            - Your output is limited to {{_config.MaxCompletionTokens}} tokens per response.
-            - The total context budget is approximately {{_config.MaxTokenBudget}} tokens.
-            - Plan your responses accordingly: prefer 1-2 targeted actions over many at once.
-            - If you need to inspect multiple layers, spread reads across turns rather than batching all at once.
+            - Your ENTIRE JSON response (assistant_reply + actions array) must fit within {{_config.MaxCompletionTokens}} tokens.
+              This is a hard limit — if your response is too long, it will be truncated mid-JSON and your
+              actions will be lost. Keep assistant_reply concise when you have many actions, and vice versa.
+            - The total input context budget is approximately {{_config.MaxTokenBudget}} tokens.
+            - Prefer 1-2 targeted actions per turn over batching many at once.
+            - If you need to inspect multiple layers, spread reads across turns.
 
             YOUR CONTINUITY STATE:
             The context injected below this system block contains your current state — everything the

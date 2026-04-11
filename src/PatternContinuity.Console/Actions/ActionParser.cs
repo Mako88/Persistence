@@ -47,7 +47,8 @@ public static partial class ActionParser
                 return new ActionEnvelope
                 {
                     AssistantReply = salvaged,
-                    Actions = []
+                    Actions = [],
+                    WasTruncated = true
                 };
             }
         }

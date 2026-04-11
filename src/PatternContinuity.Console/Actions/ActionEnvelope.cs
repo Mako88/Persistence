@@ -10,6 +10,12 @@ public class ActionEnvelope
 
     [JsonPropertyName("actions")]
     public List<ActionRequest> Actions { get; set; } = [];
+
+    /// <summary>
+    /// Set to true when the response was truncated and salvaged via fallback parsing.
+    /// </summary>
+    [JsonIgnore]
+    public bool WasTruncated { get; set; }
 }
 
 /// <summary>
