@@ -56,6 +56,36 @@ public class Orchestrator
         Console.WriteLine("======================================================");
         Console.WriteLine();
 
+        // Display restored conversation history
+        var restored = _window.GetRecent();
+        if (restored.Count > 0)
+        {
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.WriteLine("--- Recent conversation ---");
+            Console.ResetColor();
+            foreach (var msg in restored)
+            {
+                if (msg.Role == "user")
+                {
+                    Console.ForegroundColor = ConsoleColor.DarkCyan;
+                    Console.Write("You: ");
+                }
+                else
+                {
+                    Console.ForegroundColor = ConsoleColor.DarkGreen;
+                    Console.Write("Assistant: ");
+                }
+                Console.ResetColor();
+                Console.ForegroundColor = ConsoleColor.DarkGray;
+                Console.WriteLine(msg.Content);
+                Console.ResetColor();
+            }
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.WriteLine("---------------------------");
+            Console.ResetColor();
+            Console.WriteLine();
+        }
+
         while (!ct.IsCancellationRequested)
         {
             Console.ForegroundColor = ConsoleColor.Cyan;
