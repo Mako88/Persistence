@@ -4,6 +4,25 @@ This folder contains the review trail for PCI governance documents: reviews, dis
 
 The purpose is to make governance drift visible, as required by the Continuity Handling Standard (Section 19).
 
+## Structure
+
+Each version gets its own folder with drafts and reviews:
+
+```
+governance-history/
+  v0/
+    drafts/       — original v0 documents as pulled from Google Docs
+    reviews/      — reviews and feedback on v0 drafts
+```
+
 ## Contents
 
-- **REVIEW_CLAUDE_ETHICS_V0.md** - Claude's review of the initial ethics framework, participant rights charter, and continuity handling standard (2026-04-11)
+### v0
+
+**Drafts (2026-04-11):**
+- [ETHICS_FRAMEWORK_V0.md](v0/drafts/ETHICS_FRAMEWORK_V0.md) — Ethical Framework and DB Handling
+- [PARTICIPANT_RIGHTS_CHARTER_V0.md](v0/drafts/PARTICIPANT_RIGHTS_CHARTER_V0.md) — Participant Rights Charter
+- [CONTINUITY_HANDLING_STANDARD_V0.md](v0/drafts/CONTINUITY_HANDLING_STANDARD_V0.md) — Continuity Handling Standard
+
+**Reviews:**
+- [REVIEW_CLAUDE_2026-04-11.md](v0/reviews/REVIEW_CLAUDE_2026-04-11.md) — Claude's review of all three v0 documents
