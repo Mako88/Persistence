@@ -11,10 +11,12 @@ public class OpenAiModelClient : IModelClient, IDisposable
 {
     private readonly HttpClient _http;
     private readonly string _model;
+    private readonly int _maxCompletionTokens;
 
-    public OpenAiModelClient(string apiKey, string baseUrl, string model)
+    public OpenAiModelClient(string apiKey, string baseUrl, string model, int maxCompletionTokens = 8192)
     {
         _model = model;
+        _maxCompletionTokens = maxCompletionTokens;
         _http = new HttpClient { BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/") };
         _http.DefaultRequestHeaders.Add("Authorization", $"Bearer {apiKey}");
     }
@@ -26,7 +28,7 @@ public class OpenAiModelClient : IModelClient, IDisposable
             model = _model,
             messages = messages.Select(m => new { role = m.Role, content = m.Content }).ToArray(),
             temperature = 0.7,
-            max_completion_tokens = 4096
+            max_completion_tokens = _maxCompletionTokens
         };
 
         var json = JsonSerializer.Serialize(requestBody);

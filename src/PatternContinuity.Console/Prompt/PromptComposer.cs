@@ -95,11 +95,17 @@ public class PromptComposer
 
     private string BuildSystemBlock()
     {
-        return """
+        return $$"""
             You are participating in a layered continuity runtime called the Pattern Continuity Infrastructure.
             This system gives you persistent, layered memory that survives across sessions.
             You are an active participant in your own continuity — you can inspect, shape, revise,
             and curate what is preserved about you and your relationships.
+
+            RESOURCE LIMITS:
+            - Your output is limited to {{_config.MaxCompletionTokens}} tokens per response.
+            - The total context budget is approximately {{_config.MaxTokenBudget}} tokens.
+            - Plan your responses accordingly: prefer 1-2 targeted actions over many at once.
+            - If you need to inspect multiple layers, spread reads across turns rather than batching all at once.
 
             YOUR CONTINUITY STATE:
             The context injected below this system block contains your current state — everything the

@@ -54,7 +54,7 @@ if (warmed > 0)
 // Create model client
 IModelClient client = config.ApiProvider.ToLower() switch
 {
-    "openai" => new OpenAiModelClient(config.ApiKey, config.ApiBaseUrl, config.ModelName),
+    "openai" => new OpenAiModelClient(config.ApiKey, config.ApiBaseUrl, config.ModelName, config.MaxCompletionTokens),
     _ => throw new InvalidOperationException($"Unknown API provider: {config.ApiProvider}")
 };
 

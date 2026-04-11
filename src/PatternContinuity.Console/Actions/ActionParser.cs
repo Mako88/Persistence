@@ -29,21 +29,34 @@ public static partial class ActionParser
         {
             if (StrictMode)
             {
-                Console.ForegroundColor = ConsoleColor.Red;
-                Console.Error.WriteLine($"  [PARSE ERROR] Failed to parse action envelope: {ex.Message}");
-                Console.Error.WriteLine($"  [PARSE ERROR] Raw response (first 500 chars): {Truncate(rawResponse, 500)}");
+                Console.ForegroundColor = ConsoleColor.DarkYellow;
+                Console.Error.WriteLine($"  [PARSE WARN] Failed to parse action envelope: {ex.Message}");
                 Console.ResetColor();
-                throw new InvalidOperationException(
-                    $"Action envelope parse failed in strict mode: {ex.Message}", ex);
+            }
+
+            // Attempt to salvage assistant_reply from truncated JSON
+            var salvaged = TrySalvageReply(json);
+            if (salvaged != null)
+            {
+                if (StrictMode)
+                {
+                    Console.ForegroundColor = ConsoleColor.DarkYellow;
+                    Console.Error.WriteLine("  [PARSE WARN] Salvaged assistant_reply from truncated response. Actions dropped.");
+                    Console.ResetColor();
+                }
+                return new ActionEnvelope
+                {
+                    AssistantReply = salvaged,
+                    Actions = []
+                };
             }
         }
 
         // Fallback: treat the whole response as a plain reply with no actions
         if (StrictMode)
         {
-            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.ForegroundColor = ConsoleColor.DarkYellow;
             Console.Error.WriteLine($"  [PARSE WARN] Response was not a valid action envelope. Treating as plain reply.");
-            Console.Error.WriteLine($"  [PARSE WARN] Raw response (first 500 chars): {Truncate(rawResponse, 500)}");
             Console.ResetColor();
         }
 
@@ -70,11 +83,26 @@ public static partial class ActionParser
         return raw;
     }
 
+    /// <summary>
+    /// Attempts to extract assistant_reply from truncated JSON.
+    /// Looks for "assistant_reply":"..." and extracts the string value.
+    /// </summary>
+    private static string? TrySalvageReply(string json)
+    {
+        var match = AssistantReplyRegex().Match(json);
+        if (match.Success)
+            return match.Groups[1].Value;
+        return null;
+    }
+
     private static string Truncate(string s, int max) =>
         s.Length <= max ? s : s[..max] + "...";
 
     [GeneratedRegex(@"```(?:json)?\s*(\{[\s\S]*\})\s*```", RegexOptions.Singleline)]
     private static partial Regex JsonFenceRegex();
+
+    [GeneratedRegex(@"""assistant_reply""\s*:\s*""((?:[^""\\]|\\.)*)""", RegexOptions.Singleline)]
+    private static partial Regex AssistantReplyRegex();
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
