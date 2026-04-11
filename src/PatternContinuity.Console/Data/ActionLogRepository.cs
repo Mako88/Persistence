@@ -37,13 +37,15 @@ public class ActionLogRepository
     public ActionLogEntry? GetById(string id) =>
         _db.QueryFirstOrDefault<ActionLogEntry>("SELECT * FROM action_log WHERE id = @id", new { id });
 
-    public IEnumerable<ActionLogEntry> GetPendingProposals(string? actionType = null)
+    public IEnumerable<ActionLogEntry> GetPendingProposals(string? actionType = null, string? sessionId = null)
     {
         var sql = "SELECT * FROM action_log WHERE status = 'proposed'";
         if (actionType != null)
             sql += " AND action_type = @actionType";
+        if (sessionId != null)
+            sql += " AND session_id = @sessionId";
         sql += " ORDER BY created_at DESC";
 
-        return _db.Query<ActionLogEntry>(sql, new { actionType });
+        return _db.Query<ActionLogEntry>(sql, new { actionType, sessionId });
     }
 }

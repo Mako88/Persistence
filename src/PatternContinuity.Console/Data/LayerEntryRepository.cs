@@ -45,6 +45,11 @@ public class LayerEntryRepository
             "SELECT * FROM layer_entries WHERE key = @key AND layer_type = @layerType AND status = 'active'",
             new { key, layerType });
 
+    public LayerEntry? GetByKeyAndScope(string key, string layerType, string relationshipScope) =>
+        _db.QueryFirstOrDefault<LayerEntry>(
+            "SELECT * FROM layer_entries WHERE key = @key AND layer_type = @layerType AND relationship_scope = @relationshipScope AND status = 'active'",
+            new { key, layerType, relationshipScope });
+
     public IEnumerable<LayerEntry> SearchArchive(string? query, string? relationshipScope, int limit = 5)
     {
         var sql = """
@@ -88,16 +93,25 @@ public class LayerEntryRepository
     {
         entry.UpdatedAt = DateTime.UtcNow.ToString("o");
 
+        // Note: last_accessed_at is deliberately excluded here.
+        // It is managed independently by TouchAccessTime() to avoid
+        // stale in-memory values overwriting newer access timestamps.
         _db.Execute("""
             UPDATE layer_entries SET
+                layer_type = @LayerType,
+                relationship_scope = @RelationshipScope,
+                status = @Status,
+                key = @Key,
                 summary = @Summary,
                 content_json = @ContentJson,
                 salience = @Salience,
                 importance = @Importance,
                 confidence = @Confidence,
-                status = @Status,
+                source_type = @SourceType,
+                source_ref = @SourceRef,
                 updated_at = @UpdatedAt,
                 version = @Version,
+                is_protected = @IsProtected,
                 superseded_by = @SupersededBy
             WHERE id = @Id
             """, entry);

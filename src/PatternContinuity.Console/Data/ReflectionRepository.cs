@@ -26,6 +26,15 @@ public class ReflectionRepository
         return evt.Id;
     }
 
+    public void UpdateOutcomes(string id, string? acceptedActionsJson, string? rejectedActionsJson)
+    {
+        _db.Execute("""
+            UPDATE reflection_events
+            SET accepted_actions_json = @acceptedActionsJson, rejected_actions_json = @rejectedActionsJson
+            WHERE id = @id
+            """, new { id, acceptedActionsJson, rejectedActionsJson });
+    }
+
     public IEnumerable<ReflectionEvent> GetRecent(int limit = 5) =>
         _db.Query<ReflectionEvent>(
             "SELECT * FROM reflection_events ORDER BY created_at DESC LIMIT @limit",

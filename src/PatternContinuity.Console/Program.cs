@@ -26,6 +26,9 @@ db.Open();
 // Bootstrap schema + seed data
 DatabaseBootstrap.Initialize(db);
 
+// Configure parse mode
+ActionParser.StrictMode = config.StrictParseMode;
+
 // Create repositories
 var sessions = new SessionRepository(db);
 var entries = new LayerEntryRepository(db);

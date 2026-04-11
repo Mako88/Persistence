@@ -315,10 +315,10 @@ public class ActionExecutor
         foreach (var scope in scopes)
         {
             LayerEntry? existing = key != null
-                ? _entries.GetByKey(key, LayerType.Relational)
+                ? _entries.GetByKeyAndScope(key, LayerType.Relational, scope)
                 : null;
 
-            if (existing != null && existing.RelationshipScope == scope)
+            if (existing != null)
             {
                 existing.Summary = summary;
                 existing.ContentJson = content;

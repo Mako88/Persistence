@@ -73,8 +73,10 @@ public class ReflectionService
             catch { reflectionSummary = "Reflection completed."; }
         }
 
-        // Auto-commit any pending core proposals from this turn
-        var pendingProposals = _actionLog.GetPendingProposals(ActionType.ProposeCoreUpdate).ToList();
+        // Auto-commit pending core proposals scoped to this session only
+        var pendingProposals = _actionLog
+            .GetPendingProposals(ActionType.ProposeCoreUpdate, sessionId)
+            .ToList();
 
         // Store reflection event
         var reflectionEvent = new ReflectionEvent
@@ -105,9 +107,14 @@ public class ReflectionService
             reflectionResults.AddRange(commitResults);
         }
 
-        // Update reflection event with accepted/rejected
-        var accepted = reflectionResults.Where(r => r.Status == "executed" || r.Status == "proposed").ToList();
-        var rejected = reflectionResults.Where(r => r.Status == "failed" || r.Status == "rejected").ToList();
+        // Persist accepted/rejected outcomes back into reflection_events
+        var accepted = reflectionResults.Where(r => r.Status is "executed" or "proposed").ToList();
+        var rejected = reflectionResults.Where(r => r.Status is "failed" or "rejected").ToList();
+
+        _reflections.UpdateOutcomes(
+            reflectionEventId,
+            accepted.Count > 0 ? JsonSerializer.Serialize(accepted.Select(r => new { r.Action, r.Summary, r.Status })) : null,
+            rejected.Count > 0 ? JsonSerializer.Serialize(rejected.Select(r => new { r.Action, r.Summary, r.ErrorText })) : null);
 
         return new ReflectionResult
         {
