@@ -52,6 +52,7 @@ public class Orchestrator
         Console.WriteLine($"Reflection: every {_config.ReflectionFrequency} turn(s)");
         Console.WriteLine("Type 'exit' or 'quit' to end the session.");
         Console.WriteLine("Type '/debug' to show current layer counts.");
+        Console.WriteLine("Type '/tokens' to show token budget usage.");
         Console.WriteLine("Type '/wake' to show pending wake-up timer.");
         Console.WriteLine("======================================================");
         Console.WriteLine();
@@ -221,7 +222,17 @@ public class Orchestrator
 
         // 7. Update conversation window
         _window.Add("user", userMessage);
-        _window.Add("assistant", envelope.AssistantReply);
+
+        // Include action confirmations in the assistant message so the model
+        // sees what executed on subsequent turns
+        var replyForWindow = envelope.AssistantReply;
+        var writeResults = actionResults.Where(r => !r.HasData && r.Status is "executed" or "proposed").ToList();
+        if (writeResults.Count > 0)
+        {
+            var confirmations = string.Join("; ", writeResults.Select(r => $"{r.Action}: {r.Summary}"));
+            replyForWindow += $"\n[Actions executed: {confirmations}]";
+        }
+        _window.Add("assistant", replyForWindow);
 
         // 8. If response was truncated, send a one-shot recovery turn
         if (envelope.WasTruncated)
@@ -483,6 +494,18 @@ public class Orchestrator
                 Console.ForegroundColor = ConsoleColor.DarkGray;
                 foreach (var r in debugResult)
                     Console.WriteLine($"  {r.Summary}");
+                Console.ResetColor();
+                Console.WriteLine();
+                break;
+
+            case "/tokens":
+                var budget = new TokenBudget(_config.MaxTokenBudget);
+                var probe = _composer.Compose("(token probe)", _window.GetRecent(), _config.ActivePersonId);
+                var inputTokens = probe.Sum(m => TokenBudget.Estimate(m.Content));
+                Console.ForegroundColor = ConsoleColor.DarkGray;
+                Console.WriteLine($"  Input context: ~{inputTokens} tokens (budget: {_config.MaxTokenBudget})");
+                Console.WriteLine($"  Output limit:  {_config.MaxCompletionTokens} tokens");
+                Console.WriteLine($"  Conversation window: {_window.GetRecent().Count} message(s)");
                 Console.ResetColor();
                 Console.WriteLine();
                 break;
