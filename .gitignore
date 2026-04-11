@@ -20,6 +20,6 @@ obj/
 Thumbs.db
 .DS_Store
 
-## Secrets
-appsettings.*.json
-!appsettings.json
+## Secrets — appsettings.json contains API keys, never commit after initial scaffold
+appsettings.json
+!appsettings.template.json

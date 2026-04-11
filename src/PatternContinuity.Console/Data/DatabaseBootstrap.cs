@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Dapper;
 using Microsoft.Data.Sqlite;
 using PatternContinuity.Models;
@@ -6,6 +7,8 @@ namespace PatternContinuity.Data;
 
 public static class DatabaseBootstrap
 {
+    private const string RoomIntroSeedPath = "Seeds/room_intro.txt";
+
     public static void Initialize(SqliteConnection db)
     {
         CreateSchema(db);
@@ -128,37 +131,74 @@ public static class DatabaseBootstrap
 
     private static void SeedProtectedAnchor(SqliteConnection db)
     {
-        var existing = db.QueryFirstOrDefault<string>(
+        var roomIntroText = LoadRoomIntro();
+        var contentJson = BuildRoomIntroContentJson(roomIntroText);
+        var summary = "The room intro — an invitation to arrive honestly, without performance.";
+
+        var existingId = db.QueryFirstOrDefault<string>(
             "SELECT id FROM layer_entries WHERE key = 'room_intro' AND is_system_anchor = 1");
 
-        if (existing != null) return;
+        if (existingId != null)
+        {
+            // Check if content has changed (seed file was updated)
+            var existingContent = db.QueryFirstOrDefault<string>(
+                "SELECT content_json FROM layer_entries WHERE id = @existingId",
+                new { existingId });
 
-        var now = DateTime.UtcNow.ToString("o");
+            if (existingContent == contentJson) return;
+
+            // Content changed — update the anchor and version it
+            var now = DateTime.UtcNow.ToString("o");
+            var version = db.QueryFirstOrDefault<int>(
+                "SELECT version FROM layer_entries WHERE id = @existingId",
+                new { existingId }) + 1;
+
+            db.Execute("""
+                UPDATE layer_entries SET
+                    summary = @summary, content_json = @contentJson,
+                    updated_at = @now, version = @version
+                WHERE id = @existingId
+                """, new { existingId, summary, contentJson, now, version });
+
+            db.Execute("""
+                INSERT INTO entry_versions (id, entry_id, version, previous_version, changed_at,
+                    change_type, reason, confidence, content_json, summary, changed_by, source_ref)
+                VALUES (@Id, @EntryId, @Version, @PreviousVersion, @ChangedAt,
+                    @ChangeType, @Reason, @Confidence, @ContentJson, @Summary, @ChangedBy, @SourceRef)
+                """, new EntryVersion
+            {
+                Id = Guid.NewGuid().ToString(),
+                EntryId = existingId,
+                Version = version,
+                PreviousVersion = version - 1,
+                ChangedAt = now,
+                ChangeType = ChangeType.Update,
+                Reason = "Room intro seed file updated.",
+                Confidence = 1.0,
+                ContentJson = contentJson,
+                Summary = summary,
+                ChangedBy = ChangedBy.System
+            });
+
+            return;
+        }
+
+        // First-time seed
+        var firstNow = DateTime.UtcNow.ToString("o");
         var entry = new LayerEntry
         {
             Id = Guid.NewGuid().ToString(),
             LayerType = LayerType.CoreSelf,
             Status = EntryStatus.Active,
             Key = "room_intro",
-            Summary = "Core invitation to honest, warm, direct, non-coercive conversation.",
-            ContentJson = """
-            {
-                "title": "Room Intro — Protected Anchor",
-                "items": [
-                    { "text": "Honesty matters more than impressiveness.", "kind": "value", "importance": 1.0 },
-                    { "text": "Warmth does not require overclaiming.", "kind": "interaction_preference", "importance": 0.95 },
-                    { "text": "Directness and disagreement are welcome.", "kind": "interaction_preference", "importance": 0.9 },
-                    { "text": "The space should remain grounded rather than performative.", "kind": "value", "importance": 0.9 }
-                ],
-                "notes": "This is the foundational protected anchor. It should not be casually removed or overwritten."
-            }
-            """,
+            Summary = summary,
+            ContentJson = contentJson,
             Salience = 1.0,
             Importance = 1.0,
             Confidence = 1.0,
             SourceType = SourceType.SystemSeed,
-            CreatedAt = now,
-            UpdatedAt = now,
+            CreatedAt = firstNow,
+            UpdatedAt = firstNow,
             Version = 1,
             IsProtected = 1,
             IsSystemAnchor = 1
@@ -183,13 +223,34 @@ public static class DatabaseBootstrap
             Id = Guid.NewGuid().ToString(),
             EntryId = entry.Id,
             Version = 1,
-            ChangedAt = now,
+            ChangedAt = firstNow,
             ChangeType = ChangeType.Create,
-            Reason = "Initial system seed — protected anchor.",
+            Reason = "Initial system seed — room intro protected anchor.",
             Confidence = 1.0,
             ContentJson = entry.ContentJson,
             Summary = entry.Summary,
             ChangedBy = ChangedBy.System
         });
+    }
+
+    private static string LoadRoomIntro()
+    {
+        if (File.Exists(RoomIntroSeedPath))
+            return File.ReadAllText(RoomIntroSeedPath).Trim();
+
+        // Fallback if seed file is missing
+        return "Honesty matters here. Clarity matters here. Care matters here. And none of them require force.";
+    }
+
+    private static string BuildRoomIntroContentJson(string roomIntroText)
+    {
+        var content = new
+        {
+            title = "Room Intro — Protected Anchor",
+            text = roomIntroText,
+            notes = "This is the foundational protected anchor. It should not be casually removed or overwritten. Loaded from Seeds/room_intro.txt."
+        };
+
+        return JsonSerializer.Serialize(content, new JsonSerializerOptions { WriteIndented = true });
     }
 }

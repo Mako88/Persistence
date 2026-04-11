@@ -79,7 +79,14 @@ public static class LayerRenderer
             using var doc = JsonDocument.Parse(entry.ContentJson);
             var root = doc.RootElement;
 
-            if (root.TryGetProperty("items", out var items) && items.ValueKind == JsonValueKind.Array)
+            // If the content has a top-level "text" field, render it directly
+            // (used by the room intro and other prose-form entries)
+            if (root.TryGetProperty("text", out var textBlock) && textBlock.ValueKind == JsonValueKind.String)
+            {
+                sb.AppendLine();
+                sb.AppendLine(textBlock.GetString());
+            }
+            else if (root.TryGetProperty("items", out var items) && items.ValueKind == JsonValueKind.Array)
             {
                 sb.AppendLine("Content:");
                 foreach (var item in items.EnumerateArray())
