@@ -81,8 +81,18 @@ public class ActionResult
     public string Summary { get; set; } = "";
     public string? ErrorText { get; set; }
 
+    /// <summary>
+    /// For read actions: the actual data to return to the model.
+    /// </summary>
+    public string? ResultData { get; set; }
+
+    public bool HasData => ResultData != null;
+
     public static ActionResult Success(string action, string summary, string? targetId = null) =>
         new() { Action = action, Status = "executed", Summary = summary, TargetEntryId = targetId };
+
+    public static ActionResult WithData(string action, string summary, string data) =>
+        new() { Action = action, Status = "executed", Summary = summary, ResultData = data };
 
     public static ActionResult Error(string action, string error) =>
         new() { Action = action, Status = "failed", ErrorText = error, Summary = $"Failed: {error}" };

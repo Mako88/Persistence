@@ -226,17 +226,90 @@ public class Orchestrator
         // 8. If response was truncated, send a one-shot recovery turn
         if (envelope.WasTruncated)
         {
-            await ProcessTruncationRecoveryAsync(ct);
+            var recoveryResults = await ProcessTruncationRecoveryAsync(ct);
+            if (recoveryResults != null)
+                actionResults.AddRange(recoveryResults);
         }
 
-        // 9. Reflection pass (if due)
+        // 9. If any read actions returned data, feed results back to the model
+        var dataResults = actionResults.Where(r => r.HasData).ToList();
+        if (dataResults.Count > 0)
+        {
+            await ProcessReadResultsAsync(dataResults, ct);
+        }
+
+        // 10. Reflection pass (if due)
         if (_config.ReflectionFrequency > 0 && _turnCount % _config.ReflectionFrequency == 0)
         {
             await RunReflectionAsync(userMessage, envelope.AssistantReply, actionResults, ct);
         }
     }
 
-    private async Task ProcessTruncationRecoveryAsync(CancellationToken ct)
+    private async Task ProcessReadResultsAsync(List<ActionResult> dataResults, CancellationToken ct)
+    {
+        // Build a results summary to feed back to the model
+        var resultLines = dataResults.Select(r =>
+            $"[{r.Action}] {r.Summary}\nData:\n{r.ResultData}");
+        var resultsBlock = string.Join("\n\n", resultLines);
+
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.WriteLine($"  [feeding {dataResults.Count} read result(s) back to model...]");
+        Console.ResetColor();
+
+        var followUpMessage = $"""
+            [SYSTEM: ACTION RESULTS]
+            The following read actions you requested have been executed. Here are the results:
+
+            {resultsBlock}
+
+            Process these results and respond. If you want to take further actions based on what you see,
+            include them in your response. Keep your assistant_reply focused on what you learned.
+            """;
+
+        var messages = _composer.Compose(
+            followUpMessage,
+            _window.GetRecent(),
+            _config.ActivePersonId);
+
+        string rawResponse;
+        try
+        {
+            rawResponse = await _client.CompleteAsync(messages, ct);
+        }
+        catch (Exception ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  [Read follow-up API Error: {ex.Message}]");
+            Console.ResetColor();
+            return;
+        }
+
+        var envelope = ActionParser.Parse(rawResponse);
+        var followUpActions = _executor.Execute(envelope.Actions);
+
+        if (!string.IsNullOrWhiteSpace(envelope.AssistantReply))
+        {
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.Write("Assistant: ");
+            Console.ResetColor();
+            Console.WriteLine(envelope.AssistantReply);
+            Console.WriteLine();
+        }
+
+        if (followUpActions.Count > 0)
+        {
+            Console.ForegroundColor = ConsoleColor.DarkYellow;
+            Console.WriteLine($"  [{followUpActions.Count} follow-up action(s)]");
+            foreach (var r in followUpActions)
+                Console.WriteLine($"    {r.Status}: {r.Action} — {r.Summary}");
+            Console.ResetColor();
+            Console.WriteLine();
+        }
+
+        _window.Add("assistant", envelope.AssistantReply);
+    }
+
+    private async Task<List<ActionResult>?> ProcessTruncationRecoveryAsync(CancellationToken ct)
     {
         Console.ForegroundColor = ConsoleColor.DarkYellow;
         Console.WriteLine("  [Response was truncated — sending recovery prompt...]");
@@ -266,7 +339,7 @@ public class Orchestrator
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine($"  [Recovery API Error: {ex.Message}]");
             Console.ResetColor();
-            return;
+            return null;
         }
 
         var envelope = ActionParser.Parse(rawResponse);
@@ -298,6 +371,7 @@ public class Orchestrator
         _window.Add("assistant", envelope.AssistantReply);
 
         // Do NOT retry again if recovery also truncates — one shot only
+        return actionResults;
     }
 
     private async Task RunReflectionAsync(

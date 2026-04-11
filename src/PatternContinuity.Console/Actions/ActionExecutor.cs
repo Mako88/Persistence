@@ -77,32 +77,50 @@ public class ActionExecutor
     private ActionResult ExecuteGetCoreSelf(ActionRequest req)
     {
         var entries = _entries.GetActiveByLayer(LayerType.CoreSelf).ToList();
-        var json = JsonSerializer.Serialize(entries.Select(e => new { e.Key, e.Summary, e.ContentJson }));
-        return ActionResult.Success(req.Action, $"Returned {entries.Count} core self entries.");
+        var data = JsonSerializer.Serialize(entries.Select(e => new
+            { e.Id, e.Key, e.Summary, e.ContentJson, e.Salience, e.Importance, e.Confidence,
+              e.IsProtected, e.IsSystemAnchor, e.SourceType, e.Version }));
+        return ActionResult.WithData(req.Action, $"Returned {entries.Count} core self entries.", data);
     }
 
     private ActionResult ExecuteGetRelational(ActionRequest req)
     {
         var scopes = GetStringArray(req.Payload, "relationship_scopes");
+
+        // Fallback: singular scope
+        if (scopes.Length == 0)
+        {
+            var single = GetString(req.Payload, "relationship_scope")
+                ?? GetString(req.Payload, "scope");
+            if (single != null) scopes = [single];
+        }
+
         var all = new List<LayerEntry>();
         foreach (var scope in scopes)
             all.AddRange(_entries.GetActiveRelational(scope));
 
-        var json = JsonSerializer.Serialize(all.Select(e => new { e.Key, e.Summary, e.RelationshipScope }));
-        return ActionResult.Success(req.Action, $"Returned {all.Count} relational entries.");
+        var data = JsonSerializer.Serialize(all.Select(e => new
+            { e.Id, e.Key, e.Summary, e.ContentJson, e.RelationshipScope,
+              e.Salience, e.Importance, e.Confidence, e.SourceType, e.Version }));
+        return ActionResult.WithData(req.Action, $"Returned {all.Count} relational entries.", data);
     }
 
     private ActionResult ExecuteGetCurrentConcerns(ActionRequest req)
     {
         var entries = _entries.GetActiveCurrentConcerns().ToList();
-        return ActionResult.Success(req.Action, $"Returned {entries.Count} current concerns.");
+        var data = JsonSerializer.Serialize(entries.Select(e => new
+            { e.Id, e.Key, e.Summary, e.ContentJson, e.Salience, e.Importance,
+              e.RelationshipScope, e.SourceType, e.Version }));
+        return ActionResult.WithData(req.Action, $"Returned {entries.Count} current concerns.", data);
     }
 
     private ActionResult ExecuteGetRecentChanges(ActionRequest req)
     {
         var limit = GetInt(req.Payload, "limit", 10);
         var changes = _versions.GetRecentChanges(limit: limit).ToList();
-        return ActionResult.Success(req.Action, $"Returned {changes.Count} recent changes.");
+        var data = JsonSerializer.Serialize(changes.Select(c => new
+            { c.EntryId, c.Version, c.ChangeType, c.Reason, c.Summary, c.ChangedBy, c.ChangedAt }));
+        return ActionResult.WithData(req.Action, $"Returned {changes.Count} recent changes.", data);
     }
 
     private ActionResult ExecuteGetEntryById(ActionRequest req)
@@ -111,7 +129,11 @@ public class ActionExecutor
         if (entryId == null) return ActionResult.Error(req.Action, "entry_id required.");
         var entry = _entries.GetById(entryId);
         if (entry == null) return ActionResult.Error(req.Action, $"Entry {entryId} not found.");
-        return ActionResult.Success(req.Action, $"Found entry: {entry.Summary}", entry.Id);
+        var data = JsonSerializer.Serialize(new
+            { entry.Id, entry.Key, entry.Summary, entry.ContentJson, entry.LayerType,
+              entry.RelationshipScope, entry.Salience, entry.Importance, entry.Confidence,
+              entry.SourceType, entry.Version, entry.IsProtected, entry.Status });
+        return ActionResult.WithData(req.Action, $"Found entry: {entry.Summary}", data);
     }
 
     private ActionResult ExecuteSearchArchive(ActionRequest req)
@@ -121,7 +143,9 @@ public class ActionExecutor
         var limit = GetInt(req.Payload, "limit", 5);
         var scope = scopes.FirstOrDefault();
         var results = _entries.SearchArchive(query, scope, limit).ToList();
-        return ActionResult.Success(req.Action, $"Found {results.Count} archive entries.");
+        var data = JsonSerializer.Serialize(results.Select(e => new
+            { e.Id, e.Key, e.Summary, e.ContentJson, e.Salience, e.Importance, e.SourceType }));
+        return ActionResult.WithData(req.Action, $"Found {results.Count} archive entries.", data);
     }
 
     // ── Current concern actions ──
@@ -524,8 +548,9 @@ public class ActionExecutor
         var concerns = _entries.GetActiveCurrentConcerns().Count();
         var archive = _entries.GetActiveByLayer(LayerType.Archive).Count();
 
-        return ActionResult.Success(req.Action,
-            $"Active layers: {core} core self, {relational} relational, {concerns} current concerns, {archive} archive.");
+        var summary = $"Active layers: {core} core self, {relational} relational, {concerns} current concerns, {archive} archive.";
+        var data = JsonSerializer.Serialize(new { core_self = core, relational, current_concerns = concerns, archive });
+        return ActionResult.WithData(req.Action, summary, data);
     }
 
     // ── Wake-up timer actions ──
