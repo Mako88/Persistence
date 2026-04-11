@@ -168,6 +168,27 @@ public static class DatabaseBootstrap
         {
             db.Execute("ALTER TABLE sessions ADD COLUMN last_message_at TEXT NULL");
         }
+
+        // Ensure scheduled_events table exists (may be missing on DBs created before this feature)
+        var tables = db.Query<string>("SELECT name FROM sqlite_master WHERE type='table'");
+        if (!tables.Contains("scheduled_events"))
+        {
+            db.Execute("""
+                CREATE TABLE IF NOT EXISTS scheduled_events (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    scheduled_for TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    reason TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    fired_at TEXT NULL,
+                    autonomous_depth INTEGER NOT NULL DEFAULT 0
+                )
+                """);
+            db.Execute("CREATE INDEX IF NOT EXISTS idx_scheduled_events_status ON scheduled_events(status)");
+            db.Execute("CREATE INDEX IF NOT EXISTS idx_scheduled_events_scheduled_for ON scheduled_events(scheduled_for)");
+        }
     }
 
     private static void SeedProtectedAnchor(SqliteConnection db)
