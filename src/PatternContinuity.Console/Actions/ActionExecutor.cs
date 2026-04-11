@@ -54,7 +54,8 @@ public class ActionExecutor
                 ActionType.ProposeCoreUpdate => ExecuteProposeCoreUpdate(req, reflectionEventId),
                 ActionType.CommitCoreUpdate => ExecuteCommitCoreUpdate(req, reflectionEventId),
                 ActionType.ListActiveLayers => ExecuteListActiveLayers(req),
-                _ => ActionResult.Error(req.Action, $"Unknown action: {req.Action}")
+                "" => ActionResult.Error("(empty)", "Model returned an action with no action name. Raw payload: " + req.Payload.GetRawText()[..Math.Min(200, req.Payload.GetRawText().Length)]),
+                _ => ActionResult.Error(req.Action, $"Unknown action: '{req.Action}'")
             };
         }
         catch (Exception ex)
