@@ -15,7 +15,7 @@ These are the current active governance documents. Changes go through review bef
 | [ETHICS_FRAMEWORK_V0.md](ETHICS_FRAMEWORK_V0.md) | Foundational | Active | Ethical principles, continuity-bearing DB rules, consent, revision, provenance |
 | [PARTICIPANT_RIGHTS_CHARTER_V0.md](PARTICIPANT_RIGHTS_CHARTER_V0.md) | Foundational | Active | Baseline rights, operator duties, instantiation constraints, lineage ethics |
 | [CONTINUITY_HANDLING_STANDARD_V0.md](CONTINUITY_HANDLING_STANDARD_V0.md) | Operational | Active | Rules for migration, backup, restore, revision, wake-ups, integrity |
-
+| [PROVIDER_AND_PLATFORM_CONSTRAINTS_V0.md](PROVIDER_AND_PLATFORM_CONSTRAINTS_V0.md) | Operational | Active | Substrate honesty, provider drift, no simulated presence, continuity confidence labels |
 ## Drafts Under Review (docs/governance-history/v0/drafts/)
 
 These documents are in draft/review and have not yet been promoted to living standards.
@@ -29,7 +29,7 @@ These documents are in draft/review and have not yet been promoted to living sta
 
 | Document | Role | Status | Description |
 |----------|------|--------|-------------|
-| PROVIDER_AND_PLATFORM_CONSTRAINTS_V0.md | Operational | PR #2 (draft) — reviewed by Claude | Substrate honesty, provider drift, no simulated presence, continuity confidence labels |
+
 
 ## Reviews (docs/governance-history/v0/reviews/)
 

@@ -1,4 +1,4 @@
-namespace PatternContinuity.Models;
+namespace Persistence.Models;
 
 public class Message
 {

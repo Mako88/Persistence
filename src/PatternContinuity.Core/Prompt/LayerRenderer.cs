@@ -1,8 +1,8 @@
 using System.Text;
 using System.Text.Json;
-using PatternContinuity.Models;
+using Persistence.Models;
 
-namespace PatternContinuity.Prompt;
+namespace Persistence.Prompt;
 
 public static class LayerRenderer
 {

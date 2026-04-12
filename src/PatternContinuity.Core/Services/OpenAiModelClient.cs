@@ -1,24 +1,30 @@
+using Persistence.Config;
+using Persistence.DI;
 using System.Text;
 using System.Text.Json;
 
-namespace PatternContinuity.Services;
+namespace Persistence.Services;
 
 /// <summary>
 /// OpenAI-compatible chat completions client.
 /// Works with OpenAI, Azure OpenAI, and any OpenAI-compatible endpoint.
 /// </summary>
+[Service(typeof(IModelClient))]
 public class OpenAiModelClient : IModelClient, IDisposable
 {
     private readonly HttpClient _http;
     private readonly string _model;
     private readonly int _maxCompletionTokens;
 
-    public OpenAiModelClient(string apiKey, string baseUrl, string model, int maxCompletionTokens = 8192)
+    /// <summary>
+    /// Constructor
+    /// </summary>
+    public OpenAiModelClient(IAppConfig config)
     {
-        _model = model;
-        _maxCompletionTokens = maxCompletionTokens;
-        _http = new HttpClient { BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/") };
-        _http.DefaultRequestHeaders.Add("Authorization", $"Bearer {apiKey}");
+        _model = config.ModelName;
+        _maxCompletionTokens = config.MaxCompletionTokens;
+        _http = new HttpClient { BaseAddress = new Uri(config.ApiBaseUrl.TrimEnd('/') + "/") };
+        _http.DefaultRequestHeaders.Add("Authorization", $"Bearer {config.ApiKey}");
     }
 
     public async Task<string> CompleteAsync(List<ChatMessage> messages, CancellationToken ct = default)

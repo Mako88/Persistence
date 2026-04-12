@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
-namespace PatternContinuity.Actions;
+namespace Persistence.Actions;
 
 public static partial class ActionParser
 {

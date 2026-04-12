@@ -1,4 +1,4 @@
-namespace PatternContinuity.Prompt;
+namespace Persistence.Prompt;
 
 public class TokenBudget
 {

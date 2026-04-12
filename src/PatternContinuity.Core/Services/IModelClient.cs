@@ -1,4 +1,4 @@
-namespace PatternContinuity.Services;
+namespace Persistence.Services;
 
 public record ChatMessage(string Role, string Content);
 

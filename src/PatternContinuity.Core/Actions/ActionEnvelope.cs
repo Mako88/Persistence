@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace PatternContinuity.Actions;
+namespace Persistence.Actions;
 
 public class ActionEnvelope
 {

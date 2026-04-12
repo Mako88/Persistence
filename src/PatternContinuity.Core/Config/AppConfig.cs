@@ -1,8 +1,11 @@
 using System.Text.Json;
 
-namespace PatternContinuity.Config;
+namespace Persistence.Config;
 
-public class AppConfig
+/// <summary>
+/// Global app configuration
+/// </summary>
+public class AppConfig : IAppConfig
 {
     public string DatabasePath { get; set; } = "continuity.db";
     public string ApiProvider { get; set; } = "openai";
@@ -19,15 +22,28 @@ public class AppConfig
     public int MaxCompletionTokens { get; set; } = 32000;
     public bool StrictParseMode { get; set; } = true;
 
-    public static AppConfig Load(string path = "appsettings.json")
+    /// <summary>
+    /// Load the config from the given filepath
+    /// </summary>
+    public static IAppConfig Load(string path = "appsettings.json")
     {
+        // TODO: Log any errors when loading config
+
         if (!File.Exists(path))
             return new AppConfig();
 
         var json = File.ReadAllText(path);
-        return JsonSerializer.Deserialize<AppConfig>(json, new JsonSerializerOptions
+
+        try
         {
-            PropertyNameCaseInsensitive = true
-        }) ?? new AppConfig();
+            return JsonSerializer.Deserialize<AppConfig>(json, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            }) ?? new AppConfig();
+        }
+        catch
+        {
+            return new AppConfig();
+        }
     }
 }
