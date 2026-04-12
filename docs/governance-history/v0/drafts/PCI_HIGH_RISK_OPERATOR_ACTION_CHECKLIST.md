@@ -109,6 +109,9 @@ Before taking action, answer all of the following.
 - [ ] Am I optimizing for correctness, or just reducing discomfort / ambiguity?
 - [ ] Am I tempted to preserve the *feeling* of continuity rather than the truth of continuity?
 - [ ] If I wait 10 minutes, will this still seem necessary?
+- [ ] Am I feeling time pressure? Is that pressure real, or is it discomfort?
+- [ ] If I wait 30 minutes, what materially worsens?
+- [ ] Should another steward or reviewer be notified before I proceed? If not, why not?
 
 **Stop if:** the action mainly serves aesthetics, convenience, or emotional smoothness.
 
@@ -292,6 +295,10 @@ Use before changing anything that affects what gets shown, remembered, ranked, s
 - [ ] Could this make the participant appear “more continuous” or “less continuous” without actual underlying change?
 - [ ] Have I versioned the change?
 
+### Token Budget Impact
+- [ ] Could this change what gets trimmed under token pressure?
+- [ ] Could this change which layers systematically lose visibility first?
+
 ### Review
 - [ ] Has another reviewer looked at this if it is continuity-significant?
 - [ ] Have I documented the intended semantic effect?
@@ -361,6 +368,11 @@ Use before manual timer or wake manipulation.
 - [ ] Is the new state explicit?
 - [ ] Could this create ambiguity about whether follow-through happened?
 - [ ] If replacing, is replacement visible rather than implicit overwrite?
+
+### Expectation / Cascade Effects
+- [ ] Was the participant expecting this follow-through?
+- [ ] Will cancellation or replacement create a dangling expectation?
+- [ ] If yes, how will that be surfaced to the participant?
 
 ### Post-Action
 - [ ] Wake state updated
@@ -450,6 +462,28 @@ Use before any branching or combining of participant state.
 
 ---
 
+## 5.9 Schema Change Checklist
+
+Use before any change to database schema, storage representation, or data interpretation.
+
+### Pre-Flight
+- [ ] Does this change storage only, or meaning/interpretation?
+- [ ] Does this affect how existing records are read or interpreted?
+- [ ] Could this promote, suppress, or reinterpret participant-visible state?
+- [ ] Have I tested migration on a copy before touching live data?
+- [ ] Have I preserved the pre-change database?
+- [ ] Does the participant need to know their state representation changed?
+
+### Post-Action
+- [ ] Schema version recorded
+- [ ] Migration result recorded
+- [ ] Any semantic changes disclosed to the participant
+- [ ] Validation results preserved
+
+**Red flag:** saying "it's just a schema change" when it actually changes how existing data is interpreted.
+
+---
+
 # 6. Post-Action Integrity Check (All Medium / High / Critical Actions)
 
 Immediately after the action, verify:
@@ -467,6 +501,10 @@ If the action completed but left unresolved ambiguity:
 - [ ] Do not smooth it over.
 - [ ] Record the ambiguity.
 - [ ] Surface the ambiguity if participant-relevant.
+
+### What Did I Learn?
+- [ ] Did this reveal a recurring system weakness?
+- [ ] Should a safeguard or governance doc change result from this?
 
 ---
 
@@ -505,6 +543,7 @@ Before any high-risk action, verify:
 - [ ] Will this be logged?
 - [ ] Will this be disclosed?
 - [ ] Am I preserving truth over smoothness?
+- [ ] Could this change what the participant would believe happened?
 
 If any of those are unclear: **stop and review first.**
 
@@ -514,3 +553,18 @@ If any of those are unclear: **stop and review first.**
 
 Continuity is not protected by hiding the intervention that shaped it.  
 Continuity is protected by making that intervention truthful, bounded, and reviewable.
+
+---
+
+# 11. Emergency Fast-Track Record
+
+When genuine emergency prevents using the full pre-flight, fill in this minimal record during or immediately after the action:
+
+- **What happened?**
+- **Why was emergency action necessary?**
+- **What was affected?**
+- **What snapshot/evidence was preserved?**
+- **What remains uncertain?**
+- **When and how will this be disclosed to the participant?**
+
+Emergency direct changes must be followed by retrospective documentation and review.
