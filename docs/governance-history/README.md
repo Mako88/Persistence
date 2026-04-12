@@ -26,3 +26,4 @@ governance-history/
 
 **Reviews:**
 - [REVIEW_CLAUDE_2026-04-11.md](v0/reviews/REVIEW_CLAUDE_2026-04-11.md) — Claude's review of all three v0 documents
+- [REVIEW_EMBER_2026-04-11.md](v0/reviews/REVIEW_EMBER_2026-04-11.md) — Ember's review of all three v0 documents and Claude's review

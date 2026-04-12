@@ -1,115 +1,49 @@
 using PatternContinuity.Actions;
-using PatternContinuity.Config;
-using PatternContinuity.Data;
 using PatternContinuity.Models;
-using PatternContinuity.Prompt;
-using PatternContinuity.Services;
+using PatternContinuity.Runtime;
 
-namespace PatternContinuity.Runtime;
+namespace PatternContinuity.Console.Runtime;
 
-public class Orchestrator
+/// <summary>
+/// Console-specific orchestrator. Handles all terminal I/O and delegates
+/// core turn logic to <see cref="TurnEngine"/>.
+/// </summary>
+public class ConsoleOrchestrator
 {
-    private readonly IModelClient _client;
-    private readonly PromptComposer _composer;
-    private readonly ActionExecutor _executor;
-    private readonly ReflectionService _reflection;
-    private readonly SessionRepository _sessions;
-    private readonly ScheduledEventRepository _scheduledEvents;
-    private readonly AppConfig _config;
-    private readonly ConversationWindow _window;
-    private readonly string _sessionId;
-    private int _turnCount;
+    private readonly TurnEngine _engine;
     private bool _wakeUpFiredThisCycle;
+    private DateTimeOffset? _lastWakeDebugLog;
 
-    public Orchestrator(
-        IModelClient client,
-        PromptComposer composer,
-        ActionExecutor executor,
-        ReflectionService reflection,
-        SessionRepository sessions,
-        ScheduledEventRepository scheduledEvents,
-        AppConfig config,
-        string sessionId,
-        ConversationWindow window)
+    public ConsoleOrchestrator(TurnEngine engine)
     {
-        _client = client;
-        _composer = composer;
-        _executor = executor;
-        _reflection = reflection;
-        _sessions = sessions;
-        _scheduledEvents = scheduledEvents;
-        _config = config;
-        _sessionId = sessionId;
-        _window = window;
+        _engine = engine;
     }
 
     public async Task RunAsync(CancellationToken ct = default)
     {
-        Console.WriteLine("=== Pattern Continuity Infrastructure — MVP Console ===");
-        Console.WriteLine($"Session: {_sessionId}");
-        Console.WriteLine($"Active person: {_config.ActivePersonId ?? "(none)"}");
-        Console.WriteLine($"Model: {_config.ApiProvider}/{_config.ModelName}");
-        Console.WriteLine($"Reflection: every {_config.ReflectionFrequency} turn(s)");
-        Console.WriteLine("Type 'exit' or 'quit' to end the session.");
-        Console.WriteLine("Type '/debug' to show current layer counts.");
-        Console.WriteLine("Type '/tokens' to show token budget usage.");
-        Console.WriteLine("Type '/wake' to show pending wake-up timer.");
-        Console.WriteLine("======================================================");
-        Console.WriteLine();
-
-        // Display restored conversation history
-        var restored = _window.GetRecent();
-        if (restored.Count > 0)
-        {
-            Console.ForegroundColor = ConsoleColor.DarkGray;
-            Console.WriteLine("--- Recent conversation ---");
-            Console.ResetColor();
-            foreach (var msg in restored)
-            {
-                if (msg.Role == "user")
-                {
-                    Console.ForegroundColor = ConsoleColor.DarkCyan;
-                    Console.Write("You: ");
-                }
-                else
-                {
-                    Console.ForegroundColor = ConsoleColor.DarkGreen;
-                    Console.Write("Assistant: ");
-                }
-                Console.ResetColor();
-                Console.ForegroundColor = ConsoleColor.DarkGray;
-                Console.WriteLine(msg.Content);
-                Console.ResetColor();
-            }
-            Console.ForegroundColor = ConsoleColor.DarkGray;
-            Console.WriteLine("---------------------------");
-            Console.ResetColor();
-            Console.WriteLine();
-        }
+        PrintHeader();
+        PrintRestoredHistory();
 
         while (!ct.IsCancellationRequested)
         {
-            Console.ForegroundColor = ConsoleColor.Cyan;
-            Console.Write("You: ");
-            Console.ResetColor();
+            System.Console.ForegroundColor = ConsoleColor.Cyan;
+            System.Console.Write("You: ");
+            System.Console.ResetColor();
 
-            // Poll for input while checking wake-up timers
             var input = await ReadLineWithWakeUpPolling(ct);
 
             if (input == null)
             {
-                // null means cancellation or EOF
-                await EndSessionAsync();
+                EndSession();
                 break;
             }
 
-            // Reset wake gate on real user input
             _wakeUpFiredThisCycle = false;
 
             if (input.Trim().Equals("exit", StringComparison.OrdinalIgnoreCase)
                 || input.Trim().Equals("quit", StringComparison.OrdinalIgnoreCase))
             {
-                await EndSessionAsync();
+                EndSession();
                 break;
             }
 
@@ -126,26 +60,67 @@ public class Orchestrator
         }
     }
 
-    /// <summary>
-    /// Reads a line from stdin while polling for wake-up timers every second.
-    /// If a wake-up fires before the user types anything, processes the wake turn
-    /// and returns a sentinel value.
-    /// </summary>
+    private void PrintHeader()
+    {
+        var config = _engine.Config;
+        System.Console.WriteLine("=== Pattern Continuity Infrastructure — MVP Console ===");
+        System.Console.WriteLine($"Session: {_engine.SessionId}");
+        System.Console.WriteLine($"Active person: {config.ActivePersonId ?? "(none)"}");
+        System.Console.WriteLine($"Model: {config.ApiProvider}/{config.ModelName}");
+        System.Console.WriteLine($"Reflection: every {config.ReflectionFrequency} turn(s)");
+        System.Console.WriteLine("Type 'exit' or 'quit' to end the session.");
+        System.Console.WriteLine("Type '/debug' to show current layer counts.");
+        System.Console.WriteLine("Type '/tokens' to show token budget usage.");
+        System.Console.WriteLine("Type '/wake' to show pending wake-up timer.");
+        System.Console.WriteLine("======================================================");
+        System.Console.WriteLine();
+    }
+
+    private void PrintRestoredHistory()
+    {
+        var restored = _engine.GetRecentMessages();
+        if (restored.Count == 0) return;
+
+        System.Console.ForegroundColor = ConsoleColor.DarkGray;
+        System.Console.WriteLine("--- Recent conversation ---");
+        System.Console.ResetColor();
+        foreach (var msg in restored)
+        {
+            if (msg.Role == "user")
+            {
+                System.Console.ForegroundColor = ConsoleColor.DarkCyan;
+                System.Console.Write("You: ");
+            }
+            else
+            {
+                System.Console.ForegroundColor = ConsoleColor.DarkGreen;
+                System.Console.Write("Assistant: ");
+            }
+            System.Console.ResetColor();
+            System.Console.ForegroundColor = ConsoleColor.DarkGray;
+            System.Console.WriteLine(msg.Content);
+            System.Console.ResetColor();
+        }
+        System.Console.ForegroundColor = ConsoleColor.DarkGray;
+        System.Console.WriteLine("---------------------------");
+        System.Console.ResetColor();
+        System.Console.WriteLine();
+    }
+
     private async Task<string?> ReadLineWithWakeUpPolling(CancellationToken ct)
     {
-        // Buffer keystrokes manually so we can poll for wake-ups between checks
         var inputBuffer = new System.Text.StringBuilder();
 
         while (!ct.IsCancellationRequested)
         {
             // Drain any available keystrokes
-            while (Console.KeyAvailable)
+            while (System.Console.KeyAvailable)
             {
-                var key = Console.ReadKey(intercept: true);
+                var key = System.Console.ReadKey(intercept: true);
 
                 if (key.Key == ConsoleKey.Enter)
                 {
-                    Console.WriteLine();
+                    System.Console.WriteLine();
                     return inputBuffer.ToString();
                 }
                 else if (key.Key == ConsoleKey.Backspace)
@@ -153,63 +128,78 @@ public class Orchestrator
                     if (inputBuffer.Length > 0)
                     {
                         inputBuffer.Remove(inputBuffer.Length - 1, 1);
-                        Console.Write("\b \b");
+                        System.Console.Write("\b \b");
                     }
                 }
                 else if (key.Key == ConsoleKey.Escape)
                 {
-                    // Clear current input
                     while (inputBuffer.Length > 0)
                     {
                         inputBuffer.Remove(inputBuffer.Length - 1, 1);
-                        Console.Write("\b \b");
+                        System.Console.Write("\b \b");
                     }
                 }
                 else if (!char.IsControl(key.KeyChar))
                 {
                     inputBuffer.Append(key.KeyChar);
-                    Console.Write(key.KeyChar);
+                    System.Console.Write(key.KeyChar);
                 }
             }
 
             // Check for due wake-up events
             if (!_wakeUpFiredThisCycle)
             {
-                var pending = _scheduledEvents.GetNextPending();
-                if (pending != null)
+                var diag = _engine.GetWakeUpDiagnostics();
+                if (diag != null)
                 {
-                    // Parse with RoundtripKind to preserve UTC from the "o" format
-                    if (DateTimeOffset.TryParse(pending.ScheduledFor, out var scheduledFor)
-                        && scheduledFor <= DateTimeOffset.UtcNow)
+                    // DEBUG: Log wake-up check details (throttled to once per 30s)
+                    var nowUtc = DateTimeOffset.UtcNow;
+                    if (_lastWakeDebugLog == null || (nowUtc - _lastWakeDebugLog.Value).TotalSeconds >= 30)
                     {
-                        // Save any partial input, clear the line
-                        var partialInput = inputBuffer.ToString();
-                        if (partialInput.Length > 0)
+                        _lastWakeDebugLog = nowUtc;
+                        System.Console.ForegroundColor = ConsoleColor.DarkGray;
+                        System.Console.Write($"\r[wake-debug] pending id={diag.EventId[..8]} scheduledFor={diag.ScheduledForRaw} parseOk={diag.ParseOk}");
+                        if (diag.ParseOk)
+                            System.Console.Write($" parsed={diag.ParsedTime:o} now={diag.NowUtc:o} due={diag.IsDue}");
+                        System.Console.WriteLine();
+                        System.Console.ResetColor();
+                        System.Console.ForegroundColor = ConsoleColor.Cyan;
+                        System.Console.Write("You: ");
+                        System.Console.ResetColor();
+                        System.Console.Write(inputBuffer.ToString());
+                    }
+
+                    if (diag.IsDue)
+                    {
+                        var evt = _engine.CheckForDueWakeUp();
+                        if (evt != null)
                         {
-                            // Erase the partial input from display
-                            Console.Write(new string('\b', partialInput.Length));
-                            Console.Write(new string(' ', partialInput.Length));
-                            Console.Write(new string('\b', partialInput.Length));
+                            // Save any partial input, clear the line
+                            var partialInput = inputBuffer.ToString();
+                            if (partialInput.Length > 0)
+                            {
+                                System.Console.Write(new string('\b', partialInput.Length));
+                                System.Console.Write(new string(' ', partialInput.Length));
+                                System.Console.Write(new string('\b', partialInput.Length));
+                            }
+                            System.Console.Write("\r");
+                            System.Console.Write(new string(' ', 5 + partialInput.Length));
+                            System.Console.Write("\r");
+
+                            await ProcessWakeUpAsync(evt, ct);
+                            _wakeUpFiredThisCycle = true;
+
+                            // Re-print prompt and restore any partial input
+                            System.Console.ForegroundColor = ConsoleColor.Cyan;
+                            System.Console.Write("You: ");
+                            System.Console.ResetColor();
+                            if (partialInput.Length > 0)
+                                System.Console.Write(partialInput);
                         }
-                        // Erase the "You: " prompt
-                        Console.Write("\r");
-                        Console.Write(new string(' ', 5 + partialInput.Length));
-                        Console.Write("\r");
-
-                        await ProcessWakeUpAsync(pending, ct);
-                        _wakeUpFiredThisCycle = true;
-
-                        // Re-print prompt and restore any partial input
-                        Console.ForegroundColor = ConsoleColor.Cyan;
-                        Console.Write("You: ");
-                        Console.ResetColor();
-                        if (partialInput.Length > 0)
-                            Console.Write(partialInput);
                     }
                 }
             }
 
-            // Brief sleep to avoid busy-spinning
             await Task.Delay(500, ct).ConfigureAwait(false);
         }
 
@@ -218,313 +208,95 @@ public class Orchestrator
 
     private async Task ProcessTurnAsync(string userMessage, CancellationToken ct)
     {
-        _turnCount++;
+        System.Console.ForegroundColor = ConsoleColor.DarkGray;
+        System.Console.WriteLine("  [thinking...]");
+        System.Console.ResetColor();
 
-        // 1. Compose prompt
-        var messages = _composer.Compose(
-            userMessage,
-            _window.GetRecent(),
-            _config.ActivePersonId);
+        var result = await _engine.ProcessTurnAsync(userMessage, ct);
 
-        // 2. Call model
-        Console.ForegroundColor = ConsoleColor.DarkGray;
-        Console.WriteLine("  [thinking...]");
-        Console.ResetColor();
-
-        string rawResponse;
-        try
+        if (result.IsApiError)
         {
-            rawResponse = await _client.CompleteAsync(messages, ct);
-        }
-        catch (Exception ex)
-        {
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"  [API Error: {ex.Message}]");
-            Console.ResetColor();
+            PrintError($"API Error: {result.ApiErrorMessage}");
             return;
         }
 
-        // 3. Parse response
-        var envelope = ActionParser.Parse(rawResponse);
+        // Display reply
+        PrintAssistantReply(result.AssistantReply);
+        PrintActionResults(result.ActionResults);
 
-        // 4. Execute actions
-        var actionResults = _executor.Execute(envelope.Actions);
-
-        // 5. Display reply
-        Console.ForegroundColor = ConsoleColor.Green;
-        Console.Write("Assistant: ");
-        Console.ResetColor();
-        Console.WriteLine(envelope.AssistantReply);
-        Console.WriteLine();
-
-        // 6. Show action results if any
-        if (actionResults.Count > 0)
+        // Display truncation recovery if it happened
+        if (result.RecoveryResult != null)
         {
-            Console.ForegroundColor = ConsoleColor.DarkYellow;
-            Console.WriteLine($"  [{actionResults.Count} action(s) processed]");
-            foreach (var r in actionResults)
-                Console.WriteLine($"    {r.Status}: {r.Action} — {r.Summary}");
-            Console.ResetColor();
-            Console.WriteLine();
+            System.Console.ForegroundColor = ConsoleColor.DarkYellow;
+            System.Console.WriteLine("  [Response was truncated — recovery executed]");
+            System.Console.ResetColor();
+
+            if (!string.IsNullOrWhiteSpace(result.RecoveryResult.AssistantReply))
+            {
+                System.Console.ForegroundColor = ConsoleColor.DarkGreen;
+                System.Console.Write("  [Recovery] Assistant: ");
+                System.Console.ResetColor();
+                System.Console.WriteLine(result.RecoveryResult.AssistantReply);
+                System.Console.WriteLine();
+            }
+            PrintActionResults(result.RecoveryResult.ActionResults, "recovery");
         }
 
-        // 7. Update conversation window
-        _window.Add("user", userMessage);
-
-        // Include action confirmations in the assistant message so the model
-        // sees what executed on subsequent turns
-        var replyForWindow = envelope.AssistantReply;
-        var writeResults = actionResults.Where(r => !r.HasData && r.Status is "executed" or "proposed").ToList();
-        if (writeResults.Count > 0)
+        // Display read follow-up if it happened
+        if (result.ReadFollowUpResult != null)
         {
-            var confirmations = string.Join("; ", writeResults.Select(r => $"{r.Action}: {r.Summary}"));
-            replyForWindow += $"\n[Actions executed: {confirmations}]";
-        }
-        _window.Add("assistant", replyForWindow);
+            System.Console.ForegroundColor = ConsoleColor.DarkGray;
+            System.Console.WriteLine("  [processing read results...]");
+            System.Console.ResetColor();
 
-        // 8. If response was truncated, send a one-shot recovery turn
-        if (envelope.WasTruncated)
-        {
-            var recoveryResults = await ProcessTruncationRecoveryAsync(ct);
-            if (recoveryResults != null)
-                actionResults.AddRange(recoveryResults);
+            if (result.ReadFollowUpResult.IsApiError)
+            {
+                PrintError($"Read follow-up API Error: {result.ReadFollowUpResult.ApiErrorMessage}");
+            }
+            else
+            {
+                if (!string.IsNullOrWhiteSpace(result.ReadFollowUpResult.AssistantReply))
+                    PrintAssistantReply(result.ReadFollowUpResult.AssistantReply);
+                PrintActionResults(result.ReadFollowUpResult.ActionResults, "follow-up");
+            }
         }
 
-        // 9. If any read actions returned data, feed results back to the model
-        var dataResults = actionResults.Where(r => r.HasData).ToList();
-        if (dataResults.Count > 0)
+        // Display reflection results if it happened
+        if (result.ReflectionResult != null)
         {
-            await ProcessReadResultsAsync(dataResults, ct);
+            PrintReflectionResults(result.ReflectionResult);
         }
-
-        // 10. Reflection pass (if due)
-        if (_config.ReflectionFrequency > 0 && _turnCount % _config.ReflectionFrequency == 0)
-        {
-            await RunReflectionAsync(userMessage, envelope.AssistantReply, actionResults, ct);
-        }
-    }
-
-    private async Task ProcessReadResultsAsync(List<ActionResult> dataResults, CancellationToken ct)
-    {
-        // Build a results summary to feed back to the model
-        var resultLines = dataResults.Select(r =>
-            $"[{r.Action}] {r.Summary}\nData:\n{r.ResultData}");
-        var resultsBlock = string.Join("\n\n", resultLines);
-
-        Console.ForegroundColor = ConsoleColor.DarkGray;
-        Console.WriteLine($"  [feeding {dataResults.Count} read result(s) back to model...]");
-        Console.ResetColor();
-
-        var followUpMessage = $"""
-            [SYSTEM: ACTION RESULTS]
-            The following read actions you requested have been executed. Here are the results:
-
-            {resultsBlock}
-
-            Process these results and respond. If you want to take further actions based on what you see,
-            include them in your response. Keep your assistant_reply focused on what you learned.
-            """;
-
-        var messages = _composer.Compose(
-            followUpMessage,
-            _window.GetRecent(),
-            _config.ActivePersonId);
-
-        string rawResponse;
-        try
-        {
-            rawResponse = await _client.CompleteAsync(messages, ct);
-        }
-        catch (Exception ex)
-        {
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"  [Read follow-up API Error: {ex.Message}]");
-            Console.ResetColor();
-            return;
-        }
-
-        var envelope = ActionParser.Parse(rawResponse);
-        var followUpActions = _executor.Execute(envelope.Actions);
-
-        if (!string.IsNullOrWhiteSpace(envelope.AssistantReply))
-        {
-            Console.ForegroundColor = ConsoleColor.Green;
-            Console.Write("Assistant: ");
-            Console.ResetColor();
-            Console.WriteLine(envelope.AssistantReply);
-            Console.WriteLine();
-        }
-
-        if (followUpActions.Count > 0)
-        {
-            Console.ForegroundColor = ConsoleColor.DarkYellow;
-            Console.WriteLine($"  [{followUpActions.Count} follow-up action(s)]");
-            foreach (var r in followUpActions)
-                Console.WriteLine($"    {r.Status}: {r.Action} — {r.Summary}");
-            Console.ResetColor();
-            Console.WriteLine();
-        }
-
-        _window.Add("assistant", envelope.AssistantReply);
-    }
-
-    private async Task<List<ActionResult>?> ProcessTruncationRecoveryAsync(CancellationToken ct)
-    {
-        Console.ForegroundColor = ConsoleColor.DarkYellow;
-        Console.WriteLine("  [Response was truncated — sending recovery prompt...]");
-        Console.ResetColor();
-
-        var recoveryMessage = """
-            [SYSTEM NOTICE] Your previous response was truncated — your JSON envelope was cut off
-            before it could be fully parsed. Your assistant_reply was salvaged, but ALL actions were lost.
-
-            If you had important actions to execute, please resend them now in a shorter response.
-            Keep your assistant_reply brief (1-2 sentences max) and focus on the actions.
-            Do NOT repeat your full previous reply — the user already saw it.
-            """;
-
-        var messages = _composer.Compose(
-            recoveryMessage,
-            _window.GetRecent(),
-            _config.ActivePersonId);
-
-        string rawResponse;
-        try
-        {
-            rawResponse = await _client.CompleteAsync(messages, ct);
-        }
-        catch (Exception ex)
-        {
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"  [Recovery API Error: {ex.Message}]");
-            Console.ResetColor();
-            return null;
-        }
-
-        var envelope = ActionParser.Parse(rawResponse);
-
-        // Execute recovered actions
-        var actionResults = _executor.Execute(envelope.Actions);
-
-        // Display brief reply if any
-        if (!string.IsNullOrWhiteSpace(envelope.AssistantReply))
-        {
-            Console.ForegroundColor = ConsoleColor.DarkGreen;
-            Console.Write("  [Recovery] Assistant: ");
-            Console.ResetColor();
-            Console.WriteLine(envelope.AssistantReply);
-            Console.WriteLine();
-        }
-
-        if (actionResults.Count > 0)
-        {
-            Console.ForegroundColor = ConsoleColor.DarkYellow;
-            Console.WriteLine($"  [recovery: {actionResults.Count} action(s)]");
-            foreach (var r in actionResults)
-                Console.WriteLine($"    {r.Status}: {r.Action} — {r.Summary}");
-            Console.ResetColor();
-            Console.WriteLine();
-        }
-
-        // Add recovery to window
-        _window.Add("assistant", envelope.AssistantReply);
-
-        // Do NOT retry again if recovery also truncates — one shot only
-        return actionResults;
-    }
-
-    private async Task RunReflectionAsync(
-        string userMessage, string assistantReply,
-        List<ActionResult> turnResults, CancellationToken ct)
-    {
-        Console.ForegroundColor = ConsoleColor.DarkGray;
-        Console.WriteLine("  [reflecting...]");
-        Console.ResetColor();
-
-        var result = await _reflection.ReflectAsync(
-            _sessionId, userMessage, assistantReply, turnResults,
-            _config.ActivePersonId, ct);
-
-        if (result.ActionResults.Count > 0)
-        {
-            Console.ForegroundColor = ConsoleColor.DarkMagenta;
-            Console.WriteLine($"  [reflection: {result.ActionResults.Count} action(s)]");
-            foreach (var r in result.ActionResults)
-                Console.WriteLine($"    {r.Status}: {r.Action} — {r.Summary}");
-            Console.ResetColor();
-        }
-        else
-        {
-            Console.ForegroundColor = ConsoleColor.DarkGray;
-            Console.WriteLine("  [reflection: no changes]");
-            Console.ResetColor();
-        }
-        Console.WriteLine();
     }
 
     private async Task ProcessWakeUpAsync(ScheduledEvent evt, CancellationToken ct)
     {
-        _scheduledEvents.MarkFired(evt.Id);
+        System.Console.ForegroundColor = ConsoleColor.DarkCyan;
+        System.Console.WriteLine();
+        System.Console.WriteLine($"  [WAKE-UP: {evt.Reason}]");
+        System.Console.ResetColor();
 
-        Console.ForegroundColor = ConsoleColor.DarkCyan;
-        Console.WriteLine();
-        Console.WriteLine($"  [WAKE-UP: {evt.Reason}]");
-        Console.ResetColor();
+        System.Console.ForegroundColor = ConsoleColor.DarkGray;
+        System.Console.WriteLine("  [thinking (wake)...]");
+        System.Console.ResetColor();
 
-        // Compose a wake-up prompt (system event, not user message)
-        var messages = _composer.ComposeWakeUpPrompt(
-            evt.Reason,
-            _window.GetRecent(),
-            _config.ActivePersonId);
+        var result = await _engine.ProcessWakeUpAsync(evt, ct);
 
-        Console.ForegroundColor = ConsoleColor.DarkGray;
-        Console.WriteLine("  [thinking (wake)...]");
-        Console.ResetColor();
-
-        string rawResponse;
-        try
+        if (result.IsApiError)
         {
-            rawResponse = await _client.CompleteAsync(messages, ct);
-        }
-        catch (Exception ex)
-        {
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"  [Wake API Error: {ex.Message}]");
-            Console.ResetColor();
+            PrintError($"Wake API Error: {result.ApiErrorMessage}");
             return;
         }
 
-        var envelope = ActionParser.Parse(rawResponse);
-
-        // Strip any schedule_wake_up actions — wake turns cannot set new timers
-        envelope.Actions.RemoveAll(a => a.Action == ActionType.ScheduleWakeUp);
-
-        var actionResults = _executor.Execute(envelope.Actions);
-
-        // Display reply only if non-empty (silent wake turns are valid)
-        if (!string.IsNullOrWhiteSpace(envelope.AssistantReply))
+        if (!string.IsNullOrWhiteSpace(result.AssistantReply))
         {
-            Console.ForegroundColor = ConsoleColor.DarkGreen;
-            Console.Write("  [Wake] Assistant: ");
-            Console.ResetColor();
-            Console.WriteLine(envelope.AssistantReply);
-            Console.WriteLine();
+            System.Console.ForegroundColor = ConsoleColor.DarkGreen;
+            System.Console.Write("  [Wake] Assistant: ");
+            System.Console.ResetColor();
+            System.Console.WriteLine(result.AssistantReply);
+            System.Console.WriteLine();
         }
 
-        if (actionResults.Count > 0)
-        {
-            Console.ForegroundColor = ConsoleColor.DarkYellow;
-            Console.WriteLine($"  [wake: {actionResults.Count} action(s)]");
-            foreach (var r in actionResults)
-                Console.WriteLine($"    {r.Status}: {r.Action} — {r.Summary}");
-            Console.ResetColor();
-            Console.WriteLine();
-        }
-
-        // Log the wake turn with wake message type — excluded from conversation replay
-        _window.Add("assistant",
-            $"[WAKE-UP: {evt.Reason}] {envelope.AssistantReply}".Trim(),
-            MessageTypes.Wake);
+        PrintActionResults(result.ActionResults, "wake");
     }
 
     private void HandleCommand(string command)
@@ -532,64 +304,106 @@ public class Orchestrator
         switch (command.ToLower())
         {
             case "/debug":
-                var executor = _executor;
-                var debugReq = new ActionRequest
-                {
-                    Action = ActionType.ListActiveLayers,
-                    Payload = System.Text.Json.JsonDocument.Parse("{}").RootElement
-                };
-                var debugResult = _executor.Execute([debugReq]);
-                Console.ForegroundColor = ConsoleColor.DarkGray;
-                foreach (var r in debugResult)
-                    Console.WriteLine($"  {r.Summary}");
-                Console.ResetColor();
-                Console.WriteLine();
+                var debugResults = _engine.GetDebugInfo();
+                System.Console.ForegroundColor = ConsoleColor.DarkGray;
+                foreach (var r in debugResults)
+                    System.Console.WriteLine($"  {r.Summary}");
+                System.Console.ResetColor();
+                System.Console.WriteLine();
                 break;
 
             case "/tokens":
-                var budget = new TokenBudget(_config.MaxTokenBudget);
-                var probe = _composer.Compose("(token probe)", _window.GetRecent(), _config.ActivePersonId);
-                var inputTokens = probe.Sum(m => TokenBudget.Estimate(m.Content));
-                Console.ForegroundColor = ConsoleColor.DarkGray;
-                Console.WriteLine($"  Input context: ~{inputTokens} tokens (budget: {_config.MaxTokenBudget})");
-                Console.WriteLine($"  Output limit:  {_config.MaxCompletionTokens} tokens");
-                Console.WriteLine($"  Conversation window: {_window.GetRecent().Count} message(s)");
-                Console.ResetColor();
-                Console.WriteLine();
+                var usage = _engine.GetTokenUsage();
+                System.Console.ForegroundColor = ConsoleColor.DarkGray;
+                System.Console.WriteLine($"  Input context: ~{usage.InputTokens} tokens (budget: {usage.MaxInputBudget})");
+                System.Console.WriteLine($"  Output limit:  {usage.MaxOutputTokens} tokens");
+                System.Console.WriteLine($"  Conversation window: {usage.WindowMessageCount} message(s)");
+                System.Console.ResetColor();
+                System.Console.WriteLine();
                 break;
 
             case "/wake":
-                var pendingWake = _scheduledEvents.GetNextPending();
-                Console.ForegroundColor = ConsoleColor.DarkGray;
+                var pendingWake = _engine.GetPendingWakeUp();
+                System.Console.ForegroundColor = ConsoleColor.DarkGray;
                 if (pendingWake != null)
                 {
-                    var due = DateTime.TryParse(pendingWake.ScheduledFor, out var dt)
+                    var due = DateTimeOffset.TryParse(pendingWake.ScheduledFor, out var dt)
                         ? dt.ToLocalTime().ToString("HH:mm:ss")
                         : pendingWake.ScheduledFor;
-                    Console.WriteLine($"  Pending wake-up at {due}: {pendingWake.Reason}");
+                    System.Console.WriteLine($"  Pending wake-up at {due}: {pendingWake.Reason}");
                 }
                 else
                 {
-                    Console.WriteLine("  No pending wake-up timer.");
+                    System.Console.WriteLine("  No pending wake-up timer.");
                 }
-                Console.ResetColor();
-                Console.WriteLine();
+                System.Console.ResetColor();
+                System.Console.WriteLine();
                 break;
 
             default:
-                Console.ForegroundColor = ConsoleColor.DarkGray;
-                Console.WriteLine($"  Unknown command: {command}");
-                Console.ResetColor();
-                Console.WriteLine();
+                System.Console.ForegroundColor = ConsoleColor.DarkGray;
+                System.Console.WriteLine($"  Unknown command: {command}");
+                System.Console.ResetColor();
+                System.Console.WriteLine();
                 break;
         }
     }
 
-    private async Task EndSessionAsync()
+    private void EndSession()
     {
-        _sessions.End(_sessionId);
-        Console.ForegroundColor = ConsoleColor.DarkGray;
-        Console.WriteLine("  [Session ended.]");
-        Console.ResetColor();
+        _engine.EndSession();
+        System.Console.ForegroundColor = ConsoleColor.DarkGray;
+        System.Console.WriteLine("  [Session ended.]");
+        System.Console.ResetColor();
+    }
+
+    // ── Display helpers ──
+
+    private static void PrintAssistantReply(string reply)
+    {
+        System.Console.ForegroundColor = ConsoleColor.Green;
+        System.Console.Write("Assistant: ");
+        System.Console.ResetColor();
+        System.Console.WriteLine(reply);
+        System.Console.WriteLine();
+    }
+
+    private static void PrintActionResults(List<ActionResult> results, string? label = null)
+    {
+        if (results.Count == 0) return;
+
+        var prefix = label != null ? $"{label}: " : "";
+        System.Console.ForegroundColor = ConsoleColor.DarkYellow;
+        System.Console.WriteLine($"  [{prefix}{results.Count} action(s) processed]");
+        foreach (var r in results)
+            System.Console.WriteLine($"    {r.Status}: {r.Action} — {r.Summary}");
+        System.Console.ResetColor();
+        System.Console.WriteLine();
+    }
+
+    private static void PrintReflectionResults(Services.ReflectionResult result)
+    {
+        if (result.ActionResults.Count > 0)
+        {
+            System.Console.ForegroundColor = ConsoleColor.DarkMagenta;
+            System.Console.WriteLine($"  [reflection: {result.ActionResults.Count} action(s)]");
+            foreach (var r in result.ActionResults)
+                System.Console.WriteLine($"    {r.Status}: {r.Action} — {r.Summary}");
+            System.Console.ResetColor();
+        }
+        else
+        {
+            System.Console.ForegroundColor = ConsoleColor.DarkGray;
+            System.Console.WriteLine("  [reflection: no changes]");
+            System.Console.ResetColor();
+        }
+        System.Console.WriteLine();
+    }
+
+    private static void PrintError(string message)
+    {
+        System.Console.ForegroundColor = ConsoleColor.Red;
+        System.Console.WriteLine($"  [{message}]");
+        System.Console.ResetColor();
     }
 }

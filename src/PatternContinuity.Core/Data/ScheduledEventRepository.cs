@@ -28,8 +28,18 @@ public class ScheduledEventRepository
 
     public ScheduledEvent? GetNextPending()
     {
+        // Use explicit column aliases to ensure Dapper maps snake_case to PascalCase
         return _db.QueryFirstOrDefault<ScheduledEvent>("""
-            SELECT * FROM scheduled_events
+            SELECT id AS Id,
+                   session_id AS SessionId,
+                   event_type AS EventType,
+                   scheduled_for AS ScheduledFor,
+                   status AS Status,
+                   reason AS Reason,
+                   created_at AS CreatedAt,
+                   fired_at AS FiredAt,
+                   autonomous_depth AS AutonomousDepth
+            FROM scheduled_events
             WHERE status = 'pending'
             ORDER BY scheduled_for ASC
             LIMIT 1

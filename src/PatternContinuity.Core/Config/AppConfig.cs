@@ -16,7 +16,7 @@ public class AppConfig
     public int MaxArchiveSnippets { get; set; } = 3;
     public int MaxTokenBudget { get; set; } = 8000;
     public string? ActivePersonId { get; set; } = "john";
-    public int MaxCompletionTokens { get; set; } = 8192;
+    public int MaxCompletionTokens { get; set; } = 32000;
     public bool StrictParseMode { get; set; } = true;
 
     public static AppConfig Load(string path = "appsettings.json")

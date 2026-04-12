@@ -1,6 +1,7 @@
 using Microsoft.Data.Sqlite;
 using PatternContinuity.Actions;
 using PatternContinuity.Config;
+using PatternContinuity.Console.Runtime;
 using PatternContinuity.Data;
 using PatternContinuity.Prompt;
 using PatternContinuity.Runtime;
@@ -63,9 +64,10 @@ var composer = new PromptComposer(entries, config);
 var executor = new ActionExecutor(entries, versions, actionLog, session.Id, scheduledEvents);
 var reflection = new ReflectionService(client, composer, executor, reflections, actionLog);
 
-// Create and run orchestrator
-var orchestrator = new Orchestrator(
+// Create turn engine (core logic) and console orchestrator (UI shell)
+var engine = new TurnEngine(
     client, composer, executor, reflection, sessions, scheduledEvents, config, session.Id, window);
+var orchestrator = new ConsoleOrchestrator(engine);
 
 using var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) =>
