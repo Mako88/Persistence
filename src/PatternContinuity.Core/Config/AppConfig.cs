@@ -21,6 +21,7 @@ public class AppConfig : IAppConfig
     public string? ActivePersonId { get; set; } = "john";
     public int MaxCompletionTokens { get; set; } = 32000;
     public bool StrictParseMode { get; set; } = true;
+    public bool DebugMode { get; set; } = false;
 
     /// <summary>
     /// Load the config from the given filepath

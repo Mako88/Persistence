@@ -125,7 +125,7 @@ namespace Persistence.Display
         public void ShowThinking(string? label = null)
         {
             Console.ForegroundColor = ConsoleColor.DarkGray;
-            Console.WriteLine($"  [{label ?? "thinking"}...]");
+            Console.WriteLine($"\n  [{label ?? "thinking"}...]\n");
             Console.ResetColor();
         }
 
@@ -268,11 +268,10 @@ namespace Persistence.Display
         /// <summary>
         /// Display debug info results
         /// </summary>
-        public void ShowDebugInfo(List<ActionResult> debugResults)
+        public void ShowDebugInfo(string info)
         {
-            Console.ForegroundColor = ConsoleColor.DarkGray;
-            foreach (var r in debugResults)
-                Console.WriteLine($"  {r.Summary}");
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine(info);
             Console.ResetColor();
             Console.WriteLine();
         }

@@ -19,5 +19,6 @@
         string ModelName { get; set; }
         int ReflectionFrequency { get; set; }
         bool StrictParseMode { get; set; }
+        bool DebugMode { get; set; }
     }
 }

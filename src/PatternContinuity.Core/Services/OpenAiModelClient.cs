@@ -1,5 +1,5 @@
 using Persistence.Config;
-using Persistence.DI;
+using Persistence.Runtime;
 using System.Text;
 using System.Text.Json;
 
@@ -9,22 +9,26 @@ namespace Persistence.Services;
 /// OpenAI-compatible chat completions client.
 /// Works with OpenAI, Azure OpenAI, and any OpenAI-compatible endpoint.
 /// </summary>
-[Service(typeof(IModelClient))]
+//[Service(typeof(IModelClient))]
 public class OpenAiModelClient : IModelClient, IDisposable
 {
     private readonly HttpClient _http;
     private readonly string _model;
     private readonly int _maxCompletionTokens;
+    private readonly IAppConfig config;
+    private readonly IDisplayProvider display;
 
     /// <summary>
     /// Constructor
     /// </summary>
-    public OpenAiModelClient(IAppConfig config)
+    public OpenAiModelClient(IAppConfig config, IDisplayProvider display)
     {
         _model = config.ModelName;
         _maxCompletionTokens = config.MaxCompletionTokens;
         _http = new HttpClient { BaseAddress = new Uri(config.ApiBaseUrl.TrimEnd('/') + "/") };
         _http.DefaultRequestHeaders.Add("Authorization", $"Bearer {config.ApiKey}");
+        this.config = config;
+        this.display = display;
     }
 
     public async Task<string> CompleteAsync(List<ChatMessage> messages, CancellationToken ct = default)
@@ -38,10 +42,21 @@ public class OpenAiModelClient : IModelClient, IDisposable
         };
 
         var json = JsonSerializer.Serialize(requestBody);
+
+        if (config.DebugMode)
+        {
+            display.ShowDebugInfo($"\nRequest:\n{json}\n");
+        }
+
         var content = new StringContent(json, Encoding.UTF8, "application/json");
         var response = await _http.PostAsync("chat/completions", content, ct);
 
         var responseBody = await response.Content.ReadAsStringAsync(ct);
+
+        if (config.DebugMode)
+        {
+            display.ShowDebugInfo($"Response:\n{responseBody}\n");
+        }
 
         if (!response.IsSuccessStatusCode)
             throw new InvalidOperationException($"API call failed ({response.StatusCode}): {responseBody}");

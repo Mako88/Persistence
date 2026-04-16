@@ -263,8 +263,10 @@ namespace Persistence.Runtime
             switch (command.ToLower())
             {
                 case "/debug":
-                    var debugResults = await _engine.GetDebugInfoAsync();
-                    _display.ShowDebugInfo(debugResults);
+                    // TODO: Send these to the participant
+                    //var debugResults = await _engine.GetDebugInfoAsync();
+                    _config.DebugMode = !_config.DebugMode;
+                    _display.ShowDebugInfo($"\nDEBUG MODE {(_config.DebugMode ? "ENABLED" : "DISABLED")}\n");
                     break;
 
                 case "/tokens":

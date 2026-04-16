@@ -66,9 +66,9 @@ namespace Persistence.Runtime
         void ShowError(string message);
 
         /// <summary>
-        /// Display debug info results
+        /// Display debug info
         /// </summary>
-        void ShowDebugInfo(List<ActionResult> debugResults);
+        void ShowDebugInfo(string info);
 
         /// <summary>
         /// Display token usage information
