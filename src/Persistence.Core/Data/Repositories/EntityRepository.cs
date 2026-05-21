@@ -1,0 +1,348 @@
+using Dapper;
+using Dapper.Contrib.Extensions;
+using InterpolatedSql.Dapper;
+using Microsoft.Data.Sqlite;
+using Persistence.Config;
+using Persistence.Data.Entities;
+using Persistence.Extensions;
+using Persistence.Runtime;
+using System.Data;
+using System.Reflection;
+using System.Text.Json;
+
+namespace Persistence.Data.Repositories;
+
+/// <summary>
+/// Base repository for all entities. Manages connections, change tracking,
+/// save routing (insert vs update), and audit logging.
+/// </summary>
+public abstract class EntityRepository<T> : IEntityRepository<T> where T : BaseEntity
+{
+    private readonly string connectionString;
+    private readonly ISessionContext sessionContext;
+
+    /// <summary>
+    /// Constructor
+    /// </summary>
+    protected EntityRepository(IAppConfig config, ISessionContext sessionContext)
+    {
+        connectionString = $"Data Source={config.DatabasePath};Foreign Keys=True;";
+        this.sessionContext = sessionContext;
+    }
+
+    /// <summary>
+    /// The table name for <typeparamref name="T"/>, resolved from its <see cref="TableAttribute"/>
+    /// </summary>
+    protected string TableName
+    {
+        get
+        {
+            if (field.HasValue())
+            {
+                return field;
+            }
+
+            field = typeof(T).GetCustomAttribute<TableAttribute>()?.Name ?? throw new Exception("Entities must have a TableAttribute");
+
+            return field;
+        }
+    }
+
+    // ── Public CRUD ──────────────────────────────────────────────
+
+    /// <summary>
+    /// Fetches the entity with the given ID, or null if not found
+    /// </summary>
+    public async Task<T?> GetByIdAsync(long id, CancellationToken ct = default) =>
+        (await GetByIdsAsync([id], ct)).FirstOrDefault();
+
+    /// <summary>
+    /// Fetches entities with the given IDs
+    /// </summary>
+    public async Task<IEnumerable<T>> GetByIdsAsync(IEnumerable<long> ids, CancellationToken ct = default)
+    {
+        await using var connection = await OpenConnectionAsync();
+
+        var entities = await LoadByIdsAsync(ids, connection, ct);
+
+        await TouchLastAccessedAsync(entities, connection);
+        SetupTracking(entities);
+
+        return entities;
+    }
+
+    /// <summary>
+    /// Save the given entity
+    /// </summary>
+    public async Task SaveAsync(T entity, IDbTransaction? transaction = null, CancellationToken ct = default) =>
+        await SaveAsync([entity], transaction, ct);
+
+    /// <summary>
+    /// Save the given entities
+    /// </summary>
+    public async Task SaveAsync(IEnumerable<T> entities, IDbTransaction? transaction = null, CancellationToken ct = default)
+    {
+        if (transaction?.Connection != null)
+        {
+            await SaveInternalAsync(entities, transaction, ct);
+            return;
+        }
+
+        await using var connection = await OpenConnectionAsync();
+        await using var newTransaction = connection.BeginTransaction();
+
+        await SaveInternalAsync(entities, newTransaction, ct);
+        await newTransaction.CommitAsync(ct);
+    }
+
+    /// <summary>
+    /// Soft-deletes the entity by setting <see cref="BaseEntity.IsDeleted"/> and saving
+    /// </summary>
+    public async Task DeleteAsync(T entity, IDbTransaction? transaction = null, CancellationToken ct = default)
+    {
+        entity.IsDeleted = true;
+        await SaveAsync(entity, transaction, ct);
+    }
+
+    // ── Abstract — every repo must provide its own SQL ───────────
+
+    /// <summary>
+    /// Returns the INSERT statement for the entity. Do not include a trailing
+    /// semicolon — the base appends <c>SELECT last_insert_rowid()</c> automatically.
+    /// </summary>
+    protected abstract FormattableString GetInsertSql(T entity);
+
+    /// <summary>
+    /// Returns the UPDATE statement for the entity
+    /// </summary>
+    protected abstract FormattableString GetUpdateSql(T entity);
+
+    // ── Virtual — override for entities with children ────────────
+
+    /// <summary>
+    /// Loads entities by ID. Default does a plain SELECT.
+    /// Override to do multi-mapping JOINs for entities with sub-entities.
+    /// </summary>
+    protected virtual async Task<IEnumerable<T>> LoadByIdsAsync(
+        IEnumerable<long> ids, IDbConnection connection, CancellationToken ct = default) =>
+        await connection.QueryAsync<T>(
+            $"SELECT * FROM {TableName} WHERE Id IN @ids",
+            new { ids = ids.ToList() });
+
+    /// <summary>
+    /// Saves sub-entities after the parent has been inserted or updated.
+    /// Default is a no-op.
+    /// </summary>
+    protected virtual Task SaveSubEntitiesAsync(T entity, IDbTransaction transaction, CancellationToken ct = default) =>
+        Task.CompletedTask;
+
+    // ── Protected helpers ────────────────────────────────────────
+
+    /// <summary>
+    /// Executes a query and returns tracked entities.
+    /// Hydration goes through <see cref="LoadByIdsAsync"/> so entities with
+    /// children are fully populated.
+    /// </summary>
+    protected async Task<IEnumerable<T>> QueryAsync(FormattableString sql, CancellationToken ct = default)
+    {
+        await using var connection = await OpenConnectionAsync();
+
+        var flat = await connection.SqlBuilder(sql).QueryAsync<T>(cancellationToken: ct);
+        var ids = flat.Select(e => e.Id).ToList();
+
+        if (ids.Count == 0)
+        {
+            return [];
+        }
+
+        var entities = await LoadByIdsAsync(ids, connection, ct);
+
+        await TouchLastAccessedAsync(entities, connection);
+        SetupTracking(entities);
+
+        return entities;
+    }
+
+    /// <summary>
+    /// Executes a query and returns the first tracked entity, or null.
+    /// Hydration goes through <see cref="LoadByIdsAsync"/> so entities with
+    /// children are fully populated.
+    /// </summary>
+    protected async Task<T?> QueryFirstOrDefaultAsync(FormattableString sql, CancellationToken ct = default)
+    {
+        await using var connection = await OpenConnectionAsync();
+
+        var entity = await connection.SqlBuilder(sql).QueryFirstOrDefaultAsync<T>(cancellationToken: ct);
+
+        if (entity == null)
+        {
+            return null;
+        }
+
+        var hydrated = await LoadByIdsAsync([entity.Id], connection, ct);
+
+        await TouchLastAccessedAsync(hydrated, connection);
+        SetupTracking(hydrated);
+
+        return hydrated.FirstOrDefault();
+    }
+
+    /// <summary>
+    /// Executes a non-query SQL statement. Returns the number of rows affected.
+    /// </summary>
+    protected async Task<int> ExecuteAsync(FormattableString sql, IDbTransaction? transaction = null, CancellationToken ct = default)
+    {
+        if (transaction?.Connection != null)
+            return await transaction.Connection.SqlBuilder(sql).ExecuteAsync(transaction, cancellationToken: ct);
+
+        await using var connection = await OpenConnectionAsync();
+        return await connection.SqlBuilder(sql).ExecuteAsync(cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// Executes a scalar query, returning the first column of the first row
+    /// </summary>
+    protected async Task<Q?> ExecuteScalarAsync<Q>(FormattableString sql, IDbTransaction? transaction = null, CancellationToken ct = default)
+    {
+        if (transaction?.Connection != null)
+            return await transaction.Connection.SqlBuilder(sql).ExecuteScalarAsync<Q>(transaction, cancellationToken: ct);
+
+        await using var connection = await OpenConnectionAsync();
+        return await connection.SqlBuilder(sql).ExecuteScalarAsync<Q>(cancellationToken: ct);
+    }
+
+    // ── Private ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// Saves entities within an existing transaction. Inserts new entities, updates
+    /// modified ones (detected via JSON change tracking), and always calls
+    /// <see cref="SaveSubEntitiesAsync"/> regardless of whether the parent changed —
+    /// sub-entities can change independently of their parent's scalar fields.
+    /// </summary>
+    private async Task SaveInternalAsync(IEnumerable<T> entities, IDbTransaction transaction, CancellationToken ct = default)
+    {
+        foreach (var entity in entities)
+        {
+            var isUnchanged = !entity.IsNew
+                && entity.OriginalState != null
+                && JsonSerializer.Serialize(entity) == entity.OriginalState;
+
+            if (!isUnchanged)
+            {
+                entity.LastModifiedUtc = DateTimeOffset.UtcNow;
+
+                var isNew = entity.IsNew;
+
+                if (isNew)
+                {
+                    entity.Id = await transaction.Connection!
+                        .SqlBuilder($"{GetInsertSql(entity)}; SELECT last_insert_rowid()")
+                        .ExecuteScalarAsync<long>(transaction, cancellationToken: ct);
+
+                    entity.IsNew = false;
+                }
+                else
+                {
+                    await transaction.Connection!
+                        .SqlBuilder(GetUpdateSql(entity))
+                        .ExecuteAsync(transaction, cancellationToken: ct);
+                }
+
+                await WriteAuditAsync(isNew ? AuditEventType.Created : AuditEventType.Modified, entity, transaction, ct: ct);
+            }
+
+            // Always save sub-entities — they can change independently of the
+            // parent's scalar fields (e.g. fragments added to a working context
+            // without modifying the context's own Name/Summary)
+            await SaveSubEntitiesAsync(entity, transaction, ct);
+        }
+    }
+
+    /// <summary>
+    /// Updates LastAccessedUtc on the entity objects and in the database directly,
+    /// bypassing save/audit. Must be called before SetupTracking so the snapshot
+    /// reflects the updated timestamp.
+    /// </summary>
+    private async Task TouchLastAccessedAsync(IEnumerable<T> entities, IDbConnection connection)
+    {
+        var entityList = entities.ToList();
+
+        if (entityList.Count == 0)
+        {
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+
+        foreach (var entity in entityList)
+        {
+            entity.LastAccessedUtc = now;
+        }
+
+        var ids = entityList.Select(e => e.Id).ToList();
+
+        await connection.ExecuteAsync(
+            $"UPDATE {TableName} SET LastAccessedUtc = @now WHERE Id IN @ids",
+            new { now, ids });
+    }
+
+    /// <summary>
+    /// Marks entities as not new and snapshots their current state for change detection
+    /// </summary>
+    private void SetupTracking(IEnumerable<T> entities)
+    {
+        foreach (var entity in entities)
+        {
+            entity.IsNew = false;
+            entity.OriginalState = JsonSerializer.Serialize(entity);
+        }
+    }
+
+    /// <summary>
+    /// Writes an audit log entry for a create or update operation. Skips silently
+    /// during early bootstrap when the System source hasn't been created yet —
+    /// those seed operations don't need audit trails.
+    /// </summary>
+    private async Task WriteAuditAsync(
+        AuditEventType eventType,
+        BaseEntity entity,
+        IDbTransaction transaction,
+        long? sourceId = null,
+        CancellationToken ct = default)
+    {
+        var resolvedSourceId = sourceId ?? sessionContext.SystemSourceId;
+
+        // During bootstrap the System source doesn't exist yet — skip audit
+        if (resolvedSourceId == 0)
+        {
+            return;
+        }
+
+        // WorkingContextId is nullable in the schema — pass null during bootstrap
+        // when no context has been loaded yet (Id is still 0)
+        long? workingContextId = sessionContext.WorkingContextId == 0
+            ? null
+            : sessionContext.WorkingContextId;
+
+        await transaction.Connection!.SqlBuilder($"""
+            INSERT INTO AuditLogs (SessionId, WorkingContextId, EventType, TargetType, TargetId, SourceId, OldData, NewData, CreatedUtc)
+            VALUES (
+                {sessionContext.SessionId},
+                {workingContextId},
+                {eventType},
+                {typeof(T).Name},
+                {entity.Id},
+                {resolvedSourceId},
+                {(eventType == AuditEventType.Created ? null : entity.OriginalState)},
+                {JsonSerializer.Serialize(entity)},
+                {DateTimeOffset.UtcNow})
+            """).ExecuteAsync(transaction, cancellationToken: ct);
+    }
+
+    private async Task<SqliteConnection> OpenConnectionAsync()
+    {
+        var connection = new SqliteConnection(connectionString);
+        await connection.OpenAsync();
+        return connection;
+    }
+}

@@ -45,7 +45,15 @@
       "Bash(powershell.exe -Command \"& 'C:\\\\Program Files\\\\GitHub CLI\\\\gh.exe' pr view 2 --repo Mako88/Persistence --json title,body,headRefName,files\")",
       "Bash(powershell.exe -Command \"& 'C:\\\\Program Files\\\\GitHub CLI\\\\gh.exe' pr diff 2 --repo Mako88/Persistence\")",
       "Bash(powershell.exe -Command \"& 'C:\\\\Program Files\\\\GitHub CLI\\\\gh.exe' pr review 2 --repo Mako88/Persistence --comment --body \\(Get-Content -Raw '/tmp/pr_review.txt'\\)\")",
-      "Bash(powershell.exe -Command \"& 'C:\\\\Program Files\\\\GitHub CLI\\\\gh.exe' pr review 2 --repo Mako88/Persistence --comment --body-file D:\\\\Documents\\\\Persistence\\\\tmp_review.txt\")"
+      "Bash(powershell.exe -Command \"& 'C:\\\\Program Files\\\\GitHub CLI\\\\gh.exe' pr review 2 --repo Mako88/Persistence --comment --body-file D:\\\\Documents\\\\Persistence\\\\tmp_review.txt\")",
+      "Bash(ls \"D:\\\\Documents\\\\Persistence\\\\src\\\\PatternContinuity.Core\\\\Data\\\\\\\\\")",
+      "Bash(dir \"D:\\\\Documents\\\\Persistence\\\\src\\\\PatternContinuity.Core\\\\Data\")",
+      "PowerShell(head -30)",
+      "PowerShell(Write-Host \\(Test-Path \"D:\\\\Documents\\\\Persistence\"\\))",
+      "PowerShell(Write-Host \\(Get-ChildItem \"D:\\\\Documents\\\\Persistence\" -Name -Recurse | Select-Object -First 30 | Out-String\\))",
+      "PowerShell(Write-Host \\(Get-ChildItem \"D:\\\\Documents\\\\Persistence\\\\src\" -Name -Recurse | Out-String\\))",
+      "Bash(dotnet-script -e \"using System.Reflection; var a = Assembly.LoadFrom\\(\\\\\"MediatR.Extensions.Autofac.DependencyInjection.dll\\\\\"\\); foreach \\(var t in a.GetTypes\\(\\)\\) { Console.WriteLine\\(t.Name + \\\\\":\\\\\"\\); foreach\\(var m in t.GetMethods\\(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static\\)\\) Console.WriteLine\\(\\\\\"  \\\\\" + m\\); }\")",
+      "Bash(powershell.exe -Command 'Add-Type -Path '\\\\''MediatR.Extensions.Autofac.DependencyInjection.dll'\\\\''; [MediatR.Extensions.Autofac.DependencyInjection.Builder.MediatRConfigurationBuilder].GetMethods\\(\\) | ForEach-Object { $_.ToString\\(\\) }')"
     ]
   }
 }
