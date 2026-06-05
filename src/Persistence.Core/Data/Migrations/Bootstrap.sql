@@ -1,0 +1,7 @@
+﻿CREATE TABLE IF NOT EXISTS Migrations (
+    Id INTEGER PRIMARY KEY,
+    Name TEXT NOT NULL,
+    AppliedUtc TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uIdx_Migrations_Name ON Migrations(Name);

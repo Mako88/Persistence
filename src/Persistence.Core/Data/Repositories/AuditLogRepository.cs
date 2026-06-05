@@ -1,0 +1,96 @@
+using Dapper;
+using Persistence.Config;
+using Persistence.Data.Entities;
+using Persistence.DI;
+using Persistence.Runtime;
+using System.Data;
+
+namespace Persistence.Data.Repositories;
+
+/// <summary>
+/// Read-only repository for <see cref="AuditLogEntity"/>. Audit entries are written
+/// automatically by <see cref="EntityRepository{T}"/> — this repository exists
+/// solely for querying the audit trail. Loaded entries have their
+/// <see cref="AuditLogEntity.Source"/> property populated.
+/// </summary>
+[Singleton]
+public class AuditLogRepository : EntityRepository<AuditLogEntity>, IAuditLogRepository
+{
+    /// <summary>
+    /// Constructor
+    /// </summary>
+    public AuditLogRepository(IAppConfig config, ISessionContext sessionContext)
+        : base(config, sessionContext) { }
+
+    /// <summary>
+    /// Returns all audit entries for the given target entity type and ID
+    /// </summary>
+    public async Task<IEnumerable<AuditLogEntity>> GetByTargetAsync(string targetType, long targetId) =>
+        await QueryAsync(
+            $"""
+            SELECT * FROM AuditLogs
+            WHERE TargetType = {targetType} AND TargetId = {targetId}
+            ORDER BY CreatedUtc ASC
+            """);
+
+    /// <summary>
+    /// Returns all audit entries recorded during the given session
+    /// </summary>
+    public async Task<IEnumerable<AuditLogEntity>> GetBySessionAsync(string sessionId) =>
+        await QueryAsync(
+            $"SELECT * FROM AuditLogs WHERE SessionId = {sessionId} ORDER BY CreatedUtc ASC");
+
+    // ── Base overrides ───────────────────────────────────────────
+
+    /// <summary>
+    /// Loads audit log entries by ID with their Source property populated
+    /// </summary>
+    protected override async Task<IEnumerable<AuditLogEntity>> LoadByIdsAsync(
+        IEnumerable<long> ids, IDbConnection connection, CancellationToken ct = default)
+    {
+        var idList = ids.ToList();
+
+        var entries = (await connection.QueryAsync<AuditLogEntity>(
+            "SELECT * FROM AuditLogs WHERE Id IN @ids",
+            new { ids = idList })).ToList();
+
+        if (entries.Count == 0)
+        {
+            return entries;
+        }
+
+        var sourceIds = entries.Select(e => e.SourceId).Distinct().ToList();
+
+        var sources = (await connection.QueryAsync<SourceEntity>(
+            "SELECT * FROM Sources WHERE Id IN @ids",
+            new { ids = sourceIds })).ToDictionary(s => s.Id);
+
+        foreach (var entry in entries)
+        {
+            entry.Source = sources.GetValueOrDefault(entry.SourceId);
+        }
+
+        return entries;
+    }
+
+    /// <summary>
+    /// Returns the INSERT statement for an audit log entry
+    /// </summary>
+    protected override FormattableString GetInsertSql(AuditLogEntity entity) =>
+        $"""
+        INSERT INTO AuditLogs (SessionId, WorkingContextId, EventType, TargetType, TargetId, SourceId, OldData, NewData, LastAccessedUtc, IsDeleted, CreatedUtc, LastModifiedUtc, Notes)
+        VALUES ({entity.SessionId}, {entity.WorkingContextId}, {entity.EventType}, {entity.TargetType}, {entity.TargetId}, {entity.SourceId}, {entity.OldData}, {entity.NewData}, {entity.LastAccessedUtc}, {entity.IsDeleted}, {entity.CreatedUtc}, {entity.LastModifiedUtc}, {entity.Notes})
+        """;
+
+    /// <summary>
+    /// Returns the UPDATE statement for an audit log entry
+    /// </summary>
+    protected override FormattableString GetUpdateSql(AuditLogEntity entity) =>
+        $"""
+        UPDATE AuditLogs
+        SET EventType = {entity.EventType}, OldData = {entity.OldData}, NewData = {entity.NewData},
+            LastAccessedUtc = {entity.LastAccessedUtc}, IsDeleted = {entity.IsDeleted},
+            LastModifiedUtc = {entity.LastModifiedUtc}, Notes = {entity.Notes}
+        WHERE Id = {entity.Id}
+        """;
+}

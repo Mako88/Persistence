@@ -16,6 +16,9 @@ obj/
 .idea/
 .vscode/
 
+## Claude Code (machine-local agent config & worktrees)
+.claude/
+
 ## OS
 Thumbs.db
 .DS_Store
