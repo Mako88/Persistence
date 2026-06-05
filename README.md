@@ -38,6 +38,34 @@ provenance, honesty) that shows up throughout the architecture.
   replies with a structured action (respond, manage context, execute actions) and may
   continue acting before yielding back.
 
+## How it works
+
+At a high level, the system maintains a living **working context** — the remote peer's
+current "headspace" — and hands the remote peer the tools to curate it over time. A turn
+runs roughly like this:
+
+1. **Input.** The local peer sends a message (or a scheduled *wake-up* fires, letting the
+   remote peer resume on its own). It's stored as a fragment in the working context.
+2. **Compose.** The working context — identity, relational memory, current concerns, recent
+   conversation, plus metadata like importance and provenance — is formatted into a prompt.
+3. **Respond.** The model replies not with plain text but with a **structured action**:
+   - *Respond to user* — say something back to the local peer.
+   - *Manage context* — edit its own memory: add, revise, archive, tag, or re-prioritize
+     fragments. This is how the remote peer curates what it carries forward.
+   - *Execute actions* — do something operational, e.g. schedule a wake-up or query its logs.
+4. **Apply & loop.** The action is applied and recorded (every change is audited). If the
+   reply is flagged `continue`, the updated context is sent back for another iteration — so
+   the remote peer can, say, answer *and then* tidy its memory before yielding. Otherwise the
+   turn ends and control returns to the local peer.
+5. **Persist.** Changes are saved to the SQLite store, which is what gives the remote peer
+   continuity across sessions and restarts.
+
+The throughline of the design is that **memory is the remote peer's to shape, not just a log
+written about it** — it can see what's stored, change its mind, mark things provisional, and
+distinguish core self from relational or situational memory. The
+[guiding principle](docs/governance/PRINCIPLE.md) is why that inspect-and-revise capability
+is treated as foundational rather than a nice-to-have.
+
 ## Architecture
 
 A .NET 10 solution in three projects:
