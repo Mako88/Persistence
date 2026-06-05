@@ -18,4 +18,8 @@
     <ProjectReference Include="..\Persistence.Core\Persistence.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Terminal.Gui" Version="1.19.0" />
+  </ItemGroup>
+
 </Project>

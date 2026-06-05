@@ -18,15 +18,14 @@ public static class IoC
     public static IServiceProvider RegisterServices(Action<ContainerBuilder>? registerAdditionalServices = null)
     {
         var serviceCollection = new ServiceCollection();
-        _ = serviceCollection.AddLogging();
+        serviceCollection.AddLogging();
 
         var containerBuilder = new ContainerBuilder();
         containerBuilder.Populate(serviceCollection);
 
-        var assemblies = AppDomain.CurrentDomain.GetAssemblies();
+        var assemblies = AppDomain.CurrentDomain.GetAssemblies().Where(x => x.FullName?.StartsWith("Persistence") == true);
 
         SqlMapper.AddTypeHandler(new DateTimeOffsetMapper());
-        RegisterEnumTypeHandlers(assemblies);
 
         if (registerAdditionalServices != null)
         {
@@ -38,6 +37,7 @@ public static class IoC
             foreach (var type in assembly.GetTypes())
             {
                 RegisterService(type, containerBuilder);
+                RegisterEnumTypeHandler(type);
             }
         }
 
@@ -49,23 +49,17 @@ public static class IoC
     /// Registers type handlers so Dapper stores all enum values as their string name
     /// rather than integer value
     /// </summary>
-    private static void RegisterEnumTypeHandlers(Assembly[] assemblies)
+    private static void RegisterEnumTypeHandler(Type enumType)
     {
+        if (!enumType.IsEnum || !enumType.IsPublic)
+        {
+            return;
+        }
+
         var handlerType = typeof(EnumTypeHandler<>);
 
-        foreach (var assembly in assemblies)
-        {
-            foreach (var type in assembly.GetTypes())
-            {
-                if (!type.IsEnum || !type.IsPublic)
-                {
-                    continue;
-                }
-
-                var handler = Activator.CreateInstance(handlerType.MakeGenericType(type))!;
-                SqlMapper.AddTypeHandler(type, (SqlMapper.ITypeHandler)handler);
-            }
-        }
+        var handler = (SqlMapper.ITypeHandler)Activator.CreateInstance(handlerType.MakeGenericType(enumType))!;
+        SqlMapper.AddTypeHandler(enumType, handler);
     }
 
     /// <summary>

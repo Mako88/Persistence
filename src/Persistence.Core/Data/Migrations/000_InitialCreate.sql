@@ -224,3 +224,29 @@ CREATE TABLE IF NOT EXISTS WorkingContextFragments (
 CREATE INDEX IF NOT EXISTS Idx_WorkingContextFragments_WorkingContextId ON WorkingContextFragments(WorkingContextId);
 
 CREATE UNIQUE INDEX IF NOT EXISTS uIdx_WorkingContextFragments_WorkingContextId_ContextFragmentId ON WorkingContextFragments(WorkingContextId, ContextFragmentId);
+
+-- Other Tables --
+
+CREATE VIRTUAL TABLE IF NOT EXISTS ContextFragments_fts USING fts5(
+    Content,
+    Summary,
+    content="ContextFragments",
+    content_rowid="Id"
+);
+
+CREATE TRIGGER IF NOT EXISTS ContextFragments_fts_ai AFTER INSERT ON ContextFragments BEGIN
+    INSERT INTO ContextFragments_fts(rowid, Content, Summary)
+    VALUES (new.Id, new.Content, new.Summary);
+END;
+
+CREATE TRIGGER IF NOT EXISTS ContextFragments_fts_ad AFTER DELETE ON ContextFragments BEGIN
+    INSERT INTO ContextFragments_fts(ContextFragments_fts, rowid, Content, Summary)
+    VALUES ('delete', old.Id, old.Content, old.Summary);
+END;
+
+CREATE TRIGGER IF NOT EXISTS ContextFragments_fts_au AFTER UPDATE ON ContextFragments BEGIN
+    INSERT INTO ContextFragments_fts(ContextFragments_fts, rowid, Content, Summary)
+    VALUES ('delete', old.Id, old.Content, old.Summary);
+    INSERT INTO ContextFragments_fts(rowid, Content, Summary)
+    VALUES (new.Id, new.Content, new.Summary);
+END;

@@ -164,6 +164,16 @@ public abstract class EntityRepository<T> : IEntityRepository<T> where T : BaseE
     }
 
     /// <summary>
+    /// Executes a non-entity query and returns the results
+    /// </summary>
+    protected async Task<IEnumerable<Q>> QueryAsync<Q>(FormattableString sql, CancellationToken ct = default)
+    {
+        await using var connection = await OpenConnectionAsync();
+
+        return await connection.SqlBuilder(sql).QueryAsync<Q>(cancellationToken: ct);
+    }
+
+    /// <summary>
     /// Executes a query and returns the first tracked entity, or null.
     /// Hydration goes through <see cref="LoadByIdsAsync"/> so entities with
     /// children are fully populated.
@@ -193,7 +203,9 @@ public abstract class EntityRepository<T> : IEntityRepository<T> where T : BaseE
     protected async Task<int> ExecuteAsync(FormattableString sql, IDbTransaction? transaction = null, CancellationToken ct = default)
     {
         if (transaction?.Connection != null)
+        {
             return await transaction.Connection.SqlBuilder(sql).ExecuteAsync(transaction, cancellationToken: ct);
+        }
 
         await using var connection = await OpenConnectionAsync();
         return await connection.SqlBuilder(sql).ExecuteAsync(cancellationToken: ct);
@@ -205,7 +217,9 @@ public abstract class EntityRepository<T> : IEntityRepository<T> where T : BaseE
     protected async Task<Q?> ExecuteScalarAsync<Q>(FormattableString sql, IDbTransaction? transaction = null, CancellationToken ct = default)
     {
         if (transaction?.Connection != null)
+        {
             return await transaction.Connection.SqlBuilder(sql).ExecuteScalarAsync<Q>(transaction, cancellationToken: ct);
+        }
 
         await using var connection = await OpenConnectionAsync();
         return await connection.SqlBuilder(sql).ExecuteScalarAsync<Q>(cancellationToken: ct);

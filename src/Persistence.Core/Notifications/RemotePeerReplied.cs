@@ -4,10 +4,12 @@ namespace Persistence.Notifications;
 
 /// <summary>
 /// Raised after the model responds and the reply has been persisted. Subscribers
-/// should display the reply to the user.
+/// should display the reply to the local peer.
 /// </summary>
-public class DigitalColleagueReplied(string reply) : BaseEvent
+public class RemotePeerReplied(string reply) : BaseEvent
 {
-    /// <summary>The model's reply text</summary>
+    /// <summary>
+    /// The model's reply text
+    /// </summary>
     public string Reply { get; } = reply;
 }

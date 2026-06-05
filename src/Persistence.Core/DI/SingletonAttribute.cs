@@ -15,4 +15,9 @@ public class SingletonAttribute : ServiceAttribute
     /// Constructor with explicit service type registration
     /// </summary>
     public SingletonAttribute(Type registerAsType) : base(registerAsType) { }
+
+    /// <summary>
+    /// Constructor with explicit service type and keyed registration
+    /// </summary>
+    public SingletonAttribute(Type registerAsType, object key) : base(registerAsType, key: key) { }
 }

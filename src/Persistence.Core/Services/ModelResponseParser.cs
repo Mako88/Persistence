@@ -31,7 +31,7 @@ public class ModelResponseParser : IModelResponseParser
                 return FallbackResponse(rawOutput);
             }
 
-            var actionStr = json["action"]?.GetValue<string>();
+            var actionStr = json["action"]?.GetValue<string>()?.Replace("_", "");
 
             if (!Enum.TryParse<ModelAction>(actionStr, ignoreCase: true, out var action))
             {

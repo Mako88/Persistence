@@ -19,7 +19,7 @@ public record ContextFragmentEntity : BaseEntity
     public required float Confidence { get; set; }
 
     /// <summary>
-    /// Whether or not the digital colleague can modify this fragment
+    /// Whether or not the remote peer can modify this fragment
     /// </summary>
     public bool IsProtected { get; set; } = false;
 
@@ -41,7 +41,7 @@ public enum ContextFragmentType
     Proposal = 4,
     Summary = 5,
     ScratchPad = 6, // Fragments of type ScratchPad are never saved to the DB - they exist only in the current session and current working context
-    Personal = 7, // Anything the digital colleague wants to save that doesn't fit in other categories
+    Personal = 7, // Anything the remote peer wants to save that doesn't fit in other categories
     ActionResponse = 8, // Fragments of this type are also not saved to the DB, and are only included in the first context sent immediately following action execution
     AuditLog = 9,
     ActionLog = 10,

@@ -12,12 +12,14 @@ namespace Persistence.Console;
 /// Console (terminal) implementation of <see cref="IDisplayProvider"/>. Uses ANSI console
 /// colours to distinguish roles and message types.
 /// </summary>
-[Singleton]
+[Singleton(typeof(IDisplayProvider), UiMode.Console)]
 public class ConsoleDisplayProvider : IDisplayProvider
 {
     private readonly IEventBus eventBus;
     private readonly ISessionContext sessionContext;
     private readonly IAppConfig config;
+
+    private readonly TaskCompletionSource stopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private CancellationTokenSource? inputLoopCts;
 
@@ -32,33 +34,54 @@ public class ConsoleDisplayProvider : IDisplayProvider
     }
 
     /// <summary>
-    /// Shows the session header, subscribes to events, and begins accepting user input
+    /// Shows the session header, subscribes to events, begins accepting user input,
+    /// and returns a task that completes when the session is stopped
     /// </summary>
-    public void Start(CancellationToken ct)
+    public Task Start(CancellationToken ct)
     {
         ShowHeader();
 
-        _ = eventBus.Subscribe<DigitalColleagueReplied>((_, e) =>
+        eventBus.Subscribe<RemotePeerReplied>((_, e) =>
         {
             ShowReply(e.Reply);
             return Task.CompletedTask;
         });
 
-        _ = eventBus.Subscribe<ScheduledEventTriggered>((_, e) =>
+        eventBus.Subscribe<ScheduledEventTriggered>((_, e) =>
         {
             ShowWakeUpEvent(e.Event);
             return Task.CompletedTask;
         });
 
+        eventBus.Subscribe<ToolInvoked>((_, e) =>
+        {
+            ShowToolUse(e.Tool, e.Request, e.Result);
+            return Task.CompletedTask;
+        });
+
+        eventBus.Subscribe<ModelReasoningDelta>((_, e) =>
+        {
+            ShowReasoningDelta(e.Delta);
+            return Task.CompletedTask;
+        });
+
         inputLoopCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        _ = Task.Run(() => RunInputLoopAsync(inputLoopCts.Token), inputLoopCts.Token);
+        Task.Run(() => RunInputLoopAsync(inputLoopCts.Token), inputLoopCts.Token);
+
+        ct.Register(Stop);
+        return stopped.Task;
     }
 
     /// <summary>
-    /// Cancels the input loop and shows the session-ended message
+    /// Cancels the input loop and shows the session-ended message. Idempotent.
     /// </summary>
     public void Stop()
     {
+        if (!stopped.TrySetResult())
+        {
+            return;
+        }
+
         inputLoopCts?.Cancel();
 
         SysConsole.ForegroundColor = ConsoleColor.DarkGray;
@@ -77,7 +100,7 @@ public class ConsoleDisplayProvider : IDisplayProvider
     }
 
     /// <summary>
-    /// Shows the digital colleague's reply text
+    /// Shows the remote peer's reply text
     /// </summary>
     public void ShowReply(string reply)
     {
@@ -86,6 +109,39 @@ public class ConsoleDisplayProvider : IDisplayProvider
         SysConsole.ResetColor();
         SysConsole.WriteLine(reply);
         SysConsole.WriteLine();
+    }
+
+    /// <summary>
+    /// Shows the model's reasoning summary
+    /// </summary>
+    public void ShowReasoning(string summary)
+    {
+        SysConsole.ForegroundColor = ConsoleColor.DarkGray;
+        SysConsole.WriteLine("  [Reasoning]");
+        SysConsole.WriteLine($"  {summary.Replace("\n", "\n  ")}");
+        SysConsole.ResetColor();
+        SysConsole.WriteLine();
+    }
+
+    /// <summary>
+    /// Appends a streamed chunk of the reasoning summary inline (no per-chunk framing)
+    /// </summary>
+    public void ShowReasoningDelta(string delta)
+    {
+        SysConsole.ForegroundColor = ConsoleColor.DarkGray;
+        SysConsole.Write(delta);
+        SysConsole.ResetColor();
+    }
+
+    /// <summary>
+    /// Shows a tool/command invocation: its name, request, and result
+    /// </summary>
+    public void ShowToolUse(string tool, string request, string result)
+    {
+        SysConsole.ForegroundColor = ConsoleColor.DarkMagenta;
+        SysConsole.Write($"  [Tool: {tool}] ");
+        SysConsole.ResetColor();
+        SysConsole.WriteLine($"{request} → {result}");
     }
 
     /// <summary>
@@ -121,6 +177,50 @@ public class ConsoleDisplayProvider : IDisplayProvider
     }
 
     /// <summary>
+    /// Shows recent chat history on startup
+    /// </summary>
+    public void ShowChatHistory(IReadOnlyList<(string Role, string Content, DateTimeOffset Timestamp)> messages)
+    {
+        if (messages.Count == 0)
+        {
+            return;
+        }
+
+        SysConsole.ForegroundColor = ConsoleColor.DarkGray;
+        SysConsole.WriteLine("  — Recent History —");
+        SysConsole.ResetColor();
+
+        foreach (var (role, content, timestamp) in messages)
+        {
+            var timeLabel = timestamp.LocalDateTime.ToString("g");
+
+            if (role == "user")
+            {
+                SysConsole.ForegroundColor = ConsoleColor.DarkGray;
+                SysConsole.Write($"  [{timeLabel}] ");
+                SysConsole.ForegroundColor = ConsoleColor.DarkCyan;
+                SysConsole.Write("You: ");
+                SysConsole.ResetColor();
+                SysConsole.WriteLine(content);
+            }
+            else
+            {
+                SysConsole.ForegroundColor = ConsoleColor.DarkGray;
+                SysConsole.Write($"  [{timeLabel}] ");
+                SysConsole.ForegroundColor = ConsoleColor.DarkGreen;
+                SysConsole.Write("Assistant: ");
+                SysConsole.ResetColor();
+                SysConsole.WriteLine(content);
+            }
+        }
+
+        SysConsole.ForegroundColor = ConsoleColor.DarkGray;
+        SysConsole.WriteLine("  — End of History —");
+        SysConsole.ResetColor();
+        SysConsole.WriteLine();
+    }
+
+    /// <summary>
     /// Shows an unrecognised slash-command message
     /// </summary>
     public void ShowUnknownCommand(string command)
@@ -129,6 +229,16 @@ public class ConsoleDisplayProvider : IDisplayProvider
         SysConsole.WriteLine($"  Unknown command: {command}");
         SysConsole.ResetColor();
         SysConsole.WriteLine();
+    }
+
+    /// <summary>
+    /// Shows a notification that a message has been queued for the next iteration
+    /// </summary>
+    public void ShowMessageQueued(string input)
+    {
+        SysConsole.ForegroundColor = ConsoleColor.DarkYellow;
+        SysConsole.WriteLine($"  [Queued: {input}]");
+        SysConsole.ResetColor();
     }
 
     // ── Private ──────────────────────────────────────────────────
@@ -140,7 +250,7 @@ public class ConsoleDisplayProvider : IDisplayProvider
     {
         SysConsole.WriteLine($"=== Persistence — MVP Console ===");
         SysConsole.WriteLine($"Session: {sessionContext.SessionId}");
-        SysConsole.WriteLine($"Model: {config.ModelName}");
+        SysConsole.WriteLine($"Provider: {config.Provider} | Model: {config.Model}");
         SysConsole.WriteLine("Type '/exit' or '/quit' to end the session.");
         SysConsole.WriteLine("Type '/debug' to toggle debug mode.");
         SysConsole.WriteLine("=================================");
@@ -163,7 +273,8 @@ public class ConsoleDisplayProvider : IDisplayProvider
                 continue;
             }
 
-            await eventBus.PublishAsync(this, new DisplayInputReceived(input));
+            eventBus.FireAndForget(this, new DisplayInputReceived(input),
+                ex => ShowError(ex.Message));
         }
     }
 

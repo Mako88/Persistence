@@ -1,21 +1,23 @@
-using System.Text;
-using System.Text.Json.Nodes;
 using Persistence.Data.Entities;
 using Persistence.Data.Repositories;
 using Persistence.DI;
-using Persistence.Runtime;
+using Persistence.Events;
 using Persistence.Services;
+using System.Diagnostics.CodeAnalysis;
+using System.Text;
+using System.Text.Json.Nodes;
 
 namespace Persistence.Runtime.ActionHandlers;
 
 /// <summary>
 /// Handles <see cref="ModelAction.ExecuteActions"/> by performing side-effect operations
-/// (scheduling events, querying logs, recording actions). Like ManageContext, the
-/// <c>data</c> payload contains a batch of commands. Results are collected into a single
-/// <see cref="ContextFragmentType.ActionResponse"/> fragment.
+/// (scheduling events, querying logs, recording actions). Commands are discovered via
+/// <see cref="CommandAttribute"/> — send <c>{"list": {}}</c> at runtime to see all
+/// available commands and their schemas.
 /// </summary>
 [Service(registerAsType: typeof(IActionHandler), key: ModelAction.ExecuteActions)]
-public class ExecuteActionsHandler : IActionHandler
+[SuppressMessage("Style", "IDE0051:Fade out unused members", Justification = "Referenced through reflections in base class")]
+public class ExecuteActionsHandler : CommandHandler
 {
     private readonly IScheduledEventRepository scheduledEventRepo;
     private readonly IAuditLogRepository auditLogRepo;
@@ -29,7 +31,8 @@ public class ExecuteActionsHandler : IActionHandler
         IScheduledEventRepository scheduledEventRepo,
         IAuditLogRepository auditLogRepo,
         IActionLogRepository actionLogRepo,
-        ISessionContext sessionContext)
+        ISessionContext sessionContext,
+        IEventBus eventBus) : base(eventBus)
     {
         this.scheduledEventRepo = scheduledEventRepo;
         this.auditLogRepo = auditLogRepo;
@@ -37,112 +40,28 @@ public class ExecuteActionsHandler : IActionHandler
         this.sessionContext = sessionContext;
     }
 
-    /// <summary>
-    /// Parses the commands array from the model's data payload and executes each
-    /// command sequentially. Results are collected and surfaced in a single
-    /// ActionResponse fragment.
-    /// </summary>
-    public async Task HandleAsync(WorkingContextEntity context, JsonNode? data, CancellationToken ct = default)
+    // ── Commands ─────────────────────────────────────────────────
+
+    [Command("schedule", "Schedule a future event")]
+    [CommandField("name", "string", required: true, Description = "Event name")]
+    [CommandField("scheduled_for", "string", required: true, Description = "UTC datetime")]
+    [CommandField("notes", "string", Description = "Additional notes")]
+    private async Task<string> ExecuteScheduleAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
     {
-        var commands = ParseCommands(data);
-        var results = new StringBuilder();
-
-        foreach (var command in commands)
-        {
-            var result = await ExecuteCommandAsync(context, command, ct);
-            results.AppendLine(result);
-        }
-
-        context.AddFragment(new WeightedContextFragment
-        {
-            FragmentType = ContextFragmentType.ActionResponse,
-            Status = ContextFragmentStatus.Active,
-            Content = results.ToString().TrimEnd(),
-            Importance = 1.0f,
-            Confidence = 1.0f,
-            Weight = 1.0f,
-
-            CreatedUtc = DateTimeOffset.UtcNow,
-            LastModifiedUtc = DateTimeOffset.UtcNow,
-        });
-    }
-
-    // ── Private ──────────────────────────────────────────────────
-
-    /// <summary>
-    /// Extracts the commands array from the data payload. Accepts a top-level array,
-    /// an object with a "commands" property, or a single command object.
-    /// </summary>
-    private static List<JsonNode> ParseCommands(JsonNode? data)
-    {
-        if (data is JsonArray topLevelArray)
-        {
-            return topLevelArray.Where(n => n != null).Select(n => n!).ToList();
-        }
-
-        var commandsNode = data?["commands"];
-
-        if (commandsNode is JsonArray commandsArray)
-        {
-            return commandsArray.Where(n => n != null).Select(n => n!).ToList();
-        }
-
-        if (data != null)
-        {
-            return [data];
-        }
-
-        return [];
-    }
-
-    /// <summary>
-    /// Routes a single command to the appropriate handler based on its "command" property
-    /// </summary>
-    private async Task<string> ExecuteCommandAsync(
-        WorkingContextEntity context, JsonNode command, CancellationToken ct)
-    {
-        var commandType = command["command"]?.GetValue<string>()?.ToLowerInvariant();
-
-        try
-        {
-            return commandType switch
-            {
-                "schedule" => await ExecuteScheduleAsync(context, command, ct),
-                "cancel_event" => await ExecuteCancelEventAsync(command, ct),
-                "list_events" => await ExecuteListEventsAsync(context, ct),
-                "audit" => await ExecuteAuditAsync(command, ct),
-                "log" => await ExecuteLogAsync(command),
-                "query_action_log" => await ExecuteQueryActionLogAsync(command),
-                _ => $"Unknown command: {commandType ?? "(null)"}",
-            };
-        }
-        catch (Exception ex)
-        {
-            return $"Error executing '{commandType}': {ex.Message}";
-        }
-    }
-
-    /// <summary>
-    /// Creates a new scheduled event for the current working context
-    /// </summary>
-    private async Task<string> ExecuteScheduleAsync(
-        WorkingContextEntity context, JsonNode command, CancellationToken ct)
-    {
-        var name = command["name"]?.GetValue<string>();
+        var name = command?["name"]?.GetValue<string>();
 
         if (string.IsNullOrWhiteSpace(name))
         {
             return "Schedule failed: 'name' is required";
         }
 
-        var scheduledForStr = command["scheduledFor"]?.GetValue<string>();
+        var scheduledForStr = command?["scheduled_for"]?.GetValue<string>();
 
         if (!DateTimeOffset.TryParse(scheduledForStr, out var scheduledFor))
         {
-            return $"Schedule failed: 'scheduledFor' is required and must be a valid date/time (got '{scheduledForStr}')";
+            return $"Schedule failed: 'scheduled_for' is required and must be a valid date/time (got '{scheduledForStr}')";
         }
 
-        // Interpret as UTC if no offset was provided
         if (scheduledFor.Offset == TimeSpan.Zero && scheduledForStr != null && !scheduledForStr.Contains('+') && !scheduledForStr.EndsWith('Z'))
         {
             scheduledFor = new DateTimeOffset(scheduledFor.DateTime, TimeSpan.Zero);
@@ -156,7 +75,7 @@ public class ExecuteActionsHandler : IActionHandler
             WorkingContextId = context.Id,
             ScheduledForUtc = scheduledFor.UtcDateTime,
             Status = ScheduledEventStatus.Pending,
-            Notes = command["notes"]?.GetValue<string>(),
+            Notes = command?["notes"]?.GetValue<string>(),
 
             CreatedUtc = now,
             LastModifiedUtc = now,
@@ -167,12 +86,11 @@ public class ExecuteActionsHandler : IActionHandler
         return $"Scheduled event #{scheduledEvent.Id} '{name}' for {scheduledFor.UtcDateTime:yyyy-MM-dd HH:mm:ss} UTC";
     }
 
-    /// <summary>
-    /// Cancels a pending scheduled event by ID
-    /// </summary>
-    private async Task<string> ExecuteCancelEventAsync(JsonNode command, CancellationToken ct)
+    [Command("cancel_event", "Cancel a pending scheduled event")]
+    [CommandField("id", "long", required: true, Description = "Event ID")]
+    private async Task<string> ExecuteCancelEventAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
     {
-        var id = command["id"]?.GetValue<long>();
+        var id = ParseId(command?["id"]);
 
         if (id == null)
         {
@@ -196,10 +114,8 @@ public class ExecuteActionsHandler : IActionHandler
         return $"Cancelled event #{id} '{evt.Name}'";
     }
 
-    /// <summary>
-    /// Lists all non-deleted events for the current working context
-    /// </summary>
-    private async Task<string> ExecuteListEventsAsync(WorkingContextEntity context, CancellationToken ct)
+    [Command("list_events", "List all events for this context")]
+    private async Task<string> ExecuteListEventsAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
     {
         var events = (await scheduledEventRepo.GetByWorkingContextAsync(context.Id)).ToList();
 
@@ -220,18 +136,17 @@ public class ExecuteActionsHandler : IActionHandler
         return sb.ToString().TrimEnd();
     }
 
-    /// <summary>
-    /// Queries the audit trail for a specific entity type and ID and formats
-    /// the results as text for the model to review
-    /// </summary>
-    private async Task<string> ExecuteAuditAsync(JsonNode command, CancellationToken ct)
+    [Command("audit", "Query the audit trail for an entity")]
+    [CommandField("target_type", "string", required: true, Description = "Entity type name")]
+    [CommandField("target_id", "long", required: true, Description = "Entity ID")]
+    private async Task<string> ExecuteAuditAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
     {
-        var targetType = command["targetType"]?.GetValue<string>();
-        var targetId = command["targetId"]?.GetValue<long>();
+        var targetType = command?["target_type"]?.GetValue<string>();
+        var targetId = ParseId(command?["target_id"]);
 
         if (string.IsNullOrWhiteSpace(targetType) || targetId == null)
         {
-            return "Audit failed: 'targetType' and 'targetId' are required";
+            return "Audit failed: 'target_type' and 'target_id' are required";
         }
 
         var entries = (await auditLogRepo.GetByTargetAsync(targetType, targetId.Value)).ToList();
@@ -253,44 +168,45 @@ public class ExecuteActionsHandler : IActionHandler
         return sb.ToString().TrimEnd();
     }
 
-    /// <summary>
-    /// Records an action log entry for the current session and working context
-    /// </summary>
-    private async Task<string> ExecuteLogAsync(JsonNode command)
+    [Command("log", "Record an action log entry")]
+    [CommandField("action_type", "string", required: true, Description = "Type of action")]
+    [CommandField("payload", "any", Description = "Action payload")]
+    [CommandField("result", "string", Description = "Action result")]
+    private async Task<string> ExecuteLogAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
     {
-        var actionType = command["actionType"]?.GetValue<string>();
+        var actionType = command?["action_type"]?.GetValue<string>();
 
         if (string.IsNullOrWhiteSpace(actionType))
         {
-            return "Log failed: 'actionType' is required";
+            return "Log failed: 'action_type' is required";
         }
 
-        var payload = command["payload"]?.GetValue<string>();
-        var result = command["result"]?.GetValue<string>();
+        var payload = command?["payload"]?.ToJsonString();
+        var result = command?["result"]?.GetValue<string>();
 
         await actionLogRepo.LogAsync(actionType, payload, result);
 
         return $"Logged action '{actionType}'";
     }
 
-    /// <summary>
-    /// Queries the action log. Supports querying by session (defaults to current) or
-    /// by working context (defaults to current). Returns entries as formatted text.
-    /// </summary>
-    private async Task<string> ExecuteQueryActionLogAsync(JsonNode command)
+    [Command("query_action_log", "Query the action log")]
+    [CommandField("by", "string", Description = "Query by 'session' or 'context'", Default = "session")]
+    [CommandField("session_id", "string", Description = "Session ID (defaults to current)")]
+    [CommandField("context_id", "long", Description = "Context ID (defaults to current)")]
+    private async Task<string> ExecuteQueryActionLogAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
     {
-        var by = command["by"]?.GetValue<string>()?.ToLowerInvariant() ?? "session";
+        var by = command?["by"]?.GetValue<string>()?.ToLowerInvariant() ?? "session";
 
         IEnumerable<ActionLogEntity> entries;
 
         if (by == "context")
         {
-            var contextId = command["contextId"]?.GetValue<long>() ?? sessionContext.WorkingContextId;
+            var contextId = ParseId(command?["context_id"]) ?? sessionContext.WorkingContextId;
             entries = await actionLogRepo.GetByWorkingContextAsync(contextId);
         }
         else
         {
-            var sessionId = command["sessionId"]?.GetValue<string>() ?? sessionContext.SessionId;
+            var sessionId = command?["session_id"]?.GetValue<string>() ?? sessionContext.SessionId;
             entries = await actionLogRepo.GetBySessionAsync(sessionId);
         }
 

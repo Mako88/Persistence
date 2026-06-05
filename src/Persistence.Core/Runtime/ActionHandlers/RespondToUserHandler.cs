@@ -3,6 +3,7 @@ using Persistence.Data.Entities;
 using Persistence.DI;
 using Persistence.Events;
 using Persistence.Notifications;
+using Persistence.Runtime;
 using Persistence.Services;
 
 namespace Persistence.Runtime.ActionHandlers;
@@ -15,13 +16,15 @@ namespace Persistence.Runtime.ActionHandlers;
 [Service(registerAsType: typeof(IActionHandler), key: ModelAction.RespondToUser)]
 public class RespondToUserHandler : IActionHandler
 {
+    private readonly ISessionContext sessionContext;
     private readonly IEventBus eventBus;
 
     /// <summary>
     /// Constructor
     /// </summary>
-    public RespondToUserHandler(IEventBus eventBus)
+    public RespondToUserHandler(ISessionContext sessionContext, IEventBus eventBus)
     {
+        this.sessionContext = sessionContext;
         this.eventBus = eventBus;
     }
 
@@ -34,21 +37,28 @@ public class RespondToUserHandler : IActionHandler
         var reply = ExtractReplyText(data)
             ?? throw new InvalidOperationException("RespondToUser action requires a text payload");
 
+        var now = DateTimeOffset.UtcNow;
+
         context.AddFragment(new WeightedContextFragment
         {
             FragmentType = ContextFragmentType.ChatMessage,
             Status = ContextFragmentStatus.Active,
             Content = reply,
-            Notes = "assistant",
             Importance = 1.0f,
             Confidence = 1.0f,
             Weight = 1.0f,
-
-            CreatedUtc = DateTimeOffset.UtcNow,
-            LastModifiedUtc = DateTimeOffset.UtcNow,
+            Sources = [new SourceEntity
+            {
+                Id = sessionContext.RemotePeerSourceId,
+                SourceType = SourceType.RemotePeer,
+                CreatedUtc = now,
+                LastModifiedUtc = now,
+            }],
+            CreatedUtc = now,
+            LastModifiedUtc = now,
         });
 
-        await eventBus.PublishAsync(this, new DigitalColleagueReplied(reply));
+        await eventBus.PublishAsync(this, new RemotePeerReplied(reply));
     }
 
     /// <summary>

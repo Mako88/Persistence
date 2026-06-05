@@ -4,17 +4,19 @@ namespace Persistence.Services;
 
 /// <summary>
 /// Structured response from the model, parsed from JSON. Determines what action the
-/// digital colleague wants to take and whether they want to continue acting before
-/// yielding back to the physical colleague.
+/// remote peer wants to take and whether they want to continue acting before
+/// yielding back to the local peer.
 /// </summary>
 public class ModelResponse
 {
-    /// <summary>The type of action the digital colleague wants to perform</summary>
+    /// <summary>
+    /// The type of action the remote peer wants to perform
+    /// </summary>
     public required ModelAction Action { get; init; }
 
     /// <summary>
-    /// Whether the digital colleague wants to perform additional actions before
-    /// yielding back to the physical colleague. When true, the updated context is
+    /// Whether the remote peer wants to perform additional actions before
+    /// yielding back to the local peer. When true, the updated context is
     /// re-sent to the model for another iteration.
     /// </summary>
     public bool Continue { get; init; }
@@ -33,16 +35,22 @@ public class ModelResponse
 }
 
 /// <summary>
-/// The types of actions the digital colleague can perform in response to input
+/// The types of actions the remote peer can perform in response to input
 /// </summary>
 public enum ModelAction
 {
-    /// <summary>Send a plain-text response to the physical colleague</summary>
+    /// <summary>
+    /// Send a plain-text response to the local peer
+    /// </summary>
     RespondToUser = 0,
 
-    /// <summary>Manage the working context (add, remove, update, rearrange fragments, fetch by tag)</summary>
+    /// <summary>
+    /// Manage the working context (add, remove, update, rearrange fragments, fetch by tag)
+    /// </summary>
     ManageContext = 1,
 
-    /// <summary>Execute one or more actions (schedule events, fetch logs, etc.)</summary>
+    /// <summary>
+    /// Execute one or more actions (schedule events, fetch logs, etc.)
+    /// </summary>
     ExecuteActions = 2,
 }

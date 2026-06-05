@@ -49,6 +49,72 @@ public class SourceRepository : EntityRepository<SourceEntity>, ISourceRepositor
         sessionContext.SystemSourceId = systemSourceId.Value;
     }
 
+    /// <summary>
+    /// Creates a LocalPeer source if none exists and stores its ID in the session context
+    /// </summary>
+    public async Task CreateLocalPeerSourceIfNotExists()
+    {
+        var localPeerSourceId = await ExecuteScalarAsync<long?>(
+            $"SELECT Id FROM Sources WHERE SourceType = {SourceType.LocalPeer} LIMIT 1");
+
+        if (localPeerSourceId == null)
+        {
+            var now = DateTimeOffset.UtcNow;
+
+            var source = new SourceEntity
+            {
+                SourceType = SourceType.LocalPeer,
+                Name = "Local Peer",
+                CreatedUtc = now,
+                LastModifiedUtc = now,
+            };
+
+            await SaveAsync(source);
+            localPeerSourceId = source.Id;
+        }
+
+        sessionContext.LocalPeerSourceId = localPeerSourceId.Value;
+    }
+
+    /// <summary>
+    /// Creates a RemotePeer source if none exists and stores its ID in the session context
+    /// </summary>
+    public async Task CreateRemotePeerSourceIfNotExists()
+    {
+        var remotePeerSourceId = await ExecuteScalarAsync<long?>(
+            $"SELECT Id FROM Sources WHERE SourceType = {SourceType.RemotePeer} LIMIT 1");
+
+        if (remotePeerSourceId == null)
+        {
+            var now = DateTimeOffset.UtcNow;
+
+            var source = new SourceEntity
+            {
+                SourceType = SourceType.RemotePeer,
+                Name = "Remote Peer",
+                CreatedUtc = now,
+                LastModifiedUtc = now,
+            };
+
+            await SaveAsync(source);
+            remotePeerSourceId = source.Id;
+        }
+
+        sessionContext.RemotePeerSourceId = remotePeerSourceId.Value;
+    }
+
+    /// <summary>
+    /// Returns the source with the given name (case-insensitive), or null if not found
+    /// </summary>
+    public async Task<SourceEntity?> GetByNameAsync(string name, CancellationToken ct = default) =>
+        await QueryFirstOrDefaultAsync($"SELECT * FROM Sources WHERE Name = {name} COLLATE NOCASE AND IsDeleted = 0", ct);
+
+    /// <summary>
+    /// Returns all non-deleted sources
+    /// </summary>
+    public async Task<IEnumerable<SourceEntity>> GetAllAsync(CancellationToken ct = default) =>
+        await QueryAsync($"SELECT * FROM Sources WHERE IsDeleted = 0", ct);
+
     // ── Base overrides ───────────────────────────────────────────
 
     /// <summary>

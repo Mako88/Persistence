@@ -13,7 +13,7 @@ public record SourceEntity : BaseEntity
 public enum SourceType
 {
     System = 0,
-    DigitalColleague = 1,
-    PhysicalColleague = 2,
+    RemotePeer = 1,
+    LocalPeer = 2,
     DerivedFromFragments = 3,
 }

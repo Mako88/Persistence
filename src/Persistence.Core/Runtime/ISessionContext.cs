@@ -20,4 +20,14 @@ public interface ISessionContext
     /// The ID for the 'System' source type.
     /// </summary>
     long SystemSourceId { get; set; }
+
+    /// <summary>
+    /// The ID for the 'LocalPeer' source type.
+    /// </summary>
+    long LocalPeerSourceId { get; set; }
+
+    /// <summary>
+    /// The ID for the 'RemotePeer' source type.
+    /// </summary>
+    long RemotePeerSourceId { get; set; }
 }

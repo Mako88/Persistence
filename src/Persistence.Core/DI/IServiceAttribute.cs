@@ -5,12 +5,18 @@ namespace Persistence.DI;
 /// </summary>
 public interface IServiceAttribute
 {
-    /// <summary>The interface or base type this service should be registered as</summary>
+    /// <summary>
+    /// The interface or base type this service should be registered as
+    /// </summary>
     Type? RegisterAsType { get; }
 
-    /// <summary>Named registration key (for named service resolution)</summary>
+    /// <summary>
+    /// Named registration key (for named service resolution)
+    /// </summary>
     string? Name { get; }
 
-    /// <summary>Keyed registration value (for keyed/indexed service resolution)</summary>
+    /// <summary>
+    /// Keyed registration value (for keyed/indexed service resolution)
+    /// </summary>
     object? Key { get; }
 }

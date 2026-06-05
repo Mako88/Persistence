@@ -15,11 +15,16 @@ namespace Persistence.Data.Repositories;
 [Singleton]
 public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>, IContextFragmentRepository
 {
+    private readonly ISessionContext sessionContext;
+
     /// <summary>
     /// Constructor
     /// </summary>
     public ContextFragmentRepository(IAppConfig config, ISessionContext sessionContext)
-        : base(config, sessionContext) { }
+        : base(config, sessionContext)
+    {
+        this.sessionContext = sessionContext;
+    }
 
     // ── Public methods ───────────────────────────────────────────
 
@@ -50,16 +55,28 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
             """);
 
     /// <summary>
-    /// Returns all active <see cref="ContextFragmentType.System"/> fragments. Used by the
-    /// startup sequence to seed a new <see cref="WorkingContextEntity"/> with the system
-    /// fragment set.
+    /// Returns up to <paramref name="limit"/> results ordered best-match first.
     /// </summary>
-    public async Task<IEnumerable<ContextFragmentEntity>> GetSystemFragmentsAsync() =>
-        await QueryAsync(
+    public async Task<IEnumerable<ContextFragmentEntity>> SearchRelevantAsync(
+        string query, int limit = 20, CancellationToken ct = default)
+    {
+        var rankedIds = await QueryAsync<long>(
             $"""
-            SELECT * FROM ContextFragments
-            WHERE FragmentType = {ContextFragmentType.System} AND Status = {ContextFragmentStatus.Active}
+            SELECT rowid FROM ContextFragments_fts
+            WHERE ContextFragments_fts MATCH {query}
+            ORDER BY rank
+            LIMIT {limit}
             """);
+
+        if (!rankedIds.Any())
+        {
+            return [];
+        }
+
+        var entities = (await GetByIdsAsync(rankedIds, ct)).ToDictionary(e => e.Id);
+
+        return rankedIds.Where(id => entities.ContainsKey(id)).Select(id => entities[id]);
+    }
 
     // ── Base overrides ───────────────────────────────────────────
 
@@ -121,6 +138,46 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
         }
 
         return fragments;
+    }
+
+    /// <summary>
+    /// Syncs the ContextFragmentTags junction table to match the in-memory Tags list
+    /// </summary>
+    protected override async Task SaveSubEntitiesAsync(
+        ContextFragmentEntity entity, IDbTransaction transaction, CancellationToken ct = default)
+    {
+        await ExecuteAsync(
+            $"DELETE FROM ContextFragmentSources WHERE ContextFragmentId = {entity.Id}",
+            transaction, ct);
+
+        if (entity.Sources.Count == 0)
+        {
+            entity.Sources.Add(new SourceEntity
+            {
+                Id = sessionContext.SystemSourceId,
+                SourceType = SourceType.System,
+                CreatedUtc = entity.CreatedUtc,
+                LastModifiedUtc = entity.LastModifiedUtc,
+            });
+        }
+
+        foreach (var source in entity.Sources)
+        {
+            await ExecuteAsync(
+                $"INSERT INTO ContextFragmentSources (SourceId, ContextFragmentId) VALUES ({source.Id}, {entity.Id})",
+                transaction, ct);
+        }
+
+        await ExecuteAsync(
+            $"DELETE FROM ContextFragmentTags WHERE ContextFragmentId = {entity.Id}",
+            transaction, ct);
+
+        foreach (var tag in entity.Tags)
+        {
+            await ExecuteAsync(
+                $"INSERT INTO ContextFragmentTags (TagId, ContextFragmentId) VALUES ({tag.Id}, {entity.Id})",
+                transaction, ct);
+        }
     }
 
     /// <summary>

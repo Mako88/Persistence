@@ -1,0 +1,153 @@
+using System.Text.RegularExpressions;
+using Terminal.Gui;
+
+namespace Persistence.Console;
+
+/// <summary>
+/// A read-only <see cref="TextView"/> that colors text by content rules, allowing
+/// multiple colors within a single line (e.g. a cyan "You:" label, a white body, and a
+/// yellow-highlighted id all on one row).
+///
+/// Terminal.Gui's per-character color hook is content-based: it receives the current
+/// line's runes and a column index, but NOT the line number — and under
+/// <see cref="TextView.WordWrap"/> the line is the wrapped fragment. So coloring is
+/// expressed as rules over line text rather than absolute document offsets. Each rule
+/// maps a line's text to zero or more coloured ranges; rules are applied in registration
+/// order and the first rule to claim a column wins. Register the most specific rules
+/// (substring/pattern highlights) before broader ones (prefix/line tints) so highlights
+/// layer on top.
+///
+/// Per-line colour maps are computed once and cached, so regex rules cost nothing on redraw.
+/// </summary>
+internal sealed class ColoredTextView : TextView
+{
+    private readonly record struct ColorRange(int Start, int Length, Color Color);
+
+    private readonly List<Func<string, IEnumerable<ColorRange>>> rules = [];
+    private readonly Dictionary<string, Color?[]> cache = [];
+
+    // ── Rule registration ────────────────────────────────────────
+
+    /// <summary>
+    /// Colors a line that begins with <paramref name="prefix"/>: the prefix in one color
+    /// and the remainder in another — the common "labelled line" case (e.g. "You: hello").
+    /// (Under word-wrap this applies to the first visual row of the message; use
+    /// <see cref="ColorLine"/> for a tint that should cover every wrapped row.)
+    /// </summary>
+    public ColoredTextView ColorPrefix(string prefix, Color prefixColor, Color bodyColor)
+    {
+        rules.Add(text => text.StartsWith(prefix, StringComparison.Ordinal)
+            ?
+            [
+                new ColorRange(0, prefix.Length, prefixColor),
+                new ColorRange(prefix.Length, text.Length - prefix.Length, bodyColor),
+            ]
+            : []);
+        return this;
+    }
+
+    /// <summary>Tints a whole line a single color when <paramref name="matches"/> holds.</summary>
+    public ColoredTextView ColorLine(Func<string, bool> matches, Color color)
+    {
+        rules.Add(text => matches(text) ? [new ColorRange(0, text.Length, color)] : []);
+        return this;
+    }
+
+    /// <summary>Tints a whole line when it starts with <paramref name="prefix"/>.</summary>
+    public ColoredTextView ColorLinesStartingWith(string prefix, Color color) =>
+        ColorLine(t => t.StartsWith(prefix, StringComparison.Ordinal), color);
+
+    /// <summary>Tints a whole line when it contains <paramref name="needle"/>.</summary>
+    public ColoredTextView ColorLinesContaining(string needle, Color color) =>
+        ColorLine(t => t.Contains(needle, StringComparison.Ordinal), color);
+
+    /// <summary>
+    /// Colors every literal occurrence of <paramref name="needle"/> anywhere in a line —
+    /// the key "multiple colors per line" primitive for scannable highlights.
+    /// </summary>
+    public ColoredTextView ColorSubstring(string needle, Color color)
+    {
+        rules.Add(text => Occurrences(text, needle, color));
+        return this;
+    }
+
+    /// <summary>
+    /// Colors every match of <paramref name="pattern"/> anywhere in a line (e.g.
+    /// <c>#\d+</c> for ids, <c>\[[^\]]+\]</c> for bracketed tags).
+    /// </summary>
+    public ColoredTextView ColorPattern(string pattern, Color color)
+    {
+        var regex = new Regex(pattern, RegexOptions.Compiled);
+        rules.Add(text => regex.Matches(text)
+            .Where(m => m.Length > 0)
+            .Select(m => new ColorRange(m.Index, m.Length, color)));
+        return this;
+    }
+
+    // ── Rendering ────────────────────────────────────────────────
+
+    // Read-only panes draw via SetReadOnlyColor; override the others too so the same
+    // rules apply regardless of focus / "used" state.
+    protected override void SetNormalColor(List<System.Rune> line, int idx) => Apply(line, idx);
+    protected override void SetReadOnlyColor(List<System.Rune> line, int idx) => Apply(line, idx);
+    protected override void SetUsedColor(List<System.Rune> line, int idx) => Apply(line, idx);
+
+    private void Apply(List<System.Rune> line, int idx)
+    {
+        var colors = ColorsFor(line);
+        var color = idx >= 0 && idx < colors.Length ? colors[idx] : null;
+
+        Driver.SetAttribute(color is { } c
+            ? Driver.MakeAttribute(c, Color.Black)
+            : GetNormalColor());
+    }
+
+    private Color?[] ColorsFor(List<System.Rune> line)
+    {
+        var text = string.Concat(line.Select(r => r.ToString()));
+
+        if (cache.TryGetValue(text, out var cached))
+        {
+            return cached;
+        }
+
+        var colors = new Color?[text.Length];
+
+        // First rule to claim a column wins, so only fill cells still unclaimed.
+        foreach (var rule in rules)
+        {
+            foreach (var range in rule(text))
+            {
+                var end = Math.Min(range.Start + range.Length, colors.Length);
+                for (var i = Math.Max(range.Start, 0); i < end; i++)
+                {
+                    colors[i] ??= range.Color;
+                }
+            }
+        }
+
+        // Bound the cache so a long session can't accumulate unbounded distinct lines.
+        if (cache.Count > 4000)
+        {
+            cache.Clear();
+        }
+
+        cache[text] = colors;
+        return colors;
+    }
+
+    private static IEnumerable<ColorRange> Occurrences(string text, string needle, Color color)
+    {
+        if (string.IsNullOrEmpty(needle))
+        {
+            yield break;
+        }
+
+        var from = 0;
+        while ((from = text.IndexOf(needle, from, StringComparison.Ordinal)) >= 0)
+        {
+            yield return new ColorRange(from, needle.Length, color);
+            from += needle.Length;
+        }
+    }
+}

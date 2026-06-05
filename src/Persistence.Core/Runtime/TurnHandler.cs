@@ -6,13 +6,16 @@ using Persistence.DI;
 using Persistence.Events;
 using Persistence.Notifications;
 using Persistence.Services;
+using Persistence.Services.Streaming;
+using System.Collections.Concurrent;
+using System.Text;
 
 namespace Persistence.Runtime;
 
 /// <summary>
 /// Processes a single conversational turn. Persists the user's input, calls the model,
 /// parses the structured response, dispatches to the appropriate action handler, and
-/// loops if the digital colleague requests continuation. Handles parse failures by
+/// loops if the remote peer requests continuation. Handles parse failures by
 /// feeding the error back to the model when iterations remain, or displaying the raw
 /// output when they don't. Enforces a configurable iteration cap to prevent runaway loops.
 /// </summary>
@@ -25,10 +28,13 @@ public class TurnHandler : ITurnHandler
     private readonly ISessionContext sessionContext;
     private readonly IModelClient modelClient;
     private readonly IModelResponseParser responseParser;
+    private readonly IPromptFormatter promptFormatter;
     private readonly IPromptBuilder promptBuilder;
     private readonly IIndex<ModelAction, IActionHandler> actionHandlers;
     private readonly IEventBus eventBus;
     private readonly IAppConfig config;
+
+    private readonly ConcurrentQueue<string> pendingInput = new();
 
     /// <summary>
     /// Constructor
@@ -40,6 +46,7 @@ public class TurnHandler : ITurnHandler
         ISessionContext sessionContext,
         IModelClient modelClient,
         IModelResponseParser responseParser,
+        IPromptFormatter promptFormatter,
         IPromptBuilder promptBuilder,
         IIndex<ModelAction, IActionHandler> actionHandlers,
         IEventBus eventBus,
@@ -51,6 +58,7 @@ public class TurnHandler : ITurnHandler
         this.sessionContext = sessionContext;
         this.modelClient = modelClient;
         this.responseParser = responseParser;
+        this.promptFormatter = promptFormatter;
         this.promptBuilder = promptBuilder;
         this.actionHandlers = actionHandlers;
         this.eventBus = eventBus;
@@ -59,10 +67,10 @@ public class TurnHandler : ITurnHandler
 
     /// <summary>
     /// Executes a full turn — persists the user input, calls the model in a loop
-    /// dispatching to action handlers, and stops when the digital colleague yields
+    /// dispatching to action handlers, and stops when the remote peer yields
     /// or the iteration cap is reached
     /// </summary>
-    public async Task ExecuteTurnAsync(string input, CancellationToken ct = default)
+    public async Task ExecuteTurnAsync(string? input = null, CancellationToken ct = default)
     {
         var context = await workingContextRepo.GetByIdAsync(sessionContext.WorkingContextId, ct);
 
@@ -71,18 +79,29 @@ public class TurnHandler : ITurnHandler
             return;
         }
 
-        await PersistUserMessageAsync(context, input);
+        if (input != null)
+        {
+            await PersistUserMessageAsync(context, input);
+        }
+
+        DrainPendingInput(context, annotate: input != null);
 
         var availableTags = await tagRepo.GetAllRootAsync();
         var iteration = 0;
         var hasResponded = false;
 
-        while (iteration < config.MaxActionIterations)
+        while (iteration <= config.MaxActionIterations)
         {
-            iteration++;
+            if (iteration > 0)
+            {
+                DrainPendingInput(context);
+            }
 
-            var (prompt, systemPrompt) = promptBuilder.Build(context, availableTags, iteration, config.MaxActionIterations);
-            var rawOutput = await modelClient.CompleteAsync(prompt, systemPrompt, ct);
+            var segments = promptFormatter.Format(context, availableTags, iteration, config.MaxActionIterations);
+            var request = promptBuilder.Build(segments);
+            var rawOutput = config.Streaming
+                ? await StreamModelOutputAsync(request, ct)
+                : await modelClient.CompleteAsync(request, ct);
             var response = responseParser.Parse(rawOutput);
 
             if (!response.ParsedSuccessfully)
@@ -94,8 +113,8 @@ public class TurnHandler : ITurnHandler
                 }
 
                 // Out of iterations — show the raw output and an error message
-                await eventBus.PublishAsync(this, new DigitalColleagueReplied(rawOutput));
-                await eventBus.PublishAsync(this, new DigitalColleagueReplied(
+                await eventBus.PublishAsync(this, new RemotePeerReplied(rawOutput));
+                await eventBus.PublishAsync(this, new RemotePeerReplied(
                     "[Turn ended: could not parse a valid structured response]"));
                 break;
             }
@@ -111,7 +130,7 @@ public class TurnHandler : ITurnHandler
             {
                 if (!hasResponded)
                 {
-                    await eventBus.PublishAsync(this, new DigitalColleagueReplied(
+                    await eventBus.PublishAsync(this, new RemotePeerReplied(
                         "[Turn completed — no response to user]"));
                 }
 
@@ -120,9 +139,11 @@ public class TurnHandler : ITurnHandler
 
             if (iteration >= config.MaxActionIterations)
             {
-                await eventBus.PublishAsync(this, new DigitalColleagueReplied(
+                await eventBus.PublishAsync(this, new RemotePeerReplied(
                     "[Turn ended: maximum action iterations reached]"));
             }
+
+            iteration++;
         }
 
         // Persist all context changes from this turn in a single save.
@@ -131,7 +152,103 @@ public class TurnHandler : ITurnHandler
         await workingContextRepo.SaveAsync(context, ct: ct);
     }
 
+    /// <summary>
+    /// Queues input from the local peer to be injected into the working context
+    /// before the next model call within the current turn's iteration loop.
+    /// </summary>
+    public void EnqueueInput(string input) => pendingInput.Enqueue(input);
+
+    /// <summary>
+    /// Whether there are any pending input messages waiting to be processed.
+    /// </summary>
+    public bool HasPendingInput => !pendingInput.IsEmpty;
+
     // ── Private ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// Streams the model response, publishing reasoning-summary deltas for live display
+    /// and accumulating output-text deltas into the raw output the parser consumes.
+    /// </summary>
+    private async Task<string> StreamModelOutputAsync(PromptRequest request, CancellationToken ct)
+    {
+        var output = new StringBuilder();
+
+        await foreach (var evt in modelClient.StreamAsync(request, ct))
+        {
+            switch (evt.Kind)
+            {
+                case ModelStreamEventKind.OutputTextDelta:
+                    output.Append(evt.Text);
+                    break;
+
+                case ModelStreamEventKind.ReasoningSummaryDelta:
+                    await eventBus.PublishAsync(this, new ModelReasoningDelta(evt.Text));
+                    break;
+            }
+        }
+
+        return output.ToString();
+    }
+
+    /// <summary>
+    /// Drains any input queued by the local peer during processing and adds it
+    /// to the working context. When <paramref name="annotate"/> is true, a transient
+    /// ActionResponse fragment is prepended so the remote peer knows the messages
+    /// arrived mid-turn.
+    /// </summary>
+    private void DrainPendingInput(WorkingContextEntity context, bool annotate = true)
+    {
+        var injected = new List<string>();
+
+        while (pendingInput.TryDequeue(out var queued))
+        {
+            injected.Add(queued);
+        }
+
+        if (injected.Count == 0)
+        {
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+
+        if (annotate)
+        {
+            context.AddFragment(new WeightedContextFragment
+            {
+                FragmentType = ContextFragmentType.ActionResponse,
+                Status = ContextFragmentStatus.Active,
+                Content = "The following messages were added by the local peer during your last iteration:",
+                Importance = 1.0f,
+                Confidence = 1.0f,
+                Weight = 1.0f,
+                CreatedUtc = now,
+                LastModifiedUtc = now,
+            });
+        }
+
+        foreach (var message in injected)
+        {
+            context.AddFragment(new WeightedContextFragment
+            {
+                FragmentType = ContextFragmentType.ChatMessage,
+                Status = ContextFragmentStatus.Active,
+                Content = message,
+                Importance = 1.0f,
+                Confidence = 1.0f,
+                Weight = 1.0f,
+                Sources = [new SourceEntity
+                {
+                    Id = sessionContext.LocalPeerSourceId,
+                    SourceType = SourceType.LocalPeer,
+                    CreatedUtc = now,
+                    LastModifiedUtc = now,
+                }],
+                CreatedUtc = now,
+                LastModifiedUtc = now,
+            });
+        }
+    }
 
     /// <summary>
     /// Dispatches the model's response to the appropriate action handler, logs the
@@ -171,61 +288,62 @@ public class TurnHandler : ITurnHandler
     /// </summary>
     private async Task PersistUserMessageAsync(WorkingContextEntity context, string input)
     {
+        var now = DateTimeOffset.UtcNow;
+
         context.AddFragment(new WeightedContextFragment
         {
             FragmentType = ContextFragmentType.ChatMessage,
             Status = ContextFragmentStatus.Active,
             Content = input,
-            Notes = "user",
             Importance = 1.0f,
             Confidence = 1.0f,
             Weight = 1.0f,
-
-            CreatedUtc = DateTimeOffset.UtcNow,
-            LastModifiedUtc = DateTimeOffset.UtcNow,
+            Sources = [new SourceEntity
+            {
+                Id = sessionContext.LocalPeerSourceId,
+                SourceType = SourceType.LocalPeer,
+                CreatedUtc = now,
+                LastModifiedUtc = now,
+            }],
+            CreatedUtc = now,
+            LastModifiedUtc = now,
         });
 
         await workingContextRepo.SaveAsync(context);
     }
 
     /// <summary>
-    /// Adds a transient ActionResponse fragment telling the digital colleague that
+    /// Adds a transient ActionResponse fragment telling the remote peer that
     /// its previous output could not be parsed, so it can correct the format
     /// </summary>
-    private void AddParseErrorFeedback(WorkingContextEntity context, string rawOutput)
+    private void AddParseErrorFeedback(WorkingContextEntity context, string rawOutput) => context.AddFragment(new WeightedContextFragment
     {
-        context.AddFragment(new WeightedContextFragment
-        {
-            FragmentType = ContextFragmentType.ActionResponse,
-            Status = ContextFragmentStatus.Active,
-            Content = $"Your previous response could not be parsed as valid structured JSON. " +
+        FragmentType = ContextFragmentType.ActionResponse,
+        Status = ContextFragmentStatus.Active,
+        Content = $"Your previous response could not be parsed as valid structured JSON. " +
                       $"Please respond with a valid JSON object containing \"action\", \"continue\", and \"data\" properties. " +
                       $"Your raw output was:\n{rawOutput}",
-            Importance = 1.0f,
-            Confidence = 1.0f,
-            Weight = 1.0f,
+        Importance = 1.0f,
+        Confidence = 1.0f,
+        Weight = 1.0f,
 
-            CreatedUtc = DateTimeOffset.UtcNow,
-            LastModifiedUtc = DateTimeOffset.UtcNow,
-        });
-    }
+        CreatedUtc = DateTimeOffset.UtcNow,
+        LastModifiedUtc = DateTimeOffset.UtcNow,
+    });
 
     /// <summary>
     /// Adds a transient ActionResponse fragment with error details to the working context
     /// </summary>
-    private void AddErrorResponse(WorkingContextEntity context, ModelAction action, Exception ex)
+    private void AddErrorResponse(WorkingContextEntity context, ModelAction action, Exception ex) => context.AddFragment(new WeightedContextFragment
     {
-        context.AddFragment(new WeightedContextFragment
-        {
-            FragmentType = ContextFragmentType.ActionResponse,
-            Status = ContextFragmentStatus.Active,
-            Content = $"Error executing {action}: {ex.Message}",
-            Importance = 1.0f,
-            Confidence = 1.0f,
-            Weight = 1.0f,
+        FragmentType = ContextFragmentType.ActionResponse,
+        Status = ContextFragmentStatus.Active,
+        Content = $"Error executing {action}: {ex.Message}",
+        Importance = 1.0f,
+        Confidence = 1.0f,
+        Weight = 1.0f,
 
-            CreatedUtc = DateTimeOffset.UtcNow,
-            LastModifiedUtc = DateTimeOffset.UtcNow,
-        });
-    }
+        CreatedUtc = DateTimeOffset.UtcNow,
+        LastModifiedUtc = DateTimeOffset.UtcNow,
+    });
 }

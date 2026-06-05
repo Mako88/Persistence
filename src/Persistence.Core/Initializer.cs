@@ -1,7 +1,7 @@
 using Autofac;
 using Persistence.Config;
 using Persistence.DI;
-using Persistence.Extensions;
+using Persistence.Runtime;
 using Persistence.Services;
 
 namespace Persistence;
@@ -13,7 +13,9 @@ namespace Persistence;
 /// </summary>
 public static class Initializer
 {
-    /// <summary>Builds and returns the configured service provider.</summary>
+    /// <summary>
+    /// Builds and returns the configured service provider.
+    /// </summary>
     public static async Task<IServiceProvider> InitializeAsync(
         Action<ContainerBuilder>? registerAdditionalServices = null)
     {
@@ -23,10 +25,15 @@ public static class Initializer
         {
             builder.RegisterInstance(config).As<IAppConfig>().SingleInstance();
 
-            if (config.ModelName == null || !Enum.TryParseDescription<ParticipantModels>(config.ModelName, out var modelEnum))
-                throw new ArgumentException($"Unrecognized or missing ModelName value: '{config.ModelName}'");
+            if (!Enum.TryParse<ModelProvider>(config.Provider, ignoreCase: true, out var provider))
+                throw new ArgumentException($"Unrecognized Provider value: '{config.Provider}'");
 
-            builder.Register(c => c.ResolveKeyed<IModelClient>(modelEnum));
+            if (!Enum.TryParse<UiMode>(config.UiMode, ignoreCase: true, out var uiMode))
+                throw new ArgumentException($"Unrecognized UiMode value: '{config.UiMode}'");
+
+            builder.Register(c => c.ResolveKeyed<IModelClient>(provider));
+            builder.Register(c => c.ResolveKeyed<IPromptBuilder>(provider));
+            builder.Register(c => c.ResolveKeyed<IDisplayProvider>(uiMode));
 
             registerAdditionalServices?.Invoke(builder);
         });

@@ -2,13 +2,10 @@ using Dapper;
 using InterpolatedSql.Dapper;
 using Microsoft.Data.Sqlite;
 using Persistence.Config;
-using Persistence.Data.Entities;
 using Persistence.Data.Repositories;
 using Persistence.DI;
-using Persistence.Extensions;
 using Persistence.Runtime;
 using Persistence.Utilities;
-using System.Text.Json;
 
 namespace Persistence.Data;
 
@@ -22,7 +19,6 @@ public class DatabaseManager : IDatabaseManager
     private readonly ISessionContext sessionContext;
     private readonly IEmbeddedResourceManager resourceManager;
     private readonly ISourceRepository sourceRepository;
-    private readonly IContextFragmentRepository contextFragmentRepository;
 
     /// <summary>
     /// Constructor
@@ -30,14 +26,12 @@ public class DatabaseManager : IDatabaseManager
     public DatabaseManager(IAppConfig config,
         ISessionContext sessionContext,
         IEmbeddedResourceManager resourceManager,
-        ISourceRepository sourceRepository,
-        IContextFragmentRepository contextFragmentRepository)
+        ISourceRepository sourceRepository)
     {
         connectionString = $"Data Source={config.DatabasePath};Foreign Keys=True;";
         this.sessionContext = sessionContext;
         this.resourceManager = resourceManager;
         this.sourceRepository = sourceRepository;
-        this.contextFragmentRepository = contextFragmentRepository;
     }
 
     /// <summary>
@@ -46,7 +40,9 @@ public class DatabaseManager : IDatabaseManager
     public async Task InitializeAsync()
     {
         await MigrateAsync();
-        await SeedAsync();
+        await sourceRepository.CreateSystemSourceIfNotExists();
+        await sourceRepository.CreateLocalPeerSourceIfNotExists();
+        await sourceRepository.CreateRemotePeerSourceIfNotExists();
     }
 
     /// <summary>
@@ -61,7 +57,7 @@ public class DatabaseManager : IDatabaseManager
 
         if (bootstrapScript is not null)
         {
-            _ = await connection.ExecuteAsync(bootstrapScript);
+            await connection.ExecuteAsync(bootstrapScript);
         }
 
         var applied = await GetAppliedMigrationsAsync(connection);
@@ -90,68 +86,13 @@ public class DatabaseManager : IDatabaseManager
     {
         using var transaction = connection.BeginTransaction();
 
-        _ = await connection.ExecuteAsync(sql, transaction: transaction);
+        await connection.ExecuteAsync(sql, transaction: transaction);
 
-        _ = await connection
+        await connection
             .SqlBuilder($"INSERT INTO Migrations (Name, AppliedUtc) VALUES ({name}, {DateTimeOffset.UtcNow})")
             .ExecuteAsync(transaction);
 
         transaction.Commit();
-    }
-
-    /// <summary>
-    /// Seed initial data into the database if not already present
-    /// </summary>
-    private async Task SeedAsync()
-    {
-        await sourceRepository.CreateSystemSourceIfNotExists();
-
-        await SeedInitialFragmentsAsync();
-    }
-
-    /// <summary>
-    /// Seed any initial fragments defined in embedded resources
-    /// </summary>
-    private async Task SeedInitialFragmentsAsync()
-    {
-        var json = await resourceManager.GetFragmentSeedsAsync();
-
-        if (!json.HasValue())
-        {
-            return;
-        }
-
-        var seeds = JsonSerializer.Deserialize<List<FragmentSeed>>(json);
-
-        if (seeds == null || seeds.Count == 0)
-        {
-            return;
-        }
-
-        var existing = await contextFragmentRepository.GetByTypeAsync(ContextFragmentType.System);
-        var existingContent = existing.Select(f => f.Content).ToHashSet();
-
-        foreach (var seed in seeds)
-        {
-            if (existingContent.Contains(seed.Content))
-            {
-                continue;
-            }
-
-            var now = DateTimeOffset.UtcNow;
-
-            await contextFragmentRepository.SaveAsync(new ContextFragmentEntity
-            {
-                FragmentType = ContextFragmentType.System,
-                Status = ContextFragmentStatus.Active,
-                Content = seed.Content,
-                Importance = 1.0f,
-                Confidence = 1.0f,
-                IsProtected = true,
-                CreatedUtc = now,
-                LastModifiedUtc = now,
-            });
-        }
     }
 
     /// <summary>
@@ -164,11 +105,4 @@ public class DatabaseManager : IDatabaseManager
         return connection;
     }
 
-    /// <summary>
-    /// DTO for deserialising seed_fragments.json entries
-    /// </summary>
-    private sealed class FragmentSeed
-    {
-        public required string Content { get; set; }
-    }
 }

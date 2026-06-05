@@ -1,4 +1,3 @@
-using System.ComponentModel;
 using System.Text.Json;
 
 namespace Persistence.Config;
@@ -10,10 +9,14 @@ public class AppConfig : IAppConfig
 {
     public string DatabasePath { get; set; } = "continuity.db";
     public string ApiKey { get; set; } = "";
-    public string ModelProvider { get; set; } = "local";
-    public string? ModelName { get; set; }
+    public string Provider { get; set; } = "local";
+    public string Model { get; set; } = "local";
+    public string? ApiBaseUrl { get; set; }
     public int MaxInputTokens { get; set; } = 8000;
     public int MaxOutputTokens { get; set; } = 32000;
+    public string ReasoningEffort { get; set; } = "high";
+    public bool Streaming { get; set; } = true;
+    public string UiMode { get; set; } = "Tui";
     public bool DebugMode { get; set; } = false;
     public int MaxActionIterations { get; set; } = 5;
 
@@ -23,8 +26,6 @@ public class AppConfig : IAppConfig
     /// </summary>
     public static async Task<IAppConfig> LoadAsync(string path = "appsettings.json")
     {
-        // TODO: Log any errors when loading config
-
         if (!File.Exists(path))
         {
             return new AppConfig();
@@ -47,13 +48,21 @@ public class AppConfig : IAppConfig
 }
 
 /// <summary>
-/// Supported model providers, resolved by <see cref="AppConfig.ModelName"/>
+/// Supported API providers. Each provider defines an API shape — the model client
+/// uses this to know how to structure requests and parse responses.
 /// </summary>
-public enum ParticipantModels
+public enum ModelProvider
 {
-    [Description("local")]
     Local = 0,
+    OpenAI = 1,
+}
 
-    [Description("gpt-5.5")]
-    Gpt54 = 1,
+/// <summary>
+/// Supported front-ends. Selects which <c>IDisplayProvider</c> implementation
+/// renders the session and accepts input.
+/// </summary>
+public enum UiMode
+{
+    Console = 0,
+    Tui = 1,
 }

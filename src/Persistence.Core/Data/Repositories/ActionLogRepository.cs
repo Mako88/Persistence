@@ -6,7 +6,9 @@ using System.Data;
 
 namespace Persistence.Data.Repositories;
 
-/// <summary>Repository for <see cref="ActionLogEntity"/>.</summary>
+/// <summary>
+/// Repository for <see cref="ActionLogEntity"/>.
+/// </summary>
 [Singleton]
 public class ActionLogRepository : EntityRepository<ActionLogEntity>, IActionLogRepository
 {

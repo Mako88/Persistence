@@ -1,5 +1,4 @@
 using Persistence.Data.Entities;
-using System.Data;
 
 namespace Persistence.Data.Repositories;
 
@@ -20,10 +19,7 @@ public interface IContextFragmentRepository : IEntityRepository<ContextFragmentE
     Task<IEnumerable<ContextFragmentEntity>> GetByTagAsync(long tagId);
 
     /// <summary>
-    /// Returns all active <see cref="ContextFragmentType.System"/> fragments. Used by the
-    /// startup sequence to seed a new <see cref="WorkingContextEntity"/> with the system
-    /// fragment set.
+    /// Returns up to <paramref name="limit"/> results ordered best-match first.
     /// </summary>
-    Task<IEnumerable<ContextFragmentEntity>> GetSystemFragmentsAsync();
-
+    Task<IEnumerable<ContextFragmentEntity>> SearchRelevantAsync(string query, int limit = 20, CancellationToken ct = default);
 }

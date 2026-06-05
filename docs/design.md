@@ -281,7 +281,7 @@ IsProtected: bool
 `Core, Identity, Relational, ChatMessage, Proposal, Summary, ScratchPad, Personal, ActionResponse, AuditLog, ActionLog`
 
 - `ScratchPad` and `ActionResponse` fragments are never persisted to the DB
-- `AuditLog` is used when the digital colleague queries the audit log — the result is surfaced as a temporary fragment in context. `ActionLog` is the same for actions.
+- `AuditLog` is used when the remote peer queries the audit log — the result is surfaced as a temporary fragment in context. `ActionLog` is the same for actions.
 
 **`ContextFragmentStatus`** (enum): `Active, Archived, Deleted`
 
@@ -325,7 +325,7 @@ SourceType: SourceType
 Name: string?
 ```
 
-**`SourceType`** (enum): `System, DigitalColleague, HumanColleague, DerivedFromFragments`
+**`SourceType`** (enum): `System, RemotePeer, LocalPeer, DerivedFromFragments`
 
 Additional values may be added as new use cases emerge.
 
@@ -547,14 +547,14 @@ registered at startup via the standard MediatR assembly scan.
 
 | Notification | Purpose |
 |---|---|
-| `HumanInputReceived` | Physical colleague submitted a message |
+| `HumanInputReceived` | Local peer submitted a message |
 
 **Core → Console:**
 
 | Notification | Purpose |
 |---|---|
 | `ProcessingStarted` | Show thinking indicator |
-| `DigitalColleagueReplied` | Display a plain-text reply from the digital colleague |
+| `RemotePeerReplied` | Display a plain-text reply from the remote peer |
 | `ActionsExecuted` | Display action results |
 | `ContextModified` | Optional display summary of context changes applied |
 | `TurnCompleted` | Restore input prompt; turn is fully over |
@@ -604,8 +604,8 @@ Core-side `INotificationHandler<HumanInputReceived>`. Owns the full turn lifecyc
 singleton so it can hold state (the input queue).
 
 Incoming `HumanInputReceived` notifications are enqueued. If a turn is already in progress, the new
-input is queued and appended to the context before the next send — the physical colleague can type
-while the digital colleague is processing.
+input is queued and appended to the context before the next send — the local peer can type
+while the remote peer is processing.
 
 **Turn loop (per message dequeued):**
 
@@ -617,8 +617,8 @@ while the digital colleague is processing.
 6. If response includes `continue: true` → go to step 1 with updated context
 7. If `continue: false` (or absent) → publish `TurnCompleted`
 
-The `continue` flag is available on any response type. It signals whether the digital colleague
-wants the context sent back immediately or wants to hand control back to the physical colleague.
+The `continue` flag is available on any response type. It signals whether the remote peer
+wants the context sent back immediately or wants to hand control back to the local peer.
 
 Methods:
 
@@ -644,7 +644,7 @@ Methods:
 
 ---
 
-## Digital Colleague Response Format
+## Remote Peer Response Format
 
 [TBD — to be designed in a separate discussion. Key constraints already decided:
 - Response can be one of: context modifications, action array, plain text — or a mix
@@ -659,7 +659,7 @@ Methods:
 
 ## Working Context Format
 
-[TBD — the exact structure sent to the digital colleague. Known requirements:
+[TBD — the exact structure sent to the remote peer. Known requirements:
 - Include fragment ID and source(s) alongside content
 - Ordered by the `Order` field on `WorkingContextFragments`
 - Default order: Core → Identity → Relational → [other types] → ChatMessage]

@@ -3,7 +3,9 @@ using System.Data;
 
 namespace Persistence.Data.Repositories;
 
-/// <summary>Repository for <see cref="ActionLogEntity"/>.</summary>
+/// <summary>
+/// Repository for <see cref="ActionLogEntity"/>.
+/// </summary>
 public interface IActionLogRepository : IEntityRepository<ActionLogEntity>
 {
     /// <summary>

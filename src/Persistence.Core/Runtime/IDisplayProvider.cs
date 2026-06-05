@@ -11,23 +11,52 @@ namespace Persistence.Runtime;
 public interface IDisplayProvider
 {
     /// <summary>
-    /// Shows the session header and begins accepting user input
+    /// Shows the session header, begins accepting user input, and returns a task
+    /// that completes when the display has shut down (via <see cref="Stop"/> or
+    /// cancellation). Callers await this to keep the session alive.
     /// </summary>
-    void Start(CancellationToken ct);
+    Task Start(CancellationToken ct);
 
-    /// <summary>Shows a thinking/working indicator before a model call.</summary>
+    /// <summary>
+    /// Shows a thinking/working indicator before a model call.
+    /// </summary>
     void ShowThinking(string? label = null);
 
-    /// <summary>Shows the digital colleague's reply text.</summary>
+    /// <summary>
+    /// Shows the remote peer's reply text.
+    /// </summary>
     void ShowReply(string reply);
 
-    /// <summary>Shows a wake-up event notification.</summary>
+    /// <summary>
+    /// Shows the model's reasoning summary (when the provider returns one).
+    /// </summary>
+    void ShowReasoning(string summary);
+
+    /// <summary>
+    /// Appends an incremental chunk of the reasoning summary while streaming. Unlike
+    /// <see cref="ShowReasoning"/>, this is called repeatedly with small deltas and
+    /// should not add its own framing between chunks.
+    /// </summary>
+    void ShowReasoningDelta(string delta);
+
+    /// <summary>
+    /// Shows a tool/command invocation: its name, the request it was given, and its result.
+    /// </summary>
+    void ShowToolUse(string tool, string request, string result);
+
+    /// <summary>
+    /// Shows a wake-up event notification.
+    /// </summary>
     void ShowWakeUpEvent(ScheduledEventEntity evt);
 
-    /// <summary>Shows an error message.</summary>
+    /// <summary>
+    /// Shows an error message.
+    /// </summary>
     void ShowError(string message);
 
-    /// <summary>Shows a debug info string.</summary>
+    /// <summary>
+    /// Shows a debug info string.
+    /// </summary>
     void ShowDebugInfo(string info);
 
     /// <summary>
@@ -36,6 +65,18 @@ public interface IDisplayProvider
     /// </summary>
     void Stop();
 
-    /// <summary>Shows an unrecognised slash-command message.</summary>
+    /// <summary>
+    /// Shows recent chat history on startup.
+    /// </summary>
+    void ShowChatHistory(IReadOnlyList<(string Role, string Content, DateTimeOffset Timestamp)> messages);
+
+    /// <summary>
+    /// Shows an unrecognised slash-command message.
+    /// </summary>
     void ShowUnknownCommand(string command);
+
+    /// <summary>
+    /// Shows a notification that a message has been queued for the next iteration.
+    /// </summary>
+    void ShowMessageQueued(string input);
 }

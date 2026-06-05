@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 
 namespace Persistence.Data.Entities;
 
+
 [Table("WorkingContexts")]
 public record WorkingContextEntity : BaseEntity
 {
@@ -102,6 +103,7 @@ public record WeightedContextFragment : ContextFragmentEntity
     /// Relative weight of this fragment within the context (0.0–1.0). Higher values
     /// signal greater relevance for the current prompt.
     /// </summary>
+    [JsonIgnore]
     public required float Weight { get; set; }
 
     /// <summary>
@@ -109,5 +111,6 @@ public record WeightedContextFragment : ContextFragmentEntity
     /// <see cref="WorkingContextEntity.AddFragment"/> — callers do not need to
     /// provide a value.
     /// </summary>
+    [JsonIgnore]
     public int Order { get; set; }
 }

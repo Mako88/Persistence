@@ -1,9 +1,13 @@
 using Persistence.Config;
 using Persistence.Data;
+using Persistence.Data.Entities;
 using Persistence.Data.Repositories;
 using Persistence.DI;
 using Persistence.Events;
+using Persistence.Extensions;
 using Persistence.Notifications;
+using Persistence.Utilities;
+using System.Text.Json;
 
 namespace Persistence.Runtime;
 
@@ -18,16 +22,15 @@ public class Orchestrator : IOrchestrator
 {
     private readonly IDatabaseManager db;
     private readonly IWorkingContextRepository workingContextRepo;
-    private readonly IContextFragmentRepository fragmentRepo;
     private readonly ISessionContext sessionContext;
     private readonly IDisplayProvider display;
     private readonly IEventBus eventBus;
     private readonly ITurnHandler turnHandler;
     private readonly IWakeUpMonitor wakeUpMonitor;
+    private readonly IEmbeddedResourceManager resourceManager;
     private readonly IAppConfig config;
 
     private readonly SemaphoreSlim turnLock = new(1, 1);
-    private readonly TaskCompletionSource shutdown = new();
 
     /// <summary>
     /// Constructor
@@ -35,49 +38,38 @@ public class Orchestrator : IOrchestrator
     public Orchestrator(
         IDatabaseManager db,
         IWorkingContextRepository workingContextRepo,
-        IContextFragmentRepository fragmentRepo,
         ISessionContext sessionContext,
         IDisplayProvider display,
         IEventBus eventBus,
         ITurnHandler turnHandler,
         IWakeUpMonitor wakeUpMonitor,
+        IEmbeddedResourceManager resourceManager,
         IAppConfig config)
     {
         this.db = db;
         this.workingContextRepo = workingContextRepo;
-        this.fragmentRepo = fragmentRepo;
         this.sessionContext = sessionContext;
         this.display = display;
         this.eventBus = eventBus;
         this.turnHandler = turnHandler;
         this.wakeUpMonitor = wakeUpMonitor;
+        this.resourceManager = resourceManager;
         this.config = config;
     }
 
     /// <summary>
     /// Initialises the session, subscribes to display input, starts the display provider,
-    /// and awaits shutdown (triggered by cancellation or /exit and /quit commands)
+    /// and awaits its shutdown (triggered by cancellation or /exit and /quit commands)
     /// </summary>
     public async Task RunAsync(CancellationToken ct = default)
     {
         await InitializeAsync();
 
-        _ = eventBus.Subscribe<DisplayInputReceived>(OnDisplayInputReceived);
+        eventBus.Subscribe<DisplayInputReceived>(OnDisplayInputReceived);
         wakeUpMonitor.Start(ct);
-        display.Start(ct);
 
-        using var reg = ct.Register(() => shutdown.TrySetCanceled());
-
-        try
-        {
-            await shutdown.Task;
-        }
-        catch
-        {
-            // Do nothing
-        }
-
-        display.Stop();
+        // Start returns a task that completes when the display shuts down.
+        await display.Start(ct);
     }
 
     // -- Event Handlers --
@@ -101,15 +93,27 @@ public class Orchestrator : IOrchestrator
             return;
         }
 
-        await turnLock.WaitAsync();
+        if (!turnLock.Wait(0))
+        {
+            turnHandler.EnqueueInput(input);
+            display.ShowMessageQueued(input);
+            return;
+        }
+
         try
         {
             display.ShowThinking();
             await turnHandler.ExecuteTurnAsync(input);
+
+            while (turnHandler.HasPendingInput)
+            {
+                display.ShowThinking("processing queued messages");
+                await turnHandler.ExecuteTurnAsync();
+            }
         }
         finally
         {
-            _ = turnLock.Release();
+            turnLock.Release();
         }
     }
 
@@ -130,23 +134,67 @@ public class Orchestrator : IOrchestrator
 
         sessionContext.SessionId = Guid.NewGuid().ToString("N");
 
-        var context = await workingContextRepo.GetMostRecentAsync()
-            ?? await workingContextRepo.CreateAsync("Default");
+        var context = await workingContextRepo.GetMostRecentAsync();
+
+        if (context == null)
+        {
+            context = await CreateSeededContextAsync();
+        }
 
         sessionContext.WorkingContextId = context.Id;
 
-        // On first run the context has no fragments — seed it with the system fragments.
-        if (context.ContextFragments.Count == 0)
+        var recentMessages = context.ContextFragments.Values
+            .Where(f => f.FragmentType == ContextFragmentType.ChatMessage)
+            .OrderBy(f => f.Order)
+            .TakeLast(10)
+            .Select(f => (
+                // ChatMessage fragments carry their author as a Source (RemotePeer = the
+                // model/assistant), not a Notes role. Notes is always null here.
+                Role: f.Sources.Any(s => s.SourceType == Persistence.Data.Entities.SourceType.RemotePeer) ? "assistant" : "user",
+                Content: f.Content,
+                Timestamp: f.CreatedUtc))
+            .ToList();
+
+        display.ShowChatHistory(recentMessages);
+    }
+
+    /// <summary>
+    /// Creates a new working context seeded with system fragments from embedded resources
+    /// </summary>
+    private async Task<WorkingContextEntity> CreateSeededContextAsync()
+    {
+        var context = await workingContextRepo.CreateAsync("Default");
+
+        var json = await resourceManager.GetFragmentSeedsAsync();
+
+        if (json.HasValue())
         {
-            var systemFragments = await fragmentRepo.GetSystemFragmentsAsync();
+            var seeds = JsonSerializer.Deserialize<List<FragmentSeed>>(json);
 
-            foreach (var fragment in systemFragments)
+            if (seeds != null)
             {
-                context.AddFragment(fragment);
-            }
+                var now = DateTimeOffset.UtcNow;
 
-            await workingContextRepo.SaveAsync(context);
+                foreach (var seed in seeds)
+                {
+                    context.AddFragment(new ContextFragmentEntity
+                    {
+                        FragmentType = ContextFragmentType.System,
+                        Status = ContextFragmentStatus.Active,
+                        Content = seed.Content,
+                        Importance = 1.0f,
+                        Confidence = 1.0f,
+                        IsProtected = true,
+                        CreatedUtc = now,
+                        LastModifiedUtc = now,
+                    });
+                }
+
+                await workingContextRepo.SaveAsync(context);
+            }
         }
+
+        return context;
     }
 
     // -- Commands --
@@ -160,7 +208,7 @@ public class Orchestrator : IOrchestrator
         {
             case "/exit":
             case "/quit":
-                _ = shutdown.TrySetResult();
+                display.Stop();
                 break;
 
             case "/debug":
@@ -172,5 +220,10 @@ public class Orchestrator : IOrchestrator
                 display.ShowUnknownCommand(command);
                 break;
         }
+    }
+
+    private sealed class FragmentSeed
+    {
+        public required string Content { get; set; }
     }
 }
