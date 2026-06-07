@@ -34,12 +34,7 @@ public class PromptFormatter : IPromptFormatter
         int maxIterations = 0)
     {
         var fragments = context.ContextFragments.Values;
-        var segments = new List<PromptSegment>
-        {
-            // Protocol scaffolding is injected per-prompt (not persisted as a fragment), so the
-            // response format can change via config without reseeding the database.
-            new() { Source = "System", Content = protocolInstructions.GetInstructions() },
-        };
+        var segments = new List<PromptSegment>();
 
         foreach (var fragment in fragments)
         {
@@ -49,6 +44,18 @@ public class PromptFormatter : IPromptFormatter
                 Content = FormatFragment(fragment),
             });
         }
+
+        // Response-format instructions and the sensory block are injected at the END, not the
+        // top: format adherence degrades the further the rules sit from the generation point,
+        // and that worsens as the working context grows. Keeping this operational scaffolding
+        // in the trailing "fresh state" region keeps it salient. (Identity/persona lives in the
+        // fragments above, where stable framing belongs.) Injected per-prompt rather than
+        // persisted, so the format can change via config without reseeding.
+        segments.Add(new PromptSegment
+        {
+            Source = "System",
+            Content = protocolInstructions.GetInstructions(),
+        });
 
         segments.Add(new PromptSegment
         {

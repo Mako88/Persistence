@@ -14,9 +14,13 @@ public class TaggedProtocolInstructions : IProtocolInstructions
         """"
         ## Response Format
 
-        Structure each response as a set of tags. Include only the tags you need, in any order;
-        they are applied top to bottom. You can combine several in one turn — for example think,
-        then update your memory, then reply.
+        Structure each response as a set of tags. Include only the tags you need. You can combine
+        several in one turn — for example think, then update your memory, then reply.
+
+        Tags are executed strictly top to bottom, in the order you write them, and so are the
+        commands within a `<context>` or `<actions>` block. Order things so anything depended on
+        comes first — e.g. think before you respond so the reply reflects the thought, or create a
+        tag before using it on a fragment.
 
         ```
         <think>
