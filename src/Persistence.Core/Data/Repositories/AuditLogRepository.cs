@@ -43,6 +43,12 @@ public class AuditLogRepository : EntityRepository<AuditLogEntity>, IAuditLogRep
     #region Base overrides
 
     /// <summary>
+    /// Audit logs are append-only and their table has no LastAccessedUtc column, so reads
+    /// must not attempt to stamp it.
+    /// </summary>
+    protected override bool TracksLastAccessed => false;
+
+    /// <summary>
     /// Loads audit log entries by ID with their Source property populated
     /// </summary>
     protected override async Task<IEnumerable<AuditLogEntity>> LoadByIdsAsync(
@@ -74,25 +80,20 @@ public class AuditLogRepository : EntityRepository<AuditLogEntity>, IAuditLogRep
     }
 
     /// <summary>
-    /// Returns the INSERT statement for an audit log entry
+    /// Returns the INSERT statement for an audit log entry. The AuditLogs table is append-only
+    /// and minimal — it has no LastAccessedUtc / LastModifiedUtc / IsDeleted columns.
     /// </summary>
     protected override FormattableString GetInsertSql(AuditLogEntity entity) =>
         $"""
-        INSERT INTO AuditLogs (SessionId, WorkingContextId, EventType, TargetType, TargetId, SourceId, OldData, NewData, LastAccessedUtc, IsDeleted, CreatedUtc, LastModifiedUtc, Notes)
-        VALUES ({entity.SessionId}, {entity.WorkingContextId}, {entity.EventType}, {entity.TargetType}, {entity.TargetId}, {entity.SourceId}, {entity.OldData}, {entity.NewData}, {entity.LastAccessedUtc}, {entity.IsDeleted}, {entity.CreatedUtc}, {entity.LastModifiedUtc}, {entity.Notes})
+        INSERT INTO AuditLogs (SessionId, WorkingContextId, EventType, TargetType, TargetId, SourceId, OldData, NewData, CreatedUtc)
+        VALUES ({entity.SessionId}, {entity.WorkingContextId}, {entity.EventType}, {entity.TargetType}, {entity.TargetId}, {entity.SourceId}, {entity.OldData}, {entity.NewData}, {entity.CreatedUtc})
         """;
 
     /// <summary>
-    /// Returns the UPDATE statement for an audit log entry
+    /// Audit entries are immutable; updates are not supported.
     /// </summary>
     protected override FormattableString GetUpdateSql(AuditLogEntity entity) =>
-        $"""
-        UPDATE AuditLogs
-        SET EventType = {entity.EventType}, OldData = {entity.OldData}, NewData = {entity.NewData},
-            LastAccessedUtc = {entity.LastAccessedUtc}, IsDeleted = {entity.IsDeleted},
-            LastModifiedUtc = {entity.LastModifiedUtc}, Notes = {entity.Notes}
-        WHERE Id = {entity.Id}
-        """;
+        throw new NotSupportedException("Audit log entries are append-only and cannot be updated.");
 
     #endregion
 }

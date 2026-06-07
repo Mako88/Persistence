@@ -23,9 +23,24 @@ public class AppConfig : IAppConfig
 
     /// <summary>
     /// Loads the config from the given filepath, falling back to defaults on
-    /// missing file or parse error
+    /// missing file or parse error. The <c>PERSISTENCE_DB_PATH</c> environment variable,
+    /// when set, overrides <see cref="DatabasePath"/> — useful for tests (isolated DB per run)
+    /// and ops without editing the file.
     /// </summary>
     public static async Task<IAppConfig> LoadAsync(string path = "appsettings.json")
+    {
+        var config = await LoadFromFileAsync(path);
+
+        var dbOverride = Environment.GetEnvironmentVariable("PERSISTENCE_DB_PATH");
+        if (!string.IsNullOrWhiteSpace(dbOverride))
+        {
+            config.DatabasePath = dbOverride;
+        }
+
+        return config;
+    }
+
+    private static async Task<AppConfig> LoadFromFileAsync(string path)
     {
         if (!File.Exists(path))
         {

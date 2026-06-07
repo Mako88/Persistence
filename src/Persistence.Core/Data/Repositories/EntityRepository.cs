@@ -147,6 +147,13 @@ public abstract class EntityRepository<T> : IEntityRepository<T> where T : BaseE
     /// </summary>
     protected virtual void TrackSubEntities(T entity) { }
 
+    /// <summary>
+    /// Whether reads should stamp <see cref="BaseEntity.LastAccessedUtc"/>. Default true.
+    /// Override to false for append-only/immutable tables whose schema has no such column
+    /// (e.g. audit logs), so querying them doesn't attempt an UPDATE on a missing column.
+    /// </summary>
+    protected virtual bool TracksLastAccessed => true;
+
     #endregion
 
     #region Protected helpers
@@ -311,6 +318,11 @@ public abstract class EntityRepository<T> : IEntityRepository<T> where T : BaseE
     /// </summary>
     private async Task TouchLastAccessedAsync(IEnumerable<T> entities, IDbConnection connection)
     {
+        if (!TracksLastAccessed)
+        {
+            return;
+        }
+
         var entityList = entities.ToList();
 
         if (entityList.Count == 0)

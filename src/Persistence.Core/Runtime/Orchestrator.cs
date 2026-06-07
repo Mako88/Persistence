@@ -31,6 +31,7 @@ public class Orchestrator : IOrchestrator
     private readonly IAppConfig config;
 
     private readonly SemaphoreSlim turnLock = new(1, 1);
+    private readonly TaskCompletionSource initialized = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     /// <summary>
     /// Constructor
@@ -63,9 +64,14 @@ public class Orchestrator : IOrchestrator
     /// </summary>
     public async Task RunAsync(CancellationToken ct = default)
     {
-        await InitializeAsync();
-
+        // Subscribe BEFORE the (slow) initialization so input arriving immediately after the host
+        // starts isn't dropped — the event bus doesn't replay. The handler waits on the
+        // initialization gate before processing, so early input is held, not lost.
         eventBus.Subscribe<DisplayInputReceived>(OnDisplayInputReceived);
+
+        await InitializeAsync();
+        initialized.TrySetResult();
+
         wakeUpMonitor.Start(ct);
 
         // Start returns a task that completes when the display shuts down.
@@ -86,6 +92,10 @@ public class Orchestrator : IOrchestrator
         {
             return;
         }
+
+        // Hold input that arrives during startup until initialization completes (the session
+        // context / working context must be set before a turn can run).
+        await initialized.Task;
 
         if (input.StartsWith('/'))
         {

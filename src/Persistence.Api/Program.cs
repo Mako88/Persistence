@@ -47,3 +47,8 @@ var app = builder.Build();
 app.MapControllers();
 
 await app.RunAsync();
+
+/// <summary>
+/// Exposed so the integration test project can boot the real app via WebApplicationFactory.
+/// </summary>
+public partial class Program;

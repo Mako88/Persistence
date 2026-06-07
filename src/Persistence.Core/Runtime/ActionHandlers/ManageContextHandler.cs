@@ -217,7 +217,17 @@ public class ManageContextHandler : CommandHandler
             return $"Fetch failed: tag '{tagName}' not found";
         }
 
-        var fragments = (await fragmentRepo.GetByTagAsync(tag.Id)).ToList();
+        // Merge persisted matches with in-memory context fragments carrying the tag: a tag
+        // applied earlier in this same turn isn't written to the DB until the turn's end-of-turn
+        // save, so a DB-only query wouldn't see it.
+        var persisted = await fragmentRepo.GetByTagAsync(tag.Id);
+        var inContext = context.ContextFragments.Values.Where(f => f.Tags.Any(t => t.Id == tag.Id));
+
+        var fragments = persisted
+            .Concat(inContext)
+            .GroupBy(f => f.Id)
+            .Select(g => g.First())
+            .ToList();
 
         if (fragments.Count == 0)
         {
