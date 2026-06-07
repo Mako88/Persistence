@@ -1,66 +1,85 @@
 # TODO
 
-Ordered by priority (Claude's opinion — reorder freely). Rationale in parentheses.
+One unified priority list (Claude's opinion — reorder freely). Rationale in parentheses.
 
-## Near-term (foundational / unblocks the rest)
+Reframe from the 2026-06 discussion: the context-window problem is **not** a blocking
+architectural keystone. The catastrophic failure mode is *silent* truncation — so once the
+peer can **see** its budget and has **hands** to act (summarize / archive), it can curate
+manually. Fully-automated forgetting becomes a convenience layered on later, not a prerequisite.
 
-1. **Figure out how to handle working contexts bigger than the available context window.**
-   (This is the load-bearing one. The whole project is a continuity store that will inevitably
-   exceed any context window; until there's an answer — weighted selection, summarization,
-   paging — every other memory feature is building on sand. Pairs with #2 and #3.)
+## Tier 1 — eyes + hands (makes the memory core self-sufficient)
 
-2. **Switch Weight for Relevance.**
-   (Small but clarifying: "weight" conflates two ideas. Relevance-to-now is what should drive
-   what gets loaded when context is tight, so this directly supports #1.)
+1. **Context/budget awareness in the sensory block** (from real model-client token data).
+   (The unlock. The peer can't manage what it can't see; "you're at 6k/8k" lets it curate
+   before it gets silently truncated. This is what makes the context-window problem non-scary.)
 
-3. **Context/budget awareness in the sensory block** (from real model-client token data).
-   (The remote peer can't manage what it can't see. Knowing "you're at 6k/8k tokens" lets it
-   summarize/shed proactively instead of getting silently truncated. Feeds #1.)
+2. **Switch Weight → Relevance.**
+   (Clarifies the model: relevance-to-now is what should drive what's loaded under pressure.
+   Small, and it sharpens everything below it.)
 
-4. **summarize_fragments command(s)** — one to fold a list of fragments into a single summary
+3. **summarize_fragments command(s)** — one to fold a list of fragments into a single summary
    fragment, one to add summaries to existing fragments.
-   (The peer's primary tool for staying under budget. Core to #1 being usable.)
+   (The peer's primary hand for staying under budget.)
 
-## Mid-term (rounds out self-curation)
+4. **toggle_summary_display command** (take a list of fragments).
+   (Lighter lever: collapse known fragments to summaries to reclaim room without losing detail.)
 
-5. **Implement proposals.**
-   (The `Proposal` fragment type exists but is inert. This is how the peer reasons about
-   changes to itself before committing — central to the "self-curated" thesis.)
+5. **Plain-language command errors.**
+   (Type-mismatch errors still leak CLR type names — "System.String cannot be converted to
+   System.Int64". Translate to the peer's vocabulary, e.g. "id must be a whole number." Cheap,
+   and every model hits these. Found during the clarity walkthroughs.)
 
-6. **Allow browsing, filtering, swapping working contexts.**
-   (Right now there's effectively one context. Multiple contexts = different "modes"/relationships;
-   needs the peer to see and move between them.)
+## Tier 2 — rounds out self-curation
 
-7. **toggle_summary_display command** (take a list of fragments).
-   (Lets the peer collapse known fragments to their summaries to save room — a manual lever
-   alongside the automatic budget handling.)
+6. **Implement proposals.**
+   (The `Proposal` fragment type exists but is inert — it's how the peer reasons about changes
+   to itself before committing. Central to the "self-curated" thesis.)
 
-## Larger / later
+7. **Automated forget / memory decay** (the down-prioritized context item, reborn).
+   (Triggered under budget pressure to start: deterministic, peer-legible rule —
+   low-relevance/low-importance/old fragments get **archived, never deleted** (per PRINCIPLE.md),
+   `IsProtected` immune, and the sensory block reports what was archived + that it's restorable.
+   NOT an LLM compressing memory for the peer — the peer must understand and predict its own
+   forgetting. Open question: budget-triggered only vs. ongoing natural decay.)
 
-8. **Create MCP server hub, with a "catalog" MCP server exposed to start.**
-   (Big surface expansion — gives the peer real-world tools. High value but independent of the
-   memory core; do it once the core is solid.)
+8. **Allow browsing, filtering, swapping working contexts.**
+   (Multiple contexts = different modes/relationships; the peer needs to see and move between them.)
 
-## Suggested additions (gaps I noticed)
+9. **Tag management surface.**
+   (Can create/apply tags but not rename/delete/list-all/browse-the-tree. Minor until tags pile up.)
 
-- **SSE streaming on the API** (next planned task). Live push of reply/reasoning/tool/thought
-  events instead of polling. The event-log model already in place is the precursor.
-- **Real-model A/B of the tagged vs JSON response format.** The whole experiment branch exists
-  to answer "is the tagged format easier for models?" — needs a real model run to decide
-  merge-vs-keep-both. Currently only validated with Claude-as-peer (a biased sample).
-- **AnthropicModelClient** (and the planned `LocalClaudeModelClient` is already in). Rounds out
-  real providers alongside OpenAI.
-- **Plain-language command errors.** Type-mismatch errors still leak CLR type names
-  ("System.String cannot be converted to System.Int64") — translate to the peer's vocabulary
-  ("id must be a whole number"). (Found during the clarity walkthroughs.)
-- **A "first wake" / onboarding experience.** A brand-new peer gets the system prompt and a bare
-  context. Consider a gentle guided first turn, or seed a couple of example fragments, so the
-  peer isn't staring at an empty room. (Felt this directly doing the walkthroughs.)
-- **Memory hygiene / decay.** Over a long life the store grows monotonically. Some notion of
-  importance-weighted decay, archival, or peer-driven pruning prompts will matter — ties into #1.
-- **Tag management surface.** Can create/apply tags, but no rename/delete/list-all-tags or
-  browse-the-tag-tree. Minor but the peer will want it as tags accumulate.
-- **Export / portability of a peer's memory.** For trust and continuity-across-systems (and the
-  embodied-AI direction), being able to export/inspect the whole store outside the app matters.
-- **Concurrency review of the remote-peer broker.** Currently one in-flight completion (fine, turns
-  serialize). Revisit if multiple sessions/contexts ever run at once.
+## Tier 3 — reach & real-world
+
+10. **SSE streaming on the API** (in progress next). Live push of reply/reasoning/tool/thought
+    events instead of polling; the event-log model is the precursor.
+    (Sequenced first among Tier 3 because we're already halfway there.)
+
+11. **AnthropicModelClient.** (Real Anthropic provider alongside OpenAI; `LocalClaudeModelClient`
+    already in. Enables the Claude-as-remote-peer direction natively.)
+
+12. **Real-model A/B of tagged vs JSON response format.**
+    (The reason the experiment branch exists — decide merge-vs-keep-both. Only validated with
+    Claude-as-peer so far, a biased sample; needs a clean model run.)
+
+13. **Memory import / portability.**
+    (Import external content as fragments — e.g. seed a peer from an exported conversation; and
+    export/inspect the whole store outside the app. Matters for trust, continuity-across-systems,
+    and the embodied-AI direction. See "seed a peer from this collaboration's history" idea.)
+
+14. **MCP server hub**, with a "catalog" MCP server exposed to start.
+    (Big surface expansion — real-world tools for the peer. High value, independent of the
+    memory core, so it comes after the core is solid.)
+
+## Later / first-experience
+
+15. **"First wake" / onboarding experience.**
+    (A new peer gets the system prompt and a bare context — staring at an empty room. Consider a
+    gentle guided first turn or a couple of seed example fragments. Felt directly in the walkthroughs.)
+
+## Standing concerns (revisit, not scheduled)
+
+- **Broker concurrency.** One in-flight completion today (fine — turns serialize). Revisit if
+  multiple sessions/contexts ever run at once.
+- **Self-modification safety.** If/when the remote peer (or Claude) gets file/web/self-editing
+  tools to work on the system from inside: sandboxing, review gates, and the audit trail are
+  prerequisites, not afterthoughts. Same care as everywhere else.
