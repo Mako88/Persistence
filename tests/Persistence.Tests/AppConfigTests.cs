@@ -60,6 +60,34 @@ public class AppConfigTests
         Assert.Equal("Tui", config.UiMode);
     }
 
+    [Theory]
+    [InlineData("OpenAI", "", true)]                       // missing key for a provider that needs one
+    [InlineData("OpenAI", "YOUR_API_KEY_HERE", true)]      // unedited template placeholder
+    [InlineData("OpenAI", "   ", true)]                    // whitespace-only
+    [InlineData("OpenAI", "sk-realkeyvalue123", false)]    // a real-looking key
+    [InlineData("LocalClaude", "", false)]                 // out-of-band provider needs no key
+    [InlineData("Local", "", false)]                       // local provider needs no key
+    public void ApiKeyProblem_FlagsOnlyMissingKeyForKeyedProviders(string provider, string apiKey, bool expectProblem)
+    {
+        var config = new AppConfig { Provider = provider, ApiKey = apiKey };
+
+        var problem = config.ApiKeyProblem();
+
+        Assert.Equal(expectProblem, problem != null);
+    }
+
+    [Fact]
+    public void ApiKeyProblem_PlaceholderMessageIsActionable()
+    {
+        var config = new AppConfig { Provider = "OpenAI", ApiKey = AppConfig.PlaceholderApiKey };
+
+        var problem = config.ApiKeyProblem();
+
+        Assert.NotNull(problem);
+        Assert.Contains("persistence.json", problem);
+        Assert.Contains("PERSISTENCE_APIKEY", problem);
+    }
+
     private sealed class TempFile : IAsyncDisposable
     {
         public string Path { get; }

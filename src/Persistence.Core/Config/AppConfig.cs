@@ -22,6 +22,42 @@ public class AppConfig : IAppConfig
     public int MaxActionIterations { get; set; } = 5;
 
     /// <summary>
+    /// The value shipped in persistence.template.json — treated as "no key set" so a copied-but-
+    /// unedited template fails fast with a clear message instead of a raw 401.
+    /// </summary>
+    public const string PlaceholderApiKey = "YOUR_API_KEY_HERE";
+
+    /// <summary>
+    /// Returns a human-readable problem with the configured credentials, or null if they look
+    /// usable. Only HTTP providers (currently <see cref="ModelProvider.OpenAI"/>) need a key; the
+    /// local and out-of-band (LocalClaude) providers don't, so they never report a problem.
+    /// </summary>
+    public string? ApiKeyProblem()
+    {
+        var needsKey = Enum.TryParse<ModelProvider>(Provider, ignoreCase: true, out var provider)
+            && provider == ModelProvider.OpenAI;
+
+        if (!needsKey)
+        {
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(ApiKey))
+        {
+            return $"Provider is '{Provider}' but no ApiKey is set. Add your real key to "
+                 + "persistence.json (\"ApiKey\") or set the PERSISTENCE_APIKEY environment variable.";
+        }
+
+        if (ApiKey == PlaceholderApiKey)
+        {
+            return "ApiKey is still the placeholder from persistence.template.json. Replace it with "
+                 + "your real key in persistence.json (\"ApiKey\") or set PERSISTENCE_APIKEY.";
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Loads the config from the given filepath, falling back to defaults on missing file or
     /// parse error, then applies environment-variable overrides. Any setting can be overridden by
     /// a <c>PERSISTENCE_&lt;PROPERTY&gt;</c> env var (e.g. <c>PERSISTENCE_PROVIDER</c>,
