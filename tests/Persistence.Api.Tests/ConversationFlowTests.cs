@@ -258,6 +258,58 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
     }
 
     [Fact]
+    public async Task TagManagement_ListAndDelete()
+    {
+        // Create a couple of tags, list them, then delete one.
+        var created = await api.RunTurnAsync(
+            "organize tags",
+            """
+            <context>
+            create_tag(name="zztopic/alpha", description="first")
+            create_tag(name="zztopic/beta")
+            </context>
+            <continue>false</continue>
+            """);
+        Assert.Contains("Created tag", Detail(created, "tool"));
+
+        var listed = await api.RunTurnAsync(
+            "show tags",
+            """
+            <context>
+            list_tags()
+            </context>
+            <continue>false</continue>
+            """);
+        var listOut = Detail(listed, "tool");
+        Assert.Contains("zztopic", listOut);
+        Assert.Contains("alpha", listOut);
+        Assert.Contains("beta", listOut);
+
+        var deleted = await api.RunTurnAsync(
+            "delete a tag",
+            """
+            <context>
+            delete_tag(tag="zztopic/alpha")
+            </context>
+            <continue>false</continue>
+            """);
+        Assert.Contains("Deleted tag 'zztopic/alpha'", Detail(deleted, "tool"));
+
+        // After deletion, alpha is gone but beta remains.
+        var relisted = await api.RunTurnAsync(
+            "show tags again",
+            """
+            <context>
+            list_tags()
+            </context>
+            <continue>false</continue>
+            """);
+        var relistOut = Detail(relisted, "tool");
+        Assert.DoesNotContain("alpha", relistOut);
+        Assert.Contains("beta", relistOut);
+    }
+
+    [Fact]
     public async Task TypeMismatchError_UsesPlainLanguage()
     {
         // Passing text where a whole number is expected should yield a peer-friendly message,

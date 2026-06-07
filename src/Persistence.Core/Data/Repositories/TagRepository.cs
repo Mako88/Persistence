@@ -46,6 +46,31 @@ public class TagRepository : EntityRepository<TagEntity>, ITagRepository
     public async Task<IEnumerable<TagEntity>> GetChildrenAsync(long parentTagId) =>
         await QueryAsync($"SELECT * FROM Tags WHERE ParentTagId = {parentTagId}");
 
+    public async Task<int> DeleteTreeAsync(long tagId, CancellationToken ct = default)
+    {
+        // Collect the tag and all descendants (depth-first), then remove their fragment
+        // associations and the tag rows. Fragments are never touched.
+        var toDelete = new List<long>();
+        var queue = new Queue<long>();
+        queue.Enqueue(tagId);
+
+        while (queue.Count > 0)
+        {
+            var current = queue.Dequeue();
+            toDelete.Add(current);
+
+            foreach (var child in await GetChildrenAsync(current))
+            {
+                queue.Enqueue(child.Id);
+            }
+        }
+
+        await ExecuteAsync($"DELETE FROM ContextFragmentTags WHERE TagId IN {toDelete}", ct: ct);
+        await ExecuteAsync($"DELETE FROM Tags WHERE Id IN {toDelete}", ct: ct);
+
+        return toDelete.Count;
+    }
+
     #region Base overrides
 
     /// <summary>

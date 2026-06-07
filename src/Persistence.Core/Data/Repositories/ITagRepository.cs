@@ -26,4 +26,11 @@ public interface ITagRepository : IEntityRepository<TagEntity>
     /// <see cref="TagEntity.ChildTags"/> populated.
     /// </summary>
     Task<IEnumerable<TagEntity>> GetChildrenAsync(long parentTagId);
+
+    /// <summary>
+    /// Hard-deletes a tag, its descendant tags, and all fragment associations to them. The
+    /// fragments themselves are untouched — a tag is an organisational label, not curated memory,
+    /// so removing it doesn't erase anything continuity-bearing. Returns the number of tags removed.
+    /// </summary>
+    Task<int> DeleteTreeAsync(long tagId, CancellationToken ct = default);
 }

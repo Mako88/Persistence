@@ -645,6 +645,57 @@ public class ManageContextHandler : CommandHandler
         return $"Removed tag '{tagName}' from fragment #{id}";
     }
 
+    [Command("list_tags", "List all tags as a tree")]
+    private async Task<string> ExecuteListTagsAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
+    {
+        var roots = (await tagRepo.GetAllRootAsync()).ToList();
+
+        if (roots.Count == 0)
+        {
+            return "No tags exist yet";
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine("Tags:");
+
+        foreach (var root in roots.OrderBy(t => t.Name))
+        {
+            AppendTagTree(sb, root, depth: 1);
+        }
+
+        return sb.ToString().TrimEnd();
+    }
+
+    [Command("delete_tag", "Delete a tag (and its sub-tags) — removes the label from all fragments; the fragments themselves are kept")]
+    [CommandField("tag", "string", required: true, Description = "Tag path to delete, e.g. \"knowledge/science\"")]
+    private async Task<string> ExecuteDeleteTagAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
+    {
+        var tagName = command?["tag"]?.GetValue<string>();
+
+        if (string.IsNullOrWhiteSpace(tagName))
+        {
+            return "Delete tag failed: 'tag' is required";
+        }
+
+        var tag = await ResolveTagByPathAsync(tagName);
+
+        if (tag == null)
+        {
+            return $"Delete tag failed: tag '{tagName}' not found";
+        }
+
+        var removed = await tagRepo.DeleteTreeAsync(tag.Id, ct);
+
+        // Drop the deleted tag from any in-context fragments so this turn's view is consistent.
+        foreach (var fragment in context.ContextFragments.Values)
+        {
+            fragment.Tags.RemoveAll(t => t.Id == tag.Id);
+        }
+
+        var suffix = removed > 1 ? $" (and {removed - 1} sub-tag(s))" : "";
+        return $"Deleted tag '{tagName}'{suffix}; fragments that had it are kept";
+    }
+
     [Command("create_source", "Create a new source")]
     [CommandField("name", "string", required: true, Description = "Source name")]
     [CommandField("source_type", "string", Description = "Source type (RemotePeer, LocalPeer, System, DerivedFromFragments)", Default = "RemotePeer")]
@@ -920,6 +971,21 @@ public class ManageContextHandler : CommandHandler
     #endregion
 
     #region Helpers
+
+    /// <summary>
+    /// Appends a tag and its descendants to the builder as an indented tree, with descriptions.
+    /// </summary>
+    private static void AppendTagTree(StringBuilder sb, TagEntity tag, int depth)
+    {
+        var indent = new string(' ', depth * 2);
+        var description = string.IsNullOrWhiteSpace(tag.Description) ? "" : $" — {tag.Description}";
+        sb.AppendLine($"{indent}{tag.Name}{description}");
+
+        foreach (var child in tag.ChildTags.OrderBy(t => t.Name))
+        {
+            AppendTagTree(sb, child, depth + 1);
+        }
+    }
 
     private async Task<TagEntity?> ResolveTagByPathAsync(string path)
     {
