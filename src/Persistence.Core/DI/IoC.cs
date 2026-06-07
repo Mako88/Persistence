@@ -23,9 +23,9 @@ public static class IoC
         var containerBuilder = new ContainerBuilder();
         containerBuilder.Populate(serviceCollection);
 
-        var assemblies = AppDomain.CurrentDomain.GetAssemblies().Where(x => x.FullName?.StartsWith("Persistence") == true);
+        var assemblies = AppDomain.CurrentDomain.GetAssemblies().Where(x => x.FullName?.StartsWith("Persistence") == true).ToList();
 
-        SqlMapper.AddTypeHandler(new DateTimeOffsetMapper());
+        RegisterDapperTypeHandlers(assemblies);
 
         if (registerAdditionalServices != null)
         {
@@ -37,12 +37,34 @@ public static class IoC
             foreach (var type in assembly.GetTypes())
             {
                 RegisterService(type, containerBuilder);
-                RegisterEnumTypeHandler(type);
             }
         }
 
         var container = containerBuilder.Build();
         return new AutofacServiceProvider(container);
+    }
+
+    /// <summary>
+    /// Registers all Dapper type handlers the data layer relies on: the
+    /// <see cref="DateTimeOffset"/> handler and a string-backed handler for every public
+    /// enum. Exposed so tests can exercise the repositories with the same hydration the
+    /// app uses, instead of going through the full DI container. Defaults to scanning the
+    /// loaded Persistence assemblies.
+    /// </summary>
+    public static void RegisterDapperTypeHandlers(IEnumerable<Assembly>? assemblies = null)
+    {
+        SqlMapper.AddTypeHandler(new DateTimeOffsetMapper());
+
+        assemblies ??= AppDomain.CurrentDomain.GetAssemblies()
+            .Where(x => x.FullName?.StartsWith("Persistence") == true);
+
+        foreach (var assembly in assemblies)
+        {
+            foreach (var type in assembly.GetTypes())
+            {
+                RegisterEnumTypeHandler(type);
+            }
+        }
     }
 
     /// <summary>

@@ -263,6 +263,11 @@ public abstract class EntityRepository<T> : IEntityRepository<T> where T : BaseE
                 }
 
                 await WriteAuditAsync(isNew ? AuditEventType.Created : AuditEventType.Modified, entity, transaction, ct: ct);
+
+                // Re-snapshot after a successful write so a second save within the same
+                // unit of work correctly sees the entity as unchanged. Must run after the
+                // audit, which relies on the pre-save OriginalState as its OldData.
+                Track(entity);
             }
 
             // Always save sub-entities — they can change independently of the
@@ -301,16 +306,36 @@ public abstract class EntityRepository<T> : IEntityRepository<T> where T : BaseE
     }
 
     /// <summary>
-    /// Marks entities as not new and snapshots their current state for change detection
+    /// Marks entities (and any tracked sub-entities) as not new and snapshots their
+    /// current state for change detection.
     /// </summary>
     private void SetupTracking(IEnumerable<T> entities)
     {
         foreach (var entity in entities)
         {
-            entity.IsNew = false;
-            entity.OriginalState = JsonSerializer.Serialize(entity);
+            Track(entity);
+            TrackSubEntities(entity);
         }
     }
+
+    /// <summary>
+    /// Marks a single entity as existing (not new) and snapshots its state so subsequent
+    /// saves can detect whether it actually changed. Without this, an entity hydrated from
+    /// the database keeps the constructor default <see cref="BaseEntity.IsNew"/> = true and
+    /// would be re-inserted on the next save.
+    /// </summary>
+    protected static void Track(BaseEntity entity)
+    {
+        entity.IsNew = false;
+        entity.OriginalState = JsonSerializer.Serialize(entity);
+    }
+
+    /// <summary>
+    /// Tracks sub-entities loaded alongside the parent. Default is a no-op; repositories
+    /// that hydrate children (e.g. a working context's fragments) override this so the
+    /// children are recognised as existing rows rather than new inserts.
+    /// </summary>
+    protected virtual void TrackSubEntities(T entity) { }
 
     /// <summary>
     /// Writes an audit log entry for a create or update operation. Skips silently

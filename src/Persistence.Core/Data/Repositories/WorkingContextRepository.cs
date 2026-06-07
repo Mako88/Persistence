@@ -225,6 +225,19 @@ public class WorkingContextRepository : EntityRepository<WorkingContextEntity>, 
         WHERE Id = {entity.Id}
         """;
 
+    /// <summary>
+    /// Tracks fragments hydrated with the context so they're recognised as existing rows.
+    /// Without this they'd keep the constructor default <c>IsNew = true</c> and be
+    /// re-inserted (duplicated) on every save.
+    /// </summary>
+    protected override void TrackSubEntities(WorkingContextEntity entity)
+    {
+        foreach (var fragment in entity.ContextFragments.Values)
+        {
+            Track(fragment);
+        }
+    }
+
     // ── Private ─────────────────────────────────────────────────
 
     /// <summary>
