@@ -10,7 +10,8 @@ public class PromptFormatterTests
 {
     private const string ProtocolMarker = "<<PROTOCOL-INSTRUCTIONS>>";
 
-    private static PromptFormatter CreateFormatter(int maxInputTokens = 8000)
+    private static PromptFormatter CreateFormatter(
+        int maxInputTokens = 8000, ITokenUsageTracker? tracker = null, string model = "local")
     {
         var session = new Mock<ISessionContext>();
         session.SetupGet(s => s.SessionId).Returns("test-session");
@@ -18,7 +19,13 @@ public class PromptFormatterTests
         var protocol = new Mock<IProtocolInstructions>();
         protocol.Setup(p => p.GetInstructions()).Returns(ProtocolMarker);
 
-        return new PromptFormatter(session.Object, new AppConfig { MaxInputTokens = maxInputTokens }, protocol.Object);
+        var windows = new Mock<IContextWindowProvider>();
+        windows.Setup(w => w.GetContextWindow(It.IsAny<string>())).Returns(200000);
+
+        var config = new AppConfig { MaxInputTokens = maxInputTokens, Model = model };
+
+        return new PromptFormatter(
+            session.Object, config, protocol.Object, tracker ?? new TokenUsageTracker(), windows.Object);
     }
 
     private static WorkingContextEntity ContextWithFragment(string content)
@@ -103,5 +110,41 @@ public class PromptFormatterTests
         Assert.Contains("Context budget:", sensory);
         Assert.DoesNotContain("CRITICAL", sensory);
         Assert.DoesNotContain("getting full", sensory);
+    }
+
+    [Fact]
+    public void UsesModelContextWindowWhenNoBudgetConfigured()
+    {
+        // MaxInputTokens = 0 → effective budget falls back to the model window (mocked to 200000).
+        var formatter = CreateFormatter(maxInputTokens: 0);
+        var sensory = formatter.Format(ContextWithFragment("hi"), [])[^1].Content;
+
+        Assert.Contains("/200000 tokens", sensory);
+    }
+
+    [Fact]
+    public void CalibratesEstimateFromRealUsage()
+    {
+        // Tracker says last turn the real token count was 2x our estimate; the displayed "used"
+        // figure should be scaled up accordingly versus an uncalibrated formatter.
+        var tracker = new TokenUsageTracker();
+
+        var uncalibrated = CreateFormatter(maxInputTokens: 1_000_000)
+            .Format(ContextWithFragment("calibration sample text"), [])[^1].Content;
+        var baseUsed = ExtractUsed(uncalibrated);
+
+        tracker.Record(realInputTokens: 2000, estimatedInputTokens: 1000); // ratio 2.0
+        var calibrated = CreateFormatter(maxInputTokens: 1_000_000, tracker: tracker)
+            .Format(ContextWithFragment("calibration sample text"), [])[^1].Content;
+        var calibratedUsed = ExtractUsed(calibrated);
+
+        Assert.Equal(baseUsed * 2, calibratedUsed);
+    }
+
+    private static int ExtractUsed(string sensory)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(sensory, @"~(\d+)/\d+ tokens");
+        Assert.True(m.Success, "budget line not found");
+        return int.Parse(m.Groups[1].Value);
     }
 }

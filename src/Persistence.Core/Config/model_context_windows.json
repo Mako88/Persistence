@@ -1,0 +1,14 @@
+{
+  "_comment": "Maps model identifiers (or prefixes) to their context-window size in tokens. Edited at runtime — no rebuild needed. Matching is longest-prefix, case-insensitive. 'default' applies when nothing matches.",
+  "default": 128000,
+  "gpt-5": 400000,
+  "gpt-5.4": 400000,
+  "gpt-5.5": 400000,
+  "gpt-4.1": 1047576,
+  "gpt-4o": 128000,
+  "o3": 200000,
+  "claude": 200000,
+  "claude-opus": 200000,
+  "claude-sonnet": 200000,
+  "local": 128000
+}

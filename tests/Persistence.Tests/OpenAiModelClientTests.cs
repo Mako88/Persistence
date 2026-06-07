@@ -46,7 +46,7 @@ public class OpenAiModelClientTests
 
         var display = new Mock<IDisplayProvider>();
 
-        return (new OpenAiModelClient(config, display.Object, http.Object), http, display);
+        return (new OpenAiModelClient(config, display.Object, new TokenUsageTracker(), http.Object), http, display);
     }
 
     private static PromptRequest Request() => new()
@@ -181,7 +181,7 @@ public class OpenAiModelClientTests
         http.Setup(c => c.MakeStreamRequest(It.IsAny<ISimpleRequest>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(streamResponse.Object);
 
-        return (new OpenAiModelClient(config, new Mock<IDisplayProvider>().Object, http.Object), http);
+        return (new OpenAiModelClient(config, new Mock<IDisplayProvider>().Object, new TokenUsageTracker(), http.Object), http);
     }
 
     /// <summary>

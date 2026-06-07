@@ -27,11 +27,12 @@ public class OpenAiModelClient : IModelClient, IDisposable
     private readonly string reasoningEffort;
     private readonly IAppConfig config;
     private readonly IDisplayProvider display;
+    private readonly ITokenUsageTracker usageTracker;
 
     private const string DefaultBaseUrl = "https://api.openai.com/v1";
 
-    public OpenAiModelClient(IAppConfig config, IDisplayProvider display)
-        : this(config, display, CreateClient(config))
+    public OpenAiModelClient(IAppConfig config, IDisplayProvider display, ITokenUsageTracker usageTracker)
+        : this(config, display, usageTracker, CreateClient(config))
     {
     }
 
@@ -39,7 +40,7 @@ public class OpenAiModelClient : IModelClient, IDisposable
     /// Test seam: accepts a pre-configured <see cref="ISimpleClient"/> (e.g. a fake)
     /// instead of constructing one from config.
     /// </summary>
-    internal OpenAiModelClient(IAppConfig config, IDisplayProvider display, ISimpleClient client)
+    internal OpenAiModelClient(IAppConfig config, IDisplayProvider display, ITokenUsageTracker usageTracker, ISimpleClient client)
     {
         model = config.Model;
         maxCompletionTokens = config.MaxOutputTokens;
@@ -48,6 +49,7 @@ public class OpenAiModelClient : IModelClient, IDisposable
         this.client = client;
         this.config = config;
         this.display = display;
+        this.usageTracker = usageTracker;
     }
 
     private static ISimpleClient CreateClient(IAppConfig config)
@@ -72,6 +74,8 @@ public class OpenAiModelClient : IModelClient, IDisposable
         using var doc = JsonDocument.Parse(response.StringBody);
         var responseMessage = ExtractOutputText(doc.RootElement);
 
+        RecordUsage(doc.RootElement, request);
+
         var reasoning = ExtractReasoningSummary(doc.RootElement);
         if (reasoning.Length > 0)
         {
@@ -84,6 +88,21 @@ public class OpenAiModelClient : IModelClient, IDisposable
         }
 
         return responseMessage;
+    }
+
+    /// <summary>
+    /// Records the provider's real input-token count (Responses API: <c>usage.input_tokens</c>)
+    /// alongside our estimate of the same prompt, so the budget readout can self-calibrate.
+    /// </summary>
+    private void RecordUsage(JsonElement root, PromptRequest request)
+    {
+        if (root.TryGetProperty("usage", out var usage)
+            && usage.TryGetProperty("input_tokens", out var input)
+            && input.TryGetInt32(out var realInput))
+        {
+            var estimated = TokenEstimator.Estimate(request.Messages.Select(m => m.Content));
+            usageTracker.Record(realInput, estimated);
+        }
     }
 
     public async IAsyncEnumerable<ModelStreamEvent> StreamAsync(

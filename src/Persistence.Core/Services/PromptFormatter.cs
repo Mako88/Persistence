@@ -17,14 +17,23 @@ public class PromptFormatter : IPromptFormatter
     private readonly ISessionContext sessionContext;
     private readonly IAppConfig config;
     private readonly IProtocolInstructions protocolInstructions;
+    private readonly ITokenUsageTracker usageTracker;
+    private readonly IContextWindowProvider contextWindows;
 
     private DateTimeOffset? lastFormatUtc;
 
-    public PromptFormatter(ISessionContext sessionContext, IAppConfig config, IProtocolInstructions protocolInstructions)
+    public PromptFormatter(
+        ISessionContext sessionContext,
+        IAppConfig config,
+        IProtocolInstructions protocolInstructions,
+        ITokenUsageTracker usageTracker,
+        IContextWindowProvider contextWindows)
     {
         this.sessionContext = sessionContext;
         this.config = config;
         this.protocolInstructions = protocolInstructions;
+        this.usageTracker = usageTracker;
+        this.contextWindows = contextWindows;
     }
 
     public List<PromptSegment> Format(
@@ -171,21 +180,28 @@ public class PromptFormatter : IPromptFormatter
     };
 
     /// <summary>
-    /// Renders the context-budget line: how full the prompt is against the input-token budget,
-    /// with an actionable nudge as it fills so the peer can curate (summarize / archive) before it
-    /// would otherwise be silently truncated. The token figure is an estimate (~4 chars/token).
+    /// Renders the context-budget line: how full the prompt is against the effective budget, with
+    /// an actionable nudge as it fills so the peer can curate (summarize / archive) before context
+    /// would be silently dropped.
+    ///
+    /// The numerator is the raw char-estimate of the current prompt, **calibrated** by the ratio of
+    /// real-to-estimated tokens from the previous call (so it tracks the provider's actual
+    /// tokenizer rather than the ~4 chars/token heuristic alone). The denominator is the effective
+    /// budget: the configured <see cref="IAppConfig.MaxInputTokens"/> if set (a tighter working
+    /// limit), else the model's full context window.
     /// </summary>
-    private string FormatContextBudget(int usedTokens)
+    private string FormatContextBudget(int estimatedTokens)
     {
-        var budget = config.MaxInputTokens;
+        var used = Calibrate(estimatedTokens);
+        var budget = EffectiveBudget();
 
         if (budget <= 0)
         {
-            return $"Context: ~{usedTokens} tokens used (no budget configured)";
+            return $"Context: ~{used} tokens used (no budget configured)";
         }
 
-        var percent = (int)Math.Round(100.0 * usedTokens / budget);
-        var line = $"Context budget: ~{usedTokens}/{budget} tokens (~{percent}% full)";
+        var percent = (int)Math.Round(100.0 * used / budget);
+        var line = $"Context budget: ~{used}/{budget} tokens (~{percent}% full)";
 
         var nudge = percent switch
         {
@@ -197,6 +213,32 @@ public class PromptFormatter : IPromptFormatter
 
         return line + nudge;
     }
+
+    /// <summary>
+    /// Adjusts the raw estimate by the previous call's real:estimated ratio, when available, so the
+    /// figure reflects the provider's actual tokenization. Returns the raw estimate on turn one or
+    /// when no real usage has been recorded yet.
+    /// </summary>
+    private int Calibrate(int estimatedTokens)
+    {
+        if (usageTracker.LastInputTokens is { } real
+            && usageTracker.LastEstimatedTokens is { } est
+            && est > 0)
+        {
+            return (int)Math.Round(estimatedTokens * ((double)real / est));
+        }
+
+        return estimatedTokens;
+    }
+
+    /// <summary>
+    /// The effective token budget: the configured working limit if positive, otherwise the model's
+    /// full context window resolved from the model→window map.
+    /// </summary>
+    private int EffectiveBudget() =>
+        config.MaxInputTokens > 0
+            ? config.MaxInputTokens
+            : contextWindows.GetContextWindow(config.Model);
 
     #endregion
 }

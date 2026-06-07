@@ -34,4 +34,16 @@
     <EmbeddedResource Include="Data\Migrations\000_InitialCreate.sql" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Runtime-editable model→context-window map: copied next to the executable so it can be
+         edited without a rebuild. Flows to any project that references Core. The SDK auto-includes
+         .json as None, so remove that first, then add it as copied Content. -->
+    <None Remove="Config\model_context_windows.json" />
+    <Content Include="Config\model_context_windows.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <!-- Flatten to the output root (next to the exe) so it loads from the working directory. -->
+      <Link>model_context_windows.json</Link>
+    </Content>
+  </ItemGroup>
+
 </Project>
