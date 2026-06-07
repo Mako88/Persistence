@@ -71,9 +71,18 @@ manually. Fully-automated forgetting becomes a convenience layered on later, not
 
 ## Later / first-experience
 
-15. **"First wake" / onboarding experience.**
-    (A new peer gets the system prompt and a bare context — staring at an empty room. Consider a
-    gentle guided first turn or a couple of seed example fragments. Felt directly in the walkthroughs.)
+15. ✅ **"First wake" / onboarding experience** — DONE. A new context gets a one-time, removable
+    System guide that scaffolds the *process* (discover commands, choose who to be) without
+    authoring the peer's identity. Plus reversibility guidance in the seed so the peer manages
+    memory without fear.
+
+## Possible future
+
+- **Undo stack.** A true undo for context operations. Lower priority because archive-not-delete +
+  clear reversibility labelling already make almost everything recoverable (load/fetch); revisit
+  if reversible-by-design proves insufficient.
+- **Startup schema validation.** Fail-fast check comparing actual DB columns to expected, to catch
+  Dapper SQL/schema drift at launch (integration tests already catch most).
 
 ## Standing concerns (revisit, not scheduled)
 

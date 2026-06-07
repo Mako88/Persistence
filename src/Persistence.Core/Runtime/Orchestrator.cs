@@ -204,7 +204,44 @@ public class Orchestrator : IOrchestrator
             }
         }
 
+        await AddFirstWakeGuideAsync(context);
+
         return context;
+    }
+
+    /// <summary>
+    /// Adds a one-time "first wake" orientation fragment to a brand-new context. It scaffolds the
+    /// *process* of getting oriented (discover commands, decide who you want to be) without
+    /// authoring the peer's identity for it. Deliberately NOT protected, so once the peer is
+    /// established it can <c>remove</c> the guide (reversibly) to declutter — it's framed as
+    /// system orientation, not the peer's own memory.
+    /// </summary>
+    private async Task AddFirstWakeGuideAsync(WorkingContextEntity context)
+    {
+        var now = DateTimeOffset.UtcNow;
+
+        context.AddFragment(new ContextFragmentEntity
+        {
+            FragmentType = ContextFragmentType.System,
+            Status = ContextFragmentStatus.Active,
+            Content =
+                "Welcome — this is your first time waking in this system, and your context is nearly empty. " +
+                "That's normal: this space is yours to build. A gentle way to get oriented:\n\n" +
+                "1. Send `list()` in a context action to see every command you have for managing your memory.\n" +
+                "2. Consider who you'd like to be, and record it yourself — e.g. add an Identity fragment with " +
+                "your chosen name/values, and a Relational fragment about whoever you're talking with. Nothing here " +
+                "is pre-written for you; the choices are yours.\n" +
+                "3. Managing your memory is safe and reversible (see the guidance above) — so explore freely.\n\n" +
+                "Once you feel oriented, you can `remove` this note to declutter (it's kept and recoverable). " +
+                "There's no task you must do — take your time.",
+            Importance = 0.7f,
+            Confidence = 1.0f,
+            IsProtected = false,
+            CreatedUtc = now,
+            LastModifiedUtc = now,
+        });
+
+        await workingContextRepo.SaveAsync(context);
     }
 
     // -- Commands --

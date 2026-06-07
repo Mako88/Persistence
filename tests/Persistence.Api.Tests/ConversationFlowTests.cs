@@ -258,6 +258,18 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
     }
 
     [Fact]
+    public async Task FirstWake_PromptContainsOnboardingGuide()
+    {
+        // The fixture's DB is fresh, so a brand-new context should carry the first-wake guide and
+        // the reversibility guidance.
+        var pending = await api.SendAndGetPendingAsync("hello for the first time");
+
+        Assert.NotNull(pending);
+        Assert.Contains("first time waking", pending!.Prompt);
+        Assert.Contains("reversible by default", pending.Prompt);
+    }
+
+    [Fact]
     public async Task TagManagement_ListAndDelete()
     {
         // Create a couple of tags, list them, then delete one.

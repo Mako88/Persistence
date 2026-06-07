@@ -168,7 +168,7 @@ public class ManageContextHandler : CommandHandler
         return Task.FromResult($"Updated fragment #{id}");
     }
 
-    [Command("remove", "Remove a fragment from the working context")]
+    [Command("remove", "Take a fragment out of your working context (REVERSIBLE — the fragment is kept and can be brought back with load/fetch; it is not deleted)")]
     [CommandField("id", "long", required: true, Description = "Fragment ID")]
     private async Task<string> ExecuteRemoveAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
     {
@@ -196,7 +196,7 @@ public class ManageContextHandler : CommandHandler
         var key = context.ContextFragments.FirstOrDefault(kvp => kvp.Value.Id == id.Value).Key;
         context.ContextFragments.Remove(key);
 
-        return $"Removed fragment #{id}";
+        return $"Took fragment #{id} out of context (kept — bring it back anytime with load)";
     }
 
     [Command("set_summary", "Attach or replace a short summary on one or more fragments (so they can be shown collapsed)")]
@@ -666,7 +666,7 @@ public class ManageContextHandler : CommandHandler
         return sb.ToString().TrimEnd();
     }
 
-    [Command("delete_tag", "Delete a tag (and its sub-tags) — removes the label from all fragments; the fragments themselves are kept")]
+    [Command("delete_tag", "Permanently delete a tag and its sub-tags (PERMANENT for the tag label — but only removes a label; the fragments it was on are untouched)")]
     [CommandField("tag", "string", required: true, Description = "Tag path to delete, e.g. \"knowledge/science\"")]
     private async Task<string> ExecuteDeleteTagAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
     {
