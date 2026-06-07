@@ -10,7 +10,7 @@ namespace Persistence.Api.Tests;
 /// it the way the live manual testing did: submit local-peer input, fetch the prompt parked
 /// for the remote peer, answer it in the tagged format, and read back the conversation events.
 ///
-/// Each fixture instance gets its own database (via the PERSISTENCE_DB_PATH override) so tests
+/// Each fixture instance gets its own database (via the PERSISTENCE_DATABASEPATH override) so tests
 /// don't share state.
 /// </summary>
 public sealed class ApiTestFixture : WebApplicationFactory<Program>
@@ -22,8 +22,14 @@ public sealed class ApiTestFixture : WebApplicationFactory<Program>
 
     protected override IHost CreateHost(IHostBuilder builder)
     {
-        // The app reads its DB path from this env var at config-load time (AppConfig.LoadAsync).
-        Environment.SetEnvironmentVariable("PERSISTENCE_DB_PATH", dbPath);
+        // Force the test config via env overrides (these win over any persistence.json the loader
+        // finds by walking up to the repo root). Isolated DB + the Claude-as-peer provider so the
+        // fixture drives turns itself rather than calling a real model.
+        Environment.SetEnvironmentVariable("PERSISTENCE_DATABASEPATH", dbPath);
+        Environment.SetEnvironmentVariable("PERSISTENCE_PROVIDER", "LocalClaude");
+        Environment.SetEnvironmentVariable("PERSISTENCE_UIMODE", "Api");
+        Environment.SetEnvironmentVariable("PERSISTENCE_RESPONSEFORMAT", "Tagged");
+        Environment.SetEnvironmentVariable("PERSISTENCE_STREAMING", "false");
         return base.CreateHost(builder);
     }
 
@@ -153,7 +159,11 @@ public sealed class ApiTestFixture : WebApplicationFactory<Program>
     {
         await base.DisposeAsync();
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-        Environment.SetEnvironmentVariable("PERSISTENCE_DB_PATH", null);
+        Environment.SetEnvironmentVariable("PERSISTENCE_DATABASEPATH", null);
+        Environment.SetEnvironmentVariable("PERSISTENCE_PROVIDER", null);
+        Environment.SetEnvironmentVariable("PERSISTENCE_UIMODE", null);
+        Environment.SetEnvironmentVariable("PERSISTENCE_RESPONSEFORMAT", null);
+        Environment.SetEnvironmentVariable("PERSISTENCE_STREAMING", null);
         if (File.Exists(dbPath))
         {
             try { File.Delete(dbPath); } catch { /* best effort */ }

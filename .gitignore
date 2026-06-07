@@ -23,6 +23,7 @@ obj/
 Thumbs.db
 .DS_Store
 
-## Secrets — appsettings.json contains API keys, never commit after initial scaffold
-appsettings.json
-!appsettings.template.json
+## Secrets — persistence.json holds the real config incl. API key; never commit it.
+## (persistence.template.json is the committed sample; the API's appsettings.json is
+## framework-only config and is committed.)
+persistence.json

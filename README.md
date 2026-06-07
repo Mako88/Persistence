@@ -98,13 +98,16 @@ cd Persistence
 dotnet build
 ```
 
-Create your local settings from the template:
+Create your local settings from the template (a single shared config at the repo root,
+read by every entry point):
 
 ```sh
-cp src/Persistence.Console/appsettings.template.json src/Persistence.Console/appsettings.json
+cp persistence.template.json persistence.json
 ```
 
-`appsettings.json` is gitignored — it holds your API key and never gets committed.
+`persistence.json` is gitignored — it holds your API key and never gets committed. Any
+setting can also be overridden by an environment variable named `PERSISTENCE_<SETTING>`
+(e.g. `PERSISTENCE_PROVIDER`, `PERSISTENCE_DATABASEPATH`), which takes precedence over the file.
 
 Then run:
 
@@ -114,7 +117,7 @@ dotnet run --project src/Persistence.Console
 
 ### Configuration
 
-Key settings in `appsettings.json`:
+Key settings in `persistence.json`:
 
 | Setting | Notes |
 |---|---|
