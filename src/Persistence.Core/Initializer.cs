@@ -21,13 +21,6 @@ public static class Initializer
     {
         var config = await AppConfig.LoadAsync();
 
-        // Fail fast with a clear message if the provider needs a key and none is set (or it's still
-        // the template placeholder) — far friendlier than a runtime 401 mid-conversation.
-        if (config.ApiKeyProblem() is { } apiKeyProblem)
-        {
-            throw new InvalidOperationException($"Configuration error: {apiKeyProblem}");
-        }
-
         return IoC.RegisterServices(builder =>
         {
             builder.RegisterInstance(config).As<IAppConfig>().SingleInstance();

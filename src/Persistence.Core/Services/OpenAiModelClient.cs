@@ -55,8 +55,31 @@ public class OpenAiModelClient : IModelClient, IDisposable
         this.usageTracker = usageTracker;
     }
 
+    /// <summary>
+    /// The value shipped in persistence.template.json — treated as "no key set" so a copied-but-
+    /// unedited template fails fast with a clear message instead of a runtime 401.
+    /// </summary>
+    private const string PlaceholderApiKey = "YOUR_API_KEY_HERE";
+
     private static ISimpleClient CreateClient(IAppConfig config)
     {
+        // Validate the key here — in the component that actually consumes it — so the check lives
+        // with its owner (not AppConfig or the entry points) and fires at startup: this client is a
+        // startup-resolved singleton, so a bad key fails fast rather than 401-ing mid-conversation.
+        // A custom ApiBaseUrl is exempt: an OpenAI-compatible endpoint (e.g. a local model) may
+        // legitimately need no key.
+        if (string.IsNullOrEmpty(config.ApiBaseUrl)
+            && (string.IsNullOrWhiteSpace(config.ApiKey) || config.ApiKey == PlaceholderApiKey))
+        {
+            var detail = config.ApiKey == PlaceholderApiKey
+                ? " (it's still the persistence.template.json placeholder)"
+                : "";
+
+            throw new InvalidOperationException(
+                $"OpenAI provider is selected but no API key is set{detail}. Add your real key to "
+                + "persistence.json (\"ApiKey\") or set the PERSISTENCE_APIKEY environment variable.");
+        }
+
         var baseUrl = config.ApiBaseUrl ?? DefaultBaseUrl;
         var client = new SimpleClient(baseUrl.TrimEnd('/'));
         client.DefaultHeaders["Authorization"] = $"Bearer {config.ApiKey}";

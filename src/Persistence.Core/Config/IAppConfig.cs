@@ -73,11 +73,4 @@ public interface IAppConfig
     /// Maximum number of action iterations per turn before the loop is forcibly ended
     /// </summary>
     int MaxActionIterations { get; set; }
-
-    /// <summary>
-    /// Returns a human-readable problem with the configured API credentials (e.g. a missing or
-    /// placeholder key for a provider that needs one), or null if they look usable. Used to fail
-    /// fast at startup with a clear message instead of a runtime 401.
-    /// </summary>
-    string? ApiKeyProblem();
 }

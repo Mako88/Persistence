@@ -65,6 +65,40 @@ public class OpenAiModelClientTests
         return JsonDocument.Parse(json).RootElement;
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("YOUR_API_KEY_HERE")]
+    public void Constructor_ThrowsWhenKeyMissingOrPlaceholderOnDefaultEndpoint(string apiKey)
+    {
+        // The real (production) constructor builds the HTTP client and so validates the key; this is
+        // where a missing/placeholder key fails fast at startup, with an actionable message.
+        var config = new AppConfig { Provider = "OpenAI", Model = "gpt-5", ApiKey = apiKey };
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            new OpenAiModelClient(config, new Mock<IDisplayProvider>().Object, new TokenUsageTracker()));
+
+        Assert.Contains("persistence.json", ex.Message);
+        Assert.Contains("PERSISTENCE_APIKEY", ex.Message);
+    }
+
+    [Fact]
+    public void Constructor_AllowsMissingKeyForCustomEndpoint()
+    {
+        // A custom OpenAI-compatible endpoint (e.g. a local model) may legitimately need no key.
+        var config = new AppConfig
+        {
+            Provider = "OpenAI",
+            Model = "custom",
+            ApiBaseUrl = "http://localhost:1234/v1",
+            ApiKey = "",
+        };
+
+        var client = new OpenAiModelClient(config, new Mock<IDisplayProvider>().Object, new TokenUsageTracker());
+
+        Assert.NotNull(client);
+    }
+
     [Fact]
     public async Task PostsToResponsesEndpoint()
     {
