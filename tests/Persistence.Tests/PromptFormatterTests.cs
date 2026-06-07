@@ -10,7 +10,7 @@ public class PromptFormatterTests
 {
     private const string ProtocolMarker = "<<PROTOCOL-INSTRUCTIONS>>";
 
-    private static PromptFormatter CreateFormatter()
+    private static PromptFormatter CreateFormatter(int maxInputTokens = 8000)
     {
         var session = new Mock<ISessionContext>();
         session.SetupGet(s => s.SessionId).Returns("test-session");
@@ -18,7 +18,7 @@ public class PromptFormatterTests
         var protocol = new Mock<IProtocolInstructions>();
         protocol.Setup(p => p.GetInstructions()).Returns(ProtocolMarker);
 
-        return new PromptFormatter(session.Object, new AppConfig(), protocol.Object);
+        return new PromptFormatter(session.Object, new AppConfig { MaxInputTokens = maxInputTokens }, protocol.Object);
     }
 
     private static WorkingContextEntity ContextWithFragment(string content)
@@ -71,5 +71,37 @@ public class PromptFormatterTests
         var segments = formatter.Format(ContextWithFragment("x"), []);
 
         Assert.Contains("[Sensory]", segments[^1].Content);
+    }
+
+    [Fact]
+    public void SensoryIncludesContextBudgetLine()
+    {
+        var formatter = CreateFormatter();
+        var sensory = formatter.Format(ContextWithFragment("hello"), [])[^1].Content;
+
+        Assert.Contains("Context budget:", sensory);
+        Assert.Contains("% full", sensory);
+    }
+
+    [Fact]
+    public void BudgetNudgesCriticalWhenNearlyFull()
+    {
+        // Tiny budget forces the prompt over capacity, triggering the CRITICAL nudge.
+        var formatter = CreateFormatter(maxInputTokens: 1);
+        var sensory = formatter.Format(ContextWithFragment("a fragment that easily exceeds one token"), [])[^1].Content;
+
+        Assert.Contains("CRITICAL", sensory);
+    }
+
+    [Fact]
+    public void BudgetHasNoNudgeWhenPlentyOfRoom()
+    {
+        // Huge budget → low percentage → no nudge text.
+        var formatter = CreateFormatter(maxInputTokens: 1_000_000);
+        var sensory = formatter.Format(ContextWithFragment("short"), [])[^1].Content;
+
+        Assert.Contains("Context budget:", sensory);
+        Assert.DoesNotContain("CRITICAL", sensory);
+        Assert.DoesNotContain("getting full", sensory);
     }
 }

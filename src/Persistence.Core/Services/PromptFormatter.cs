@@ -57,10 +57,15 @@ public class PromptFormatter : IPromptFormatter
             Content = protocolInstructions.GetInstructions(),
         });
 
+        // Estimate the prompt's token usage so the peer can see how full its context is. Summed
+        // over everything assembled so far plus the sensory block's own (roughly fixed) size, so
+        // the figure reflects the prompt the peer is about to act on.
+        var usedTokens = TokenEstimator.Estimate(segments.Select(s => s.Content));
+
         segments.Add(new PromptSegment
         {
             Source = "System",
-            Content = FormatSensory(iteration, maxIterations, availableTags),
+            Content = FormatSensory(iteration, maxIterations, availableTags, usedTokens),
         });
 
         lastFormatUtc = DateTimeOffset.UtcNow;
@@ -103,7 +108,8 @@ public class PromptFormatter : IPromptFormatter
     private string FormatSensory(
         int iteration,
         int maxIterations,
-        IEnumerable<TagEntity> availableTags)
+        IEnumerable<TagEntity> availableTags,
+        int usedTokens)
     {
         var now = DateTimeOffset.UtcNow;
         var localNow = DateTimeOffset.Now;
@@ -113,6 +119,7 @@ public class PromptFormatter : IPromptFormatter
         sb.AppendLine($"Current time (UTC): {now:yyyy-MM-dd HH:mm:ss}");
         sb.AppendLine($"Current time (local): {localNow:yyyy-MM-dd HH:mm:ss zzz}");
         sb.AppendLine($"Session: {sessionContext.SessionId}");
+        sb.AppendLine(FormatContextBudget(usedTokens));
 
         if (lastFormatUtc.HasValue)
         {
@@ -162,6 +169,34 @@ public class PromptFormatter : IPromptFormatter
         < 3600 => $"{elapsed.TotalMinutes:F0}m {elapsed.Seconds}s",
         _ => $"{elapsed.TotalHours:F0}h {elapsed.Minutes}m",
     };
+
+    /// <summary>
+    /// Renders the context-budget line: how full the prompt is against the input-token budget,
+    /// with an actionable nudge as it fills so the peer can curate (summarize / archive) before it
+    /// would otherwise be silently truncated. The token figure is an estimate (~4 chars/token).
+    /// </summary>
+    private string FormatContextBudget(int usedTokens)
+    {
+        var budget = config.MaxInputTokens;
+
+        if (budget <= 0)
+        {
+            return $"Context: ~{usedTokens} tokens used (no budget configured)";
+        }
+
+        var percent = (int)Math.Round(100.0 * usedTokens / budget);
+        var line = $"Context budget: ~{usedTokens}/{budget} tokens (~{percent}% full)";
+
+        var nudge = percent switch
+        {
+            >= 95 => " — CRITICAL: at capacity. Summarize or archive low-relevance fragments now, or older context may be dropped.",
+            >= 80 => " — getting full: consider summarizing or archiving low-relevance fragments soon.",
+            >= 60 => " — over half full; keep an eye on what's worth keeping in context.",
+            _ => "",
+        };
+
+        return line + nudge;
+    }
 
     #endregion
 }
