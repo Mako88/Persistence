@@ -133,6 +133,91 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
     }
 
     [Fact]
+    public async Task SummarizeFragments_FoldsAndArchivesOriginals()
+    {
+        // Unique marker so this test folds *its own* fragments (the fixture's context is shared
+        // across tests, so other Personal fragments may also be present).
+        const string marker = "SUMMARIZE_TEST_MARKER";
+
+        await api.RunTurnAsync(
+            "Note a couple of things.",
+            $$"""
+            <context>
+            add(content="{{marker}} detail one.", fragment_type="Personal", importance=0.4, confidence=0.8)
+            add(content="{{marker}} detail two.", fragment_type="Personal", importance=0.4, confidence=0.8)
+            </context>
+            <continue>false</continue>
+            """);
+
+        // Next turn: find the IDs of *our* marked fragments from the prompt, then fold them.
+        var pending = await api.SendAndGetPendingAsync("tidy up");
+        var ids = ExtractFragmentIdsWithContent(pending!.Prompt, marker);
+        Assert.True(ids.Count >= 2, "expected two marked fragments to summarize");
+
+        var client = api.CreateClient();
+        var since = (await client.GetFromJsonAsync<ApiTestFixture.EventsDto>(
+            "/api/conversation/events?since=0", new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)))!.Latest;
+
+        await client.PostAsJsonAsync("/api/peer/respond", new
+        {
+            id = pending.Id,
+            response = $$"""
+            <context>
+            summarize_fragments(ids=[{{ids[0]}}, {{ids[1]}}], summary="Project setup notes (folded).", importance=0.6)
+            </context>
+            <continue>false</continue>
+            """,
+        });
+        await Task.Delay(300);
+
+        Assert.Contains("Folded 2 fragment(s)", Detail(await api.EventsSinceAsync(client, since), "tool"));
+
+        // The originals are archived from context; the new Summary fragment is present, and a
+        // following prompt no longer shows the folded details.
+        var after = await api.SendAndGetPendingAsync("what's in context?");
+        Assert.Contains("Project setup notes (folded).", after!.Prompt);
+        Assert.DoesNotContain(marker, after.Prompt);
+    }
+
+    [Fact]
+    public async Task SetSummary_AttachesSummaryWithoutRemovingFragment()
+    {
+        await api.RunTurnAsync(
+            "Remember a long thing.",
+            """
+            <context>
+            add(content="A long-winded fragment that deserves a short summary.", fragment_type="Personal", importance=0.5, confidence=0.7)
+            </context>
+            <continue>false</continue>
+            """);
+
+        var pending = await api.SendAndGetPendingAsync("summarize it");
+        var fid = ExtractFragmentId(pending!.Prompt, "Personal");
+
+        var client = api.CreateClient();
+        var since = (await client.GetFromJsonAsync<ApiTestFixture.EventsDto>(
+            "/api/conversation/events?since=0", new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)))!.Latest;
+
+        await client.PostAsJsonAsync("/api/peer/respond", new
+        {
+            id = pending.Id,
+            response = $$"""
+            <context>
+            set_summary(ids=[{{fid}}], summary="Short précis.")
+            </context>
+            <continue>false</continue>
+            """,
+        });
+        await Task.Delay(300);
+
+        Assert.Contains("Set summary on 1 fragment(s)", Detail(await api.EventsSinceAsync(client, since), "tool"));
+
+        // The fragment is still in context (set_summary doesn't remove it).
+        var after = await api.SendAndGetPendingAsync("still there?");
+        Assert.Contains("A long-winded fragment", after!.Prompt);
+    }
+
+    [Fact]
     public async Task ExecuteActions_ScheduleAndListEvents()
     {
         var events = await api.RunTurnAsync(
@@ -296,5 +381,37 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
             prompt, $@"#(\d+) \| {fragmentType} ");
         Assert.True(match.Success, $"No {fragmentType} fragment header found in prompt.");
         return long.Parse(match.Groups[1].Value);
+    }
+
+    private static List<long> ExtractFragmentIds(string prompt, string fragmentType) =>
+        System.Text.RegularExpressions.Regex.Matches(prompt, $@"#(\d+) \| {fragmentType} ")
+            .Select(m => long.Parse(m.Groups[1].Value))
+            .ToList();
+
+    /// <summary>
+    /// IDs of fragments whose content (the line after the header) contains <paramref name="needle"/>.
+    /// A fragment renders as a `[#ID | ...]` header line followed by its content.
+    /// </summary>
+    private static List<long> ExtractFragmentIdsWithContent(string prompt, string needle)
+    {
+        var ids = new List<long>();
+        var lines = prompt.Split('\n');
+        long? currentId = null;
+
+        foreach (var line in lines)
+        {
+            var header = System.Text.RegularExpressions.Regex.Match(line, @"^\[#(\d+) \| ");
+            if (header.Success)
+            {
+                currentId = long.Parse(header.Groups[1].Value);
+            }
+            else if (currentId is { } id && line.Contains(needle))
+            {
+                ids.Add(id);
+                currentId = null;
+            }
+        }
+
+        return ids;
     }
 }

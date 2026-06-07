@@ -199,6 +199,165 @@ public class ManageContextHandler : CommandHandler
         return $"Removed fragment #{id}";
     }
 
+    [Command("set_summary", "Attach or replace a short summary on one or more fragments (so they can be shown collapsed)")]
+    [CommandField("ids", "array", required: true, Description = "Fragment IDs to summarise, e.g. [3, 5]")]
+    [CommandField("summary", "string", required: true, Description = "The short summary text to attach to each")]
+    private Task<string> ExecuteSetSummaryAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
+    {
+        if (command?["ids"] is not JsonArray idsArray || idsArray.Count == 0)
+        {
+            return Task.FromResult("Set summary failed: 'ids' array is required");
+        }
+
+        var summary = command?["summary"]?.GetValue<string>();
+
+        if (string.IsNullOrWhiteSpace(summary))
+        {
+            return Task.FromResult("Set summary failed: 'summary' is required");
+        }
+
+        var updated = new List<long>();
+        var skipped = new List<string>();
+
+        foreach (var idNode in idsArray)
+        {
+            var id = ParseId(idNode);
+
+            if (id == null)
+            {
+                continue;
+            }
+
+            var fragment = context.ContextFragments.Values.FirstOrDefault(f => f.Id == id.Value);
+
+            if (fragment == null)
+            {
+                skipped.Add($"#{id} (not in context)");
+                continue;
+            }
+
+            if (fragment.IsProtected)
+            {
+                skipped.Add($"#{id} (protected)");
+                continue;
+            }
+
+            fragment.Summary = summary;
+            fragment.LastModifiedUtc = DateTimeOffset.UtcNow;
+            updated.Add(id.Value);
+        }
+
+        var result = $"Set summary on {updated.Count} fragment(s): {string.Join(", ", updated.Select(i => $"#{i}"))}";
+
+        if (skipped.Count > 0)
+        {
+            result += $"; skipped {string.Join(", ", skipped)}";
+        }
+
+        return Task.FromResult(result);
+    }
+
+    [Command("summarize_fragments", "Fold several fragments into one new Summary fragment and archive the originals from context")]
+    [CommandField("ids", "array", required: true, Description = "Fragment IDs to fold into the summary, e.g. [3, 5, 7]")]
+    [CommandField("summary", "string", required: true, Description = "The summary text (you write it — this is not auto-generated)")]
+    [CommandField("importance", "float", Description = "Significance of the summary (0-1)", Default = "0.5")]
+    [CommandField("confidence", "float", Description = "Certainty (0-1)", Default = "0.5")]
+    private async Task<string> ExecuteSummarizeFragmentsAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
+    {
+        if (command?["ids"] is not JsonArray idsArray || idsArray.Count == 0)
+        {
+            return "Summarize failed: 'ids' array is required";
+        }
+
+        var summary = command?["summary"]?.GetValue<string>();
+
+        if (string.IsNullOrWhiteSpace(summary))
+        {
+            return "Summarize failed: 'summary' is required (you write the summary; it is not auto-generated)";
+        }
+
+        // Resolve the requested fragments that are actually in context and not protected.
+        var toArchive = new List<WeightedContextFragment>();
+        var skipped = new List<string>();
+
+        foreach (var idNode in idsArray)
+        {
+            var id = ParseId(idNode);
+
+            if (id == null)
+            {
+                continue;
+            }
+
+            var fragment = context.ContextFragments.Values.FirstOrDefault(f => f.Id == id.Value);
+
+            if (fragment == null)
+            {
+                skipped.Add($"#{id} (not in context)");
+            }
+            else if (fragment.IsProtected)
+            {
+                skipped.Add($"#{id} (protected)");
+            }
+            else
+            {
+                toArchive.Add(fragment);
+            }
+        }
+
+        if (toArchive.Count == 0)
+        {
+            return $"Summarize failed: none of the given fragments could be summarised ({string.Join(", ", skipped)})";
+        }
+
+        var importance = command?["importance"]?.GetValue<float>() ?? 0.5f;
+        var confidence = command?["confidence"]?.GetValue<float>() ?? 0.5f;
+        var now = DateTimeOffset.UtcNow;
+
+        // Add the new Summary fragment. Note its provenance: which fragments it folds.
+        var foldedIds = toArchive.Select(f => f.Id).ToList();
+        var summaryFragment = new WeightedContextFragment
+        {
+            FragmentType = ContextFragmentType.Summary,
+            Status = ContextFragmentStatus.Active,
+            Content = summary,
+            Notes = $"Summary of fragments: {string.Join(", ", foldedIds.Select(i => $"#{i}"))}",
+            Importance = importance,
+            Confidence = confidence,
+            Weight = 1.0f,
+            Sources = [new SourceEntity
+            {
+                Id = sessionContext.RemotePeerSourceId,
+                SourceType = SourceType.RemotePeer,
+                CreatedUtc = now,
+                LastModifiedUtc = now,
+            }],
+            CreatedUtc = now,
+            LastModifiedUtc = now,
+        };
+
+        context.AddFragment(summaryFragment);
+
+        // Archive the originals: detach from the working context (the fragment rows remain in the
+        // DB and can be re-loaded with `load` or found via `fetch` — archived, not destroyed).
+        foreach (var fragment in toArchive)
+        {
+            await workingContextRepo.RemoveFragmentAsync(context.Id, fragment.Id);
+            var key = context.ContextFragments.FirstOrDefault(kvp => kvp.Value.Id == fragment.Id).Key;
+            context.ContextFragments.Remove(key);
+        }
+
+        var result = $"Folded {foldedIds.Count} fragment(s) ({string.Join(", ", foldedIds.Select(i => $"#{i}"))}) " +
+                     $"into a new Summary fragment and archived the originals (still recoverable via load/fetch)";
+
+        if (skipped.Count > 0)
+        {
+            result += $"; skipped {string.Join(", ", skipped)}";
+        }
+
+        return result;
+    }
+
     [Command("fetch", "Search for fragments by tag")]
     [CommandField("tag", "string", required: true, Description = "Tag path (e.g. \"personality/values\")")]
     private async Task<string> ExecuteFetchAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)

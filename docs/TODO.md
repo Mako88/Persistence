@@ -9,20 +9,21 @@ manually. Fully-automated forgetting becomes a convenience layered on later, not
 
 ## Tier 1 — eyes + hands (makes the memory core self-sufficient)
 
-1. **Context/budget awareness in the sensory block** (from real model-client token data).
-   (The unlock. The peer can't manage what it can't see; "you're at 6k/8k" lets it curate
-   before it gets silently truncated. This is what makes the context-window problem non-scary.)
+1. ✅ **Context/budget awareness in the sensory block** — DONE. Calibrated estimate vs.
+   model-aware effective budget, with escalating nudges. (The "eyes.")
 
 2. **Switch Weight → Relevance.**
    (Clarifies the model: relevance-to-now is what should drive what's loaded under pressure.
    Small, and it sharpens everything below it.)
 
-3. **summarize_fragments command(s)** — one to fold a list of fragments into a single summary
-   fragment, one to add summaries to existing fragments.
-   (The peer's primary hand for staying under budget.)
+3. ✅ **summarize_fragments / set_summary commands** — DONE. `summarize_fragments` folds a list
+   into a new Summary fragment and archives the originals from context (recoverable via
+   load/fetch — archive, not delete); `set_summary` attaches a précis without removing. The
+   peer writes the summary text itself (no black-box summarizer). (The "hands.")
 
 4. **toggle_summary_display command** (take a list of fragments).
-   (Lighter lever: collapse known fragments to summaries to reclaim room without losing detail.)
+   (Lighter lever: collapse known fragments to summaries to reclaim room without losing detail.
+   `set_summary` now provides the summaries this would display.)
 
 5. **Plain-language command errors.**
    (Type-mismatch errors still leak CLR type names — "System.String cannot be converted to
