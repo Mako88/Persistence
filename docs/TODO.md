@@ -20,13 +20,17 @@ manually. Fully-automated forgetting becomes a convenience layered on later, not
    load/fetch — archive, not delete); `set_summary` attaches a précis without removing. The
    peer writes the summary text itself (no black-box summarizer). (The "hands.")
 
-4. **toggle_summary_display command** (take a list of fragments).
-   (Lighter lever: collapse known fragments to summaries to reclaim room without losing detail.
-   `set_summary` now provides the summaries this would display.)
+4. ✅ **toggle_summary_display command** — DONE. Collapses a list of fragments to their summaries
+   (header marks `| collapsed`) to reclaim room without losing detail; fully reversible.
 
 5. ✅ **Plain-language command errors** — DONE. `CommandHandler.Humanize` translates JSON
    type-mismatch messages (e.g. "System.String … System.Int64") into the peer's vocabulary
    ("a value of type text can't be used where a whole number is expected").
+   ✅ **Extended (small-model hardening pass):** malformed calls are now recoverable (a bad call
+   becomes an `__error__` with a plain reason + snippet; sibling calls and other tags still run,
+   instead of one slip nuking the turn); errors are format-neutral (no JSON syntax shown to a
+   tagged peer); typo'd fields/commands get Levenshtein "did you mean" hints instead of being
+   silently dropped.
 
 ## Tier 2 — rounds out self-curation
 
@@ -44,8 +48,9 @@ manually. Fully-automated forgetting becomes a convenience layered on later, not
 8. **Allow browsing, filtering, swapping working contexts.**
    (Multiple contexts = different modes/relationships; the peer needs to see and move between them.)
 
-9. **Tag management surface.**
-   (Can create/apply tags but not rename/delete/list-all/browse-the-tree. Minor until tags pile up.)
+9. ✅ **Tag management surface** — DONE. `list_tags` (tree view) and `delete_tag` (permanent for
+   the label only — fragments untouched) added; descriptions spell out reversibility. Rename still
+   open if it's wanted later.
 
 ## Tier 3 — reach & real-world
 
@@ -75,6 +80,24 @@ manually. Fully-automated forgetting becomes a convenience layered on later, not
     System guide that scaffolds the *process* (discover commands, choose who to be) without
     authoring the peer's identity. Plus reversibility guidance in the seed so the peer manages
     memory without fear.
+
+## Open decisions (need John's call)
+
+- **Narrow or drop `IsDeleted`?** Finding from the 2026-06 audit: `IsDeleted` lives on `BaseEntity`,
+  so all six tables carry the column and ~12 read queries filter `IsDeleted = 0` — **but the only
+  thing that ever sets it (`EntityRepository.DeleteAsync`) has zero callers.** It is currently 100%
+  dead/speculative. The real deletion models are already different per entity: Tags hard-delete
+  (`DeleteTreeAsync`), fragments use `Status=Archived` + junction removal, events use `Status`,
+  audit/action logs are append-only.
+  - **My recommendation: narrow to `ContextFragments` (+ `WorkingContexts`).** Soft-delete = recoverable
+    erasure, which only makes sense for *peer memory* — that's where the planned **forget/undo** (Tier 2
+    #7, Possible-future undo) will land. Move `IsDeleted` off `BaseEntity` onto those two entities; drop
+    the column + dead filters from Tags/Sources/ScheduledEvents/ActionLogs via a new `001_*` migration.
+  - Alternatives: fragments-only (working contexts could use a Status/Archived concept instead), or
+    remove entirely now and re-add deliberately when forget/undo is built (purest YAGNI, but throws
+    away scaffolding for explicitly-planned features).
+  - Low-risk either way (new migration; existing DBs unaffected by the InitialCreate edit). ~15 min to
+    implement once you pick. Held for your decision since you flagged it as a question.
 
 ## Possible future
 
