@@ -12,6 +12,10 @@ namespace Persistence.Services;
 [Service(registerAsType: typeof(IPromptBuilder), key: ModelProvider.Local)]
 public class LocalPromptBuilder : IPromptBuilder
 {
+    /// <summary>
+    /// Builds a prompt request that splits System segments into a single system message and joins
+    /// the remaining segments into a single user message
+    /// </summary>
     public PromptRequest Build(List<PromptSegment> segments)
     {
         var messages = new List<PromptMessage>();

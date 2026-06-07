@@ -5,6 +5,9 @@ using System.Text.Json;
 
 namespace Persistence.Api.Controllers;
 
+/// <summary>
+/// Request body for submitting local-peer input: the text to send to the conversation.
+/// </summary>
 public record SendRequest(string Input);
 
 /// <summary>
@@ -22,6 +25,9 @@ public class ConversationController : ControllerBase
     private readonly IEventBus eventBus;
     private readonly ApiDisplayProvider display;
 
+    /// <summary>
+    /// Constructor
+    /// </summary>
     public ConversationController(IEventBus eventBus, ApiDisplayProvider display)
     {
         this.eventBus = eventBus;

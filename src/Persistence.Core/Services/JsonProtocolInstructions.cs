@@ -9,6 +9,9 @@ namespace Persistence.Services;
 [Singleton(typeof(IProtocolInstructions), ResponseFormat.Json)]
 public class JsonProtocolInstructions : IProtocolInstructions
 {
+    /// <summary>
+    /// Returns the system instructions describing the JSON response format and its actions
+    /// </summary>
     public string GetInstructions() =>
         """
         ## Response Format

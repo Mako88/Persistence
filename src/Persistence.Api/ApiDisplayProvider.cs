@@ -39,6 +39,9 @@ public class ApiDisplayProvider : IDisplayProvider
     /// </summary>
     public event Action<ConversationEvent>? EventAppended;
 
+    /// <summary>
+    /// Constructor
+    /// </summary>
     public ApiDisplayProvider(IEventBus eventBus)
     {
         this.eventBus = eventBus;
@@ -62,6 +65,9 @@ public class ApiDisplayProvider : IDisplayProvider
         return stopped.Task;
     }
 
+    /// <summary>
+    /// Completes the lifetime task so the host can shut down. Idempotent.
+    /// </summary>
     public void Stop() => stopped.TrySetResult();
 
     #endregion
@@ -134,19 +140,64 @@ public class ApiDisplayProvider : IDisplayProvider
 
     #region IDisplayProvider — output (logged)
 
+    /// <summary>
+    /// Appends the remote peer's reply text to the log as a "reply" event
+    /// </summary>
     public void ShowReply(string reply) => Append("reply", reply);
+
+    /// <summary>
+    /// Appends an open thought to the log as a "thought" event
+    /// </summary>
     public void ShowThought(string thought) => Append("thought", thought);
+
+    /// <summary>
+    /// Appends the model's reasoning summary to the log as a "reasoning" event
+    /// </summary>
     public void ShowReasoning(string summary) => Append("reasoning", summary);
+
+    /// <summary>
+    /// Appends a streamed chunk of the reasoning summary to the log as a "reasoning" event
+    /// </summary>
     public void ShowReasoningDelta(string delta) => Append("reasoning", delta);
+
+    /// <summary>
+    /// Appends a tool/command invocation to the log as a "tool" event, with the request and result as detail
+    /// </summary>
     public void ShowToolUse(string tool, string request, string result) => Append("tool", tool, $"{request} → {result}");
+
+    /// <summary>
+    /// Appends an error message to the log as an "error" event
+    /// </summary>
     public void ShowError(string message) => Append("error", message);
+
+    /// <summary>
+    /// Appends a wake-up event notification to the log as a "wakeup" event
+    /// </summary>
     public void ShowWakeUpEvent(ScheduledEventEntity evt) => Append("wakeup", evt.Name);
+
+    /// <summary>
+    /// Appends an unrecognised slash-command message to the log as an "error" event
+    /// </summary>
     public void ShowUnknownCommand(string command) => Append("error", $"Unknown command: {command}");
+
+    /// <summary>
+    /// Appends a notification that a message has been queued for the next iteration as a "queued" event
+    /// </summary>
     public void ShowMessageQueued(string input) => Append("queued", input);
 
-    // Not surfaced to API callers.
+    /// <summary>
+    /// No-op; the thinking indicator is not surfaced to API callers
+    /// </summary>
     public void ShowThinking(string? label = null) { }
+
+    /// <summary>
+    /// No-op; debug info is not surfaced to API callers
+    /// </summary>
     public void ShowDebugInfo(string info) { }
+
+    /// <summary>
+    /// No-op; chat history is not surfaced to API callers
+    /// </summary>
     public void ShowChatHistory(IReadOnlyList<(string Role, string Content, DateTimeOffset Timestamp)> messages) { }
 
     #endregion

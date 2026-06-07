@@ -20,6 +20,10 @@ public class LocalModelClient : IModelClient
         this.display = display;
     }
 
+    /// <summary>
+    /// Displays the prompt messages and returns the model response read from the console,
+    /// or "{}" if no input is provided
+    /// </summary>
     public async Task<string> CompleteAsync(PromptRequest request, CancellationToken ct = default)
     {
         foreach (var message in request.Messages)

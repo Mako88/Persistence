@@ -10,6 +10,9 @@ namespace Persistence.Services;
 [Singleton(typeof(IProtocolInstructions), ResponseFormat.Tagged)]
 public class TaggedProtocolInstructions : IProtocolInstructions
 {
+    /// <summary>
+    /// Returns the system instructions describing the tagged response format, its tags, and command syntax
+    /// </summary>
     public string GetInstructions() =>
         """"
         ## Response Format

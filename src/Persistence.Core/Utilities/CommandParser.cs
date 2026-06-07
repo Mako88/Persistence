@@ -2,6 +2,10 @@
 
 namespace Persistence.Utilities;
 
+/// <summary>
+/// Parses a command data payload into a sequence of command name/fields pairs, normalising the
+/// several accepted shapes (array, "commands" wrapper, or single object) into one form.
+/// </summary>
 public static class CommandParser
 {
     /// <summary>

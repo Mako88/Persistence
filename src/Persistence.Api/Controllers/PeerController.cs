@@ -3,6 +3,9 @@ using Persistence.Services;
 
 namespace Persistence.Api.Controllers;
 
+/// <summary>
+/// Request body for a remote peer's completion: the pending request's id and the response text.
+/// </summary>
 public record PeerResponse(string Id, string Response);
 
 /// <summary>
@@ -18,6 +21,9 @@ public class PeerController : ControllerBase
 {
     private readonly IRemotePeerBroker broker;
 
+    /// <summary>
+    /// Constructor
+    /// </summary>
     public PeerController(IRemotePeerBroker broker)
     {
         this.broker = broker;

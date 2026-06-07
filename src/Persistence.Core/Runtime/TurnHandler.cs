@@ -318,15 +318,17 @@ public class TurnHandler : ITurnHandler
     }
 
     /// <summary>
-    /// Adds a transient ActionResponse fragment telling the remote peer that
-    /// its previous output could not be parsed, so it can correct the format
+    /// Adds a transient ActionResponse fragment telling the remote peer that its previous output
+    /// could not be parsed, so it can correct the format. Format-neutral — points back to the
+    /// response-format instructions in the prompt rather than naming a specific wire format, since
+    /// the format is configurable (JSON or tagged).
     /// </summary>
     private void AddParseErrorFeedback(WorkingContextEntity context, string rawOutput) => context.AddFragment(new WeightedContextFragment
     {
         FragmentType = ContextFragmentType.ActionResponse,
         Status = ContextFragmentStatus.Active,
-        Content = $"Your previous response could not be parsed as valid structured JSON. " +
-                      $"Please respond with a valid JSON object containing \"action\", \"continue\", and \"data\" properties. " +
+        Content = $"Your previous response could not be parsed. Please re-read the response-format " +
+                      $"instructions in this prompt and reply in exactly that format. " +
                       $"Your raw output was:\n{rawOutput}",
         Importance = 1.0f,
         Confidence = 1.0f,

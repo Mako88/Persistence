@@ -21,12 +21,19 @@ public abstract class CommandHandler : IActionHandler
     private readonly Dictionary<string, CommandInfo> commands;
     private readonly IEventBus eventBus;
 
+    /// <summary>
+    /// Constructor
+    /// </summary>
     protected CommandHandler(IEventBus eventBus)
     {
         commands = Cache.GetOrAdd(GetType(), DiscoverCommands);
         this.eventBus = eventBus;
     }
 
+    /// <summary>
+    /// Parses and dispatches each command in the data payload in order, publishing a tool-invoked
+    /// event per command and recording the combined results as an action-response fragment
+    /// </summary>
     public async Task HandleAsync(WorkingContextEntity context, JsonNode? data, CancellationToken ct = default)
     {
         var parsed = CommandParser.Parse(data);

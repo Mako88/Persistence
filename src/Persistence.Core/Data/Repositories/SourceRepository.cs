@@ -25,83 +25,20 @@ public class SourceRepository : EntityRepository<SourceEntity>, ISourceRepositor
     /// <summary>
     /// Creates a System source if none exists and stores its ID in the session context
     /// </summary>
-    public async Task CreateSystemSourceIfNotExists()
-    {
-        var systemSourceId = await ExecuteScalarAsync<long?>(
-            $"SELECT Id FROM Sources WHERE SourceType = {SourceType.System} LIMIT 1");
-
-        if (systemSourceId == null)
-        {
-            var now = DateTimeOffset.UtcNow;
-
-            var source = new SourceEntity
-            {
-                SourceType = SourceType.System,
-                Name = "System",
-                CreatedUtc = now,
-                LastModifiedUtc = now,
-            };
-
-            await SaveAsync(source);
-            systemSourceId = source.Id;
-        }
-
-        sessionContext.SystemSourceId = systemSourceId.Value;
-    }
+    public Task CreateSystemSourceIfNotExists() =>
+        EnsureSourceAsync(SourceType.System, "System", id => sessionContext.SystemSourceId = id);
 
     /// <summary>
     /// Creates a LocalPeer source if none exists and stores its ID in the session context
     /// </summary>
-    public async Task CreateLocalPeerSourceIfNotExists()
-    {
-        var localPeerSourceId = await ExecuteScalarAsync<long?>(
-            $"SELECT Id FROM Sources WHERE SourceType = {SourceType.LocalPeer} LIMIT 1");
-
-        if (localPeerSourceId == null)
-        {
-            var now = DateTimeOffset.UtcNow;
-
-            var source = new SourceEntity
-            {
-                SourceType = SourceType.LocalPeer,
-                Name = "Local Peer",
-                CreatedUtc = now,
-                LastModifiedUtc = now,
-            };
-
-            await SaveAsync(source);
-            localPeerSourceId = source.Id;
-        }
-
-        sessionContext.LocalPeerSourceId = localPeerSourceId.Value;
-    }
+    public Task CreateLocalPeerSourceIfNotExists() =>
+        EnsureSourceAsync(SourceType.LocalPeer, "Local Peer", id => sessionContext.LocalPeerSourceId = id);
 
     /// <summary>
     /// Creates a RemotePeer source if none exists and stores its ID in the session context
     /// </summary>
-    public async Task CreateRemotePeerSourceIfNotExists()
-    {
-        var remotePeerSourceId = await ExecuteScalarAsync<long?>(
-            $"SELECT Id FROM Sources WHERE SourceType = {SourceType.RemotePeer} LIMIT 1");
-
-        if (remotePeerSourceId == null)
-        {
-            var now = DateTimeOffset.UtcNow;
-
-            var source = new SourceEntity
-            {
-                SourceType = SourceType.RemotePeer,
-                Name = "Remote Peer",
-                CreatedUtc = now,
-                LastModifiedUtc = now,
-            };
-
-            await SaveAsync(source);
-            remotePeerSourceId = source.Id;
-        }
-
-        sessionContext.RemotePeerSourceId = remotePeerSourceId.Value;
-    }
+    public Task CreateRemotePeerSourceIfNotExists() =>
+        EnsureSourceAsync(SourceType.RemotePeer, "Remote Peer", id => sessionContext.RemotePeerSourceId = id);
 
     /// <summary>
     /// Returns the source with the given name (case-insensitive), or null if not found
@@ -137,6 +74,38 @@ public class SourceRepository : EntityRepository<SourceEntity>, ISourceRepositor
             LastModifiedUtc = {entity.LastModifiedUtc}, Notes = {entity.Notes}
         WHERE Id = {entity.Id}
         """;
+
+    #endregion
+
+    #region Private
+
+    /// <summary>
+    /// Ensures a single source of the given type exists (creating it if absent) and reports its id
+    /// to the caller — the shared core of the System/LocalPeer/RemotePeer seeding methods.
+    /// </summary>
+    private async Task EnsureSourceAsync(SourceType type, string name, Action<long> setId)
+    {
+        var sourceId = await ExecuteScalarAsync<long?>(
+            $"SELECT Id FROM Sources WHERE SourceType = {type} LIMIT 1");
+
+        if (sourceId == null)
+        {
+            var now = DateTimeOffset.UtcNow;
+
+            var source = new SourceEntity
+            {
+                SourceType = type,
+                Name = name,
+                CreatedUtc = now,
+                LastModifiedUtc = now,
+            };
+
+            await SaveAsync(source);
+            sourceId = source.Id;
+        }
+
+        setId(sourceId.Value);
+    }
 
     #endregion
 }

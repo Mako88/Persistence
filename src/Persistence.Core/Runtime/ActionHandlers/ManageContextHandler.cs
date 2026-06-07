@@ -119,7 +119,7 @@ public class ManageContextHandler : CommandHandler
     [CommandField("summary", "string", Description = "New summary")]
     private Task<string> ExecuteUpdateAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
     {
-        var id = command?["id"]?.GetValue<long>();
+        var id = ParseId(command?["id"]);
 
         if (id == null)
         {
@@ -172,7 +172,7 @@ public class ManageContextHandler : CommandHandler
     [CommandField("id", "long", required: true, Description = "Fragment ID")]
     private async Task<string> ExecuteRemoveAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
     {
-        var id = command?["id"]?.GetValue<long>();
+        var id = ParseId(command?["id"]);
 
         if (id == null)
         {
@@ -564,7 +564,7 @@ public class ManageContextHandler : CommandHandler
     [CommandField("tag", "string", required: true, Description = "Tag path")]
     private async Task<string> ExecuteTagAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
     {
-        var id = command?["id"]?.GetValue<long>();
+        var id = ParseId(command?["id"]);
 
         if (id == null)
         {
@@ -606,7 +606,7 @@ public class ManageContextHandler : CommandHandler
     [CommandField("tag", "string", required: true, Description = "Tag path")]
     private async Task<string> ExecuteUntagAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
     {
-        var id = command?["id"]?.GetValue<long>();
+        var id = ParseId(command?["id"]);
 
         if (id == null)
         {

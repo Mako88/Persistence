@@ -25,7 +25,7 @@ public class TagRepository : EntityRepository<TagEntity>, ITagRepository
     /// Returns all root tags (those with no parent), with children populated
     /// </summary>
     public async Task<IEnumerable<TagEntity>> GetAllRootAsync() =>
-        await QueryAsync($"SELECT * FROM Tags WHERE ParentTagId IS NULL");
+        await QueryAsync($"SELECT * FROM Tags WHERE ParentTagId IS NULL AND IsDeleted = 0");
 
     /// <summary>
     /// Returns the tag matching the given name within the given parent scope, or null
@@ -33,19 +33,25 @@ public class TagRepository : EntityRepository<TagEntity>, ITagRepository
     public async Task<TagEntity?> GetByNameAsync(string name, long? parentTagId = null)
     {
         if (parentTagId == null)
+        {
             return await QueryFirstOrDefaultAsync(
-                $"SELECT * FROM Tags WHERE Name = {name} AND ParentTagId IS NULL");
+                $"SELECT * FROM Tags WHERE Name = {name} AND ParentTagId IS NULL AND IsDeleted = 0");
+        }
 
         return await QueryFirstOrDefaultAsync(
-            $"SELECT * FROM Tags WHERE Name = {name} AND ParentTagId = {parentTagId}");
+            $"SELECT * FROM Tags WHERE Name = {name} AND ParentTagId = {parentTagId} AND IsDeleted = 0");
     }
 
     /// <summary>
     /// Returns the immediate children of the given parent tag
     /// </summary>
     public async Task<IEnumerable<TagEntity>> GetChildrenAsync(long parentTagId) =>
-        await QueryAsync($"SELECT * FROM Tags WHERE ParentTagId = {parentTagId}");
+        await QueryAsync($"SELECT * FROM Tags WHERE ParentTagId = {parentTagId} AND IsDeleted = 0");
 
+    /// <summary>
+    /// Deletes the given tag and all its descendants along with their fragment associations,
+    /// leaving the fragments themselves untouched; returns the number of tags deleted
+    /// </summary>
     public async Task<int> DeleteTreeAsync(long tagId, CancellationToken ct = default)
     {
         // Collect the tag and all descendants (depth-first), then remove their fragment

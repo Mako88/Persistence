@@ -34,7 +34,7 @@ public class RespondToUserHandler : IActionHandler
     /// </summary>
     public async Task HandleAsync(WorkingContextEntity context, JsonNode? data, CancellationToken ct = default)
     {
-        var reply = ExtractReplyText(data)
+        var reply = TextPayload.Extract(data)
             ?? throw new InvalidOperationException("RespondToUser action requires a text payload");
 
         var now = DateTimeOffset.UtcNow;
@@ -59,19 +59,5 @@ public class RespondToUserHandler : IActionHandler
         });
 
         await eventBus.PublishAsync(this, new RemotePeerReplied(reply));
-    }
-
-    /// <summary>
-    /// Extracts reply text from the data payload. Handles both a plain string value
-    /// and an object with a "text" property.
-    /// </summary>
-    private static string? ExtractReplyText(JsonNode? data)
-    {
-        if (data is JsonValue value && value.TryGetValue<string>(out var text))
-        {
-            return text;
-        }
-
-        return data?["text"]?.GetValue<string>();
     }
 }

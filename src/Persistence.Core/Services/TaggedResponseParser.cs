@@ -31,6 +31,10 @@ namespace Persistence.Services;
 [Singleton(typeof(IModelResponseParser), ResponseFormat.Tagged)]
 public partial class TaggedResponseParser : IModelResponseParser
 {
+    /// <summary>
+    /// Parses tagged-format output into a multi-action turn, ignoring unknown tags; returns a failed
+    /// turn when the output is empty or contains no recognised tags
+    /// </summary>
     public ModelTurn Parse(string rawOutput)
     {
         if (string.IsNullOrWhiteSpace(rawOutput))
@@ -94,12 +98,21 @@ public partial class TaggedResponseParser : IModelResponseParser
         };
     }
 
+    /// <summary>
+    /// Builds a model response carrying raw text as the action's data
+    /// </summary>
     private static ModelResponse TextAction(ModelAction action, string text) =>
         new() { Action = action, Data = System.Text.Json.Nodes.JsonValue.Create(text) };
 
+    /// <summary>
+    /// Builds a model response whose data is the JSON command array parsed from the tag body
+    /// </summary>
     private static ModelResponse CommandAction(ModelAction action, string body) =>
         new() { Action = action, Data = FunctionCallParser.Parse(body) };
 
+    /// <summary>
+    /// Returns the compiled regex that matches each top-level tag and its body
+    /// </summary>
     // Matches <tag>...</tag> for any tag name; DOTALL so bodies span newlines. Non-greedy
     // body so adjacent tags don't merge.
     [GeneratedRegex(@"<(?<tag>\w+)\s*>(?<body>.*?)</\k<tag>\s*>", RegexOptions.Singleline)]

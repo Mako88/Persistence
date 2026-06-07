@@ -18,11 +18,18 @@ public class LocalClaudeModelClient : IModelClient
 {
     private readonly IRemotePeerBroker broker;
 
+    /// <summary>
+    /// Constructor
+    /// </summary>
     public LocalClaudeModelClient(IRemotePeerBroker broker)
     {
         this.broker = broker;
     }
 
+    /// <summary>
+    /// Parks the flattened prompt on the broker and returns the completion supplied out-of-band
+    /// by the external agent
+    /// </summary>
     public Task<string> CompleteAsync(PromptRequest request, CancellationToken ct = default) =>
         broker.RequestCompletionAsync(Flatten(request), ct);
 

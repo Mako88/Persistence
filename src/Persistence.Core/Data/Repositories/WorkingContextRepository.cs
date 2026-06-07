@@ -36,7 +36,7 @@ public class WorkingContextRepository : EntityRepository<WorkingContextEntity>, 
     /// </summary>
     public async Task<WorkingContextEntity?> GetMostRecentAsync() =>
         await QueryFirstOrDefaultAsync(
-            $"SELECT * FROM WorkingContexts ORDER BY LastAccessedUtc DESC LIMIT 1");
+            $"SELECT * FROM WorkingContexts WHERE IsDeleted = 0 ORDER BY LastAccessedUtc DESC LIMIT 1");
 
     /// <summary>
     /// Creates, persists, and returns a new empty <see cref="WorkingContextEntity"/> with

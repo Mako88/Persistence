@@ -13,6 +13,10 @@ namespace Persistence.Services.Streaming;
 /// </summary>
 public static class OpenAiResponseStreamParser
 {
+    /// <summary>
+    /// Yields a model stream event for each recognised payload, skipping the [DONE] sentinel and
+    /// any blank, unrecognised, or malformed payloads
+    /// </summary>
     public static async IAsyncEnumerable<ModelStreamEvent> ParseAsync(
         IAsyncEnumerable<string> dataPayloads, [EnumeratorCancellation] CancellationToken ct = default)
     {
@@ -30,6 +34,10 @@ public static class OpenAiResponseStreamParser
         }
     }
 
+    /// <summary>
+    /// Maps a single JSON payload to a model stream event by its "type" discriminator, returning
+    /// null for malformed or unrecognised payloads
+    /// </summary>
     private static ModelStreamEvent? Map(string data)
     {
         string? type;

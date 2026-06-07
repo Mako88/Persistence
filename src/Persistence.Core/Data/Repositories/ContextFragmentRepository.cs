@@ -37,13 +37,13 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
             ? await QueryAsync(
                 $"""
                 SELECT * FROM ContextFragments
-                WHERE FragmentType = {type} AND Status = {ContextFragmentStatus.Active}
+                WHERE FragmentType = {type} AND Status = {ContextFragmentStatus.Active} AND IsDeleted = 0
                 """)
             : await QueryAsync(
-                $"SELECT * FROM ContextFragments WHERE FragmentType = {type}");
+                $"SELECT * FROM ContextFragments WHERE FragmentType = {type} AND IsDeleted = 0");
 
     /// <summary>
-    /// Returns all fragments tagged with the given tag ID, regardless of status
+    /// Returns all non-deleted fragments tagged with the given tag ID, regardless of status
     /// </summary>
     public async Task<IEnumerable<ContextFragmentEntity>> GetByTagAsync(long tagId) =>
         await QueryAsync(
@@ -51,7 +51,7 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
             SELECT cf.*
             FROM ContextFragments cf
             JOIN ContextFragmentTags cft ON cf.Id = cft.ContextFragmentId
-            WHERE cft.TagId = {tagId}
+            WHERE cft.TagId = {tagId} AND cf.IsDeleted = 0
             """);
 
     /// <summary>

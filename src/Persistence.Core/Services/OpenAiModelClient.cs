@@ -31,6 +31,9 @@ public class OpenAiModelClient : IModelClient, IDisposable
 
     private const string DefaultBaseUrl = "https://api.openai.com/v1";
 
+    /// <summary>
+    /// Constructor that builds the HTTP client from config
+    /// </summary>
     public OpenAiModelClient(IAppConfig config, IDisplayProvider display, ITokenUsageTracker usageTracker)
         : this(config, display, usageTracker, CreateClient(config))
     {
@@ -60,6 +63,10 @@ public class OpenAiModelClient : IModelClient, IDisposable
         return client;
     }
 
+    /// <summary>
+    /// Sends a non-streaming completion request and returns the assistant's text, surfacing any
+    /// reasoning summary and debug info as a side effect
+    /// </summary>
     public async Task<string> CompleteAsync(PromptRequest request, CancellationToken ct = default)
     {
         var apiRequest = BuildApiRequest(request, stream: false);
@@ -105,6 +112,9 @@ public class OpenAiModelClient : IModelClient, IDisposable
         }
     }
 
+    /// <summary>
+    /// Sends a streaming completion request and yields parsed model stream events as they arrive
+    /// </summary>
     public async IAsyncEnumerable<ModelStreamEvent> StreamAsync(
         PromptRequest request, [EnumeratorCancellation] CancellationToken ct = default)
     {
@@ -258,5 +268,8 @@ public class OpenAiModelClient : IModelClient, IDisposable
         return text.ToString();
     }
 
+    /// <summary>
+    /// Disposes the underlying HTTP client if it is disposable
+    /// </summary>
     public void Dispose() => (client as IDisposable)?.Dispose();
 }

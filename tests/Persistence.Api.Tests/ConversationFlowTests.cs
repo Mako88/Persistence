@@ -324,19 +324,21 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
     [Fact]
     public async Task TypeMismatchError_UsesPlainLanguage()
     {
-        // Passing text where a whole number is expected should yield a peer-friendly message,
-        // not a CLR type name like "System.String cannot be converted to System.Int64".
+        // Passing text where a number is expected should yield a peer-friendly message, not a CLR
+        // type name like "System.String cannot be converted to System.Single". (importance is a
+        // float read via GetValue<float>(), which throws on a string — unlike id, which goes
+        // through the forgiving ParseId helper.)
         var events = await api.RunTurnAsync(
             "make a mistake",
             """
             <context>
-            update(id="not-a-number", importance=0.5)
+            add(content="oops", importance="high")
             </context>
             <continue>false</continue>
             """);
 
         var tools = Detail(events, "tool");
-        Assert.Contains("whole number", tools);
+        Assert.Contains("a number", tools);
         Assert.DoesNotContain("System.", tools);
     }
 

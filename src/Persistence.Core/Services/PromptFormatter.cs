@@ -22,6 +22,9 @@ public class PromptFormatter : IPromptFormatter
 
     private DateTimeOffset? lastFormatUtc;
 
+    /// <summary>
+    /// Constructor
+    /// </summary>
     public PromptFormatter(
         ISessionContext sessionContext,
         IAppConfig config,
@@ -36,6 +39,10 @@ public class PromptFormatter : IPromptFormatter
         this.contextWindows = contextWindows;
     }
 
+    /// <summary>
+    /// Renders the working context into an ordered list of prompt segments — one per fragment,
+    /// followed by the protocol instructions and a sensory block with time, session, and budget info
+    /// </summary>
     public List<PromptSegment> Format(
         WorkingContextEntity context,
         IEnumerable<TagEntity> availableTags,

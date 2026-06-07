@@ -17,6 +17,10 @@ namespace Persistence.Services;
 [Service(registerAsType: typeof(IPromptBuilder), key: ModelProvider.LocalClaude)]
 public class OpenAiPromptBuilder : IPromptBuilder
 {
+    /// <summary>
+    /// Builds a prompt request by mapping each segment to a role and collapsing adjacent
+    /// same-role messages into one
+    /// </summary>
     public PromptRequest Build(List<PromptSegment> segments)
     {
         var messages = new List<PromptMessage>();
@@ -39,6 +43,10 @@ public class OpenAiPromptBuilder : IPromptBuilder
         return new PromptRequest { Messages = messages };
     }
 
+    /// <summary>
+    /// Maps a segment's source to an OpenAI role: System to developer, Remote Peer to assistant,
+    /// everything else to user
+    /// </summary>
     private static string MapRole(PromptSegment segment) => segment.Source switch
     {
         "System" => "developer",

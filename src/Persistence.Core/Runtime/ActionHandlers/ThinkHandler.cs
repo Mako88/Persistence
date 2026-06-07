@@ -40,7 +40,7 @@ public class ThinkHandler : IActionHandler
     /// </summary>
     public async Task HandleAsync(WorkingContextEntity context, JsonNode? data, CancellationToken ct = default)
     {
-        var thought = ExtractText(data)
+        var thought = TextPayload.Extract(data)
             ?? throw new InvalidOperationException("Think action requires a text payload");
 
         var now = DateTimeOffset.UtcNow;
@@ -65,19 +65,5 @@ public class ThinkHandler : IActionHandler
         });
 
         await eventBus.PublishAsync(this, new ModelThought(thought));
-    }
-
-    /// <summary>
-    /// Extracts the thought text. Handles both a plain string value and an object with a
-    /// "text" property.
-    /// </summary>
-    private static string? ExtractText(JsonNode? data)
-    {
-        if (data is JsonValue value && value.TryGetValue<string>(out var text))
-        {
-            return text;
-        }
-
-        return data?["text"]?.GetValue<string>();
     }
 }

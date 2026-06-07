@@ -398,6 +398,9 @@ public abstract class EntityRepository<T> : IEntityRepository<T> where T : BaseE
             """).ExecuteAsync(transaction, cancellationToken: ct);
     }
 
+    /// <summary>
+    /// Opens and returns a new SQLite connection using the configured connection string
+    /// </summary>
     private async Task<SqliteConnection> OpenConnectionAsync()
     {
         var connection = new SqliteConnection(connectionString);

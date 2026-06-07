@@ -11,11 +11,17 @@ public class OrchestratorHostedService : BackgroundService
 {
     private readonly IOrchestrator orchestrator;
 
+    /// <summary>
+    /// Constructor
+    /// </summary>
     public OrchestratorHostedService(IOrchestrator orchestrator)
     {
         this.orchestrator = orchestrator;
     }
 
+    /// <summary>
+    /// Runs the orchestrator for the duration of the host's lifetime, stopping when cancelled
+    /// </summary>
     protected override Task ExecuteAsync(CancellationToken stoppingToken) =>
         orchestrator.RunAsync(stoppingToken);
 }
