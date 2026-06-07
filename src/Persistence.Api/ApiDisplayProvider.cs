@@ -4,6 +4,7 @@ using Persistence.DI;
 using Persistence.Events;
 using Persistence.Notifications;
 using Persistence.Runtime;
+using System.Threading.Channels;
 
 namespace Persistence.Api;
 
@@ -30,6 +31,13 @@ public class ApiDisplayProvider : IDisplayProvider
     private readonly List<ConversationEvent> log = [];
 
     private long seq;
+
+    /// <summary>
+    /// Raised after a new event is appended, so the SSE endpoint can push it live. Handlers run
+    /// outside the lock and must not throw. Polling via <see cref="EventsSince"/> still works for
+    /// clients that prefer it; streaming is an additional consumer of the same log.
+    /// </summary>
+    public event Action<ConversationEvent>? EventAppended;
 
     public ApiDisplayProvider(IEventBus eventBus)
     {
@@ -75,6 +83,53 @@ public class ApiDisplayProvider : IDisplayProvider
         get { lock (sync) { return seq; } }
     }
 
+    /// <summary>
+    /// Streams events after <paramref name="since"/>, in order, until <paramref name="ct"/> is
+    /// cancelled (client disconnect). Subscribes to live events *before* snapshotting the backlog
+    /// so nothing appended during replay is missed, then dedups by sequence — so each event is
+    /// yielded exactly once whether it landed before or during the subscription.
+    /// </summary>
+    public async IAsyncEnumerable<ConversationEvent> StreamAsync(
+        long since, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var channel = Channel.CreateUnbounded<ConversationEvent>(
+            new UnboundedChannelOptions { SingleReader = true });
+
+        void OnAppended(ConversationEvent e) => channel.Writer.TryWrite(e);
+
+        EventAppended += OnAppended;
+        try
+        {
+            // Replay the backlog captured after the subscription is live.
+            IReadOnlyList<ConversationEvent> backlog;
+            lock (sync)
+            {
+                backlog = log.Where(e => e.Seq > since).ToList();
+            }
+
+            var lastSeq = since;
+            foreach (var e in backlog)
+            {
+                yield return e;
+                lastSeq = e.Seq;
+            }
+
+            // Then live events, skipping any the backlog already covered.
+            await foreach (var e in channel.Reader.ReadAllAsync(ct))
+            {
+                if (e.Seq > lastSeq)
+                {
+                    yield return e;
+                    lastSeq = e.Seq;
+                }
+            }
+        }
+        finally
+        {
+            EventAppended -= OnAppended;
+        }
+    }
+
     #endregion
 
     #region IDisplayProvider — output (logged)
@@ -100,10 +155,16 @@ public class ApiDisplayProvider : IDisplayProvider
 
     private void Append(string kind, string text, string? detail = null)
     {
+        ConversationEvent evt;
+
         lock (sync)
         {
-            log.Add(new ConversationEvent(++seq, kind, text, detail));
+            evt = new ConversationEvent(++seq, kind, text, detail);
+            log.Add(evt);
         }
+
+        // Notify outside the lock so a slow/streaming subscriber can't stall event production.
+        EventAppended?.Invoke(evt);
     }
 
     #endregion

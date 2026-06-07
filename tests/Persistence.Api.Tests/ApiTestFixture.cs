@@ -66,6 +66,20 @@ public sealed class ApiTestFixture : WebApplicationFactory<Program>
         return await WaitForPendingAsync(client);
     }
 
+    /// <summary>Sends input, waits for the parked prompt, and answers it — without reading events.</summary>
+    public async Task DriveTurnAsync(string input, string peerResponse)
+    {
+        var client = CreateClient();
+        await EnsureReadyAsync(client);
+
+        await client.PostAsJsonAsync("/api/conversation/send", new { input });
+        var pending = await WaitForPendingAsync(client);
+        await client.PostAsJsonAsync("/api/peer/respond", new { id = pending!.Id, response = peerResponse });
+    }
+
+    /// <summary>Ensures the fixture is initialized (used before opening a stream).</summary>
+    public Task EnsureReadyAsync() => EnsureReadyAsync(CreateClient());
+
     private bool ready;
 
     /// <summary>
