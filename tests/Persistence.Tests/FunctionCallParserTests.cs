@@ -29,6 +29,20 @@ public class FunctionCallParserTests
     }
 
     [Fact]
+    public void NumbersAreReadableAsFloatIntAndLong()
+    {
+        // Command fields read numeric values as various CLR types (e.g. importance is float).
+        // Parsed numbers must support all of them, like JsonNode.Parse does — a CLR-typed
+        // JsonValue<double> would throw on GetValue<float>().
+        var (_, fields) = Unwrap(SingleCall("add(importance=0.7, count=3)"));
+
+        Assert.Equal(0.7f, fields["importance"]!.GetValue<float>());
+        Assert.Equal(0.7, fields["importance"]!.GetValue<double>());
+        Assert.Equal(3, fields["count"]!.GetValue<int>());
+        Assert.Equal(3L, fields["count"]!.GetValue<long>());
+    }
+
+    [Fact]
     public void ParsesBoolAndQuotedString()
     {
         var (_, fields) = Unwrap(SingleCall("""add(is_protected=true, summary="a note")"""));

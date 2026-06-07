@@ -211,14 +211,14 @@ public static class FunctionCallParser
             return null;
         }
 
-        if (long.TryParse(token, out var l))
+        if (long.TryParse(token, out _) ||
+            double.TryParse(token, System.Globalization.CultureInfo.InvariantCulture, out _))
         {
-            return JsonValue.Create(l);
-        }
-
-        if (double.TryParse(token, System.Globalization.CultureInfo.InvariantCulture, out var d))
-        {
-            return JsonValue.Create(d);
+            // Parse as a JSON number node (JsonElement-backed) rather than JsonValue.Create(double),
+            // so command fields can read it as float/int/long/double interchangeably — matching how
+            // JsonNode.Parse handles numbers in the JSON format. A CLR-typed JsonValue<double> would
+            // throw on GetValue<float>().
+            return JsonNode.Parse(token);
         }
 
         // Unquoted, non-numeric token — treat as a string (e.g. a bare ISO date).

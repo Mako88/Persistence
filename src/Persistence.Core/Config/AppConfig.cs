@@ -56,6 +56,12 @@ public enum ModelProvider
 {
     Local = 0,
     OpenAI = 1,
+
+    /// <summary>
+    /// The remote peer is an external agent (e.g. Claude) supplying completions out-of-band
+    /// via the API, rather than an HTTP model endpoint. See <c>LocalClaudeModelClient</c>.
+    /// </summary>
+    LocalClaude = 2,
 }
 
 /// <summary>
@@ -66,4 +72,5 @@ public enum UiMode
 {
     Console = 0,
     Tui = 1,
+    Api = 2,
 }

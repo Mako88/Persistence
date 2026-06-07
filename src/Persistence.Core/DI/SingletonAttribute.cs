@@ -3,7 +3,7 @@ namespace Persistence.DI;
 /// <summary>
 /// Marks a class for DI registration as a singleton
 /// </summary>
-[AttributeUsage(AttributeTargets.Class, AllowMultiple = false)]
+[AttributeUsage(AttributeTargets.Class, AllowMultiple = true)]
 public class SingletonAttribute : ServiceAttribute
 {
     /// <summary>
