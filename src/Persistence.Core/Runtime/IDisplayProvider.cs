@@ -40,6 +40,11 @@ public interface IDisplayProvider
     void ShowReasoningDelta(string delta);
 
     /// <summary>
+    /// Shows an open thought the remote peer recorded via a Think action.
+    /// </summary>
+    void ShowThought(string thought);
+
+    /// <summary>
     /// Shows a tool/command invocation: its name, the request it was given, and its result.
     /// </summary>
     void ShowToolUse(string tool, string request, string result);

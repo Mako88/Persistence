@@ -65,6 +65,7 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
         eventBus.Subscribe<ScheduledEventTriggered>((_, e) => { ShowWakeUpEvent(e.Event); return Task.CompletedTask; });
         eventBus.Subscribe<ToolInvoked>((_, e) => { ShowToolUse(e.Tool, e.Request, e.Result); return Task.CompletedTask; });
         eventBus.Subscribe<ModelReasoningDelta>((_, e) => { ShowReasoningDelta(e.Delta); return Task.CompletedTask; });
+        eventBus.Subscribe<ModelThought>((_, e) => { ShowThought(e.Thought); return Task.CompletedTask; });
 
         uiThread = new Thread(RunUi) { IsBackground = true, Name = "tui" };
         uiThread.Start();
@@ -118,6 +119,8 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
     public void ShowReasoning(string summary) => Append(reasoningBuffer, () => reasoning, summary + "\n\n");
 
     public void ShowReasoningDelta(string delta) => Append(reasoningBuffer, () => reasoning, delta);
+
+    public void ShowThought(string thought) => Append(reasoningBuffer, () => reasoning, $"\n💭 {thought}\n\n");
 
     public void ShowToolUse(string tool, string request, string result) =>
         Append(toolsBuffer, () => tools, $"▸ {tool}\n  request:  {request}\n  response: {result}\n\n");

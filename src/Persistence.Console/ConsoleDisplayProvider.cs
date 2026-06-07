@@ -65,6 +65,12 @@ public class ConsoleDisplayProvider : IDisplayProvider
             return Task.CompletedTask;
         });
 
+        eventBus.Subscribe<ModelThought>((_, e) =>
+        {
+            ShowThought(e.Thought);
+            return Task.CompletedTask;
+        });
+
         inputLoopCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         Task.Run(() => RunInputLoopAsync(inputLoopCts.Token), inputLoopCts.Token);
 
@@ -131,6 +137,17 @@ public class ConsoleDisplayProvider : IDisplayProvider
         SysConsole.ForegroundColor = ConsoleColor.DarkGray;
         SysConsole.Write(delta);
         SysConsole.ResetColor();
+    }
+
+    /// <summary>
+    /// Shows an open thought recorded via a Think action
+    /// </summary>
+    public void ShowThought(string thought)
+    {
+        SysConsole.ForegroundColor = ConsoleColor.DarkGray;
+        SysConsole.WriteLine($"  💭 {thought}");
+        SysConsole.ResetColor();
+        SysConsole.WriteLine();
     }
 
     /// <summary>
