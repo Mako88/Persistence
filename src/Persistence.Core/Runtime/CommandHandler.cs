@@ -126,13 +126,13 @@ public abstract class CommandHandler : IActionHandler
         foreach (var (name, info) in commands.OrderBy(c => c.Key))
         {
             sb.AppendLine();
-            sb.AppendLine($"  {name} — {info.Description}");
 
-            if (info.Fields.Length == 0)
-            {
-                sb.AppendLine("    (no fields)");
-                continue;
-            }
+            // Lead with a call-signature line so the shape is obvious at a glance, then detail
+            // each field. Required fields come first in the signature.
+            var signatureFields = info.Fields
+                .OrderByDescending(f => f.Required)
+                .Select(f => f.Required ? f.Name : $"{f.Name}?");
+            sb.AppendLine($"  {name}({string.Join(", ", signatureFields)}) — {info.Description}");
 
             foreach (var field in info.Fields)
             {
@@ -152,22 +152,35 @@ public abstract class CommandHandler : IActionHandler
         var sb = new StringBuilder();
         sb.AppendLine($"Error executing '{commandName}': {message}");
 
+        // Describe the command's fields format-neutrally (the peer may be writing function-call
+        // or JSON syntax — don't presume one), and echo what was actually received so the peer
+        // can see the mismatch.
         if (info.Fields.Length > 0)
         {
             var fields = string.Join(", ", info.Fields.Select(f =>
             {
-                var req = f.Required ? " (required)" : "";
-                return $"\"{f.Name}\": {f.Type}{req}";
+                var req = f.Required ? ", required" : "";
+                return $"{f.Name} ({f.Type}{req})";
             }));
-            sb.AppendLine($"  Expected: {{ {fields} }}");
+            sb.AppendLine($"  Accepts: {commandName}({fields})");
         }
         else
         {
-            sb.AppendLine("  Expected: {}");
+            sb.AppendLine($"  Accepts: {commandName}() — no fields");
         }
 
-        sb.AppendLine($"  Received: {received?.ToJsonString() ?? "null"}");
+        sb.AppendLine($"  You sent: {FormatReceivedFields(received)}");
         return sb.ToString().TrimEnd();
+    }
+
+    private static string FormatReceivedFields(JsonObject? received)
+    {
+        if (received is null || received.Count == 0)
+        {
+            return "(no fields)";
+        }
+
+        return string.Join(", ", received.Select(kvp => $"{kvp.Key}={kvp.Value?.ToJsonString() ?? "null"}"));
     }
 
     private static Dictionary<string, CommandInfo> DiscoverCommands(Type handlerType)
