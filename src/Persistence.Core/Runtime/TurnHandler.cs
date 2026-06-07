@@ -168,7 +168,7 @@ public class TurnHandler : ITurnHandler
     /// </summary>
     public bool HasPendingInput => !pendingInput.IsEmpty;
 
-    // ── Private ──────────────────────────────────────────────────
+    #region Private
 
     /// <summary>
     /// Streams the model response, publishing reasoning-summary deltas for live display
@@ -351,4 +351,6 @@ public class TurnHandler : ITurnHandler
         CreatedUtc = DateTimeOffset.UtcNow,
         LastModifiedUtc = DateTimeOffset.UtcNow,
     });
+
+    #endregion
 }

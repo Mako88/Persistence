@@ -163,7 +163,7 @@ public class OpenAiModelClientTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => client.CompleteAsync(Request()));
     }
 
-    // ── Streaming ────────────────────────────────────────────────
+    #region Streaming
 
     private static (OpenAiModelClient Client, Mock<ISimpleClient> Http) CreateStreamingClient(
         string sse, HttpStatusCode status = HttpStatusCode.OK)
@@ -257,4 +257,6 @@ public class OpenAiModelClientTests
         Assert.Contains("Unauthorized", ex.Message);
         Assert.Contains("bad key", ex.Message);
     }
+
+    #endregion
 }

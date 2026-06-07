@@ -43,7 +43,7 @@ public class ManageContextHandler : CommandHandler
         this.sessionContext = sessionContext;
     }
 
-    // ── Commands ─────────────────────────────────────────────────
+    #region Commands
 
     [Command("add", "Add a fragment to the working context")]
     [CommandField("content", "string", required: true, Description = "The fragment content")]
@@ -694,7 +694,9 @@ public class ManageContextHandler : CommandHandler
         return sb.ToString().TrimEnd();
     }
 
-    // ── Helpers ──────────────────────────────────────────────────
+    #endregion
+
+    #region Helpers
 
     private async Task<TagEntity?> ResolveTagByPathAsync(string path)
     {
@@ -753,4 +755,6 @@ public class ManageContextHandler : CommandHandler
         Enum.TryParse<ContextFragmentStatus>(statusName, ignoreCase: true, out var result)
             ? result
             : ContextFragmentStatus.Active;
+
+    #endregion
 }

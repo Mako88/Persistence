@@ -46,7 +46,7 @@ public class TagRepository : EntityRepository<TagEntity>, ITagRepository
     public async Task<IEnumerable<TagEntity>> GetChildrenAsync(long parentTagId) =>
         await QueryAsync($"SELECT * FROM Tags WHERE ParentTagId = {parentTagId}");
 
-    // ── Base overrides ───────────────────────────────────────────
+    #region Base overrides
 
     /// <summary>
     /// Loads tags by ID with their ChildTags collection populated one level deep
@@ -103,4 +103,6 @@ public class TagRepository : EntityRepository<TagEntity>, ITagRepository
             LastModifiedUtc = {entity.LastModifiedUtc}, Notes = {entity.Notes}
         WHERE Id = {entity.Id}
         """;
+
+    #endregion
 }

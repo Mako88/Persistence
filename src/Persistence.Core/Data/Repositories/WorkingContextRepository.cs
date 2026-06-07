@@ -28,7 +28,7 @@ public class WorkingContextRepository : EntityRepository<WorkingContextEntity>, 
         this.fragmentRepo = fragmentRepo;
     }
 
-    // ── Public methods ───────────────────────────────────────────
+    #region Public methods
 
     /// <summary>
     /// Returns the most recently accessed <see cref="WorkingContextEntity"/>, fully
@@ -73,7 +73,9 @@ public class WorkingContextRepository : EntityRepository<WorkingContextEntity>, 
             """,
             transaction);
 
-    // ── Base overrides ───────────────────────────────────────────
+    #endregion
+
+    #region Base overrides
 
     /// <summary>
     /// Saves the context's fragments and junction table entries. New or modified
@@ -238,7 +240,9 @@ public class WorkingContextRepository : EntityRepository<WorkingContextEntity>, 
         }
     }
 
-    // ── Private ─────────────────────────────────────────────────
+    #endregion
+
+    #region Private
 
     /// <summary>
     /// Returns true for fragment types that exist only in the in-memory context
@@ -247,4 +251,6 @@ public class WorkingContextRepository : EntityRepository<WorkingContextEntity>, 
     private static bool IsTransientType(ContextFragmentType type) => type is
         ContextFragmentType.ActionResponse or
         ContextFragmentType.ScratchPad;
+
+    #endregion
 }

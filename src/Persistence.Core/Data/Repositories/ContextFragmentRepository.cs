@@ -26,7 +26,7 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
         this.sessionContext = sessionContext;
     }
 
-    // ── Public methods ───────────────────────────────────────────
+    #region Public methods
 
     /// <summary>
     /// Returns fragments of the given type. Defaults to active only.
@@ -78,7 +78,9 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
         return rankedIds.Where(id => entities.ContainsKey(id)).Select(id => entities[id]);
     }
 
-    // ── Base overrides ───────────────────────────────────────────
+    #endregion
+
+    #region Base overrides
 
     /// <summary>
     /// Loads fragments by ID with their sources and tags populated
@@ -201,4 +203,6 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
             LastModifiedUtc = {entity.LastModifiedUtc}, Notes = {entity.Notes}
         WHERE Id = {entity.Id}
         """;
+
+    #endregion
 }

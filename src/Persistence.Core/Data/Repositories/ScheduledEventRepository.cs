@@ -20,7 +20,7 @@ public class ScheduledEventRepository : EntityRepository<ScheduledEventEntity>, 
     public ScheduledEventRepository(IAppConfig config, ISessionContext sessionContext)
         : base(config, sessionContext) { }
 
-    // ── Public methods ───────────────────────────────────────────
+    #region Public methods
 
     /// <summary>
     /// Returns all pending, non-deleted events whose <c>ScheduledForUtc</c> is at or before
@@ -72,7 +72,9 @@ public class ScheduledEventRepository : EntityRepository<ScheduledEventEntity>, 
         await SaveAsync(scheduledEvent, transaction, ct);
     }
 
-    // ── Base overrides ───────────────────────────────────────────
+    #endregion
+
+    #region Base overrides
 
     /// <summary>
     /// Loads scheduled events by ID with their tags populated
@@ -137,4 +139,6 @@ public class ScheduledEventRepository : EntityRepository<ScheduledEventEntity>, 
             LastModifiedUtc = {entity.LastModifiedUtc}, LastAccessedUtc = {entity.LastAccessedUtc}, Notes = {entity.Notes}
         WHERE Id = {entity.Id}
         """;
+
+    #endregion
 }

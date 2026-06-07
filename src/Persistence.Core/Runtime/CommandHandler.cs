@@ -83,7 +83,7 @@ public abstract class CommandHandler : IActionHandler
         return null;
     }
 
-    // ── Private ──────────────────────────────────────────────────
+    #region Private
 
     private async Task<string> DispatchAsync(
         WorkingContextEntity context, string type, JsonObject? fields, CancellationToken ct)
@@ -195,4 +195,6 @@ public abstract class CommandHandler : IActionHandler
     }
 
     private record CommandInfo(string Name, string Description, CommandFieldAttribute[] Fields, MethodInfo Method);
+
+    #endregion
 }

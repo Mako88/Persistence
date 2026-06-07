@@ -115,7 +115,7 @@ public class SourceRepository : EntityRepository<SourceEntity>, ISourceRepositor
     public async Task<IEnumerable<SourceEntity>> GetAllAsync(CancellationToken ct = default) =>
         await QueryAsync($"SELECT * FROM Sources WHERE IsDeleted = 0", ct);
 
-    // ── Base overrides ───────────────────────────────────────────
+    #region Base overrides
 
     /// <summary>
     /// Returns the INSERT statement for a source entity
@@ -137,4 +137,6 @@ public class SourceRepository : EntityRepository<SourceEntity>, ISourceRepositor
             LastModifiedUtc = {entity.LastModifiedUtc}, Notes = {entity.Notes}
         WHERE Id = {entity.Id}
         """;
+
+    #endregion
 }

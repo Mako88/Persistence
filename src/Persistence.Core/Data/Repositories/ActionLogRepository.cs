@@ -60,7 +60,7 @@ public class ActionLogRepository : EntityRepository<ActionLogEntity>, IActionLog
         await QueryAsync(
             $"SELECT * FROM ActionLogs WHERE WorkingContextId = {workingContextId} ORDER BY CreatedUtc ASC");
 
-    // ── Base overrides ───────────────────────────────────────────
+    #region Base overrides
 
     /// <summary>
     /// Returns the INSERT statement for an action log entry
@@ -82,4 +82,6 @@ public class ActionLogRepository : EntityRepository<ActionLogEntity>, IActionLog
             LastModifiedUtc = {entity.LastModifiedUtc}, Notes = {entity.Notes}
         WHERE Id = {entity.Id}
         """;
+
+    #endregion
 }

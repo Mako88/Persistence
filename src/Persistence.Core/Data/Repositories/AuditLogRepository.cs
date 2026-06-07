@@ -40,7 +40,7 @@ public class AuditLogRepository : EntityRepository<AuditLogEntity>, IAuditLogRep
         await QueryAsync(
             $"SELECT * FROM AuditLogs WHERE SessionId = {sessionId} ORDER BY CreatedUtc ASC");
 
-    // ── Base overrides ───────────────────────────────────────────
+    #region Base overrides
 
     /// <summary>
     /// Loads audit log entries by ID with their Source property populated
@@ -93,4 +93,6 @@ public class AuditLogRepository : EntityRepository<AuditLogEntity>, IAuditLogRep
             LastModifiedUtc = {entity.LastModifiedUtc}, Notes = {entity.Notes}
         WHERE Id = {entity.Id}
         """;
+
+    #endregion
 }

@@ -90,7 +90,7 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
         }
     }
 
-    // ── Output ───────────────────────────────────────────────────
+    #region Output
 
     public void ShowReply(string reply)
     {
@@ -136,7 +136,9 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
 
     public void ShowThinking(string? label = null) => SetStatus($"{label ?? "thinking"}…");
 
-    // ── UI construction & lifecycle ──────────────────────────────
+    #endregion
+
+    #region UI construction & lifecycle
 
     private void RunUi()
     {
@@ -432,7 +434,9 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
             ex => ShowError(ex.Message));
     }
 
-    // ── Helpers ──────────────────────────────────────────────────
+    #endregion
+
+    #region Helpers
 
     /// <summary>
     /// Appends text to a pane's buffer and, when the loop is ready, pushes the
@@ -473,4 +477,6 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
 
     private string BuildStatusText(string state) =>
         $" {state}  │  Session {sessionContext.SessionId}  │  {config.Provider} / {config.Model}  │  /exit to quit";
+
+    #endregion
 }

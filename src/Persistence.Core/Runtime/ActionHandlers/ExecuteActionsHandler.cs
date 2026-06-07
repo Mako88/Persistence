@@ -40,7 +40,7 @@ public class ExecuteActionsHandler : CommandHandler
         this.sessionContext = sessionContext;
     }
 
-    // ── Commands ─────────────────────────────────────────────────
+    #region Commands
 
     [Command("schedule", "Schedule a future event")]
     [CommandField("name", "string", required: true, Description = "Event name")]
@@ -234,4 +234,6 @@ public class ExecuteActionsHandler : CommandHandler
 
         return sb.ToString().TrimEnd();
     }
+
+    #endregion
 }

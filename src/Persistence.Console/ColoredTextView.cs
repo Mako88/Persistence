@@ -26,7 +26,7 @@ internal sealed class ColoredTextView : TextView
     private readonly List<Func<string, IEnumerable<ColorRange>>> rules = [];
     private readonly Dictionary<string, Color?[]> cache = [];
 
-    // ── Rule registration ────────────────────────────────────────
+    #region Rule registration
 
     /// <summary>
     /// Colors a line that begins with <paramref name="prefix"/>: the prefix in one color
@@ -84,7 +84,9 @@ internal sealed class ColoredTextView : TextView
         return this;
     }
 
-    // ── Rendering ────────────────────────────────────────────────
+    #endregion
+
+    #region Rendering
 
     // Read-only panes draw via SetReadOnlyColor; override the others too so the same
     // rules apply regardless of focus / "used" state.
@@ -150,4 +152,6 @@ internal sealed class ColoredTextView : TextView
             from += needle.Length;
         }
     }
+
+    #endregion
 }

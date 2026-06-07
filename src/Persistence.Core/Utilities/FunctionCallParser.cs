@@ -50,7 +50,7 @@ public static class FunctionCallParser
         return calls;
     }
 
-    // ── Parsing pieces ───────────────────────────────────────────
+    #region Parsing pieces
 
     private static JsonObject ReadArgs(string s, ref int pos)
     {
@@ -225,7 +225,9 @@ public static class FunctionCallParser
         return JsonValue.Create(token);
     }
 
-    // ── Helpers ──────────────────────────────────────────────────
+    #endregion
+
+    #region Helpers
 
     private static string ReadIdentifier(string s, ref int pos)
     {
@@ -259,4 +261,6 @@ public static class FunctionCallParser
 
         pos++;
     }
+
+    #endregion
 }

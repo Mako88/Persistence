@@ -68,7 +68,7 @@ public class PromptFormatter : IPromptFormatter
         return segments;
     }
 
-    // ── Private ──────────────────────────────────────────────────
+    #region Private
 
     private static string ResolveSourceName(WeightedContextFragment fragment)
     {
@@ -162,4 +162,6 @@ public class PromptFormatter : IPromptFormatter
         < 3600 => $"{elapsed.TotalMinutes:F0}m {elapsed.Seconds}s",
         _ => $"{elapsed.TotalHours:F0}h {elapsed.Minutes}m",
     };
+
+    #endregion
 }

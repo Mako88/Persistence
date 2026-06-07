@@ -258,7 +258,7 @@ public class ConsoleDisplayProvider : IDisplayProvider
         SysConsole.ResetColor();
     }
 
-    // ── Private ──────────────────────────────────────────────────
+    #region Private
 
     /// <summary>
     /// Shows the session header with session ID and model info
@@ -304,4 +304,6 @@ public class ConsoleDisplayProvider : IDisplayProvider
         SysConsole.Write("You: ");
         SysConsole.ResetColor();
     }
+
+    #endregion
 }

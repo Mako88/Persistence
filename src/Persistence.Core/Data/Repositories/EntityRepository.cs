@@ -48,7 +48,7 @@ public abstract class EntityRepository<T> : IEntityRepository<T> where T : BaseE
         }
     }
 
-    // ── Public CRUD ──────────────────────────────────────────────
+    #region Public CRUD
 
     /// <summary>
     /// Fetches the entity with the given ID, or null if not found
@@ -104,7 +104,9 @@ public abstract class EntityRepository<T> : IEntityRepository<T> where T : BaseE
         await SaveAsync(entity, transaction, ct);
     }
 
-    // ── Abstract — every repo must provide its own SQL ───────────
+    #endregion
+
+    #region Abstract — every repo must provide its own SQL
 
     /// <summary>
     /// Returns the INSERT statement for the entity. Do not include a trailing
@@ -117,7 +119,9 @@ public abstract class EntityRepository<T> : IEntityRepository<T> where T : BaseE
     /// </summary>
     protected abstract FormattableString GetUpdateSql(T entity);
 
-    // ── Virtual — override for entities with children ────────────
+    #endregion
+
+    #region Virtual — override for entities with children
 
     /// <summary>
     /// Loads entities by ID. Default does a plain SELECT.
@@ -136,7 +140,16 @@ public abstract class EntityRepository<T> : IEntityRepository<T> where T : BaseE
     protected virtual Task SaveSubEntitiesAsync(T entity, IDbTransaction transaction, CancellationToken ct = default) =>
         Task.CompletedTask;
 
-    // ── Protected helpers ────────────────────────────────────────
+    /// <summary>
+    /// Tracks sub-entities loaded alongside the parent. Default is a no-op; repositories
+    /// that hydrate children (e.g. a working context's fragments) override this so the
+    /// children are recognised as existing rows rather than new inserts.
+    /// </summary>
+    protected virtual void TrackSubEntities(T entity) { }
+
+    #endregion
+
+    #region Protected helpers
 
     /// <summary>
     /// Executes a query and returns tracked entities.
@@ -225,7 +238,21 @@ public abstract class EntityRepository<T> : IEntityRepository<T> where T : BaseE
         return await connection.SqlBuilder(sql).ExecuteScalarAsync<Q>(cancellationToken: ct);
     }
 
-    // ── Private ──────────────────────────────────────────────────
+    /// <summary>
+    /// Marks a single entity as existing (not new) and snapshots its state so subsequent
+    /// saves can detect whether it actually changed. Without this, an entity hydrated from
+    /// the database keeps the constructor default <see cref="BaseEntity.IsNew"/> = true and
+    /// would be re-inserted on the next save.
+    /// </summary>
+    protected static void Track(BaseEntity entity)
+    {
+        entity.IsNew = false;
+        entity.OriginalState = JsonSerializer.Serialize(entity);
+    }
+
+    #endregion
+
+    #region Private
 
     /// <summary>
     /// Saves entities within an existing transaction. Inserts new entities, updates
@@ -319,25 +346,6 @@ public abstract class EntityRepository<T> : IEntityRepository<T> where T : BaseE
     }
 
     /// <summary>
-    /// Marks a single entity as existing (not new) and snapshots its state so subsequent
-    /// saves can detect whether it actually changed. Without this, an entity hydrated from
-    /// the database keeps the constructor default <see cref="BaseEntity.IsNew"/> = true and
-    /// would be re-inserted on the next save.
-    /// </summary>
-    protected static void Track(BaseEntity entity)
-    {
-        entity.IsNew = false;
-        entity.OriginalState = JsonSerializer.Serialize(entity);
-    }
-
-    /// <summary>
-    /// Tracks sub-entities loaded alongside the parent. Default is a no-op; repositories
-    /// that hydrate children (e.g. a working context's fragments) override this so the
-    /// children are recognised as existing rows rather than new inserts.
-    /// </summary>
-    protected virtual void TrackSubEntities(T entity) { }
-
-    /// <summary>
     /// Writes an audit log entry for a create or update operation. Skips silently
     /// during early bootstrap when the System source hasn't been created yet —
     /// those seed operations don't need audit trails.
@@ -384,4 +392,6 @@ public abstract class EntityRepository<T> : IEntityRepository<T> where T : BaseE
         await connection.OpenAsync();
         return connection;
     }
+
+    #endregion
 }
