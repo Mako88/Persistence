@@ -113,4 +113,12 @@ public record WeightedContextFragment : ContextFragmentEntity
     /// </summary>
     [JsonIgnore]
     public int Order { get; set; }
+
+    /// <summary>
+    /// When true, this fragment is rendered as just its summary (if it has one) rather than its
+    /// full content, to save context space. A per-context display preference set via the
+    /// <c>toggle_summary_display</c> command.
+    /// </summary>
+    [JsonIgnore]
+    public bool Collapsed { get; set; }
 }

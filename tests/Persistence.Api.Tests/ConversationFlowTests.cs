@@ -218,6 +218,46 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
     }
 
     [Fact]
+    public async Task ToggleSummaryDisplay_CollapsesToSummary()
+    {
+        const string longText = "TOGGLE_TEST a verbose fragment whose full text should disappear when collapsed.";
+        const string shortSummary = "TOGGLE_SUMMARY terse.";
+
+        // Add a fragment, then (next turn, once it has an ID) attach a summary and collapse it.
+        await api.RunTurnAsync(
+            "remember a verbose thing",
+            $$"""
+            <context>
+            add(content="{{longText}}", fragment_type="Personal", importance=0.5, confidence=0.7)
+            </context>
+            <continue>false</continue>
+            """);
+
+        var pending = await api.SendAndGetPendingAsync("collapse it");
+        var fid = ExtractFragmentIdsWithContent(pending!.Prompt, "TOGGLE_TEST").First();
+
+        var client = api.CreateClient();
+        await client.PostAsJsonAsync("/api/peer/respond", new
+        {
+            id = pending.Id,
+            response = $$"""
+            <context>
+            set_summary(ids=[{{fid}}], summary="{{shortSummary}}")
+            toggle_summary_display(ids=[{{fid}}], collapsed=true)
+            </context>
+            <continue>false</continue>
+            """,
+        });
+        await Task.Delay(300);
+
+        // Now the full text should be gone from the prompt, replaced by the summary.
+        var after = await api.SendAndGetPendingAsync("what's in context now?");
+        Assert.Contains(shortSummary, after!.Prompt);
+        Assert.DoesNotContain(longText, after.Prompt);
+        Assert.Contains("collapsed", after.Prompt);
+    }
+
+    [Fact]
     public async Task TypeMismatchError_UsesPlainLanguage()
     {
         // Passing text where a whole number is expected should yield a peer-friendly message,

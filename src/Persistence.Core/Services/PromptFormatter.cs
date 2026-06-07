@@ -97,7 +97,14 @@ public class PromptFormatter : IPromptFormatter
     private static string FormatFragment(WeightedContextFragment fragment)
     {
         var header = BuildFragmentHeader(fragment);
-        return $"{header}\n{fragment.Content}";
+
+        // A collapsed fragment with a summary renders as just its summary (to save space). If it's
+        // collapsed but has no summary, fall back to full content — there's nothing shorter to show.
+        var body = fragment.Collapsed && !string.IsNullOrWhiteSpace(fragment.Summary)
+            ? $"(collapsed) {fragment.Summary}"
+            : fragment.Content;
+
+        return $"{header}\n{body}";
     }
 
     private static string BuildFragmentHeader(WeightedContextFragment fragment)
@@ -107,6 +114,11 @@ public class PromptFormatter : IPromptFormatter
         if (fragment.IsProtected)
         {
             meta += " | protected";
+        }
+
+        if (fragment.Collapsed && !string.IsNullOrWhiteSpace(fragment.Summary))
+        {
+            meta += " | collapsed";
         }
 
         meta += "]";

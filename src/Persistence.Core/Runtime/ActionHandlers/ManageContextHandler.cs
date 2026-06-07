@@ -257,6 +257,60 @@ public class ManageContextHandler : CommandHandler
         return Task.FromResult(result);
     }
 
+    [Command("toggle_summary_display", "Collapse or expand fragments in context — collapsed ones show only their summary, saving space")]
+    [CommandField("ids", "array", required: true, Description = "Fragment IDs to collapse/expand, e.g. [3, 5]")]
+    [CommandField("collapsed", "bool", Description = "true to show only the summary, false to show full content", Default = "true")]
+    private Task<string> ExecuteToggleSummaryDisplayAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
+    {
+        if (command?["ids"] is not JsonArray idsArray || idsArray.Count == 0)
+        {
+            return Task.FromResult("Toggle summary display failed: 'ids' array is required");
+        }
+
+        var collapsed = command?["collapsed"]?.GetValue<bool>() ?? true;
+
+        var changed = new List<long>();
+        var skipped = new List<string>();
+
+        foreach (var idNode in idsArray)
+        {
+            var id = ParseId(idNode);
+
+            if (id == null)
+            {
+                continue;
+            }
+
+            var fragment = context.ContextFragments.Values.FirstOrDefault(f => f.Id == id.Value);
+
+            if (fragment == null)
+            {
+                skipped.Add($"#{id} (not in context)");
+            }
+            else if (collapsed && string.IsNullOrWhiteSpace(fragment.Summary))
+            {
+                // Collapsing only helps if there's a summary to show instead of full content.
+                skipped.Add($"#{id} (no summary — use set_summary first)");
+            }
+            else
+            {
+                fragment.Collapsed = collapsed;
+                fragment.LastModifiedUtc = DateTimeOffset.UtcNow;
+                changed.Add(id.Value);
+            }
+        }
+
+        var verb = collapsed ? "Collapsed" : "Expanded";
+        var result = $"{verb} {changed.Count} fragment(s): {string.Join(", ", changed.Select(i => $"#{i}"))}";
+
+        if (skipped.Count > 0)
+        {
+            result += $"; skipped {string.Join(", ", skipped)}";
+        }
+
+        return Task.FromResult(result);
+    }
+
     [Command("summarize_fragments", "Fold several fragments into one new Summary fragment and archive the originals from context")]
     [CommandField("ids", "array", required: true, Description = "Fragment IDs to fold into the summary, e.g. [3, 5, 7]")]
     [CommandField("summary", "string", required: true, Description = "The summary text (you write it — this is not auto-generated)")]
