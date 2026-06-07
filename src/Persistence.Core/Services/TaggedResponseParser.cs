@@ -11,7 +11,7 @@ namespace Persistence.Services;
 /// <code>
 /// &lt;think&gt;free-form reasoning, unescaped&lt;/think&gt;
 /// &lt;context&gt;
-/// update(id=42, weight=0.9)
+/// update(id=42, importance=0.9)
 /// add(content="""multi-line note""", importance=0.8)
 /// &lt;/context&gt;
 /// &lt;actions&gt;

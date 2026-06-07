@@ -115,6 +115,7 @@ public class ManageContextHandler : CommandHandler
     [CommandField("content", "string", Description = "New content")]
     [CommandField("importance", "float", Description = "New importance (0-1)")]
     [CommandField("confidence", "float", Description = "New confidence (0-1)")]
+    [CommandField("relevance", "float", Description = "New relevance to the current prompt (0-1); lower it to de-prioritise a fragment for inclusion when context is tight, without removing it")]
     [CommandField("status", "string", Description = "New status (Active, Archived)")]
     [CommandField("summary", "string", Description = "New summary")]
     private Task<string> ExecuteUpdateAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
@@ -151,6 +152,11 @@ public class ManageContextHandler : CommandHandler
         if (command?["confidence"] is JsonNode confidenceNode)
         {
             fragment.Confidence = confidenceNode.GetValue<float>();
+        }
+
+        if (command?["relevance"] is JsonNode relevanceNode)
+        {
+            fragment.Relevance = relevanceNode.GetValue<float>();
         }
 
         if (command?["status"] is JsonNode statusNode)

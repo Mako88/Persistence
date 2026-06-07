@@ -31,7 +31,7 @@ public class TaggedProtocolInstructions : IProtocolInstructions
         </think>
 
         <context>
-        update(id=42, weight=0.9)
+        update(id=42, importance=0.9)
         add(content="""Multi-line note.
         Quotes "like this" need no escaping.""", importance=0.8)
         </context>
@@ -66,7 +66,7 @@ public class TaggedProtocolInstructions : IProtocolInstructions
 
         Each command is a function call with named arguments: `command(field=value, field=value)`.
 
-        - Numbers and booleans are bare: `weight=0.9`, `is_protected=true`.
+        - Numbers and booleans are bare: `importance=0.9`, `is_protected=true`.
         - Short strings use quotes: `tag="personality/values"`.
         - Multi-line or quote-containing text uses triple quotes (no escaping needed):
           `content="""line one\nline two"""`.

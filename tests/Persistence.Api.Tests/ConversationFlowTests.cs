@@ -258,6 +258,43 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
     }
 
     [Fact]
+    public async Task UpdateRelevance_PersistsToFragmentHeader()
+    {
+        const string marker = "RELEVANCE_TEST a fragment whose relevance we will lower.";
+
+        // Add a fragment at default relevance (1.0 -> header shows r:1.0).
+        await api.RunTurnAsync(
+            "remember something low priority",
+            $$"""
+            <context>
+            add(content="{{marker}}", fragment_type="Personal", importance=0.5, confidence=0.7)
+            </context>
+            <continue>false</continue>
+            """);
+
+        var pending = await api.SendAndGetPendingAsync("lower its relevance");
+        var fid = ExtractFragmentIdsWithContent(pending!.Prompt, "RELEVANCE_TEST").First();
+
+        var client = api.CreateClient();
+        await client.PostAsJsonAsync("/api/peer/respond", new
+        {
+            id = pending.Id,
+            response = $$"""
+            <context>
+            update(id={{fid}}, relevance=0.2)
+            </context>
+            <continue>false</continue>
+            """,
+        });
+        await Task.Delay(300);
+
+        // The junction relevance should round-trip through save/reload into the header.
+        var after = await api.SendAndGetPendingAsync("what's in context now?");
+        Assert.Contains("RELEVANCE_TEST", after!.Prompt);
+        Assert.Contains("r:0.2", after.Prompt);
+    }
+
+    [Fact]
     public async Task FirstWake_PromptContainsOnboardingGuide()
     {
         // The fixture's DB is fresh, so a brand-new context should carry the first-wake guide and

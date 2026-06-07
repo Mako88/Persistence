@@ -18,7 +18,7 @@ public record WorkingContextEntity : BaseEntity
     /// <summary>
     /// Wraps an existing <see cref="ContextFragmentEntity"/> as a
     /// <see cref="WeightedContextFragment"/> and adds it to this context with the
-    /// given weight. Preserves the original entity's ID, tracking state, and all
+    /// given relevance. Preserves the original entity's ID, tracking state, and all
     /// properties. See <see cref="AddFragment(WeightedContextFragment, long?)"/>
     /// for ordering behaviour.
     /// </summary>
