@@ -159,9 +159,24 @@ public class ManageContextHandler : CommandHandler
             fragment.Relevance = relevanceNode.GetValue<float>();
         }
 
+        string? statusWarning = null;
+
         if (command?["status"] is JsonNode statusNode)
         {
-            fragment.Status = ParseStatus(statusNode.GetValue<string>());
+            var statusName = statusNode.GetValue<string>();
+            var (status, wasRecognised) = ParseStatus(statusName);
+
+            if (wasRecognised)
+            {
+                fragment.Status = status;
+            }
+            else
+            {
+                // Silently defaulting an unrecognised status to Active would let a peer think it
+                // archived a fragment when it didn't. Flag it instead and leave status untouched.
+                var valid = string.Join(", ", Enum.GetNames<ContextFragmentStatus>());
+                statusWarning = $" (status '{statusName}' not recognised — left unchanged; valid values: {valid})";
+            }
         }
 
         if (command?["summary"] is JsonNode summaryNode)
@@ -171,7 +186,7 @@ public class ManageContextHandler : CommandHandler
 
         fragment.LastModifiedUtc = DateTimeOffset.UtcNow;
 
-        return Task.FromResult($"Updated fragment #{id}");
+        return Task.FromResult($"Updated fragment #{id}{statusWarning}");
     }
 
     [Command("remove", "Take a fragment out of your working context (REVERSIBLE — the fragment is kept and can be brought back with load/fetch; it is not deleted)")]
@@ -928,7 +943,14 @@ public class ManageContextHandler : CommandHandler
 
         if (!string.IsNullOrWhiteSpace(statusFilter))
         {
-            var status = ParseStatus(statusFilter);
+            var (status, wasRecognised) = ParseStatus(statusFilter);
+
+            if (!wasRecognised)
+            {
+                var valid = string.Join(", ", Enum.GetNames<ContextFragmentStatus>());
+                return $"List failed: unknown status '{statusFilter}'. Valid values: {valid}";
+            }
+
             fragments = fragments.Where(f => f.Status == status);
         }
 
@@ -1046,10 +1068,10 @@ public class ManageContextHandler : CommandHandler
             ? (result, true)
             : (ContextFragmentType.Personal, typeName == null);
 
-    private static ContextFragmentStatus ParseStatus(string? statusName) =>
+    private static (ContextFragmentStatus status, bool wasRecognised) ParseStatus(string? statusName) =>
         Enum.TryParse<ContextFragmentStatus>(statusName, ignoreCase: true, out var result)
-            ? result
-            : ContextFragmentStatus.Active;
+            ? (result, true)
+            : (ContextFragmentStatus.Active, statusName == null);
 
     #endregion
 }

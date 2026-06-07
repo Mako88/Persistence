@@ -424,6 +424,37 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
     }
 
     [Fact]
+    public async Task UnknownStatus_IsReportedNotSilentlyDefaulted()
+    {
+        // "archive" (vs the real "Archived") used to silently become Active — the peer would think
+        // it archived a fragment that's still active. It must be told instead.
+        await api.RunTurnAsync(
+            "add then mis-archive",
+            """
+            <context>
+            add(content="STATUS_TEST fragment to mis-archive", fragment_type="Personal", importance=0.5)
+            </context>
+            <continue>false</continue>
+            """);
+
+        var pending = await api.SendAndGetPendingAsync("archive it wrong");
+        var fid = ExtractFragmentIdsWithContent(pending!.Prompt, "STATUS_TEST").First();
+
+        var events = await api.RunTurnAsync(
+            "mis-archive",
+            $$"""
+            <context>
+            update(id={{fid}}, status="archive")
+            </context>
+            <continue>false</continue>
+            """);
+
+        var tool = Detail(events, "tool");
+        Assert.Contains("not recognised", tool);
+        Assert.Contains("Archived", tool); // lists the valid values
+    }
+
+    [Fact]
     public async Task ExecuteActions_ScheduleAndListEvents()
     {
         var events = await api.RunTurnAsync(
