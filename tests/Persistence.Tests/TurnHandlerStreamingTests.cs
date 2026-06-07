@@ -64,9 +64,9 @@ public class TurnHandlerStreamingTests
         responseParser
             .Setup(p => p.Parse(It.IsAny<string>()))
             .Callback<string>(s => parsedInput = s)
-            .Returns(new ModelResponse
+            .Returns(new ModelTurn
             {
-                Action = ModelAction.RespondToUser,
+                Actions = [new ModelResponse { Action = ModelAction.RespondToUser }],
                 Continue = false,
                 ParsedSuccessfully = true,
             });

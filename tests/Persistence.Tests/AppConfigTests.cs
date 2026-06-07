@@ -14,6 +14,7 @@ public class AppConfigTests
         Assert.Equal("Tui", config.UiMode);
         Assert.Equal("high", config.ReasoningEffort);
         Assert.Equal("local", config.Provider);
+        Assert.Equal("Tagged", config.ResponseFormat);
     }
 
     [Fact]

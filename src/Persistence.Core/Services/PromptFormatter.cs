@@ -16,13 +16,15 @@ public class PromptFormatter : IPromptFormatter
 {
     private readonly ISessionContext sessionContext;
     private readonly IAppConfig config;
+    private readonly IProtocolInstructions protocolInstructions;
 
     private DateTimeOffset? lastFormatUtc;
 
-    public PromptFormatter(ISessionContext sessionContext, IAppConfig config)
+    public PromptFormatter(ISessionContext sessionContext, IAppConfig config, IProtocolInstructions protocolInstructions)
     {
         this.sessionContext = sessionContext;
         this.config = config;
+        this.protocolInstructions = protocolInstructions;
     }
 
     public List<PromptSegment> Format(
@@ -32,7 +34,12 @@ public class PromptFormatter : IPromptFormatter
         int maxIterations = 0)
     {
         var fragments = context.ContextFragments.Values;
-        var segments = new List<PromptSegment>();
+        var segments = new List<PromptSegment>
+        {
+            // Protocol scaffolding is injected per-prompt (not persisted as a fragment), so the
+            // response format can change via config without reseeding the database.
+            new() { Source = "System", Content = protocolInstructions.GetInstructions() },
+        };
 
         foreach (var fragment in fragments)
         {

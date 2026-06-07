@@ -17,6 +17,7 @@ public class AppConfig : IAppConfig
     public string ReasoningEffort { get; set; } = "high";
     public bool Streaming { get; set; } = true;
     public string UiMode { get; set; } = "Tui";
+    public string ResponseFormat { get; set; } = "Tagged";
     public bool DebugMode { get; set; } = false;
     public int MaxActionIterations { get; set; } = 5;
 

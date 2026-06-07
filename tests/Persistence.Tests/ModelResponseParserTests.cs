@@ -13,37 +13,38 @@ public class ModelResponseParserTests
     [InlineData("think", ModelAction.Think)]
     public void ParsesActionNames(string actionName, ModelAction expected)
     {
-        var result = Parser.Parse($$"""{ "action": "{{actionName}}", "continue": false, "data": "x" }""");
+        var turn = Parser.Parse($$"""{ "action": "{{actionName}}", "continue": false, "data": "x" }""");
 
-        Assert.True(result.ParsedSuccessfully);
-        Assert.Equal(expected, result.Action);
+        Assert.True(turn.ParsedSuccessfully);
+        Assert.Equal(expected, Assert.Single(turn.Actions).Action);
     }
 
     [Fact]
     public void ParsesContinueAndData()
     {
-        var result = Parser.Parse("""{ "action": "think", "continue": true, "data": "a thought" }""");
+        var turn = Parser.Parse("""{ "action": "think", "continue": true, "data": "a thought" }""");
 
-        Assert.True(result.Continue);
-        Assert.Equal("a thought", result.Data?.GetValue<string>());
+        Assert.True(turn.Continue);
+        Assert.Equal("a thought", Assert.Single(turn.Actions).Data?.GetValue<string>());
     }
 
     [Fact]
     public void FallsBackToRespondForNonJson()
     {
-        var result = Parser.Parse("just some prose, not json");
+        var turn = Parser.Parse("just some prose, not json");
 
-        Assert.False(result.ParsedSuccessfully);
-        Assert.Equal(ModelAction.RespondToUser, result.Action);
-        Assert.Equal("just some prose, not json", result.Data?.GetValue<string>());
+        Assert.False(turn.ParsedSuccessfully);
+        var action = Assert.Single(turn.Actions);
+        Assert.Equal(ModelAction.RespondToUser, action.Action);
+        Assert.Equal("just some prose, not json", action.Data?.GetValue<string>());
     }
 
     [Fact]
     public void FallsBackForUnknownAction()
     {
-        var result = Parser.Parse("""{ "action": "teleport", "data": "x" }""");
+        var turn = Parser.Parse("""{ "action": "teleport", "data": "x" }""");
 
-        Assert.False(result.ParsedSuccessfully);
-        Assert.Equal(ModelAction.RespondToUser, result.Action);
+        Assert.False(turn.ParsedSuccessfully);
+        Assert.Equal(ModelAction.RespondToUser, Assert.Single(turn.Actions).Action);
     }
 }

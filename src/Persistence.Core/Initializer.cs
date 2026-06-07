@@ -31,9 +31,14 @@ public static class Initializer
             if (!Enum.TryParse<UiMode>(config.UiMode, ignoreCase: true, out var uiMode))
                 throw new ArgumentException($"Unrecognized UiMode value: '{config.UiMode}'");
 
+            if (!Enum.TryParse<ResponseFormat>(config.ResponseFormat, ignoreCase: true, out var responseFormat))
+                throw new ArgumentException($"Unrecognized ResponseFormat value: '{config.ResponseFormat}'");
+
             builder.Register(c => c.ResolveKeyed<IModelClient>(provider));
             builder.Register(c => c.ResolveKeyed<IPromptBuilder>(provider));
             builder.Register(c => c.ResolveKeyed<IDisplayProvider>(uiMode));
+            builder.Register(c => c.ResolveKeyed<IModelResponseParser>(responseFormat));
+            builder.Register(c => c.ResolveKeyed<IProtocolInstructions>(responseFormat));
 
             registerAdditionalServices?.Invoke(builder);
         });

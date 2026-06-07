@@ -3,9 +3,7 @@ using System.Text.Json.Nodes;
 namespace Persistence.Services;
 
 /// <summary>
-/// Structured response from the model, parsed from JSON. Determines what action the
-/// remote peer wants to take and whether they want to continue acting before
-/// yielding back to the local peer.
+/// A single action the remote peer wants to perform within a <see cref="ModelTurn"/>.
 /// </summary>
 public class ModelResponse
 {
@@ -15,23 +13,24 @@ public class ModelResponse
     public required ModelAction Action { get; init; }
 
     /// <summary>
-    /// Whether the remote peer wants to perform additional actions before
-    /// yielding back to the local peer. When true, the updated context is
-    /// re-sent to the model for another iteration.
-    /// </summary>
-    public bool Continue { get; init; }
-
-    /// <summary>
     /// Action-specific payload. Shape varies by action type — each
     /// <see cref="Runtime.IActionHandler"/> deserializes what it expects.
     /// </summary>
     public JsonNode? Data { get; init; }
+}
 
-    /// <summary>
-    /// Whether the raw model output was successfully parsed as structured JSON.
-    /// When false, the response was created from a fallback path (e.g. plain text).
-    /// </summary>
-    public bool ParsedSuccessfully { get; init; }
+/// <summary>
+/// The wire format the remote peer responds in. Selects which
+/// <see cref="IModelResponseParser"/> is used.
+/// </summary>
+public enum ResponseFormat
+{
+    /// <summary>Single JSON object per turn: <c>{ action, continue, data }</c>.</summary>
+    Json = 0,
+
+    /// <summary>Tagged format: <c>&lt;think&gt;</c>/<c>&lt;respond&gt;</c> prose tags plus
+    /// <c>&lt;context&gt;</c>/<c>&lt;actions&gt;</c> function-call blocks.</summary>
+    Tagged = 1,
 }
 
 /// <summary>

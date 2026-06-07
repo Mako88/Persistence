@@ -102,9 +102,9 @@ public class TurnHandler : ITurnHandler
             var rawOutput = config.Streaming
                 ? await StreamModelOutputAsync(request, ct)
                 : await modelClient.CompleteAsync(request, ct);
-            var response = responseParser.Parse(rawOutput);
+            var turn = responseParser.Parse(rawOutput);
 
-            if (!response.ParsedSuccessfully)
+            if (!turn.ParsedSuccessfully)
             {
                 if (iteration < config.MaxActionIterations)
                 {
@@ -119,14 +119,19 @@ public class TurnHandler : ITurnHandler
                 break;
             }
 
-            await DispatchActionAsync(context, response, ct);
-
-            if (response.Action == ModelAction.RespondToUser)
+            // A turn may carry several actions (e.g. think + manage context + respond);
+            // dispatch them in order.
+            foreach (var action in turn.Actions)
             {
-                hasResponded = true;
+                await DispatchActionAsync(context, action, ct);
+
+                if (action.Action == ModelAction.RespondToUser)
+                {
+                    hasResponded = true;
+                }
             }
 
-            if (!response.Continue)
+            if (!turn.Continue)
             {
                 if (!hasResponded)
                 {

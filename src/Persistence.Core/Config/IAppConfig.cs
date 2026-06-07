@@ -60,6 +60,11 @@ public interface IAppConfig
     string UiMode { get; set; }
 
     /// <summary>
+    /// Selects the remote-peer response wire format ("Json" or "Tagged").
+    /// </summary>
+    string ResponseFormat { get; set; }
+
+    /// <summary>
     /// When true, displays raw prompts and model responses in the console
     /// </summary>
     bool DebugMode { get; set; }

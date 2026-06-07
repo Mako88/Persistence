@@ -1,13 +1,14 @@
 namespace Persistence.Services;
 
 /// <summary>
-/// Parses raw model output into a structured <see cref="ModelResponse"/>
+/// Parses raw model output into a structured <see cref="ModelTurn"/> (one or more actions
+/// plus a continue flag). Implementations define the wire format the remote peer responds in.
 /// </summary>
 public interface IModelResponseParser
 {
     /// <summary>
-    /// Parses the raw model output into a <see cref="ModelResponse"/>. Returns a
-    /// <see cref="ModelAction.RespondToUser"/> response if the output is not valid JSON.
+    /// Parses the raw model output into a <see cref="ModelTurn"/>. Returns a turn with
+    /// <see cref="ModelTurn.ParsedSuccessfully"/> = false when the output can't be parsed.
     /// </summary>
-    ModelResponse Parse(string rawOutput);
+    ModelTurn Parse(string rawOutput);
 }

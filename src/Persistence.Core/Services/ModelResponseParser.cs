@@ -5,22 +5,18 @@ using Persistence.DI;
 namespace Persistence.Services;
 
 /// <summary>
-/// Parses model output into a structured <see cref="ModelResponse"/>. Falls back to
-/// a plain-text <see cref="ModelAction.RespondToUser"/> response when parsing fails.
+/// Parses JSON model output (<c>{ action, continue, data }</c>) into a single-action
+/// <see cref="ModelTurn"/>. Falls back to a plain-text <see cref="ModelAction.RespondToUser"/>
+/// turn when parsing fails.
 /// </summary>
-[Singleton]
+[Singleton(typeof(IModelResponseParser), ResponseFormat.Json)]
 public class ModelResponseParser : IModelResponseParser
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true,
-    };
-
     /// <summary>
-    /// Parses the raw model output into a <see cref="ModelResponse"/>. Returns a
-    /// <see cref="ModelAction.RespondToUser"/> response if the output is not valid JSON.
+    /// Parses the raw model output into a single-action <see cref="ModelTurn"/>. Returns a
+    /// <see cref="ModelAction.RespondToUser"/> turn if the output is not valid JSON.
     /// </summary>
-    public ModelResponse Parse(string rawOutput)
+    public ModelTurn Parse(string rawOutput)
     {
         try
         {
@@ -28,37 +24,42 @@ public class ModelResponseParser : IModelResponseParser
 
             if (json == null)
             {
-                return FallbackResponse(rawOutput);
+                return Fallback(rawOutput);
             }
 
             var actionStr = json["action"]?.GetValue<string>()?.Replace("_", "");
 
             if (!Enum.TryParse<ModelAction>(actionStr, ignoreCase: true, out var action))
             {
-                return FallbackResponse(rawOutput);
+                return Fallback(rawOutput);
             }
 
-            return new ModelResponse
+            var response = new ModelResponse
             {
                 Action = action,
-                Continue = json["continue"]?.GetValue<bool>() ?? false,
                 Data = json["data"],
+            };
+
+            return new ModelTurn
+            {
+                Actions = [response],
+                Continue = json["continue"]?.GetValue<bool>() ?? false,
                 ParsedSuccessfully = true,
             };
         }
         catch
         {
-            return FallbackResponse(rawOutput);
+            return Fallback(rawOutput);
         }
     }
 
     /// <summary>
-    /// Creates a plain-text response when JSON parsing fails
+    /// Creates a plain-text response turn when JSON parsing fails
     /// </summary>
-    private ModelResponse FallbackResponse(string rawOutput) => new()
+    private static ModelTurn Fallback(string rawOutput) => new()
     {
-        Action = ModelAction.RespondToUser,
+        Actions = [new ModelResponse { Action = ModelAction.RespondToUser, Data = JsonValue.Create(rawOutput) }],
         Continue = false,
-        Data = JsonValue.Create(rawOutput),
+        ParsedSuccessfully = false,
     };
 }
