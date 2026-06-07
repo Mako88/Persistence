@@ -98,13 +98,13 @@ public class WorkingContextRepository : EntityRepository<WorkingContextEntity>, 
             // change tracking handles skipping unmodified entities
             await fragmentRepo.SaveAsync(fragment, transaction, ct);
 
-            // Upsert the junction row (weight and order may have changed)
+            // Upsert the junction row (relevance and order may have changed)
             await ExecuteAsync(
                 $"""
-                INSERT INTO WorkingContextFragments (WorkingContextId, ContextFragmentId, Weight, "Order")
-                VALUES ({entity.Id}, {fragment.Id}, {fragment.Weight}, {fragment.Order})
+                INSERT INTO WorkingContextFragments (WorkingContextId, ContextFragmentId, Relevance, "Order")
+                VALUES ({entity.Id}, {fragment.Id}, {fragment.Relevance}, {fragment.Order})
                 ON CONFLICT(WorkingContextId, ContextFragmentId) DO UPDATE SET
-                    Weight = {fragment.Weight},
+                    Relevance = {fragment.Relevance},
                     "Order" = {fragment.Order}
                 """,
                 transaction,
@@ -121,10 +121,10 @@ public class WorkingContextRepository : EntityRepository<WorkingContextEntity>, 
         var idList = ids.ToList();
         var contextMap = new Dictionary<long, WorkingContextEntity>();
 
-        // 1. Contexts with their fragments (including junction Weight/Order)
+        // 1. Contexts with their fragments (including junction Relevance/Order)
         await connection.QueryAsync<WorkingContextEntity, WeightedContextFragment, WorkingContextEntity>(
             """
-            SELECT wc.*, cf.*, wcf.Weight, wcf."Order"
+            SELECT wc.*, cf.*, wcf.Relevance, wcf."Order"
             FROM WorkingContexts wc
             LEFT JOIN WorkingContextFragments wcf ON wc.Id = wcf.WorkingContextId
             LEFT JOIN ContextFragments cf ON wcf.ContextFragmentId = cf.Id

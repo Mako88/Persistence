@@ -218,6 +218,25 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
     }
 
     [Fact]
+    public async Task TypeMismatchError_UsesPlainLanguage()
+    {
+        // Passing text where a whole number is expected should yield a peer-friendly message,
+        // not a CLR type name like "System.String cannot be converted to System.Int64".
+        var events = await api.RunTurnAsync(
+            "make a mistake",
+            """
+            <context>
+            update(id="not-a-number", importance=0.5)
+            </context>
+            <continue>false</continue>
+            """);
+
+        var tools = Detail(events, "tool");
+        Assert.Contains("whole number", tools);
+        Assert.DoesNotContain("System.", tools);
+    }
+
+    [Fact]
     public async Task ExecuteActions_ScheduleAndListEvents()
     {
         var events = await api.RunTurnAsync(
@@ -376,7 +395,7 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
 
     private static long ExtractFragmentId(string prompt, string fragmentType)
     {
-        // Fragment headers look like: [#5 | Identity | w:1.0 i:0.9 c:1.0]
+        // Fragment headers look like: [#5 | Identity | r:1.0 i:0.9 c:1.0]
         var match = System.Text.RegularExpressions.Regex.Match(
             prompt, $@"#(\d+) \| {fragmentType} ");
         Assert.True(match.Success, $"No {fragmentType} fragment header found in prompt.");

@@ -12,9 +12,8 @@ manually. Fully-automated forgetting becomes a convenience layered on later, not
 1. ✅ **Context/budget awareness in the sensory block** — DONE. Calibrated estimate vs.
    model-aware effective budget, with escalating nudges. (The "eyes.")
 
-2. **Switch Weight → Relevance.**
-   (Clarifies the model: relevance-to-now is what should drive what's loaded under pressure.
-   Small, and it sharpens everything below it.)
+2. ✅ **Switch Weight → Relevance** — DONE. Renamed the junction property/column/command field
+   and the prompt header (`w:` → `r:`). The peer now sees/sets "relevance to the current prompt."
 
 3. ✅ **summarize_fragments / set_summary commands** — DONE. `summarize_fragments` folds a list
    into a new Summary fragment and archives the originals from context (recoverable via
@@ -25,10 +24,9 @@ manually. Fully-automated forgetting becomes a convenience layered on later, not
    (Lighter lever: collapse known fragments to summaries to reclaim room without losing detail.
    `set_summary` now provides the summaries this would display.)
 
-5. **Plain-language command errors.**
-   (Type-mismatch errors still leak CLR type names — "System.String cannot be converted to
-   System.Int64". Translate to the peer's vocabulary, e.g. "id must be a whole number." Cheap,
-   and every model hits these. Found during the clarity walkthroughs.)
+5. ✅ **Plain-language command errors** — DONE. `CommandHandler.Humanize` translates JSON
+   type-mismatch messages (e.g. "System.String … System.Int64") into the peer's vocabulary
+   ("a value of type text can't be used where a whole number is expected").
 
 ## Tier 2 — rounds out self-curation
 
@@ -51,9 +49,9 @@ manually. Fully-automated forgetting becomes a convenience layered on later, not
 
 ## Tier 3 — reach & real-world
 
-10. **SSE streaming on the API** (in progress next). Live push of reply/reasoning/tool/thought
-    events instead of polling; the event-log model is the precursor.
-    (Sequenced first among Tier 3 because we're already halfway there.)
+10. ✅ **SSE streaming on the API** — DONE. `GET /api/conversation/stream` pushes
+    reply/reasoning/tool/thought events live (backlog replay + live, deduped, `Last-Event-ID`
+    resume), alongside the existing poll endpoint.
 
 11. **AnthropicModelClient.** (Real Anthropic provider alongside OpenAI; `LocalClaudeModelClient`
     already in. Enables the Claude-as-remote-peer direction natively.)

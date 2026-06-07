@@ -55,7 +55,7 @@ public sealed class WorkingContextPersistenceTests : IAsyncLifetime
             Content = content,
             Importance = 1.0f,
             Confidence = 1.0f,
-            Weight = 1.0f,
+            Relevance = 1.0f,
             Sources = [new SourceEntity
             {
                 Id = sourceId,

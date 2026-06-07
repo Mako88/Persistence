@@ -50,7 +50,7 @@ public class ManageContextHandler : CommandHandler
     [CommandField("fragment_type", "string", Description = "Fragment type (Identity, Relational, Personal, Summary, Proposal, etc.)")]
     [CommandField("importance", "float", Description = "Significance (0-1)", Default = "0.5")]
     [CommandField("confidence", "float", Description = "Certainty (0-1)", Default = "0.5")]
-    [CommandField("weight", "float", Description = "Relevance to current prompt (0-1)", Default = "1.0")]
+    [CommandField("relevance", "float", Description = "How relevant to the current prompt (0-1); ranks inclusion when context is tight", Default = "1.0")]
     [CommandField("is_protected", "bool", Description = "Prevent modification", Default = "false")]
     [CommandField("summary", "string", Description = "Short summary")]
     [CommandField("insert_after", "long", Description = "Fragment ID to insert after")]
@@ -68,7 +68,7 @@ public class ManageContextHandler : CommandHandler
         var (fragmentType, wasRecognised) = ParseFragmentType(fragmentTypeName);
         var importance = command?["importance"]?.GetValue<float>() ?? 0.5f;
         var confidence = command?["confidence"]?.GetValue<float>() ?? 0.5f;
-        var weight = command?["weight"]?.GetValue<float>() ?? 1.0f;
+        var relevance = command?["relevance"]?.GetValue<float>() ?? 1.0f;
         var isProtected = command?["is_protected"]?.GetValue<bool>() ?? false;
         var insertAfter = command?["insert_after"]?.GetValue<long?>();
         var summary = command?["summary"]?.GetValue<string>();
@@ -88,7 +88,7 @@ public class ManageContextHandler : CommandHandler
             Summary = summary,
             Importance = importance,
             Confidence = confidence,
-            Weight = weight,
+            Relevance = relevance,
             IsProtected = isProtected,
             Sources = [new SourceEntity
             {
@@ -324,7 +324,7 @@ public class ManageContextHandler : CommandHandler
             Notes = $"Summary of fragments: {string.Join(", ", foldedIds.Select(i => $"#{i}"))}",
             Importance = importance,
             Confidence = confidence,
-            Weight = 1.0f,
+            Relevance = 1.0f,
             Sources = [new SourceEntity
             {
                 Id = sessionContext.RemotePeerSourceId,
@@ -407,7 +407,7 @@ public class ManageContextHandler : CommandHandler
 
     [Command("load", "Load existing fragments into the working context by ID")]
     [CommandField("ids", "array", required: true, Description = "Fragment IDs to load")]
-    [CommandField("weight", "float", Description = "Weight for loaded fragments (0-1)", Default = "1.0")]
+    [CommandField("relevance", "float", Description = "Relevance for loaded fragments (0-1)", Default = "1.0")]
     private async Task<string> ExecuteLoadAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
     {
         var idsNode = command?["ids"];
@@ -417,7 +417,7 @@ public class ManageContextHandler : CommandHandler
             return "Load failed: 'ids' array is required";
         }
 
-        var weight = command?["weight"]?.GetValue<float>() ?? 1.0f;
+        var relevance = command?["relevance"]?.GetValue<float>() ?? 1.0f;
         var existingIds = context.ContextFragments.Values.Select(f => f.Id).ToHashSet();
         var loaded = 0;
         var skipped = 0;
@@ -444,7 +444,7 @@ public class ManageContextHandler : CommandHandler
                 continue;
             }
 
-            context.AddFragment(fragment, weight);
+            context.AddFragment(fragment, relevance);
             existingIds.Add(id.Value);
             loaded++;
         }

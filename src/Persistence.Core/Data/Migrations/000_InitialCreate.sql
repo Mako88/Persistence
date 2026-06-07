@@ -215,7 +215,7 @@ CREATE TABLE IF NOT EXISTS WorkingContextFragments (
     Id INTEGER PRIMARY KEY,
     WorkingContextId INTEGER NOT NULL,
     ContextFragmentId INTEGER NOT NULL,
-    Weight REAL NOT NULL,
+    Relevance REAL NOT NULL,
     [Order] INTEGER NOT NULL,
     FOREIGN KEY(WorkingContextId) REFERENCES WorkingContexts(Id),
     FOREIGN KEY(ContextFragmentId) REFERENCES ContextFragments(Id)

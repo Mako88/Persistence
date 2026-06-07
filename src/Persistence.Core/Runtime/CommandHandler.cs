@@ -46,7 +46,7 @@ public abstract class CommandHandler : IActionHandler
             Content = results.ToString().TrimEnd(),
             Importance = 1.0f,
             Confidence = 1.0f,
-            Weight = 1.0f,
+            Relevance = 1.0f,
             CreatedUtc = DateTimeOffset.UtcNow,
             LastModifiedUtc = DateTimeOffset.UtcNow,
         });
@@ -110,13 +110,43 @@ public abstract class CommandHandler : IActionHandler
         }
         catch (TargetInvocationException ex) when (ex.InnerException != null)
         {
-            return FormatError(type, info, fields, ex.InnerException.Message);
+            return FormatError(type, info, fields, Humanize(ex.InnerException.Message));
         }
         catch (Exception ex)
         {
-            return FormatError(type, info, fields, ex.Message);
+            return FormatError(type, info, fields, Humanize(ex.Message));
         }
     }
+
+    /// <summary>
+    /// Translates implementation-jargon exception messages into the peer's vocabulary. The most
+    /// common is a JSON type mismatch (e.g. passing a string where a number is expected), whose
+    /// raw message names CLR types ("System.String cannot be converted to 'System.Int64'") that
+    /// mean nothing to the remote peer.
+    /// </summary>
+    private static string Humanize(string message)
+    {
+        // Matches the System.Text.Json message: "... type 'System.String' ... to a 'System.Int64'."
+        var match = System.Text.RegularExpressions.Regex.Match(
+            message, @"type '(?<from>System\.\w+)'.*to a '(?<to>System\.\w+)'");
+
+        if (match.Success)
+        {
+            return $"a value of type {FriendlyType(match.Groups["from"].Value)} can't be used where " +
+                   $"{FriendlyType(match.Groups["to"].Value)} is expected";
+        }
+
+        return message;
+    }
+
+    private static string FriendlyType(string clrType) => clrType switch
+    {
+        "System.Int64" or "System.Int32" => "a whole number",
+        "System.Double" or "System.Single" => "a number",
+        "System.Boolean" => "true/false",
+        "System.String" => "text",
+        _ => clrType,
+    };
 
     private string FormatCommandList()
     {

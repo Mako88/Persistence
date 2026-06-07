@@ -46,7 +46,7 @@ public class RespondToUserHandler : IActionHandler
             Content = reply,
             Importance = 1.0f,
             Confidence = 1.0f,
-            Weight = 1.0f,
+            Relevance = 1.0f,
             Sources = [new SourceEntity
             {
                 Id = sessionContext.RemotePeerSourceId,

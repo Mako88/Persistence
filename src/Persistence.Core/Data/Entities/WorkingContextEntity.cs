@@ -22,7 +22,7 @@ public record WorkingContextEntity : BaseEntity
     /// properties. See <see cref="AddFragment(WeightedContextFragment, long?)"/>
     /// for ordering behaviour.
     /// </summary>
-    public void AddFragment(ContextFragmentEntity fragment, float weight = 1.0f, long? insertAfter = null)
+    public void AddFragment(ContextFragmentEntity fragment, float relevance = 1.0f, long? insertAfter = null)
     {
         AddFragment(new WeightedContextFragment
         {
@@ -38,7 +38,7 @@ public record WorkingContextEntity : BaseEntity
             IsDeleted = fragment.IsDeleted,
             Sources = fragment.Sources,
             Tags = fragment.Tags,
-            Weight = weight,
+            Relevance = relevance,
             CreatedUtc = fragment.CreatedUtc,
             LastModifiedUtc = fragment.LastModifiedUtc,
             LastAccessedUtc = fragment.LastAccessedUtc,
@@ -93,18 +93,18 @@ public record WorkingContextEntity : BaseEntity
 }
 
 /// <summary>
-/// A <see cref="ContextFragmentEntity"/> decorated with its position and weight
-/// within a <see cref="WorkingContextEntity"/>. Weight and Order are junction-table
+/// A <see cref="ContextFragmentEntity"/> decorated with its relevance and position
+/// within a <see cref="WorkingContextEntity"/>. Relevance and Order are junction-table
 /// properties — they describe the relationship, not the fragment itself.
 /// </summary>
 public record WeightedContextFragment : ContextFragmentEntity
 {
     /// <summary>
-    /// Relative weight of this fragment within the context (0.0–1.0). Higher values
-    /// signal greater relevance for the current prompt.
+    /// How relevant this fragment is to the current prompt (0.0–1.0). Higher values rank it
+    /// more strongly for inclusion when context is tight.
     /// </summary>
     [JsonIgnore]
-    public required float Weight { get; set; }
+    public required float Relevance { get; set; }
 
     /// <summary>
     /// Position of this fragment within the context. Set automatically by

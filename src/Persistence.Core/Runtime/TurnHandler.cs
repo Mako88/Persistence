@@ -226,7 +226,7 @@ public class TurnHandler : ITurnHandler
                 Content = "The following messages were added by the local peer during your last iteration:",
                 Importance = 1.0f,
                 Confidence = 1.0f,
-                Weight = 1.0f,
+                Relevance = 1.0f,
                 CreatedUtc = now,
                 LastModifiedUtc = now,
             });
@@ -241,7 +241,7 @@ public class TurnHandler : ITurnHandler
                 Content = message,
                 Importance = 1.0f,
                 Confidence = 1.0f,
-                Weight = 1.0f,
+                Relevance = 1.0f,
                 Sources = [new SourceEntity
                 {
                     Id = sessionContext.LocalPeerSourceId,
@@ -302,7 +302,7 @@ public class TurnHandler : ITurnHandler
             Content = input,
             Importance = 1.0f,
             Confidence = 1.0f,
-            Weight = 1.0f,
+            Relevance = 1.0f,
             Sources = [new SourceEntity
             {
                 Id = sessionContext.LocalPeerSourceId,
@@ -330,7 +330,7 @@ public class TurnHandler : ITurnHandler
                       $"Your raw output was:\n{rawOutput}",
         Importance = 1.0f,
         Confidence = 1.0f,
-        Weight = 1.0f,
+        Relevance = 1.0f,
 
         CreatedUtc = DateTimeOffset.UtcNow,
         LastModifiedUtc = DateTimeOffset.UtcNow,
@@ -346,7 +346,7 @@ public class TurnHandler : ITurnHandler
         Content = $"Error executing {action}: {ex.Message}",
         Importance = 1.0f,
         Confidence = 1.0f,
-        Weight = 1.0f,
+        Relevance = 1.0f,
 
         CreatedUtc = DateTimeOffset.UtcNow,
         LastModifiedUtc = DateTimeOffset.UtcNow,

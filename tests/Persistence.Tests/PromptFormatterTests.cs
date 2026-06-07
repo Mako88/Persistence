@@ -45,7 +45,7 @@ public class PromptFormatterTests
             Content = content,
             Importance = 1.0f,
             Confidence = 1.0f,
-            Weight = 1.0f,
+            Relevance = 1.0f,
             CreatedUtc = DateTimeOffset.UtcNow,
             LastModifiedUtc = DateTimeOffset.UtcNow,
         });

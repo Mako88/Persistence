@@ -102,7 +102,7 @@ public class PromptFormatter : IPromptFormatter
 
     private static string BuildFragmentHeader(WeightedContextFragment fragment)
     {
-        var meta = $"[#{fragment.Id} | {fragment.FragmentType} | w:{fragment.Weight:F1} i:{fragment.Importance:F1} c:{fragment.Confidence:F1}";
+        var meta = $"[#{fragment.Id} | {fragment.FragmentType} | r:{fragment.Relevance:F1} i:{fragment.Importance:F1} c:{fragment.Confidence:F1}";
 
         if (fragment.IsProtected)
         {

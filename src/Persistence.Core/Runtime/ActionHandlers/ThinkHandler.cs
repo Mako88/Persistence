@@ -52,7 +52,7 @@ public class ThinkHandler : IActionHandler
             Content = thought,
             Importance = 0.5f,
             Confidence = 1.0f,
-            Weight = 1.0f,
+            Relevance = 1.0f,
             Sources = [new SourceEntity
             {
                 Id = sessionContext.RemotePeerSourceId,
