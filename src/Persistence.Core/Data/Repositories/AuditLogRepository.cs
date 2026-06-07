@@ -1,4 +1,5 @@
 using Dapper;
+using InterpolatedSql.Dapper;
 using Persistence.Config;
 using Persistence.Data.Entities;
 using Persistence.DI;
@@ -56,9 +57,9 @@ public class AuditLogRepository : EntityRepository<AuditLogEntity>, IAuditLogRep
     {
         var idList = ids.ToList();
 
-        var entries = (await connection.QueryAsync<AuditLogEntity>(
-            "SELECT * FROM AuditLogs WHERE Id IN @ids",
-            new { ids = idList })).ToList();
+        var entries = (await connection.SqlBuilder(
+            $"SELECT * FROM AuditLogs WHERE Id IN {idList}")
+            .QueryAsync<AuditLogEntity>(cancellationToken: ct)).ToList();
 
         if (entries.Count == 0)
         {
@@ -67,9 +68,9 @@ public class AuditLogRepository : EntityRepository<AuditLogEntity>, IAuditLogRep
 
         var sourceIds = entries.Select(e => e.SourceId).Distinct().ToList();
 
-        var sources = (await connection.QueryAsync<SourceEntity>(
-            "SELECT * FROM Sources WHERE Id IN @ids",
-            new { ids = sourceIds })).ToDictionary(s => s.Id);
+        var sources = (await connection.SqlBuilder(
+            $"SELECT * FROM Sources WHERE Id IN {sourceIds}")
+            .QueryAsync<SourceEntity>(cancellationToken: ct)).ToDictionary(s => s.Id);
 
         foreach (var entry in entries)
         {

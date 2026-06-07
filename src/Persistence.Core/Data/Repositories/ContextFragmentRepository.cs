@@ -90,9 +90,9 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
     {
         var idList = ids.ToList();
 
-        var fragments = (await connection.QueryAsync<ContextFragmentEntity>(
-            "SELECT * FROM ContextFragments WHERE Id IN @ids",
-            new { ids = idList })).ToList();
+        var fragments = (await connection.SqlBuilder(
+            $"SELECT * FROM ContextFragments WHERE Id IN {idList}")
+            .QueryAsync<ContextFragmentEntity>(cancellationToken: ct)).ToList();
 
         if (fragments.Count == 0)
         {
@@ -102,32 +102,34 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
         var fragmentIds = fragments.Select(f => f.Id).ToList();
 
         // Sources for all fragments
-        var sourceRows = await connection.QueryAsync<long, SourceEntity, (long FragmentId, SourceEntity Source)>(
-            """
+        var sourceRows = await connection.SqlBuilder(
+            $"""
             SELECT cfs.ContextFragmentId, s.*
             FROM ContextFragmentSources cfs
             JOIN Sources s ON cfs.SourceId = s.Id
-            WHERE cfs.ContextFragmentId IN @ids
-            """,
-            (fragmentId, source) => (fragmentId, source),
-            new { ids = fragmentIds },
-            splitOn: "Id");
+            WHERE cfs.ContextFragmentId IN {fragmentIds}
+            """)
+            .QueryAsync<long, SourceEntity, (long FragmentId, SourceEntity Source)>(
+                (fragmentId, source) => (fragmentId, source),
+                splitOn: "Id",
+                cancellationToken: ct);
 
         var sourcesByFragment = sourceRows
             .GroupBy(x => x.FragmentId)
             .ToDictionary(g => g.Key, g => g.Select(x => x.Source).ToList());
 
         // Tags for all fragments
-        var tagRows = await connection.QueryAsync<long, TagEntity, (long FragmentId, TagEntity Tag)>(
-            """
+        var tagRows = await connection.SqlBuilder(
+            $"""
             SELECT cft.ContextFragmentId, t.*
             FROM ContextFragmentTags cft
             JOIN Tags t ON cft.TagId = t.Id
-            WHERE cft.ContextFragmentId IN @ids
-            """,
-            (fragmentId, tag) => (fragmentId, tag),
-            new { ids = fragmentIds },
-            splitOn: "Id");
+            WHERE cft.ContextFragmentId IN {fragmentIds}
+            """)
+            .QueryAsync<long, TagEntity, (long FragmentId, TagEntity Tag)>(
+                (fragmentId, tag) => (fragmentId, tag),
+                splitOn: "Id",
+                cancellationToken: ct);
 
         var tagsByFragment = tagRows
             .GroupBy(x => x.FragmentId)

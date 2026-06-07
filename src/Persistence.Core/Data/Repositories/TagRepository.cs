@@ -1,4 +1,5 @@
 using Dapper;
+using InterpolatedSql.Dapper;
 using Persistence.Config;
 using Persistence.Data.Entities;
 using Persistence.DI;
@@ -87,9 +88,9 @@ public class TagRepository : EntityRepository<TagEntity>, ITagRepository
     {
         var idList = ids.ToList();
 
-        var tags = (await connection.QueryAsync<TagEntity>(
-            "SELECT * FROM Tags WHERE Id IN @ids",
-            new { ids = idList })).ToList();
+        var tags = (await connection.SqlBuilder(
+            $"SELECT * FROM Tags WHERE Id IN {idList}")
+            .QueryAsync<TagEntity>(cancellationToken: ct)).ToList();
 
         if (tags.Count == 0)
         {
@@ -98,9 +99,9 @@ public class TagRepository : EntityRepository<TagEntity>, ITagRepository
 
         var tagIds = tags.Select(t => t.Id).ToList();
 
-        var children = (await connection.QueryAsync<TagEntity>(
-            "SELECT * FROM Tags WHERE ParentTagId IN @ids",
-            new { ids = tagIds })).ToList();
+        var children = (await connection.SqlBuilder(
+            $"SELECT * FROM Tags WHERE ParentTagId IN {tagIds}")
+            .QueryAsync<TagEntity>(cancellationToken: ct)).ToList();
 
         var childrenByParent = children
             .GroupBy(c => c.ParentTagId!.Value)

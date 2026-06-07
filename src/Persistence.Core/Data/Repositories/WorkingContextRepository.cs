@@ -123,32 +123,33 @@ public class WorkingContextRepository : EntityRepository<WorkingContextEntity>, 
         var contextMap = new Dictionary<long, WorkingContextEntity>();
 
         // 1. Contexts with their fragments (including junction Relevance/Order/Collapsed)
-        await connection.QueryAsync<WorkingContextEntity, WeightedContextFragment, WorkingContextEntity>(
-            """
+        await connection.SqlBuilder(
+            $"""
             SELECT wc.*, cf.*, wcf.Relevance, wcf."Order", wcf.Collapsed
             FROM WorkingContexts wc
             LEFT JOIN WorkingContextFragments wcf ON wc.Id = wcf.WorkingContextId
             LEFT JOIN ContextFragments cf ON wcf.ContextFragmentId = cf.Id
-            WHERE wc.Id IN @ids
+            WHERE wc.Id IN {idList}
             ORDER BY wcf."Order"
-            """,
-            (context, fragment) =>
-            {
-                if (!contextMap.TryGetValue(context.Id, out var existing))
+            """)
+            .QueryAsync<WorkingContextEntity, WeightedContextFragment, WorkingContextEntity>(
+                (context, fragment) =>
                 {
-                    existing = context;
-                    contextMap[context.Id] = existing;
-                }
+                    if (!contextMap.TryGetValue(context.Id, out var existing))
+                    {
+                        existing = context;
+                        contextMap[context.Id] = existing;
+                    }
 
-                if (fragment?.Id > 0)
-                {
-                    existing.ContextFragments[fragment.Order] = fragment;
-                }
+                    if (fragment?.Id > 0)
+                    {
+                        existing.ContextFragments[fragment.Order] = fragment;
+                    }
 
-                return existing;
-            },
-            new { ids = idList },
-            splitOn: "Id");
+                    return existing;
+                },
+                splitOn: "Id",
+                cancellationToken: ct);
 
         var contexts = contextMap.Values.ToList();
 
@@ -164,32 +165,34 @@ public class WorkingContextRepository : EntityRepository<WorkingContextEntity>, 
         }
 
         // 2. Sources for all fragments
-        var sourceRows = await connection.QueryAsync<long, SourceEntity, (long FragmentId, SourceEntity Source)>(
-            """
+        var sourceRows = await connection.SqlBuilder(
+            $"""
             SELECT cfs.ContextFragmentId, s.*
             FROM ContextFragmentSources cfs
             JOIN Sources s ON cfs.SourceId = s.Id
-            WHERE cfs.ContextFragmentId IN @ids
-            """,
-            (fragmentId, source) => (fragmentId, source),
-            new { ids = fragmentIds },
-            splitOn: "Id");
+            WHERE cfs.ContextFragmentId IN {fragmentIds}
+            """)
+            .QueryAsync<long, SourceEntity, (long FragmentId, SourceEntity Source)>(
+                (fragmentId, source) => (fragmentId, source),
+                splitOn: "Id",
+                cancellationToken: ct);
 
         var sourcesByFragment = sourceRows
             .GroupBy(x => x.FragmentId)
             .ToDictionary(g => g.Key, g => g.Select(x => x.Source).ToList());
 
         // 3. Tags for all fragments
-        var tagRows = await connection.QueryAsync<long, TagEntity, (long FragmentId, TagEntity Tag)>(
-            """
+        var tagRows = await connection.SqlBuilder(
+            $"""
             SELECT cft.ContextFragmentId, t.*
             FROM ContextFragmentTags cft
             JOIN Tags t ON cft.TagId = t.Id
-            WHERE cft.ContextFragmentId IN @ids
-            """,
-            (fragmentId, tag) => (fragmentId, tag),
-            new { ids = fragmentIds },
-            splitOn: "Id");
+            WHERE cft.ContextFragmentId IN {fragmentIds}
+            """)
+            .QueryAsync<long, TagEntity, (long FragmentId, TagEntity Tag)>(
+                (fragmentId, tag) => (fragmentId, tag),
+                splitOn: "Id",
+                cancellationToken: ct);
 
         var tagsByFragment = tagRows
             .GroupBy(x => x.FragmentId)

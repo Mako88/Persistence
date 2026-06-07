@@ -1,4 +1,5 @@
 using Dapper;
+using InterpolatedSql.Dapper;
 using Persistence.Config;
 using Persistence.Data.Entities;
 using Persistence.DI;
@@ -84,9 +85,9 @@ public class ScheduledEventRepository : EntityRepository<ScheduledEventEntity>, 
     {
         var idList = ids.ToList();
 
-        var events = (await connection.QueryAsync<ScheduledEventEntity>(
-            "SELECT * FROM ScheduledEvents WHERE Id IN @ids",
-            new { ids = idList })).ToList();
+        var events = (await connection.SqlBuilder(
+            $"SELECT * FROM ScheduledEvents WHERE Id IN {idList}")
+            .QueryAsync<ScheduledEventEntity>(cancellationToken: ct)).ToList();
 
         if (events.Count == 0)
         {
@@ -96,16 +97,17 @@ public class ScheduledEventRepository : EntityRepository<ScheduledEventEntity>, 
         var eventIds = events.Select(e => e.Id).ToList();
 
         // Tags for all events
-        var tagRows = await connection.QueryAsync<long, TagEntity, (long EventId, TagEntity Tag)>(
-            """
+        var tagRows = await connection.SqlBuilder(
+            $"""
             SELECT st.ScheduledEventId, t.*
             FROM ScheduledEventTags st
             JOIN Tags t ON st.TagId = t.Id
-            WHERE st.ScheduledEventId IN @ids
-            """,
-            (eventId, tag) => (eventId, tag),
-            new { ids = eventIds },
-            splitOn: "Id");
+            WHERE st.ScheduledEventId IN {eventIds}
+            """)
+            .QueryAsync<long, TagEntity, (long EventId, TagEntity Tag)>(
+                (eventId, tag) => (eventId, tag),
+                splitOn: "Id",
+                cancellationToken: ct);
 
         var tagsByEvent = tagRows
             .GroupBy(x => x.EventId)

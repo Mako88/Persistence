@@ -129,9 +129,8 @@ public abstract class EntityRepository<T> : IEntityRepository<T> where T : BaseE
     /// </summary>
     protected virtual async Task<IEnumerable<T>> LoadByIdsAsync(
         IEnumerable<long> ids, IDbConnection connection, CancellationToken ct = default) =>
-        await connection.QueryAsync<T>(
-            $"SELECT * FROM {TableName} WHERE Id IN @ids",
-            new { ids = ids.ToList() });
+        await connection.SqlBuilder($"SELECT * FROM {TableName:raw} WHERE Id IN {ids.ToList()}")
+            .QueryAsync<T>(cancellationToken: ct);
 
     /// <summary>
     /// Saves sub-entities after the parent has been inserted or updated.
@@ -339,9 +338,9 @@ public abstract class EntityRepository<T> : IEntityRepository<T> where T : BaseE
 
         var ids = entityList.Select(e => e.Id).ToList();
 
-        await connection.ExecuteAsync(
-            $"UPDATE {TableName} SET LastAccessedUtc = @now WHERE Id IN @ids",
-            new { now, ids });
+        await connection.SqlBuilder(
+            $"UPDATE {TableName:raw} SET LastAccessedUtc = {now} WHERE Id IN {ids}")
+            .ExecuteAsync();
     }
 
     /// <summary>
