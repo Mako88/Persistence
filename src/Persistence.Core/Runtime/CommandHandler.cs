@@ -102,27 +102,42 @@ public abstract class CommandHandler : IActionHandler
 
         if (type == "error")
         {
-            return "Could not parse command. Send {\"list\": {}} to see available commands and their schemas.";
+            return "That didn't look like a command. Each command is a function call like " +
+                   "name(field=value). Send a `list` command to see everything available and its fields.";
+        }
+
+        // A call the parser couldn't read (e.g. a typo'd bracket or a missing value). The synthetic
+        // command carries a plain-language reason and the offending text so the peer can correct it.
+        if (type == FunctionCallParser.ErrorCommandName)
+        {
+            return FormatParseError(fields);
         }
 
         if (!commands.TryGetValue(type, out var info))
         {
             var available = string.Join(", ", commands.Keys.Order());
-            return $"Unknown command: '{type}'. Available: {available}. Send {{\"list\": {{}}}} for full schemas.";
+            var suggestion = ClosestMatch(type, commands.Keys);
+            var didYouMean = suggestion != null ? $" Did you mean '{suggestion}'?" : "";
+            return $"Unknown command: '{type}'.{didYouMean} Available: {available}. " +
+                   "Send a `list` command for full schemas.";
         }
+
+        string result;
 
         try
         {
-            return await (Task<string>)info.Method.Invoke(this, [context, (JsonNode?)fields, ct])!;
+            result = await (Task<string>)info.Method.Invoke(this, [context, (JsonNode?)fields, ct])!;
         }
         catch (TargetInvocationException ex) when (ex.InnerException != null)
         {
-            return FormatError(type, info, fields, Humanize(ex.InnerException.Message));
+            result = FormatError(type, info, fields, Humanize(ex.InnerException.Message));
         }
         catch (Exception ex)
         {
-            return FormatError(type, info, fields, Humanize(ex.Message));
+            result = FormatError(type, info, fields, Humanize(ex.Message));
         }
+
+        return AppendUnknownFieldHint(result, info, fields);
     }
 
     /// <summary>
@@ -154,6 +169,118 @@ public abstract class CommandHandler : IActionHandler
         "System.String" => "text",
         _ => clrType,
     };
+
+    /// <summary>
+    /// Formats the feedback for a call the parser couldn't read, surfacing the plain-language
+    /// reason and the offending text the peer wrote so it can fix that specific call.
+    /// </summary>
+    private static string FormatParseError(JsonObject? fields)
+    {
+        var message = fields?["message"]?.GetValue<string>() ?? "it could not be read";
+        var text = fields?["text"]?.GetValue<string>();
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"Couldn't parse a command: {message}.");
+
+        if (!string.IsNullOrWhiteSpace(text))
+        {
+            sb.AppendLine($"  In: {text}");
+        }
+
+        sb.Append("  Commands are function calls like name(field=value), one per line. " +
+                  "Send a `list` command to see them all.");
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Appends a note when a command was given field names it doesn't define — these are silently
+    /// ignored otherwise, so a typo'd field looks like it worked. Offers a closest-match suggestion
+    /// per unknown field and lists what the command actually accepts.
+    /// </summary>
+    private static string AppendUnknownFieldHint(string result, CommandInfo info, JsonObject? fields)
+    {
+        if (fields is null || fields.Count == 0)
+        {
+            return result;
+        }
+
+        var known = info.Fields.Select(f => f.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var unknown = fields.Select(kvp => kvp.Key).Where(k => !known.Contains(k)).ToList();
+
+        if (unknown.Count == 0)
+        {
+            return result;
+        }
+
+        var hints = unknown.Select(u =>
+        {
+            var match = ClosestMatch(u, info.Fields.Select(f => f.Name));
+            return match != null ? $"'{u}' (did you mean '{match}'?)" : $"'{u}'";
+        });
+
+        var accepts = info.Fields.Length > 0
+            ? string.Join(", ", info.Fields.Select(f => f.Name))
+            : "no fields";
+
+        return $"{result}\n  Note: ignored unknown field(s): {string.Join(", ", hints)}. " +
+               $"{info.Name} accepts: {accepts}.";
+    }
+
+    /// <summary>
+    /// Returns the candidate closest to <paramref name="input"/> by edit distance, or null when
+    /// nothing is near enough to be a likely typo (guards against misleading suggestions).
+    /// </summary>
+    private static string? ClosestMatch(string input, IEnumerable<string> candidates)
+    {
+        string? best = null;
+        var bestDistance = int.MaxValue;
+
+        foreach (var candidate in candidates)
+        {
+            var distance = LevenshteinDistance(input.ToLowerInvariant(), candidate.ToLowerInvariant());
+
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                best = candidate;
+            }
+        }
+
+        // Only suggest when the edit distance is small relative to the input — a far-off match is
+        // noise, not a helpful "did you mean".
+        return bestDistance <= Math.Max(2, input.Length / 2) ? best : null;
+    }
+
+    /// <summary>
+    /// Standard Levenshtein edit distance between two strings.
+    /// </summary>
+    private static int LevenshteinDistance(string a, string b)
+    {
+        var previous = new int[b.Length + 1];
+        var current = new int[b.Length + 1];
+
+        for (var j = 0; j <= b.Length; j++)
+        {
+            previous[j] = j;
+        }
+
+        for (var i = 1; i <= a.Length; i++)
+        {
+            current[0] = i;
+
+            for (var j = 1; j <= b.Length; j++)
+            {
+                var cost = a[i - 1] == b[j - 1] ? 0 : 1;
+                current[j] = Math.Min(
+                    Math.Min(current[j - 1] + 1, previous[j] + 1),
+                    previous[j - 1] + cost);
+            }
+
+            (previous, current) = (current, previous);
+        }
+
+        return previous[b.Length];
+    }
 
     private string FormatCommandList()
     {

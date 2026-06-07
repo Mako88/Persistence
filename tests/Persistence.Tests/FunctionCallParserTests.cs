@@ -121,9 +121,48 @@ public class FunctionCallParserTests
     }
 
     [Fact]
-    public void UnterminatedCallThrows()
+    public void UnterminatedCallBecomesErrorCommand()
     {
-        Assert.Throws<FormatException>(() => FunctionCallParser.Parse("update(id=42"));
+        // Resilient parsing: a malformed call surfaces as an __error__ command rather than throwing,
+        // so the rest of the turn (and the peer's other tags) survive.
+        var call = SingleCall("update(id=42");
+
+        Assert.Equal(FunctionCallParser.ErrorCommandName, call.Single().Key);
+    }
+
+    [Fact]
+    public void MalformedCallDoesNotKillSiblings()
+    {
+        // One bad call in the middle must not discard the valid calls around it.
+        var calls = FunctionCallParser.Parse("add(content=\"ok\")\nbad(@=2)\nremove(id=3)");
+
+        Assert.Equal(3, calls.Count);
+        Assert.Equal("add", ((JsonObject)calls[0]!).Single().Key);
+        Assert.Equal(FunctionCallParser.ErrorCommandName, ((JsonObject)calls[1]!).Single().Key);
+        Assert.Equal("remove", ((JsonObject)calls[2]!).Single().Key);
+    }
+
+    [Fact]
+    public void ColonInsteadOfEqualsGivesActionableMessage()
+    {
+        var call = SingleCall("update(id: 42)");
+        var (name, fields) = Unwrap(call);
+
+        Assert.Equal(FunctionCallParser.ErrorCommandName, name);
+        // The message should steer toward name=value, and echo the offending text.
+        Assert.Contains("name=value", fields["message"]!.GetValue<string>());
+        Assert.Equal("update(id: 42)", fields["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ErrorSnippetIsCappedAndSingleLine()
+    {
+        var longArg = new string('x', 200);
+        var call = SingleCall($"add(content={longArg}"); // unterminated-ish bareword call (no close paren)
+        var (_, fields) = Unwrap(call);
+
+        var text = fields["text"]!.GetValue<string>();
+        Assert.True(text.Length <= 81, $"snippet should be capped, was {text.Length}");
     }
 
     [Fact]

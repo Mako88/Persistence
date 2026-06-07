@@ -380,6 +380,50 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
     }
 
     [Fact]
+    public async Task MalformedCommand_PreservesReplyAndExplains()
+    {
+        // A colon instead of '=' is a classic small-model slip. It must not nuke the whole turn:
+        // the reply still lands, and the tool feedback explains how to fix the command.
+        var events = await api.RunTurnAsync(
+            "make a parse slip",
+            """
+            <context>
+            add(content: "missing the equals sign")
+            </context>
+            <respond>
+            Still here despite the slip.
+            </respond>
+            <continue>false</continue>
+            """);
+
+        // The bad command must not have swallowed the reply.
+        Assert.Contains(events, e => e.Kind == "reply" && e.Text.Contains("Still here"));
+
+        var tool = Detail(events, "tool");
+        Assert.Contains("Couldn't parse", tool);
+        Assert.Contains("name=value", tool);
+    }
+
+    [Fact]
+    public async Task UnknownField_IsFlaggedWithDidYouMean()
+    {
+        // A typo'd field is silently dropped otherwise; the peer should be told and nudged toward
+        // the real field name so it can self-correct.
+        var events = await api.RunTurnAsync(
+            "typo a field",
+            """
+            <context>
+            add(content="content with a typo'd field", importence=0.8)
+            </context>
+            <continue>false</continue>
+            """);
+
+        var tool = Detail(events, "tool");
+        Assert.Contains("importence", tool);
+        Assert.Contains("did you mean 'importance'", tool);
+    }
+
+    [Fact]
     public async Task ExecuteActions_ScheduleAndListEvents()
     {
         var events = await api.RunTurnAsync(
