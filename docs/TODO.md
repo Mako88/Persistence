@@ -91,6 +91,11 @@ manually. Fully-automated forgetting becomes a convenience layered on later, not
 - **Wire soft-delete on fragments/working contexts.** `IsDeleted` is now scoped to `ContextFragments`
   + `WorkingContexts` (migration `001`), filtered on read but not yet *set* by any command — that's
   the hook for the planned forget/undo (Tier 2 #7). Add a recoverable "forget" command when ready.
+  - **Surfacing deleted items:** when forget exists, the list/browse commands need an opt-in flag
+    (e.g. `include_deleted=true` on `list_fragments` and the working-context list) so a peer can see
+    what it soft-deleted, and `load` should be able to bring a deleted fragment back (un-delete on
+    load). Otherwise a soft-deleted fragment is invisible and unrecoverable through the command
+    surface — defeating the "recoverable" point. (John's idea, 2026-06.)
 
 ## Resolved decisions
 

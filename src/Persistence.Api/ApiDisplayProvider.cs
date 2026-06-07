@@ -191,9 +191,10 @@ public class ApiDisplayProvider : IDisplayProvider
     public void ShowThinking(string? label = null) { }
 
     /// <summary>
-    /// No-op; debug info is not surfaced to API callers
+    /// Appends debug info (e.g. the assembled request and raw model output) to the log as a
+    /// "debug" event. Only called when DebugMode is enabled, so it stays silent in normal runs.
     /// </summary>
-    public void ShowDebugInfo(string info) { }
+    public void ShowDebugInfo(string info) => Append("debug", info);
 
     /// <summary>
     /// No-op; chat history is not surfaced to API callers
