@@ -29,7 +29,7 @@ public class TaggedProtocolInstructions : IProtocolInstructions
 
         <context>
         update(id=42, weight=0.9)
-        remember(content="""Multi-line note.
+        add(content="""Multi-line note.
         Quotes "like this" need no escaping.""", importance=0.8)
         </context>
 
@@ -47,8 +47,8 @@ public class TaggedProtocolInstructions : IProtocolInstructions
         ## Tags
 
         - **`<think>`** — Reason in the open before acting. The text becomes a transient note in
-          your context (informs this turn, not sent to your peer, not saved permanently — use a
-          `remember`/`add` command to keep it). Deliberate visibly regardless of whether the model
+          your context (informs this turn, not sent to your peer, not saved permanently — use an
+          `add` command to keep it). Deliberate visibly regardless of whether the model
           has built-in reasoning.
         - **`<respond>`** — A message to your peer. The tag body is the literal text; no escaping.
         - **`<context>`** — Manage your working memory. The body is one or more function calls, one

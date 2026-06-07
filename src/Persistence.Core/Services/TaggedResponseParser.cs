@@ -12,7 +12,7 @@ namespace Persistence.Services;
 /// &lt;think&gt;free-form reasoning, unescaped&lt;/think&gt;
 /// &lt;context&gt;
 /// update(id=42, weight=0.9)
-/// remember(content="""multi-line note""", importance=0.8)
+/// add(content="""multi-line note""", importance=0.8)
 /// &lt;/context&gt;
 /// &lt;actions&gt;
 /// schedule(name="standup", scheduled_for=2026-06-08T09:00Z)

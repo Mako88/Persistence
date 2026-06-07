@@ -44,7 +44,7 @@ public class ExecuteActionsHandler : CommandHandler
 
     [Command("schedule", "Schedule a future event")]
     [CommandField("name", "string", required: true, Description = "Event name")]
-    [CommandField("scheduled_for", "string", required: true, Description = "UTC datetime")]
+    [CommandField("scheduled_for", "string", required: true, Description = "UTC datetime in ISO 8601 format, e.g. \"2026-12-01T09:00:00Z\"")]
     [CommandField("notes", "string", Description = "Additional notes")]
     private async Task<string> ExecuteScheduleAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
     {
@@ -136,18 +136,22 @@ public class ExecuteActionsHandler : CommandHandler
         return sb.ToString().TrimEnd();
     }
 
-    [Command("audit", "Query the audit trail for an entity")]
-    [CommandField("target_type", "string", required: true, Description = "Entity type name")]
-    [CommandField("target_id", "long", required: true, Description = "Entity ID")]
+    [Command("audit", "Query the change history of one of your fragments (or another entity)")]
+    [CommandField("target_id", "long", required: true, Description = "The #ID of the fragment (or entity) to inspect")]
+    [CommandField("target_type", "string", Description = "What kind of thing target_id refers to: \"fragment\" (default), \"tag\", \"source\", or \"event\"")]
     private async Task<string> ExecuteAuditAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
     {
-        var targetType = command?["target_type"]?.GetValue<string>();
         var targetId = ParseId(command?["target_id"]);
 
-        if (string.IsNullOrWhiteSpace(targetType) || targetId == null)
+        if (targetId == null)
         {
-            return "Audit failed: 'target_type' and 'target_id' are required";
+            return "Audit failed: 'target_id' is required";
         }
+
+        // Accept friendly names ("fragment", "tag", …) and map to the stored entity type name,
+        // so the peer never has to know internal class names. Defaults to fragment.
+        var friendly = command?["target_type"]?.GetValue<string>();
+        var targetType = ResolveAuditTargetType(friendly);
 
         var entries = (await auditLogRepo.GetByTargetAsync(targetType, targetId.Value)).ToList();
 
@@ -234,6 +238,24 @@ public class ExecuteActionsHandler : CommandHandler
 
         return sb.ToString().TrimEnd();
     }
+
+    #endregion
+
+    #region Helpers
+
+    /// <summary>
+    /// Maps a peer-friendly target name ("fragment", "tag", "source", "event") to the stored
+    /// audit entity-type name. Defaults to fragment — the common case — and passes through an
+    /// already-exact entity type name unchanged.
+    /// </summary>
+    private static string ResolveAuditTargetType(string? friendly) => friendly?.Trim().ToLowerInvariant() switch
+    {
+        null or "" or "fragment" => nameof(ContextFragmentEntity),
+        "tag" => nameof(TagEntity),
+        "source" => nameof(SourceEntity),
+        "event" or "scheduledevent" => nameof(ScheduledEventEntity),
+        _ => friendly!, // assume the caller already passed an exact entity type name
+    };
 
     #endregion
 }

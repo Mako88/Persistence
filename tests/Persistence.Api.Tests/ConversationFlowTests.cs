@@ -176,7 +176,7 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
             id = pending.Id,
             response = $$"""
             <actions>
-            audit(target_type="ContextFragmentEntity", target_id={{fid}})
+            audit(target_id={{fid}})
             </actions>
             <continue>false</continue>
             """,
