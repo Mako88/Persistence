@@ -22,9 +22,4 @@ public interface IEntityRepository<T> where T : BaseEntity
     /// Persists a new entity or saves changes to an existing one
     /// </summary>
     Task SaveAsync(T entity, IDbTransaction? transaction = null, CancellationToken ct = default);
-
-    /// <summary>
-    /// Soft-deletes the entity by setting <see cref="BaseEntity.IsDeleted"/> and saving
-    /// </summary>
-    Task DeleteAsync(T entity, IDbTransaction? transaction = null, CancellationToken ct = default);
 }

@@ -11,6 +11,12 @@ public record WorkingContextEntity : BaseEntity
 
     public required string Summary { get; set; }
 
+    /// <summary>
+    /// Soft-delete flag. A working context is recoverable peer memory, so it is filtered from reads
+    /// when deleted rather than erased (retiring a context you might later restore).
+    /// </summary>
+    public bool IsDeleted { get; set; } = false;
+
     [Computed]
     [JsonIgnore]
     public SortedList<int, WeightedContextFragment> ContextFragments { get; set; } = [];

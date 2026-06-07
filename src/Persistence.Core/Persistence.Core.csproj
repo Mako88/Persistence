@@ -32,6 +32,7 @@
     <EmbeddedResource Include="Data\fragment_seeds.json" />
     <EmbeddedResource Include="Data\Migrations\Bootstrap.sql" />
     <EmbeddedResource Include="Data\Migrations\000_InitialCreate.sql" />
+    <EmbeddedResource Include="Data\Migrations\001_NarrowSoftDelete.sql" />
   </ItemGroup>
 
   <ItemGroup>

@@ -95,15 +95,6 @@ public abstract class EntityRepository<T> : IEntityRepository<T> where T : BaseE
         await newTransaction.CommitAsync(ct);
     }
 
-    /// <summary>
-    /// Soft-deletes the entity by setting <see cref="BaseEntity.IsDeleted"/> and saving
-    /// </summary>
-    public async Task DeleteAsync(T entity, IDbTransaction? transaction = null, CancellationToken ct = default)
-    {
-        entity.IsDeleted = true;
-        await SaveAsync(entity, transaction, ct);
-    }
-
     #endregion
 
     #region Abstract — every repo must provide its own SQL

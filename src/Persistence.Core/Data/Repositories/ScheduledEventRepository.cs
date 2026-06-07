@@ -35,17 +35,15 @@ public class ScheduledEventRepository : EntityRepository<ScheduledEventEntity>, 
             SELECT * FROM ScheduledEvents
             WHERE ScheduledForUtc <= {now}
                 AND Status = {ScheduledEventStatus.Pending}
-                AND IsDeleted = 0
             """);
     }
 
     /// <summary>
-    /// Returns all non-deleted events associated with the given working context,
-    /// regardless of status
+    /// Returns all events associated with the given working context, regardless of status
     /// </summary>
     public async Task<IEnumerable<ScheduledEventEntity>> GetByWorkingContextAsync(long workingContextId) =>
         await QueryAsync(
-            $"SELECT * FROM ScheduledEvents WHERE WorkingContextId = {workingContextId} AND IsDeleted = 0");
+            $"SELECT * FROM ScheduledEvents WHERE WorkingContextId = {workingContextId}");
 
     /// <summary>
     /// Sets status to <see cref="ScheduledEventStatus.Triggered"/>, stamps
@@ -126,8 +124,8 @@ public class ScheduledEventRepository : EntityRepository<ScheduledEventEntity>, 
     /// </summary>
     protected override FormattableString GetInsertSql(ScheduledEventEntity entity) =>
         $"""
-        INSERT INTO ScheduledEvents (Name, WorkingContextId, ScheduledForUtc, TriggeredAtUtc, Status, IsDeleted, CreatedUtc, LastModifiedUtc, LastAccessedUtc, Notes)
-        VALUES ({entity.Name}, {entity.WorkingContextId}, {entity.ScheduledForUtc}, {entity.TriggeredAtUtc}, {entity.Status}, {entity.IsDeleted}, {entity.CreatedUtc}, {entity.LastModifiedUtc}, {entity.LastAccessedUtc}, {entity.Notes})
+        INSERT INTO ScheduledEvents (Name, WorkingContextId, ScheduledForUtc, TriggeredAtUtc, Status, CreatedUtc, LastModifiedUtc, LastAccessedUtc, Notes)
+        VALUES ({entity.Name}, {entity.WorkingContextId}, {entity.ScheduledForUtc}, {entity.TriggeredAtUtc}, {entity.Status}, {entity.CreatedUtc}, {entity.LastModifiedUtc}, {entity.LastAccessedUtc}, {entity.Notes})
         """;
 
     /// <summary>
@@ -137,7 +135,7 @@ public class ScheduledEventRepository : EntityRepository<ScheduledEventEntity>, 
         $"""
         UPDATE ScheduledEvents
         SET Name = {entity.Name}, WorkingContextId = {entity.WorkingContextId}, ScheduledForUtc = {entity.ScheduledForUtc},
-            TriggeredAtUtc = {entity.TriggeredAtUtc}, Status = {entity.Status}, IsDeleted = {entity.IsDeleted},
+            TriggeredAtUtc = {entity.TriggeredAtUtc}, Status = {entity.Status},
             LastModifiedUtc = {entity.LastModifiedUtc}, LastAccessedUtc = {entity.LastAccessedUtc}, Notes = {entity.Notes}
         WHERE Id = {entity.Id}
         """;

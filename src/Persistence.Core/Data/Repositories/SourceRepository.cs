@@ -44,13 +44,13 @@ public class SourceRepository : EntityRepository<SourceEntity>, ISourceRepositor
     /// Returns the source with the given name (case-insensitive), or null if not found
     /// </summary>
     public async Task<SourceEntity?> GetByNameAsync(string name, CancellationToken ct = default) =>
-        await QueryFirstOrDefaultAsync($"SELECT * FROM Sources WHERE Name = {name} COLLATE NOCASE AND IsDeleted = 0", ct);
+        await QueryFirstOrDefaultAsync($"SELECT * FROM Sources WHERE Name = {name} COLLATE NOCASE", ct);
 
     /// <summary>
-    /// Returns all non-deleted sources
+    /// Returns all sources
     /// </summary>
     public async Task<IEnumerable<SourceEntity>> GetAllAsync(CancellationToken ct = default) =>
-        await QueryAsync($"SELECT * FROM Sources WHERE IsDeleted = 0", ct);
+        await QueryAsync($"SELECT * FROM Sources", ct);
 
     #region Base overrides
 
@@ -59,8 +59,8 @@ public class SourceRepository : EntityRepository<SourceEntity>, ISourceRepositor
     /// </summary>
     protected override FormattableString GetInsertSql(SourceEntity entity) =>
         $"""
-        INSERT INTO Sources (SourceType, Name, LastAccessedUtc, IsDeleted, CreatedUtc, LastModifiedUtc, Notes)
-        VALUES ({entity.SourceType}, {entity.Name}, {entity.LastAccessedUtc}, {entity.IsDeleted}, {entity.CreatedUtc}, {entity.LastModifiedUtc}, {entity.Notes})
+        INSERT INTO Sources (SourceType, Name, LastAccessedUtc, CreatedUtc, LastModifiedUtc, Notes)
+        VALUES ({entity.SourceType}, {entity.Name}, {entity.LastAccessedUtc}, {entity.CreatedUtc}, {entity.LastModifiedUtc}, {entity.Notes})
         """;
 
     /// <summary>
@@ -70,7 +70,7 @@ public class SourceRepository : EntityRepository<SourceEntity>, ISourceRepositor
         $"""
         UPDATE Sources
         SET SourceType = {entity.SourceType}, Name = {entity.Name},
-            LastAccessedUtc = {entity.LastAccessedUtc}, IsDeleted = {entity.IsDeleted},
+            LastAccessedUtc = {entity.LastAccessedUtc},
             LastModifiedUtc = {entity.LastModifiedUtc}, Notes = {entity.Notes}
         WHERE Id = {entity.Id}
         """;

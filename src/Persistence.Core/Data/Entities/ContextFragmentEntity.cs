@@ -23,6 +23,12 @@ public record ContextFragmentEntity : BaseEntity
     /// </summary>
     public bool IsProtected { get; set; } = false;
 
+    /// <summary>
+    /// Soft-delete flag. Fragments are peer memory, so erasure must be recoverable: a deleted
+    /// fragment is filtered from reads but kept in the table (the home for the planned forget/undo).
+    /// </summary>
+    public bool IsDeleted { get; set; } = false;
+
     [Computed]
     [JsonIgnore]
     public List<SourceEntity> Sources { get; set; } = [];

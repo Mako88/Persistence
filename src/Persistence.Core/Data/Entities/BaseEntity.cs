@@ -31,8 +31,6 @@ public abstract record BaseEntity
 
     public string? Notes { get; set; }
 
-    public bool IsDeleted { get; set; } = false;
-
     [Computed]
     [JsonIgnore]
     public bool IsNew { get; set; }

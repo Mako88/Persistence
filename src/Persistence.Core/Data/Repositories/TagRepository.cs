@@ -26,7 +26,7 @@ public class TagRepository : EntityRepository<TagEntity>, ITagRepository
     /// Returns all root tags (those with no parent), with children populated
     /// </summary>
     public async Task<IEnumerable<TagEntity>> GetAllRootAsync() =>
-        await QueryAsync($"SELECT * FROM Tags WHERE ParentTagId IS NULL AND IsDeleted = 0");
+        await QueryAsync($"SELECT * FROM Tags WHERE ParentTagId IS NULL");
 
     /// <summary>
     /// Returns the tag matching the given name within the given parent scope, or null
@@ -36,18 +36,18 @@ public class TagRepository : EntityRepository<TagEntity>, ITagRepository
         if (parentTagId == null)
         {
             return await QueryFirstOrDefaultAsync(
-                $"SELECT * FROM Tags WHERE Name = {name} AND ParentTagId IS NULL AND IsDeleted = 0");
+                $"SELECT * FROM Tags WHERE Name = {name} AND ParentTagId IS NULL");
         }
 
         return await QueryFirstOrDefaultAsync(
-            $"SELECT * FROM Tags WHERE Name = {name} AND ParentTagId = {parentTagId} AND IsDeleted = 0");
+            $"SELECT * FROM Tags WHERE Name = {name} AND ParentTagId = {parentTagId}");
     }
 
     /// <summary>
     /// Returns the immediate children of the given parent tag
     /// </summary>
     public async Task<IEnumerable<TagEntity>> GetChildrenAsync(long parentTagId) =>
-        await QueryAsync($"SELECT * FROM Tags WHERE ParentTagId = {parentTagId} AND IsDeleted = 0");
+        await QueryAsync($"SELECT * FROM Tags WHERE ParentTagId = {parentTagId}");
 
     /// <summary>
     /// Deletes the given tag and all its descendants along with their fragment associations,
@@ -120,8 +120,8 @@ public class TagRepository : EntityRepository<TagEntity>, ITagRepository
     /// </summary>
     protected override FormattableString GetInsertSql(TagEntity entity) =>
         $"""
-        INSERT INTO Tags (Name, ParentTagId, Description, LastAccessedUtc, IsDeleted, CreatedUtc, LastModifiedUtc, Notes)
-        VALUES ({entity.Name}, {entity.ParentTagId}, {entity.Description}, {entity.LastAccessedUtc}, {entity.IsDeleted}, {entity.CreatedUtc}, {entity.LastModifiedUtc}, {entity.Notes})
+        INSERT INTO Tags (Name, ParentTagId, Description, LastAccessedUtc, CreatedUtc, LastModifiedUtc, Notes)
+        VALUES ({entity.Name}, {entity.ParentTagId}, {entity.Description}, {entity.LastAccessedUtc}, {entity.CreatedUtc}, {entity.LastModifiedUtc}, {entity.Notes})
         """;
 
     /// <summary>
@@ -131,7 +131,7 @@ public class TagRepository : EntityRepository<TagEntity>, ITagRepository
         $"""
         UPDATE Tags
         SET Name = {entity.Name}, ParentTagId = {entity.ParentTagId}, Description = {entity.Description},
-            LastAccessedUtc = {entity.LastAccessedUtc}, IsDeleted = {entity.IsDeleted},
+            LastAccessedUtc = {entity.LastAccessedUtc},
             LastModifiedUtc = {entity.LastModifiedUtc}, Notes = {entity.Notes}
         WHERE Id = {entity.Id}
         """;

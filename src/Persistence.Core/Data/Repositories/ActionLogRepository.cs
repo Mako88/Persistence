@@ -67,8 +67,8 @@ public class ActionLogRepository : EntityRepository<ActionLogEntity>, IActionLog
     /// </summary>
     protected override FormattableString GetInsertSql(ActionLogEntity entity) =>
         $"""
-        INSERT INTO ActionLogs (SessionId, WorkingContextId, ActionType, Payload, Result, LastAccessedUtc, IsDeleted, CreatedUtc, LastModifiedUtc, Notes)
-        VALUES ({entity.SessionId}, {entity.WorkingContextId}, {entity.ActionType}, {entity.Payload}, {entity.Result}, {entity.LastAccessedUtc}, {entity.IsDeleted}, {entity.CreatedUtc}, {entity.LastModifiedUtc}, {entity.Notes})
+        INSERT INTO ActionLogs (SessionId, WorkingContextId, ActionType, Payload, Result, LastAccessedUtc, CreatedUtc, LastModifiedUtc, Notes)
+        VALUES ({entity.SessionId}, {entity.WorkingContextId}, {entity.ActionType}, {entity.Payload}, {entity.Result}, {entity.LastAccessedUtc}, {entity.CreatedUtc}, {entity.LastModifiedUtc}, {entity.Notes})
         """;
 
     /// <summary>
@@ -78,7 +78,7 @@ public class ActionLogRepository : EntityRepository<ActionLogEntity>, IActionLog
         $"""
         UPDATE ActionLogs
         SET ActionType = {entity.ActionType}, Payload = {entity.Payload}, Result = {entity.Result},
-            LastAccessedUtc = {entity.LastAccessedUtc}, IsDeleted = {entity.IsDeleted},
+            LastAccessedUtc = {entity.LastAccessedUtc},
             LastModifiedUtc = {entity.LastModifiedUtc}, Notes = {entity.Notes}
         WHERE Id = {entity.Id}
         """;

@@ -81,24 +81,6 @@ manually. Fully-automated forgetting becomes a convenience layered on later, not
     authoring the peer's identity. Plus reversibility guidance in the seed so the peer manages
     memory without fear.
 
-## Open decisions (need John's call)
-
-- **Narrow or drop `IsDeleted`?** Finding from the 2026-06 audit: `IsDeleted` lives on `BaseEntity`,
-  so all six tables carry the column and ~12 read queries filter `IsDeleted = 0` — **but the only
-  thing that ever sets it (`EntityRepository.DeleteAsync`) has zero callers.** It is currently 100%
-  dead/speculative. The real deletion models are already different per entity: Tags hard-delete
-  (`DeleteTreeAsync`), fragments use `Status=Archived` + junction removal, events use `Status`,
-  audit/action logs are append-only.
-  - **My recommendation: narrow to `ContextFragments` (+ `WorkingContexts`).** Soft-delete = recoverable
-    erasure, which only makes sense for *peer memory* — that's where the planned **forget/undo** (Tier 2
-    #7, Possible-future undo) will land. Move `IsDeleted` off `BaseEntity` onto those two entities; drop
-    the column + dead filters from Tags/Sources/ScheduledEvents/ActionLogs via a new `001_*` migration.
-  - Alternatives: fragments-only (working contexts could use a Status/Archived concept instead), or
-    remove entirely now and re-add deliberately when forget/undo is built (purest YAGNI, but throws
-    away scaffolding for explicitly-planned features).
-  - Low-risk either way (new migration; existing DBs unaffected by the InitialCreate edit). ~15 min to
-    implement once you pick. Held for your decision since you flagged it as a question.
-
 ## Possible future
 
 - **Undo stack.** A true undo for context operations. Lower priority because archive-not-delete +
@@ -106,6 +88,17 @@ manually. Fully-automated forgetting becomes a convenience layered on later, not
   if reversible-by-design proves insufficient.
 - **Startup schema validation.** Fail-fast check comparing actual DB columns to expected, to catch
   Dapper SQL/schema drift at launch (integration tests already catch most).
+- **Wire soft-delete on fragments/working contexts.** `IsDeleted` is now scoped to `ContextFragments`
+  + `WorkingContexts` (migration `001`), filtered on read but not yet *set* by any command — that's
+  the hook for the planned forget/undo (Tier 2 #7). Add a recoverable "forget" command when ready.
+
+## Resolved decisions
+
+- ✅ **Narrowed `IsDeleted` to peer memory.** Audit found it on `BaseEntity` (all 6 tables, ~12
+  filters) with zero setters — fully dead. Moved onto `ContextFragments` + `WorkingContexts` only;
+  dropped the column + dead filters from Tags/Sources/ScheduledEvents/ActionLogs via migration `001`
+  (and removed the unused generic `EntityRepository.DeleteAsync`). Also hardened the migration runner
+  to apply migrations in name order (was relying on unspecified manifest order).
 
 ## Standing concerns (revisit, not scheduled)
 

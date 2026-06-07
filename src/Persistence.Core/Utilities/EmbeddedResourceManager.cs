@@ -16,10 +16,13 @@ public class EmbeddedResourceManager : IEmbeddedResourceManager
     {
         var assembly = Assembly.GetExecutingAssembly();
 
+        // Sort by name so migrations apply in their numeric-prefix order (000_, 001_, ...).
+        // GetManifestResourceNames() order is unspecified, so this ordering is load-bearing.
         var migrationNames = assembly.GetManifestResourceNames()
             .Where(x =>
                 x.Contains("Data.Migrations") &&
-                !x.EndsWith("Bootstrap.sql", StringComparison.OrdinalIgnoreCase));
+                !x.EndsWith("Bootstrap.sql", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(x => x, StringComparer.Ordinal);
 
         var migrations = new OrderedDictionary<string, string>();
 
