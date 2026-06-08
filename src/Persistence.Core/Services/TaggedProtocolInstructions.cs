@@ -60,7 +60,9 @@ public class TaggedProtocolInstructions : IProtocolInstructions
           to discover all commands.
         - **`<continue>`** — `true` to act again before yielding (you'll get your updated context),
           or `false` when done. There is an iteration cap per turn — the sensory block tells you
-          where you are. Omitting this tag means `false`.
+          where you are. Omitting this tag means `false`. Anything you already did this turn —
+          including command results — is in that updated context, so don't repeat a read you've
+          already run.
 
         ## Command syntax (inside `<context>` and `<actions>`)
 

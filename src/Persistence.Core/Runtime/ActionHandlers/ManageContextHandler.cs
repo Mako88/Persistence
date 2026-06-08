@@ -966,6 +966,9 @@ public class ManageContextHandler : CommandHandler
             fragments = fragments.Where(f => f.Tags.Any(t => t.Id == tag.Id));
         }
 
+        // Command-output echoes (ActionResponse) are transient plumbing, not memory — don't list them.
+        fragments = fragments.Where(f => f.FragmentType != ContextFragmentType.ActionResponse);
+
         var results = fragments.Take(limit).ToList();
 
         if (results.Count == 0)
@@ -979,7 +982,9 @@ public class ManageContextHandler : CommandHandler
         foreach (var f in results)
         {
             var tags = f.Tags.Count > 0 ? $" tags:{string.Join(",", f.Tags.Select(t => t.Name))}" : "";
-            sb.AppendLine($"  [#{f.Id} | {f.FragmentType} | {f.Status} | i:{f.Importance:F1} c:{f.Confidence:F1}]{tags}");
+            // A not-yet-persisted fragment has no usable id; show "transient" rather than a misleading #0.
+            var idLabel = f.Id > 0 ? $"#{f.Id}" : "transient";
+            sb.AppendLine($"  [{idLabel} | {f.FragmentType} | {f.Status} | i:{f.Importance:F1} c:{f.Confidence:F1}]{tags}");
 
             if (!string.IsNullOrWhiteSpace(f.Summary))
             {

@@ -54,6 +54,32 @@ public class PromptFormatterTests
     }
 
     [Fact]
+    public void TransientFragmentShowsTransientLabelNotZeroId()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var context = new WorkingContextEntity { Name = "c", Summary = "s", CreatedUtc = now, LastModifiedUtc = now };
+
+        context.AddFragment(new WeightedContextFragment
+        {
+            Id = 42, FragmentType = ContextFragmentType.Identity, Status = ContextFragmentStatus.Active,
+            Content = "a persisted note", Importance = 1.0f, Confidence = 1.0f, Relevance = 1.0f,
+            CreatedUtc = now, LastModifiedUtc = now,
+        });
+        context.AddFragment(new WeightedContextFragment
+        {
+            Id = 0, FragmentType = ContextFragmentType.ActionResponse, Status = ContextFragmentStatus.Active,
+            Content = "a transient command result", Importance = 1.0f, Confidence = 1.0f, Relevance = 1.0f,
+            CreatedUtc = now, LastModifiedUtc = now,
+        });
+
+        var joined = string.Join("\n", CreateFormatter().Format(context, []).Select(s => s.Content));
+
+        Assert.Contains("#42", joined);          // persisted fragment keeps its id
+        Assert.Contains("transient", joined);    // id-0 fragment is labelled, not addressable
+        Assert.DoesNotContain("#0", joined);     // never a misleading #0
+    }
+
+    [Fact]
     public void ProtocolInstructionsComeAfterFragmentsAndBeforeSensory()
     {
         var formatter = CreateFormatter();

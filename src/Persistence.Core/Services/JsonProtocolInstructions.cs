@@ -29,7 +29,8 @@ public class JsonProtocolInstructions : IProtocolInstructions
         Set `continue` to `true` when you want to take additional actions before yielding back
         to your peer. You will receive your updated context and can act again. Set it to `false`
         when you are done for this turn. There is an iteration cap per turn — the sensory block
-        tells you where you are.
+        tells you where you are. Anything you already did this turn — including command results —
+        is in that updated context, so you don't need to repeat a read you've already run.
 
         ## Actions
 

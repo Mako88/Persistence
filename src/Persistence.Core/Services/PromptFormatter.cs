@@ -116,7 +116,10 @@ public class PromptFormatter : IPromptFormatter
 
     private static string BuildFragmentHeader(WeightedContextFragment fragment)
     {
-        var meta = $"[#{fragment.Id} | {fragment.FragmentType} | r:{fragment.Relevance:F1} i:{fragment.Importance:F1} c:{fragment.Confidence:F1}";
+        // A not-yet-persisted fragment (e.g. a transient command result) has no usable id; show
+        // "transient" rather than a misleading #0 the peer might try to address.
+        var idLabel = fragment.Id > 0 ? $"#{fragment.Id}" : "transient";
+        var meta = $"[{idLabel} | {fragment.FragmentType} | r:{fragment.Relevance:F1} i:{fragment.Importance:F1} c:{fragment.Confidence:F1}";
 
         if (fragment.IsProtected)
         {
