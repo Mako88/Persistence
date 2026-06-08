@@ -104,6 +104,21 @@ manually. Fully-automated forgetting becomes a convenience layered on later, not
     load). Otherwise a soft-deleted fragment is invisible and unrecoverable through the command
     surface — defeating the "recoverable" point. (John's idea, 2026-06.)
 
+## From the Qwen3.5-9B trial (small-model friction observed live)
+
+- **`add` silently drops unknown tags.** `add(tags=["x"])` where `x` doesn't exist drops it with no
+  feedback (result says "Added … fragment", not "with N tags") — the peer thinks it tagged. `tag`/
+  `untag` now report skipped/not-found; `add` should too. Pairs with the open question: **should
+  applying a non-existent tag auto-create it?** Convenient (one step vs create_tag-first) but typos
+  become junk tags — John's call. (Decision fork — surface, don't default.)
+- **Small models forget to `<respond>` after acting.** Qwen repeatedly ran commands with
+  `continue=false` and no respond → "[Turn completed — no response to user]", leaving the local peer
+  with nothing. Consider a gentle nudge when a turn ends with actions but no response (or emphasize it
+  in the format instructions). Borderline — sometimes acting-only is legitimate.
+- **Self-recorded lessons can encode mistakes.** When coached to "save what you learned," Qwen first
+  saved the *wrong* usage (memorialized its own error). Persisted lessons help continuity but aren't
+  self-correcting — relevant if/when we lean on them for "learning over time."
+
 ## Resolved decisions
 
 - ✅ **Narrowed `IsDeleted` to peer memory.** Audit found it on `BaseEntity` (all 6 tables, ~12
