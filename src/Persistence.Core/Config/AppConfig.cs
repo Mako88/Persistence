@@ -7,7 +7,7 @@ namespace Persistence.Config;
 /// </summary>
 public class AppConfig : IAppConfig
 {
-    public string DatabasePath { get; set; } = "continuity.db";
+    public string DatabasePath { get; set; } = "dbs/continuity.db";
     public string ApiKey { get; set; } = "";
     public string Provider { get; set; } = "local";
     public string Model { get; set; } = "local";

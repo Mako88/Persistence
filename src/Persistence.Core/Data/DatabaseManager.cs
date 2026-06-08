@@ -29,6 +29,15 @@ public class DatabaseManager : IDatabaseManager
         ISourceRepository sourceRepository)
     {
         connectionString = $"Data Source={config.DatabasePath};Foreign Keys=True;";
+
+        // SQLite won't create missing parent directories, so a DatabasePath like "dbs/qwen.db"
+        // would fail on a fresh checkout. Ensure the folder exists.
+        var dbDir = Path.GetDirectoryName(config.DatabasePath);
+        if (!string.IsNullOrEmpty(dbDir))
+        {
+            Directory.CreateDirectory(dbDir);
+        }
+
         this.sessionContext = sessionContext;
         this.resourceManager = resourceManager;
         this.sourceRepository = sourceRepository;

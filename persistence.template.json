@@ -1,5 +1,5 @@
 {
-  "DatabasePath": "continuity.db",
+  "DatabasePath": "dbs/continuity.db",
   "Provider": "OpenAI",
   "Model": "gpt-5.5",
   "ApiKey": "YOUR_API_KEY_HERE",
