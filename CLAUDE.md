@@ -7,6 +7,7 @@ Read these before making changes:
 - **`docs/adr/`** — Architecture Decision Records: the *why* behind the big choices (layering, event
   bus, soft-delete scope, pluggable response format, context budget).
 - **`docs/TODO.md`** — current priorities and open/resolved decisions.
+- **`docs/running-local-models.md`** — driving a local llama.cpp/OpenAI-compatible model + perf findings.
 
 Generic cross-project patterns and style (layered core + thin entry points, event-bus boundaries,
 enum-keyed strategy DI, repository + generic base, config + env overrides + fail-fast, migrations,
