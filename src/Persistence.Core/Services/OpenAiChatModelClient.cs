@@ -1,0 +1,196 @@
+using Persistence.Config;
+using Persistence.DI;
+using Persistence.Runtime;
+using Persistence.Services.Streaming;
+using SimpleHttpClient;
+using SimpleHttpClient.Models;
+using System.Net.Http;
+using System.Runtime.CompilerServices;
+using System.Text.Json;
+
+namespace Persistence.Services;
+
+/// <summary>
+/// Client for the OpenAI-compatible Chat Completions API (<c>/chat/completions</c>) — the de-facto
+/// standard exposed by local servers like llama.cpp, Ollama, LM Studio, and vLLM. Distinct from
+/// <see cref="OpenAiModelClient"/>, which talks the newer Responses API (<c>/responses</c>): the two
+/// have different request/response shapes, so they're separate clients (point this one at a local
+/// server via <c>ApiBaseUrl</c>, e.g. <c>http://localhost:8080/v1</c>).
+/// </summary>
+[Service(registerAsType: typeof(IModelClient), key: ModelProvider.OpenAiChat)]
+public class OpenAiChatModelClient : IModelClient, IDisposable
+{
+    private readonly ISimpleClient client;
+    private readonly string model;
+    private readonly int maxTokens;
+    private readonly IAppConfig config;
+    private readonly IDisplayProvider display;
+    private readonly ITokenUsageTracker usageTracker;
+
+    private const string DefaultBaseUrl = "https://api.openai.com/v1";
+    private const string PlaceholderApiKey = "YOUR_API_KEY_HERE";
+
+    /// <summary>
+    /// Constructor that builds the HTTP client from config
+    /// </summary>
+    public OpenAiChatModelClient(IAppConfig config, IDisplayProvider display, ITokenUsageTracker usageTracker)
+        : this(config, display, usageTracker, CreateClient(config))
+    {
+    }
+
+    /// <summary>
+    /// Test seam: accepts a pre-configured <see cref="ISimpleClient"/> (e.g. a fake) instead of
+    /// constructing one from config.
+    /// </summary>
+    internal OpenAiChatModelClient(IAppConfig config, IDisplayProvider display, ITokenUsageTracker usageTracker, ISimpleClient client)
+    {
+        model = config.Model;
+        maxTokens = config.MaxOutputTokens;
+
+        this.client = client;
+        this.config = config;
+        this.display = display;
+        this.usageTracker = usageTracker;
+    }
+
+    private static ISimpleClient CreateClient(IAppConfig config)
+    {
+        // Same precondition as the Responses client: the default (real OpenAI) endpoint needs a key;
+        // a custom ApiBaseUrl (e.g. a local llama.cpp server) is exempt — those are usually keyless.
+        if (string.IsNullOrEmpty(config.ApiBaseUrl)
+            && (string.IsNullOrWhiteSpace(config.ApiKey) || config.ApiKey == PlaceholderApiKey))
+        {
+            var detail = config.ApiKey == PlaceholderApiKey
+                ? " (it's still the persistence.template.json placeholder)"
+                : "";
+
+            throw new InvalidOperationException(
+                $"OpenAiChat provider is selected against the default endpoint but no API key is set{detail}. "
+                + "Add your real key to persistence.json (\"ApiKey\"), set PERSISTENCE_APIKEY, or point "
+                + "ApiBaseUrl at a local OpenAI-compatible server.");
+        }
+
+        var baseUrl = config.ApiBaseUrl ?? DefaultBaseUrl;
+        var client = new SimpleClient(baseUrl.TrimEnd('/'));
+        client.DefaultHeaders["Authorization"] = $"Bearer {config.ApiKey}";
+        return client;
+    }
+
+    /// <summary>
+    /// Sends a non-streaming chat-completions request and returns the assistant's message text
+    /// </summary>
+    public async Task<string> CompleteAsync(PromptRequest request, CancellationToken ct = default)
+    {
+        var apiRequest = BuildApiRequest(request);
+        var response = await client.MakeRequest(apiRequest);
+
+        if (!response.IsSuccessful)
+        {
+            throw new InvalidOperationException(
+                $"API call failed ({response.StatusCode}): {response.StringBody}");
+        }
+
+        using var doc = JsonDocument.Parse(response.StringBody);
+        var responseMessage = ExtractContent(doc.RootElement);
+
+        RecordUsage(doc.RootElement, request);
+
+        if (config.DebugMode)
+        {
+            display.ShowDebugInfo($"Response:\n{responseMessage}\n");
+        }
+
+        return responseMessage;
+    }
+
+    /// <summary>
+    /// Streams the response. Chat Completions can stream token deltas, but this client yields the
+    /// completed text as a single output-text event followed by completion — enough for the turn
+    /// pipeline; live token deltas are a future enhancement.
+    /// </summary>
+    public async IAsyncEnumerable<ModelStreamEvent> StreamAsync(
+        PromptRequest request, [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var response = await CompleteAsync(request, ct);
+
+        yield return ModelStreamEvent.OutputText(response);
+        yield return ModelStreamEvent.Completed();
+    }
+
+    /// <summary>
+    /// Records the provider's real prompt-token count (Chat Completions: <c>usage.prompt_tokens</c>)
+    /// alongside our estimate of the same prompt, so the budget readout can self-calibrate.
+    /// </summary>
+    private void RecordUsage(JsonElement root, PromptRequest request)
+    {
+        if (root.TryGetProperty("usage", out var usage)
+            && usage.TryGetProperty("prompt_tokens", out var input)
+            && input.TryGetInt32(out var realInput))
+        {
+            var estimated = TokenEstimator.Estimate(request.Messages.Select(m => m.Content));
+            usageTracker.Record(realInput, estimated);
+        }
+    }
+
+    /// <summary>
+    /// Builds the Chat Completions request body. The prompt builder labels system segments as
+    /// "developer" (the Responses convention); map that to "system" for the chat template.
+    /// </summary>
+    private SimpleRequest BuildApiRequest(PromptRequest request)
+    {
+        var messages = request.Messages
+            .Select(m => new { role = MapRole(m.Role), content = m.Content })
+            .ToArray();
+
+        var body = new
+        {
+            model,
+            messages,
+            max_tokens = maxTokens,
+            stream = false,
+        };
+
+        if (config.DebugMode)
+        {
+            var debugContent = $"{messages[^2]?.content}\n\n{messages[^1]?.content}";
+            display.ShowDebugInfo($"Request ({request.Messages.Count} messages):\n{debugContent}\n");
+        }
+
+        return new SimpleRequest("/chat/completions", HttpMethod.Post, body);
+    }
+
+    /// <summary>
+    /// Maps a prompt-builder role to a Chat Completions role: "developer" becomes "system";
+    /// "user"/"assistant" pass through.
+    /// </summary>
+    private static string MapRole(string role) => role == "developer" ? "system" : role;
+
+    /// <summary>
+    /// Extracts the assistant text from a Chat Completions result: <c>choices[0].message.content</c>.
+    /// </summary>
+    private static string ExtractContent(JsonElement root)
+    {
+        if (!root.TryGetProperty("choices", out var choices)
+            || choices.ValueKind != JsonValueKind.Array
+            || choices.GetArrayLength() == 0)
+        {
+            throw new InvalidOperationException("API returned no choices.");
+        }
+
+        var first = choices[0];
+
+        if (!first.TryGetProperty("message", out var message)
+            || !message.TryGetProperty("content", out var content)
+            || content.ValueKind != JsonValueKind.String)
+        {
+            throw new InvalidOperationException("API returned no message content.");
+        }
+
+        return content.GetString() ?? string.Empty;
+    }
+
+    /// <summary>
+    /// Disposes the underlying HTTP client if it is disposable
+    /// </summary>
+    public void Dispose() => (client as IDisposable)?.Dispose();
+}

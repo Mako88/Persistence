@@ -150,6 +150,13 @@ public enum ModelProvider
     /// via the API, rather than an HTTP model endpoint. See <c>LocalClaudeModelClient</c>.
     /// </summary>
     LocalClaude = 2,
+
+    /// <summary>
+    /// OpenAI-compatible Chat Completions API (<c>/chat/completions</c>) — for local servers like
+    /// llama.cpp/Ollama/LM Studio/vLLM (point <c>ApiBaseUrl</c> at them), or OpenAI's chat endpoint.
+    /// See <c>OpenAiChatModelClient</c>.
+    /// </summary>
+    OpenAiChat = 3,
 }
 
 /// <summary>

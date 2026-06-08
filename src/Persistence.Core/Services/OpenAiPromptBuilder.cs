@@ -15,6 +15,7 @@ namespace Persistence.Services;
 /// </summary>
 [Service(registerAsType: typeof(IPromptBuilder), key: ModelProvider.OpenAI)]
 [Service(registerAsType: typeof(IPromptBuilder), key: ModelProvider.LocalClaude)]
+[Service(registerAsType: typeof(IPromptBuilder), key: ModelProvider.OpenAiChat)]
 public class OpenAiPromptBuilder : IPromptBuilder
 {
     /// <summary>
