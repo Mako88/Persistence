@@ -20,6 +20,7 @@ public class AppConfig : IAppConfig
     public string ResponseFormat { get; set; } = "Tagged";
     public bool DebugMode { get; set; } = false;
     public int MaxActionIterations { get; set; } = 5;
+    public int RequestTimeoutSeconds { get; set; } = 600;
 
     /// <summary>
     /// Loads the config from the given filepath, falling back to defaults on missing file or

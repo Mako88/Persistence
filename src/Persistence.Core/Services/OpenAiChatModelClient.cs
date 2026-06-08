@@ -73,6 +73,9 @@ public class OpenAiChatModelClient : IModelClient, IDisposable
         var baseUrl = config.ApiBaseUrl ?? DefaultBaseUrl;
         var client = new SimpleClient(baseUrl.TrimEnd('/'));
         client.DefaultHeaders["Authorization"] = $"Bearer {config.ApiKey}";
+        // Slow local models can spend a long time ingesting a large prompt before the first byte;
+        // a generous timeout keeps the request from being cancelled mid-think.
+        client.Timeout = config.RequestTimeoutSeconds;
         return client;
     }
 

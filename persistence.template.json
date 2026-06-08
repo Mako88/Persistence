@@ -11,5 +11,6 @@
   "UiMode": "Tui",
   "ResponseFormat": "Tagged",
   "MaxActionIterations": 5,
+  "RequestTimeoutSeconds": 600,
   "DebugMode": false
 }

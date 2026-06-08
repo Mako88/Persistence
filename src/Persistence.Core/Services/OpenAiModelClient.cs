@@ -83,6 +83,9 @@ public class OpenAiModelClient : IModelClient, IDisposable
         var baseUrl = config.ApiBaseUrl ?? DefaultBaseUrl;
         var client = new SimpleClient(baseUrl.TrimEnd('/'));
         client.DefaultHeaders["Authorization"] = $"Bearer {config.ApiKey}";
+        // Generous timeout: slow/local endpoints can take a while to ingest a large prompt and
+        // begin responding; the default would cancel the request mid-flight.
+        client.Timeout = config.RequestTimeoutSeconds;
         return client;
     }
 

@@ -73,4 +73,10 @@ public interface IAppConfig
     /// Maximum number of action iterations per turn before the loop is forcibly ended
     /// </summary>
     int MaxActionIterations { get; set; }
+
+    /// <summary>
+    /// HTTP request timeout (seconds) for model calls; -1 disables it. Generous by default because
+    /// slow local models can spend a long time just ingesting a large prompt before responding.
+    /// </summary>
+    int RequestTimeoutSeconds { get; set; }
 }
