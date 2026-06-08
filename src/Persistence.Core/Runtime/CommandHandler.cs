@@ -193,9 +193,20 @@ public abstract class CommandHandler : IActionHandler
     }
 
     /// <summary>
+    /// Response-structure keywords (tags in the tagged format; top-level keys in JSON). When a peer
+    /// puts one of these *inside* a command's parentheses it's confusing response structure with
+    /// command arguments — a common small-model slip worth correcting specifically.
+    /// </summary>
+    private static readonly HashSet<string> ResponseStructureWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "continue", "respond", "think", "context", "actions", "action", "data",
+    };
+
+    /// <summary>
     /// Appends a note when a command was given field names it doesn't define — these are silently
     /// ignored otherwise, so a typo'd field looks like it worked. Offers a closest-match suggestion
-    /// per unknown field and lists what the command actually accepts.
+    /// per unknown field, calls out response-structure words used as fields, and lists what the
+    /// command actually accepts.
     /// </summary>
     private static string AppendUnknownFieldHint(string result, CommandInfo info, JsonObject? fields)
     {
@@ -214,6 +225,11 @@ public abstract class CommandHandler : IActionHandler
 
         var hints = unknown.Select(u =>
         {
+            if (ResponseStructureWords.Contains(u))
+            {
+                return $"'{u}' (that's response structure, not a command field)";
+            }
+
             var match = ClosestMatch(u, info.Fields.Select(f => f.Name));
             return match != null ? $"'{u}' (did you mean '{match}'?)" : $"'{u}'";
         });
@@ -222,8 +238,18 @@ public abstract class CommandHandler : IActionHandler
             ? string.Join(", ", info.Fields.Select(f => f.Name))
             : "no fields";
 
-        return $"{result}\n  Note: ignored unknown field(s): {string.Join(", ", hints)}. " +
-               $"{info.Name} accepts: {accepts}.";
+        var note = $"{result}\n  Note: ignored unknown field(s): {string.Join(", ", hints)}. " +
+                   $"{info.Name} accepts: {accepts}.";
+
+        var structural = unknown.Where(ResponseStructureWords.Contains).ToList();
+
+        if (structural.Count > 0)
+        {
+            note += $"\n  Tip: {string.Join(", ", structural)} go at the top level of your response "
+                  + "(e.g. continue is its own tag/key), never inside a command's parentheses.";
+        }
+
+        return note;
     }
 
     /// <summary>

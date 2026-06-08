@@ -73,6 +73,22 @@ public class CommandHandlerTests
     }
 
     [Fact]
+    public async Task ResponseStructureWordAsFieldGetsTargetedHint()
+    {
+        // A peer putting a tag/control word like "continue" inside a command's parentheses is a
+        // common small-model slip; the feedback should call it out specifically, not just "ignored".
+        var (handler, published) = CreateHandler();
+
+        await handler.HandleAsync(NewContext(),
+            JsonNode.Parse("""{ "echo": { "text": "hi", "continue": true } }"""));
+
+        var tool = Assert.Single(published);
+        Assert.Equal("echoed: hi", tool.Result.Split('\n')[0]); // command still ran
+        Assert.Contains("response structure", tool.Result);
+        Assert.Contains("top level", tool.Result);
+    }
+
+    [Fact]
     public async Task ListCommandReturnsAvailableCommands()
     {
         var (handler, published) = CreateHandler();

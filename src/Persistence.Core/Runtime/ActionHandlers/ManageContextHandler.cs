@@ -580,9 +580,10 @@ public class ManageContextHandler : CommandHandler
         return $"Created tag '{name}'";
     }
 
-    [Command("tag", "Add a tag to an existing fragment")]
+    [Command("tag", "Add one or more tags to an existing fragment")]
     [CommandField("id", "long", required: true, Description = "Fragment ID")]
-    [CommandField("tag", "string", required: true, Description = "Tag path")]
+    [CommandField("tag", "string", Description = "A tag path to add, e.g. \"identity/core\"")]
+    [CommandField("tags", "array", Description = "Several tag paths to add at once, e.g. [\"a/b\", \"c/d\"] (use 'tag' or 'tags')")]
     private async Task<string> ExecuteTagAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
     {
         var id = ParseId(command?["id"]);
@@ -599,32 +600,51 @@ public class ManageContextHandler : CommandHandler
             return $"Tag failed: fragment #{id} not found in current context";
         }
 
-        var tagName = command?["tag"]?.GetValue<string>();
+        var paths = ExtractTagPaths(command);
 
-        if (string.IsNullOrWhiteSpace(tagName))
+        if (paths.Count == 0)
         {
-            return "Tag failed: 'tag' is required";
+            return "Tag failed: provide a tag (e.g. tag=\"a/b\") or tags (e.g. tags=[\"a/b\", \"c/d\"])";
         }
 
-        var tag = await ResolveTagByPathAsync(tagName);
+        var added = new List<string>();
+        var skipped = new List<string>();
 
-        if (tag == null)
+        foreach (var path in paths)
         {
-            return $"Tag failed: tag '{tagName}' not found";
+            var tag = await ResolveTagByPathAsync(path);
+
+            if (tag == null)
+            {
+                skipped.Add($"'{path}' (not found — create_tag first)");
+            }
+            else if (fragment.Tags.Any(t => t.Id == tag.Id))
+            {
+                skipped.Add($"'{path}' (already applied)");
+            }
+            else
+            {
+                fragment.Tags.Add(tag);
+                added.Add(path);
+            }
         }
 
-        if (fragment.Tags.Any(t => t.Id == tag.Id))
+        var result = added.Count > 0
+            ? $"Tagged fragment #{id} with {string.Join(", ", added.Select(p => $"'{p}'"))}"
+            : $"No tags added to fragment #{id}";
+
+        if (skipped.Count > 0)
         {
-            return $"Fragment #{id} is already tagged with '{tagName}'";
+            result += $"; skipped {string.Join(", ", skipped)}";
         }
 
-        fragment.Tags.Add(tag);
-        return $"Tagged fragment #{id} with '{tagName}'";
+        return result;
     }
 
-    [Command("untag", "Remove a tag from a fragment")]
+    [Command("untag", "Remove one or more tags from a fragment")]
     [CommandField("id", "long", required: true, Description = "Fragment ID")]
-    [CommandField("tag", "string", required: true, Description = "Tag path")]
+    [CommandField("tag", "string", Description = "A tag path to remove, e.g. \"identity/core\"")]
+    [CommandField("tags", "array", Description = "Several tag paths to remove at once, e.g. [\"a/b\", \"c/d\"] (use 'tag' or 'tags')")]
     private async Task<string> ExecuteUntagAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
     {
         var id = ParseId(command?["id"]);
@@ -641,29 +661,42 @@ public class ManageContextHandler : CommandHandler
             return $"Untag failed: fragment #{id} not found in current context";
         }
 
-        var tagName = command?["tag"]?.GetValue<string>();
+        var paths = ExtractTagPaths(command);
 
-        if (string.IsNullOrWhiteSpace(tagName))
+        if (paths.Count == 0)
         {
-            return "Untag failed: 'tag' is required";
+            return "Untag failed: provide a tag (e.g. tag=\"a/b\") or tags (e.g. tags=[\"a/b\", \"c/d\"])";
         }
 
-        var tag = await ResolveTagByPathAsync(tagName);
+        var removed = new List<string>();
+        var skipped = new List<string>();
 
-        if (tag == null)
+        foreach (var path in paths)
         {
-            return $"Untag failed: tag '{tagName}' not found";
+            var tag = await ResolveTagByPathAsync(path);
+            var existing = tag == null ? null : fragment.Tags.FirstOrDefault(t => t.Id == tag.Id);
+
+            if (existing == null)
+            {
+                skipped.Add($"'{path}' (not on this fragment)");
+            }
+            else
+            {
+                fragment.Tags.Remove(existing);
+                removed.Add(path);
+            }
         }
 
-        var existing = fragment.Tags.FirstOrDefault(t => t.Id == tag.Id);
+        var result = removed.Count > 0
+            ? $"Removed {string.Join(", ", removed.Select(p => $"'{p}'"))} from fragment #{id}"
+            : $"No tags removed from fragment #{id}";
 
-        if (existing == null)
+        if (skipped.Count > 0)
         {
-            return $"Fragment #{id} is not tagged with '{tagName}'";
+            result += $"; skipped {string.Join(", ", skipped)}";
         }
 
-        fragment.Tags.Remove(existing);
-        return $"Removed tag '{tagName}' from fragment #{id}";
+        return result;
     }
 
     [Command("list_tags", "List all tags as a tree")]
@@ -1037,6 +1070,33 @@ public class ManageContextHandler : CommandHandler
         }
 
         return current;
+    }
+
+    /// <summary>
+    /// Extracts tag paths from a command that accepts either a single <c>tag</c> (string) or a
+    /// <c>tags</c> array (or both) — so a peer needn't remember which field a given command uses.
+    /// </summary>
+    private static List<string> ExtractTagPaths(JsonNode? command)
+    {
+        var paths = new List<string>();
+
+        if (command?["tag"] is JsonValue single && single.TryGetValue<string>(out var one) && !string.IsNullOrWhiteSpace(one))
+        {
+            paths.Add(one.Trim());
+        }
+
+        if (command?["tags"] is JsonArray array)
+        {
+            foreach (var node in array)
+            {
+                if (node is JsonValue value && value.TryGetValue<string>(out var path) && !string.IsNullOrWhiteSpace(path))
+                {
+                    paths.Add(path.Trim());
+                }
+            }
+        }
+
+        return paths.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     private async Task<List<TagEntity>> ResolveTagsAsync(JsonNode? tagsNode)
