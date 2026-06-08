@@ -3,13 +3,15 @@
 **Status:** Accepted · **Date:** 2026-06-07 (records an early decision)
 
 ## Context
-The system needs to run behind multiple surfaces — a console, a Terminal.Gui TUI, and an HTTP API —
-and eventually be driven by an in-system peer. The continuity logic (memory, turns, prompt assembly,
+The system needs to run behind multiple surfaces — a Terminal.Gui TUI and an HTTP API — and
+eventually be driven by an in-system peer. The continuity logic (memory, turns, prompt assembly,
 model clients) is the valuable, hard part and must not be duplicated or coupled to any one surface.
+(A bare-console provider existed first as the quickest path; it was removed once the TUI superseded
+it — the project name `Persistence.Console` remains but it serves the TUI.)
 
 ## Decision
-All logic lives in `Persistence.Core`. Each entry point (`Persistence.Console` hosting Console + TUI,
-`Persistence.Api`) is a thin adapter that only wires DI and adapts I/O. Entry points contain no
+All logic lives in `Persistence.Core`. Each entry point (`Persistence.Console`, which serves the TUI,
+and `Persistence.Api`) is a thin adapter that only wires DI and adapts I/O. Entry points contain no
 business logic. (Generic pattern — see global `architecture-patterns` memory.)
 
 ## Alternatives considered

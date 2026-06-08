@@ -158,7 +158,6 @@ public enum ModelProvider
 /// </summary>
 public enum UiMode
 {
-    Console = 0,
     Tui = 1,
     Api = 2,
 }

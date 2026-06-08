@@ -88,6 +88,13 @@ manually. Fully-automated forgetting becomes a convenience layered on later, not
   if reversible-by-design proves insufficient.
 - **Startup schema validation.** Fail-fast check comparing actual DB columns to expected, to catch
   Dapper SQL/schema drift at launch (integration tests already catch most).
+- **Wire up `Notes` — peer-addable metadata on any entity.** `Notes` is on `BaseEntity` and plumbed
+  through all INSERT/UPDATEs but nothing sets it yet — *intentional* scaffolding (not dead like
+  `IsDeleted` was). Intent: let the peer attach a free-text note to any entity — e.g. a fragment, a
+  tag, or even an audit-log row ("why this was deleted"). Stays on `BaseEntity` by design (applies to
+  everything). To wire up: a command to set/append a note by entity type + id, surfaced where relevant.
+  Note: the append-only `AuditLogs` table currently has **no** `Notes` column, so covering audit logs
+  needs a migration to add it there.
 - **Wire soft-delete on fragments/working contexts.** `IsDeleted` is now scoped to `ContextFragments`
   + `WorkingContexts` (migration `001`), filtered on read but not yet *set* by any command — that's
   the hook for the planned forget/undo (Tier 2 #7). Add a recoverable "forget" command when ready.
