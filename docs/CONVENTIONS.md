@@ -32,10 +32,12 @@ Persistence**. For the rationale behind the bigger choices, see `docs/adr/`.
   discovered by reflection; the base handles parse/dispatch/list/error formatting and `ParseId`. Add a
   command = add an attributed method, nothing else. Every command field a handler reads MUST be declared
   as a `[CommandField]` (the unknown-field "did you mean" hint relies on this being exhaustive).
-- **Response formats are pluggable** (`ResponseFormat` enum → keyed `IModelResponseParser` /
-  `IProtocolInstructions`): `Json` and `Tagged`. Keep handler/command logic format-agnostic; only the
-  parser + protocol-instructions differ. Peer-facing text (errors, guidance) must be format-neutral —
-  never show JSON syntax to a tagged peer or vice versa (ADR-0004).
+- **Response format** is the **Tagged** format (`<think>/<respond>/<context>/<actions>/<continue>`).
+  JSON was removed once Tagged proved out across real models (ADR-0004), but the `ResponseFormat` enum
+  → keyed `IModelResponseParser` / `IProtocolInstructions` seam is kept (single-valued) so another
+  format can be added without rewiring. Keep handler/command logic format-agnostic; only the parser +
+  protocol-instructions differ. Peer-facing text (errors, guidance) must stay format-neutral —
+  instructions/messages are owned by the format layer, never hard-coded elsewhere.
 - **Prompt assembly** (`PromptFormatter`): fragments render with a metadata header
   `[#id | Type | r: i: c: | flags]`; format instructions + the sensory block (time, session, context
   budget, tags) are injected at the END of the prompt, not the top (format adherence degrades with

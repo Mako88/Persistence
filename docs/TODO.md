@@ -61,9 +61,9 @@ manually. Fully-automated forgetting becomes a convenience layered on later, not
 11. **AnthropicModelClient.** (Real Anthropic provider alongside OpenAI; `LocalClaudeModelClient`
     already in. Enables the Claude-as-remote-peer direction natively.)
 
-12. **Real-model A/B of tagged vs JSON response format.**
-    (The reason the experiment branch exists — decide merge-vs-keep-both. Only validated with
-    Claude-as-peer so far, a biased sample; needs a clean model run.)
+12. ✅ **Real-model A/B of tagged vs JSON response format** — DONE/RESOLVED. Tagged validated on real
+    non-Claude models (gpt-5.4-mini, local Qwen3.5-9B); JSON removed, Tagged is the sole format
+    (ADR-0004). The experiment branch was merged to main.
 
 13. **Memory import / portability.**
     (Import external content as fragments — e.g. seed a peer from an exported conversation; and

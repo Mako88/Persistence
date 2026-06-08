@@ -1,6 +1,6 @@
-# ADR-0004: Pluggable response format (JSON / Tagged) with format-neutral peer messaging
+# ADR-0004: Response format — Tagged (JSON removed) with format-neutral peer messaging
 
-**Status:** Accepted (experiment in progress) · **Date:** 2026-06-07
+**Status:** Accepted; experiment **resolved in favour of Tagged** (JSON removed 2026-06) · **Date:** 2026-06-07
 
 ## Context
 The remote peer replies in a structured wire format the system parses into actions. JSON is the
@@ -20,9 +20,18 @@ handler/command logic stays format-agnostic; only the parser and protocol instru
   durable continuity for *any* model.
 - **Tagged only** — premature: only validated with Claude-as-peer so far (biased sample).
 
+## Resolution (2026-06)
+The A/B is settled: the tagged format worked cleanly across real, non-Claude models — gpt-5.4-mini
+(which previously struggled) and a local Qwen3.5-9B both drove the system in it fluently. **JSON was
+removed** (`ModelResponseParser`, `JsonProtocolInstructions`, `ResponseFormat.Json`); Tagged is the
+sole format. The `ResponseFormat` enum + keyed-strategy seam is **kept** (now single-valued) so a new
+format can be added later without rewiring — cheap insurance, matching the enum-keyed-strategy
+convention.
+
 ## Consequences
-- Two parsers/instruction sets to maintain until the A/B resolves it.
-- A standing rule: error/guidance messages and instructions are owned by the format layer, not
-  hard-coded; the rest of the system must not assume a wire format.
+- One parser/instruction set to maintain (Tagged).
+- A standing rule survives: error/guidance messages and instructions are owned by the format layer,
+  not hard-coded; the rest of the system must not assume a wire format. (Keeps the seam meaningful and
+  any future format clean to add.)
 - Tagged parsing is resilient (a malformed call becomes a reported error and parsing continues) so one
   slip doesn't lose the whole turn.
