@@ -254,9 +254,11 @@ public abstract class CommandHandler : IActionHandler
 
     /// <summary>
     /// Returns the candidate closest to <paramref name="input"/> by edit distance, or null when
-    /// nothing is near enough to be a likely typo (guards against misleading suggestions).
+    /// nothing is near enough to be a likely typo (guards against misleading suggestions). Pass
+    /// <paramref name="maxDistance"/> to override the default proximity threshold (e.g. a tighter
+    /// bound for tag suggestions). Protected so subclass handlers can reuse the same did-you-mean.
     /// </summary>
-    private static string? ClosestMatch(string input, IEnumerable<string> candidates)
+    protected static string? ClosestMatch(string input, IEnumerable<string> candidates, int maxDistance = -1)
     {
         string? best = null;
         var bestDistance = int.MaxValue;
@@ -274,13 +276,14 @@ public abstract class CommandHandler : IActionHandler
 
         // Only suggest when the edit distance is small relative to the input — a far-off match is
         // noise, not a helpful "did you mean".
-        return bestDistance <= Math.Max(2, input.Length / 2) ? best : null;
+        var threshold = maxDistance >= 0 ? maxDistance : Math.Max(2, input.Length / 2);
+        return bestDistance <= threshold ? best : null;
     }
 
     /// <summary>
     /// Standard Levenshtein edit distance between two strings.
     /// </summary>
-    private static int LevenshteinDistance(string a, string b)
+    protected static int LevenshteinDistance(string a, string b)
     {
         var previous = new int[b.Length + 1];
         var current = new int[b.Length + 1];

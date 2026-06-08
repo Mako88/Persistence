@@ -111,6 +111,9 @@ manually. Fully-automated forgetting becomes a convenience layered on later, not
   so a typo is visible and `delete_tag`-able. Resolved the auto-create fork in favour of
   create-with-reporting (reporting neutralises the junk-tag downside; tags are cheap and reversible).
   Filters (`fetch`/`list_fragments`) still resolve-only — they never create.
+  ✅ **Typo guard:** before creating, a Levenshtein check (≤2 edits) compares against existing tag
+  paths; a near-miss is held back with "did you mean 'X'?" instead of creating a junk near-duplicate.
+  `create_tag(name="…")` is the explicit override to force a genuinely-new similar tag.
 - ✅ **Respond nudge.** Both protocol-instruction sets now state most turns should include a respond,
   since acting without one leaves the peer with nothing. (Instruction-level; a behavioural nudge in
   TurnHandler remains a future option if models still forget.)

@@ -326,6 +326,26 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
     }
 
     [Fact]
+    public async Task Tag_TypoSuggestsExistingInsteadOfCreating()
+    {
+        // A near-miss of an existing tag should be held back with a "did you mean?" rather than
+        // silently creating a junk near-duplicate.
+        var events = await api.RunTurnAsync(
+            "tag with a typo",
+            """
+            <context>
+            create_tag(name="philosophy/ethics")
+            add(content="DIDYOUMEAN_TEST a note", fragment_type="Personal", tags=["philosphy/ethics"])
+            </context>
+            <continue>false</continue>
+            """);
+
+        var tool = Detail(events, "tool");
+        Assert.Contains("did you mean 'philosophy/ethics'", tool);
+        Assert.DoesNotContain("created new tag(s): philosphy/ethics", tool); // the typo was NOT created
+    }
+
+    [Fact]
     public async Task TagManagement_ListAndDelete()
     {
         // Create a couple of tags, list them, then delete one.

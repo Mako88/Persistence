@@ -101,7 +101,7 @@ public class ManageContextHandler : CommandHandler
             LastModifiedUtc = now,
         };
 
-        var (tags, createdTags) = await ResolveOrCreateTagsAsync(command?["tags"], ct);
+        var (tags, createdTags, suggestedTags) = await ResolveOrCreateTagsAsync(command?["tags"], ct);
         fragment.Tags = tags;
 
         context.AddFragment(fragment, insertAfter);
@@ -113,7 +113,14 @@ public class ManageContextHandler : CommandHandler
             tagSuffix += $" (created new tag(s): {string.Join(", ", createdTags)})";
         }
 
-        return $"Added {fragmentType} fragment{tagSuffix}";
+        var result = $"Added {fragmentType} fragment{tagSuffix}";
+
+        if (suggestedTags.Count > 0)
+        {
+            result += $"\n  Note: some tags weren't added — {string.Join("; ", suggestedTags)}";
+        }
+
+        return result;
     }
 
     [Command("update", "Modify an existing fragment in the working context")]
@@ -593,12 +600,17 @@ public class ManageContextHandler : CommandHandler
 
         var added = new List<string>();
         var skipped = new List<string>();
+        var existingPaths = await GetExistingTagPathsAsync();
 
         foreach (var path in paths)
         {
-            var (tag, created) = await GetOrCreateTagByPathAsync(path, ct: ct);
+            var (tag, outcome, suggestion) = await ResolveTagForApplyAsync(path, existingPaths, ct);
 
-            if (tag == null)
+            if (outcome == TagApplyOutcome.Suggested)
+            {
+                skipped.Add($"'{path}' (not created — did you mean '{suggestion}'? if you really want a new tag, run create_tag(name=\"{path}\") first)");
+            }
+            else if (tag == null)
             {
                 skipped.Add($"'{path}' (invalid tag path)");
             }
@@ -609,7 +621,7 @@ public class ManageContextHandler : CommandHandler
             else
             {
                 fragment.Tags.Add(tag);
-                added.Add(created ? $"'{path}' (new)" : $"'{path}'");
+                added.Add(outcome == TagApplyOutcome.Created ? $"'{path}' (new)" : $"'{path}'");
             }
         }
 
@@ -1083,6 +1095,56 @@ public class ManageContextHandler : CommandHandler
         return paths.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
 
+    private enum TagApplyOutcome { Resolved, Created, Suggested }
+
+    /// <summary>
+    /// Returns every existing tag's full path (e.g. "identity/core"), two levels deep — used to spot
+    /// likely typos before creating a near-duplicate tag.
+    /// </summary>
+    private async Task<List<string>> GetExistingTagPathsAsync()
+    {
+        var paths = new List<string>();
+
+        foreach (var root in await tagRepo.GetAllRootAsync())
+        {
+            paths.Add(root.Name);
+
+            foreach (var child in root.ChildTags)
+            {
+                paths.Add($"{root.Name}/{child.Name}");
+            }
+        }
+
+        return paths;
+    }
+
+    /// <summary>
+    /// Decides how to apply a tag path: use it if it already exists; if not, but it's a close match
+    /// to an existing tag (a likely typo), <em>suggest</em> that one instead of creating — the
+    /// "did you mean?" gate; otherwise create it as genuinely new. <c>create_tag</c> remains the
+    /// explicit way to force a similar-but-deliberately-new tag past the suggestion.
+    /// </summary>
+    private async Task<(TagEntity? tag, TagApplyOutcome outcome, string? suggestion)> ResolveTagForApplyAsync(
+        string path, IReadOnlyCollection<string> existingPaths, CancellationToken ct)
+    {
+        var existing = await ResolveTagByPathAsync(path);
+
+        if (existing != null)
+        {
+            return (existing, TagApplyOutcome.Resolved, null);
+        }
+
+        var suggestion = ClosestMatch(path, existingPaths, maxDistance: 2);
+
+        if (suggestion != null && !suggestion.Equals(path, StringComparison.OrdinalIgnoreCase))
+        {
+            return (null, TagApplyOutcome.Suggested, suggestion);
+        }
+
+        var (created, _) = await GetOrCreateTagByPathAsync(path, ct: ct);
+        return (created, TagApplyOutcome.Created, null);
+    }
+
     /// <summary>
     /// Resolves a slash-separated tag path, creating any missing segments along the way (tags are
     /// cheap, reversible labels). Returns the leaf tag and whether any segment was newly created, so
@@ -1131,20 +1193,24 @@ public class ManageContextHandler : CommandHandler
     }
 
     /// <summary>
-    /// Resolves a <c>tags</c> array to entities, creating any that don't exist. Returns the resolved
-    /// tags and the paths that were newly created (so the caller can report them instead of the old
-    /// silent-drop behaviour).
+    /// Resolves a <c>tags</c> array to entities, creating genuinely-new tags but holding back likely
+    /// typos (a close match to an existing tag) with a "did you mean?" suggestion instead of creating
+    /// them. Returns the resolved tags, the paths newly created, and any suggestions for the caller to
+    /// surface — replacing the old silent-drop behaviour.
     /// </summary>
-    private async Task<(List<TagEntity> tags, List<string> created)> ResolveOrCreateTagsAsync(
+    private async Task<(List<TagEntity> tags, List<string> created, List<string> suggestions)> ResolveOrCreateTagsAsync(
         JsonNode? tagsNode, CancellationToken ct = default)
     {
         var tags = new List<TagEntity>();
         var created = new List<string>();
+        var suggestions = new List<string>();
 
         if (tagsNode is not JsonArray tagsArray)
         {
-            return (tags, created);
+            return (tags, created, suggestions);
         }
+
+        var existingPaths = await GetExistingTagPathsAsync();
 
         foreach (var node in tagsArray)
         {
@@ -1155,7 +1221,15 @@ public class ManageContextHandler : CommandHandler
                 continue;
             }
 
-            var (tag, wasCreated) = await GetOrCreateTagByPathAsync(path.Trim(), ct: ct);
+            path = path.Trim();
+
+            var (tag, outcome, suggestion) = await ResolveTagForApplyAsync(path, existingPaths, ct);
+
+            if (outcome == TagApplyOutcome.Suggested)
+            {
+                suggestions.Add($"'{path}' (did you mean '{suggestion}'? not added — use create_tag(name=\"{path}\") to make it new)");
+                continue;
+            }
 
             if (tag == null || tags.Any(t => t.Id == tag.Id))
             {
@@ -1164,13 +1238,13 @@ public class ManageContextHandler : CommandHandler
 
             tags.Add(tag);
 
-            if (wasCreated)
+            if (outcome == TagApplyOutcome.Created)
             {
-                created.Add(path.Trim());
+                created.Add(path);
             }
         }
 
-        return (tags, created);
+        return (tags, created, suggestions);
     }
 
     private static (ContextFragmentType type, bool wasRecognised) ParseFragmentType(string? typeName) =>
