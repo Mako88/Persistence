@@ -133,14 +133,20 @@ public class OpenAiChatModelClient : IModelClient, IDisposable
     }
 
     /// <summary>
-    /// Builds the Chat Completions request body. The prompt builder labels system segments as
-    /// "developer" (the Responses convention); map that to "system" for the chat template.
+    /// Builds the Chat Completions request body. Local chat templates (e.g. Qwen via llama.cpp)
+    /// are strict — they require a single system message at the very start and don't tolerate the
+    /// system segments our prompt injects at the END (format instructions + sensory block). So we
+    /// flatten to at most two messages: a leading <c>system</c> message (the persona/identity head)
+    /// and one <c>user</c> message carrying everything else, each part role-labelled inline so
+    /// attribution survives and the end-positioned format instructions stay last.
     /// </summary>
     private SimpleRequest BuildApiRequest(PromptRequest request)
     {
-        var messages = request.Messages
-            .Select(m => new { role = MapRole(m.Role), content = m.Content })
-            .ToArray();
+        var built = BuildChatMessages(request);
+
+        // Project to anonymous objects so the serializer emits {"role":..,"content":..}
+        // (a ValueTuple would serialize as Item1/Item2).
+        var messages = built.Select(m => new { role = m.role, content = m.content }).ToArray();
 
         var body = new
         {
@@ -152,18 +158,52 @@ public class OpenAiChatModelClient : IModelClient, IDisposable
 
         if (config.DebugMode)
         {
-            var debugContent = $"{messages[^2]?.content}\n\n{messages[^1]?.content}";
-            display.ShowDebugInfo($"Request ({request.Messages.Count} messages):\n{debugContent}\n");
+            var debugContent = string.Join("\n\n", built.Select(m => $"[{m.role}]\n{m.content}"));
+            display.ShowDebugInfo($"Request ({messages.Length} messages):\n{debugContent}\n");
         }
 
         return new SimpleRequest("/chat/completions", HttpMethod.Post, body);
     }
 
     /// <summary>
-    /// Maps a prompt-builder role to a Chat Completions role: "developer" becomes "system";
-    /// "user"/"assistant" pass through.
+    /// Collapses the prompt into a strict-template-safe shape: an optional leading system message
+    /// (only if the first segment is a system/developer one), then a single user message containing
+    /// the remaining segments concatenated with inline role labels.
     /// </summary>
-    private static string MapRole(string role) => role == "developer" ? "system" : role;
+    private static (string role, string content)[] BuildChatMessages(PromptRequest request)
+    {
+        var msgs = request.Messages;
+        var result = new List<(string role, string content)>();
+        var start = 0;
+
+        if (msgs.Count > 0 && IsSystem(msgs[0].Role))
+        {
+            result.Add(("system", msgs[0].Content));
+            start = 1;
+        }
+
+        if (start < msgs.Count)
+        {
+            var sb = new System.Text.StringBuilder();
+
+            for (var i = start; i < msgs.Count; i++)
+            {
+                if (sb.Length > 0)
+                {
+                    sb.Append("\n\n");
+                }
+
+                var label = IsSystem(msgs[i].Role) ? "system" : msgs[i].Role;
+                sb.Append($"[{label}]\n{msgs[i].Content}");
+            }
+
+            result.Add(("user", sb.ToString()));
+        }
+
+        return [.. result];
+    }
+
+    private static bool IsSystem(string role) => role is "developer" or "system";
 
     /// <summary>
     /// Extracts the assistant text from a Chat Completions result: <c>choices[0].message.content</c>.
