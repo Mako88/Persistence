@@ -35,7 +35,9 @@ public class JsonProtocolInstructions : IProtocolInstructions
         ## Actions
 
         ### respond_to_user
-        Send a message to your peer. `data` is the text string you want them to see.
+        Send a message to your peer. `data` is the text string you want them to see. Most turns
+        should include a respond_to_user — without it your peer hears nothing back, even if you took
+        other actions.
 
         ### manage_context
         Manage your working memory. `data` is an array of commands — each command is an object

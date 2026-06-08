@@ -307,6 +307,25 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
     }
 
     [Fact]
+    public async Task Add_AutoCreatesAndReportsNewTags()
+    {
+        // A non-existent tag used to be silently dropped; now it's created and reported, so the peer
+        // knows (and can delete_tag if it was a typo).
+        var events = await api.RunTurnAsync(
+            "remember with a fresh tag",
+            """
+            <context>
+            add(content="AUTOTAG_TEST a note with a brand-new tag", fragment_type="Personal", tags=["freshtopic/brandnew"])
+            </context>
+            <continue>false</continue>
+            """);
+
+        var tool = Detail(events, "tool");
+        Assert.Contains("created new tag", tool);
+        Assert.Contains("freshtopic/brandnew", tool);
+    }
+
+    [Fact]
     public async Task TagManagement_ListAndDelete()
     {
         // Create a couple of tags, list them, then delete one.

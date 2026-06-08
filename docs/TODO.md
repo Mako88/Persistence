@@ -106,18 +106,17 @@ manually. Fully-automated forgetting becomes a convenience layered on later, not
 
 ## From the Qwen3.5-9B trial (small-model friction observed live)
 
-- **`add` silently drops unknown tags.** `add(tags=["x"])` where `x` doesn't exist drops it with no
-  feedback (result says "Added … fragment", not "with N tags") — the peer thinks it tagged. `tag`/
-  `untag` now report skipped/not-found; `add` should too. Pairs with the open question: **should
-  applying a non-existent tag auto-create it?** Convenient (one step vs create_tag-first) but typos
-  become junk tags — John's call. (Decision fork — surface, don't default.)
-- **Small models forget to `<respond>` after acting.** Qwen repeatedly ran commands with
-  `continue=false` and no respond → "[Turn completed — no response to user]", leaving the local peer
-  with nothing. Consider a gentle nudge when a turn ends with actions but no response (or emphasize it
-  in the format instructions). Borderline — sometimes acting-only is legitimate.
-- **Self-recorded lessons can encode mistakes.** When coached to "save what you learned," Qwen first
-  saved the *wrong* usage (memorialized its own error). Persisted lessons help continuity but aren't
-  self-correcting — relevant if/when we lean on them for "learning over time."
+- ✅ **Tag application auto-creates + reports.** `add`/`tag` now create a missing tag path instead of
+  silently dropping it (`add`) or erroring (`tag`), and report it ("created new tag(s): x" / "x (new)")
+  so a typo is visible and `delete_tag`-able. Resolved the auto-create fork in favour of
+  create-with-reporting (reporting neutralises the junk-tag downside; tags are cheap and reversible).
+  Filters (`fetch`/`list_fragments`) still resolve-only — they never create.
+- ✅ **Respond nudge.** Both protocol-instruction sets now state most turns should include a respond,
+  since acting without one leaves the peer with nothing. (Instruction-level; a behavioural nudge in
+  TurnHandler remains a future option if models still forget.)
+- **Self-recorded lessons can encode mistakes.** (Noted, not fixed — inherent.) When coached to "save
+  what you learned," Qwen first saved the *wrong* usage. Persisted lessons aid continuity but aren't
+  self-correcting; relevant if/when we lean on them for "learning over time."
 
 ## Resolved decisions
 

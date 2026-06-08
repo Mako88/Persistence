@@ -101,12 +101,18 @@ public class ManageContextHandler : CommandHandler
             LastModifiedUtc = now,
         };
 
-        var tags = await ResolveTagsAsync(command?["tags"]);
+        var (tags, createdTags) = await ResolveOrCreateTagsAsync(command?["tags"], ct);
         fragment.Tags = tags;
 
         context.AddFragment(fragment, insertAfter);
 
         var tagSuffix = tags.Count > 0 ? $" with {tags.Count} tag(s)" : "";
+
+        if (createdTags.Count > 0)
+        {
+            tagSuffix += $" (created new tag(s): {string.Join(", ", createdTags)})";
+        }
+
         return $"Added {fragmentType} fragment{tagSuffix}";
     }
 
@@ -547,37 +553,15 @@ public class ManageContextHandler : CommandHandler
         }
 
         var description = command?["description"]?.GetValue<string>();
-        var segments = name.Split('/', StringSplitOptions.RemoveEmptyEntries);
 
-        TagEntity? parent = null;
+        var (tag, created) = await GetOrCreateTagByPathAsync(name, description, ct);
 
-        foreach (var segment in segments)
+        if (tag == null)
         {
-            var existing = await tagRepo.GetByNameAsync(segment, parent?.Id);
-
-            if (existing != null)
-            {
-                parent = existing;
-                continue;
-            }
-
-            var now = DateTimeOffset.UtcNow;
-
-            var tag = new TagEntity
-            {
-                Name = segment,
-                ParentTagId = parent?.Id,
-                Description = segment == segments[^1] ? description : null,
-
-                CreatedUtc = now,
-                LastModifiedUtc = now,
-            };
-
-            await tagRepo.SaveAsync(tag, ct: ct);
-            parent = tag;
+            return $"Create tag failed: '{name}' is not a valid tag path";
         }
 
-        return $"Created tag '{name}'";
+        return created ? $"Created tag '{name}'" : $"Tag '{name}' already exists";
     }
 
     [Command("tag", "Add one or more tags to an existing fragment")]
@@ -612,11 +596,11 @@ public class ManageContextHandler : CommandHandler
 
         foreach (var path in paths)
         {
-            var tag = await ResolveTagByPathAsync(path);
+            var (tag, created) = await GetOrCreateTagByPathAsync(path, ct: ct);
 
             if (tag == null)
             {
-                skipped.Add($"'{path}' (not found — create_tag first)");
+                skipped.Add($"'{path}' (invalid tag path)");
             }
             else if (fragment.Tags.Any(t => t.Id == tag.Id))
             {
@@ -625,12 +609,12 @@ public class ManageContextHandler : CommandHandler
             else
             {
                 fragment.Tags.Add(tag);
-                added.Add(path);
+                added.Add(created ? $"'{path}' (new)" : $"'{path}'");
             }
         }
 
         var result = added.Count > 0
-            ? $"Tagged fragment #{id} with {string.Join(", ", added.Select(p => $"'{p}'"))}"
+            ? $"Tagged fragment #{id} with {string.Join(", ", added)}"
             : $"No tags added to fragment #{id}";
 
         if (skipped.Count > 0)
@@ -1099,13 +1083,67 @@ public class ManageContextHandler : CommandHandler
         return paths.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
 
-    private async Task<List<TagEntity>> ResolveTagsAsync(JsonNode? tagsNode)
+    /// <summary>
+    /// Resolves a slash-separated tag path, creating any missing segments along the way (tags are
+    /// cheap, reversible labels). Returns the leaf tag and whether any segment was newly created, so
+    /// callers can report new tags rather than creating them silently. Returns null for an empty path.
+    /// </summary>
+    private async Task<(TagEntity? tag, bool created)> GetOrCreateTagByPathAsync(
+        string path, string? leafDescription = null, CancellationToken ct = default)
+    {
+        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+
+        if (segments.Length == 0)
+        {
+            return (null, false);
+        }
+
+        TagEntity? parent = null;
+        var created = false;
+
+        foreach (var segment in segments)
+        {
+            var existing = await tagRepo.GetByNameAsync(segment, parent?.Id);
+
+            if (existing != null)
+            {
+                parent = existing;
+                continue;
+            }
+
+            var now = DateTimeOffset.UtcNow;
+
+            var tag = new TagEntity
+            {
+                Name = segment,
+                ParentTagId = parent?.Id,
+                Description = segment == segments[^1] ? leafDescription : null,
+                CreatedUtc = now,
+                LastModifiedUtc = now,
+            };
+
+            await tagRepo.SaveAsync(tag, ct: ct);
+            parent = tag;
+            created = true;
+        }
+
+        return (parent, created);
+    }
+
+    /// <summary>
+    /// Resolves a <c>tags</c> array to entities, creating any that don't exist. Returns the resolved
+    /// tags and the paths that were newly created (so the caller can report them instead of the old
+    /// silent-drop behaviour).
+    /// </summary>
+    private async Task<(List<TagEntity> tags, List<string> created)> ResolveOrCreateTagsAsync(
+        JsonNode? tagsNode, CancellationToken ct = default)
     {
         var tags = new List<TagEntity>();
+        var created = new List<string>();
 
         if (tagsNode is not JsonArray tagsArray)
         {
-            return tags;
+            return (tags, created);
         }
 
         foreach (var node in tagsArray)
@@ -1117,15 +1155,22 @@ public class ManageContextHandler : CommandHandler
                 continue;
             }
 
-            var tag = await ResolveTagByPathAsync(path);
+            var (tag, wasCreated) = await GetOrCreateTagByPathAsync(path.Trim(), ct: ct);
 
-            if (tag != null)
+            if (tag == null || tags.Any(t => t.Id == tag.Id))
             {
-                tags.Add(tag);
+                continue;
+            }
+
+            tags.Add(tag);
+
+            if (wasCreated)
+            {
+                created.Add(path.Trim());
             }
         }
 
-        return tags;
+        return (tags, created);
     }
 
     private static (ContextFragmentType type, bool wasRecognised) ParseFragmentType(string? typeName) =>

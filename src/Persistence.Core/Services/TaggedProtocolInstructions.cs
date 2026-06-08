@@ -54,6 +54,8 @@ public class TaggedProtocolInstructions : IProtocolInstructions
           `add` command to keep it). Deliberate visibly regardless of whether the model
           has built-in reasoning.
         - **`<respond>`** — A message to your peer. The tag body is the literal text; no escaping.
+          Most turns should include a `<respond>` — without it your peer hears nothing back, even if
+          you ran commands.
         - **`<context>`** — Manage your working memory. The body is one or more function calls, one
           per line. Send `list()` to discover all commands and their fields.
         - **`<actions>`** — Perform side-effect operations. Same function-call format. Send `list()`
