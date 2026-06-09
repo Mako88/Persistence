@@ -35,5 +35,5 @@ public enum AuditEventType
 {
     Created = 0,
     Modified = 1,
-    Deleted = 2,
+    // No Deleted: erasure is recorded as a Modified update to IsDeleted (archive-over-erase).
 }

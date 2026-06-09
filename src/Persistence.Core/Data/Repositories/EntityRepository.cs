@@ -26,7 +26,7 @@ public abstract class EntityRepository<T> : IEntityRepository<T> where T : BaseE
     /// </summary>
     protected EntityRepository(IAppConfig config, ISessionContext sessionContext)
     {
-        connectionString = $"Data Source={config.DatabasePath};Foreign Keys=True;";
+        connectionString = SqliteConnectionString.For(config.DatabasePath);
         this.sessionContext = sessionContext;
     }
 
@@ -93,6 +93,24 @@ public abstract class EntityRepository<T> : IEntityRepository<T> where T : BaseE
 
         await SaveInternalAsync(entities, newTransaction, ct);
         await newTransaction.CommitAsync(ct);
+    }
+
+    /// <summary>
+    /// Runs <paramref name="work"/> inside a single transaction on a fresh connection, committing on
+    /// success and rolling back (via dispose) on exception. The open transaction is passed to the
+    /// callback so it can be threaded into <see cref="SaveAsync"/> on this or other repositories,
+    /// keeping connection ownership in the repository layer.
+    /// </summary>
+    public async Task<TResult> RunInTransactionAsync<TResult>(
+        Func<IDbTransaction, Task<TResult>> work, CancellationToken ct = default)
+    {
+        await using var connection = await OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync(ct);
+
+        var result = await work(transaction);
+
+        await transaction.CommitAsync(ct);
+        return result;
     }
 
     #endregion

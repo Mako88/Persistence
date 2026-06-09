@@ -20,4 +20,11 @@ public interface IAuditLogRepository : IEntityRepository<AuditLogEntity>
     /// <c>CreatedUtc</c> ascending.
     /// </summary>
     Task<IEnumerable<AuditLogEntity>> GetBySessionAsync(string sessionId);
+
+    /// <summary>
+    /// Returns the most recent "changes to self" — audit entries newest first, excluding
+    /// conversational/transient noise (ChatMessage and System fragment changes) so the result is the
+    /// peer's own memory/state edits (identity/personal fragments, proposals, contexts, events).
+    /// </summary>
+    Task<IReadOnlyList<AuditLogEntity>> GetRecentSelfChangesAsync(int limit, CancellationToken ct = default);
 }

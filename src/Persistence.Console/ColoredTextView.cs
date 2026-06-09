@@ -57,10 +57,6 @@ internal sealed class ColoredTextView : TextView
     public ColoredTextView ColorLinesStartingWith(string prefix, Color color) =>
         ColorLine(t => t.StartsWith(prefix, StringComparison.Ordinal), color);
 
-    /// <summary>Tints a whole line when it contains <paramref name="needle"/>.</summary>
-    public ColoredTextView ColorLinesContaining(string needle, Color color) =>
-        ColorLine(t => t.Contains(needle, StringComparison.Ordinal), color);
-
     /// <summary>
     /// Colors every literal occurrence of <paramref name="needle"/> anywhere in a line —
     /// the key "multiple colors per line" primitive for scannable highlights.

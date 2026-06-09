@@ -14,7 +14,6 @@ public class AppConfigTests
         Assert.Equal("Tui", config.UiMode);
         Assert.Equal("high", config.ReasoningEffort);
         Assert.Equal("local", config.Provider);
-        Assert.Equal("Tagged", config.ResponseFormat);
     }
 
     [Fact]
@@ -48,6 +47,27 @@ public class AppConfigTests
         var config = await AppConfig.LoadAsync(temp.Path);
 
         Assert.Equal("Tui", config.UiMode);
+    }
+
+    [Fact]
+    public async Task EnvironmentVariableOverridesFileAndDefaults()
+    {
+        Environment.SetEnvironmentVariable("PERSISTENCE_PROVIDER", "OpenAI");
+        Environment.SetEnvironmentVariable("PERSISTENCE_MAXINPUTTOKENS", "1234");
+        try
+        {
+            await using var temp = new TempFile("""{ "Provider": "local" }""");
+
+            var config = await AppConfig.LoadAsync(temp.Path);
+
+            Assert.Equal("OpenAI", config.Provider);   // env beats the file
+            Assert.Equal(1234, config.MaxInputTokens);  // env beats the default, converted to int
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PERSISTENCE_PROVIDER", null);
+            Environment.SetEnvironmentVariable("PERSISTENCE_MAXINPUTTOKENS", null);
+        }
     }
 
     [Fact]

@@ -1,3 +1,4 @@
+using Persistence.Config;
 using Persistence.Data.Entities;
 using Persistence.Data.Repositories;
 using Persistence.DI;
@@ -22,8 +23,13 @@ public class ManageContextHandler : CommandHandler
     private readonly IWorkingContextRepository workingContextRepo;
     private readonly IContextFragmentRepository fragmentRepo;
     private readonly ITagRepository tagRepo;
+    private readonly IEntityTagRepository entityTagRepo;
+    private readonly IScheduledEventRepository scheduledEventRepo;
     private readonly ISourceRepository sourceRepo;
     private readonly ISessionContext sessionContext;
+    private readonly IProposalService proposalService;
+    private readonly IProposalRepository proposalRepo;
+    private readonly IAppConfig config;
 
     /// <summary>
     /// Constructor
@@ -32,22 +38,327 @@ public class ManageContextHandler : CommandHandler
         IWorkingContextRepository workingContextRepo,
         IContextFragmentRepository fragmentRepo,
         ITagRepository tagRepo,
+        IEntityTagRepository entityTagRepo,
+        IScheduledEventRepository scheduledEventRepo,
         ISourceRepository sourceRepo,
         ISessionContext sessionContext,
+        IProposalService proposalService,
+        IProposalRepository proposalRepo,
+        IAppConfig config,
         IEventBus eventBus) : base(eventBus)
     {
         this.workingContextRepo = workingContextRepo;
         this.fragmentRepo = fragmentRepo;
         this.tagRepo = tagRepo;
+        this.entityTagRepo = entityTagRepo;
+        this.scheduledEventRepo = scheduledEventRepo;
         this.sourceRepo = sourceRepo;
         this.sessionContext = sessionContext;
+        this.proposalService = proposalService;
+        this.proposalRepo = proposalRepo;
+        this.config = config;
     }
 
     #region Commands
 
+    [Command("list_contexts", "List the working contexts you can switch between (separate spaces of fragments — e.g. different modes or relationships)")]
+    private async Task<string> ExecuteListContextsAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
+    {
+        var summaries = await workingContextRepo.GetSummariesAsync(ct);
+
+        if (summaries.Count == 0)
+        {
+            return "No working contexts exist yet";
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"Working contexts ({summaries.Count}):");
+
+        foreach (var summary in summaries)
+        {
+            var marker = summary.Id == sessionContext.WorkingContextId ? " ← current" : "";
+            sb.AppendLine(
+                $"  [#{summary.Id} | {summary.Name} | fragments:{summary.FragmentCount} | accessed:{summary.LastAccessedUtc:yyyy-MM-dd HH:mm} UTC]{marker}");
+
+            if (!string.IsNullOrWhiteSpace(summary.Summary))
+            {
+                sb.AppendLine($"    {summary.Summary}");
+            }
+        }
+
+        return sb.ToString().TrimEnd();
+    }
+
+    [Command("create_context", "Create a new, empty working context. Does not switch you into it — use switch_context to enter it.")]
+    [CommandField("name", "string", required: true, Description = "Name for the new context")]
+    [CommandField("summary", "string", Description = "Optional one-line description of what this context is for")]
+    private async Task<string> ExecuteCreateContextAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
+    {
+        var name = command?["name"]?.GetValue<string>();
+
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return "Create context failed: 'name' is required";
+        }
+
+        var created = await workingContextRepo.CreateAsync(name);
+
+        var summary = command?["summary"]?.GetValue<string>();
+
+        if (!string.IsNullOrWhiteSpace(summary))
+        {
+            created.Summary = summary;
+            await workingContextRepo.SaveAsync(created, ct: ct);
+        }
+
+        return $"Created context #{created.Id} '{name}'. Use switch_context(id={created.Id}) to enter it.";
+    }
+
+    [Command("switch_context", "Switch your active working context. Takes effect on your next action round; fragments you add afterward land in the new context.")]
+    [CommandField("id", "long", required: true, Description = "ID of the context to switch to (see list_contexts)")]
+    private async Task<string> ExecuteSwitchContextAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
+    {
+        var id = ParseId(command?["id"]);
+
+        if (id == null)
+        {
+            return "Switch context failed: 'id' is required";
+        }
+
+        if (id == sessionContext.WorkingContextId)
+        {
+            return $"Already in context #{id} '{context.Name}'";
+        }
+
+        // Validate against the (non-deleted) summary list rather than GetByIdAsync so a
+        // soft-deleted context can't be switched into and we avoid hydrating its fragments.
+        var target = (await workingContextRepo.GetSummariesAsync(ct)).FirstOrDefault(s => s.Id == id);
+
+        if (target == null)
+        {
+            return $"Switch context failed: no context with id #{id}";
+        }
+
+        sessionContext.WorkingContextId = target.Id;
+
+        return $"Switched to context #{target.Id} '{target.Name}' ({target.FragmentCount} fragment(s)). "
+            + "It's active from your next action round.";
+    }
+
+    [Command("rename_context", "Rename your current working context")]
+    [CommandField("name", "string", required: true, Description = "The new name")]
+    private Task<string> ExecuteRenameContextAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
+    {
+        var name = command?["name"]?.GetValue<string>();
+
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return Task.FromResult("Rename context failed: 'name' is required");
+        }
+
+        var previous = context.Name;
+        context.Name = name;
+        context.LastModifiedUtc = DateTimeOffset.UtcNow;
+
+        return Task.FromResult($"Renamed context #{context.Id} from '{previous}' to '{name}'");
+    }
+
+    [Command("set_context_summary", "Set or update the summary describing your current working context (shown when browsing contexts)")]
+    [CommandField("summary", "string", required: true, Description = "The summary text")]
+    private Task<string> ExecuteSetContextSummaryAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
+    {
+        var summary = command?["summary"]?.GetValue<string>();
+
+        if (string.IsNullOrWhiteSpace(summary))
+        {
+            return Task.FromResult("Set context summary failed: 'summary' is required");
+        }
+
+        context.Summary = summary;
+        context.LastModifiedUtc = DateTimeOffset.UtcNow;
+
+        return Task.FromResult($"Updated the summary for context #{context.Id}");
+    }
+
+    [Command("propose", "Record a proposed change to your memory to deliberate on before committing — the only way to change a protected fragment. Accept it in a LATER turn (or your peer may), or reject it.")]
+    [CommandField("kind", "string", required: true, Description = "What to change: 'add' (a new fragment), 'modify' (a fragment's content/summary), 'remove' (take a fragment out of context), 'protect' (lock a fragment), or 'unprotect' (unlock a fragment so it can be edited directly again)")]
+    [CommandField("rationale", "string", required: true, Description = "Why you're proposing this — the reasoning that justifies the change")]
+    [CommandField("target_id", "long", Description = "The fragment to modify or remove (required for modify/remove)")]
+    [CommandField("content", "string", Description = "New content (for add; or modify to change content)")]
+    [CommandField("summary", "string", Description = "New summary (for add/modify), optional")]
+    [CommandField("fragment_type", "string", Description = "For 'add': Identity, Relational, Personal, or Summary (defaults to Personal)")]
+    private async Task<string> ExecuteProposeAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
+    {
+        var rationale = command?["rationale"]?.GetValue<string>();
+
+        if (string.IsNullOrWhiteSpace(rationale))
+        {
+            return "Propose failed: 'rationale' is required — say why you want the change";
+        }
+
+        var kind = ParseProposalKind(command?["kind"]?.GetValue<string>());
+
+        if (kind == null)
+        {
+            return "Propose failed: 'kind' must be 'add', 'modify', 'remove', 'protect', or 'unprotect'";
+        }
+
+        var targetId = ParseId(command?["target_id"]);
+        var content = command?["content"]?.GetValue<string>();
+        var summary = command?["summary"]?.GetValue<string>();
+
+        ProposalDraft draft;
+
+        switch (kind.Value)
+        {
+            case ProposalKind.AddFragment:
+                if (string.IsNullOrWhiteSpace(content))
+                {
+                    return "Propose failed: an 'add' proposal needs 'content'";
+                }
+
+                var (proposedType, wasAuthorable) = ParseAuthorableFragmentType(command?["fragment_type"]?.GetValue<string>());
+                draft = new ProposalDraft(ProposalKind.AddFragment, rationale,
+                    ProposedFragmentType: proposedType, ProposedContent: content, ProposedSummary: summary);
+
+                var created = await proposalService.CreateAsync(draft, ct);
+                var note = wasAuthorable ? "" : $" (note: that fragment type isn't one you can set — it'll be added as Personal)";
+                return $"Proposed #{created.Id}: add a {proposedType} fragment. Accept it in a later turn to apply it.{note}";
+
+            case ProposalKind.ModifyFragment:
+                if (targetId == null)
+                {
+                    return "Propose failed: a 'modify' proposal needs 'target_id'";
+                }
+
+                if (content == null && summary == null)
+                {
+                    return "Propose failed: a 'modify' proposal needs new 'content' and/or 'summary'";
+                }
+
+                draft = new ProposalDraft(ProposalKind.ModifyFragment, rationale,
+                    TargetFragmentId: targetId, ProposedContent: content, ProposedSummary: summary);
+                break;
+
+            case ProposalKind.RemoveFragment:
+            case ProposalKind.ProtectFragment:
+            case ProposalKind.UnprotectFragment:
+                if (targetId == null)
+                {
+                    return $"Propose failed: a '{ProposalKindVerb(kind.Value)}' proposal needs 'target_id'";
+                }
+
+                draft = new ProposalDraft(kind.Value, rationale, TargetFragmentId: targetId);
+                break;
+
+            default:
+                return "Propose failed: unsupported kind";
+        }
+
+        var proposal = await proposalService.CreateAsync(draft, ct);
+        return $"Proposed #{proposal.Id}: {ProposalKindVerb(kind.Value)} fragment #{targetId}. Accept it in a later turn to apply it.";
+    }
+
+    /// <summary>The peer-facing verb for a fragment-targeting proposal kind.</summary>
+    private static string ProposalKindVerb(ProposalKind kind) => kind switch
+    {
+        ProposalKind.RemoveFragment => "remove",
+        ProposalKind.ProtectFragment => "protect",
+        ProposalKind.UnprotectFragment => "unprotect",
+        _ => "modify",
+    };
+
+    [Command("list_proposals", "List your open proposals (pending self-changes awaiting accept/reject)")]
+    private async Task<string> ExecuteListProposalsAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
+    {
+        var proposals = await proposalService.GetOpenAsync(ct);
+
+        if (proposals.Count == 0)
+        {
+            return "No open proposals";
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"Open proposals ({proposals.Count}):");
+
+        foreach (var p in proposals)
+        {
+            var target = p.TargetFragmentId is long tid ? $" → fragment #{tid}" : "";
+            var typeInfo = p.Kind == ProposalKind.AddFragment ? $" ({p.ProposedFragmentType ?? ContextFragmentType.Personal})" : "";
+            sb.AppendLine($"  [#{p.Id} | {p.Kind}{typeInfo}{target} | proposed {p.CreatedUtc:yyyy-MM-dd HH:mm} UTC]");
+            sb.AppendLine($"    why: {p.Rationale}");
+
+            if (!string.IsNullOrWhiteSpace(p.ProposedContent))
+            {
+                var preview = p.ProposedContent.Length > 200 ? p.ProposedContent[..200] + "…" : p.ProposedContent;
+                sb.AppendLine($"    new content: {preview}");
+            }
+        }
+
+        return sb.ToString().TrimEnd();
+    }
+
+    [Command("accept_proposal", "Apply an open proposal's change (yours, from a previous turn). This is how a protected fragment changes.")]
+    [CommandField("id", "long", required: true, Description = "ID of the proposal to accept (see list_proposals)")]
+    private async Task<string> ExecuteAcceptProposalAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
+    {
+        var id = ParseId(command?["id"]);
+
+        if (id == null)
+        {
+            return "Accept proposal failed: 'id' is required";
+        }
+
+        var approval = config.ResolvedProposalApproval();
+
+        if (approval == ProposalApproval.Participant)
+        {
+            return $"Proposal #{id} is your peer's to accept — you can propose and reject, but not accept. It stays open for them.";
+        }
+
+        var proposal = await proposalRepo.GetByIdAsync(id.Value, ct);
+
+        if (proposal == null)
+        {
+            return $"Accept proposal failed: no proposal #{id}";
+        }
+
+        // Deliberation gap: a proposal can't be accepted in the same turn it was created.
+        if (proposal.CreatedUtc >= sessionContext.TurnStartedUtc)
+        {
+            return $"You proposed #{id} this turn — sit with it and accept it in a later turn (that's the point of proposing).";
+        }
+
+        var outcome = await proposalService.AcceptAsync(proposal, context, "remote peer", ct);
+        return outcome.Message;
+    }
+
+    [Command("reject_proposal", "Discard an open proposal without applying it")]
+    [CommandField("id", "long", required: true, Description = "ID of the proposal to reject (see list_proposals)")]
+    [CommandField("reason", "string", Description = "Optional note on why you're rejecting it")]
+    private async Task<string> ExecuteRejectProposalAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
+    {
+        var id = ParseId(command?["id"]);
+
+        if (id == null)
+        {
+            return "Reject proposal failed: 'id' is required";
+        }
+
+        var proposal = await proposalRepo.GetByIdAsync(id.Value, ct);
+
+        if (proposal == null)
+        {
+            return $"Reject proposal failed: no proposal #{id}";
+        }
+
+        var outcome = await proposalService.RejectAsync(proposal, command?["reason"]?.GetValue<string>(), ct);
+        return outcome.Message;
+    }
+
     [Command("add", "Add a fragment to the working context")]
     [CommandField("content", "string", required: true, Description = "The fragment content")]
-    [CommandField("fragment_type", "string", Description = "Fragment type (Identity, Relational, Personal, Summary, Proposal, etc.)")]
+    [CommandField("fragment_type", "string", Description = "What kind of memory this is. One of: Identity (who you are — values, personality, your chosen name), Relational (your relationships and how you relate to specific others), Personal (anything else worth keeping — observations, preferences, lessons; the default), Summary (a précis that folds other fragments). Defaults to Personal; other types are system-managed and can't be set here.")]
     [CommandField("importance", "float", Description = "Significance (0-1)", Default = "0.5")]
     [CommandField("confidence", "float", Description = "Certainty (0-1)", Default = "0.5")]
     [CommandField("relevance", "float", Description = "How relevant to the current prompt (0-1); ranks inclusion when context is tight", Default = "1.0")]
@@ -65,7 +376,7 @@ public class ManageContextHandler : CommandHandler
         }
 
         var fragmentTypeName = command?["fragment_type"]?.GetValue<string>();
-        var (fragmentType, wasRecognised) = ParseFragmentType(fragmentTypeName);
+        var (fragmentType, wasAuthorable) = ParseAuthorableFragmentType(fragmentTypeName);
         var importance = command?["importance"]?.GetValue<float>() ?? 0.5f;
         var confidence = command?["confidence"]?.GetValue<float>() ?? 0.5f;
         var relevance = command?["relevance"]?.GetValue<float>() ?? 1.0f;
@@ -74,11 +385,6 @@ public class ManageContextHandler : CommandHandler
         var summary = command?["summary"]?.GetValue<string>();
 
         var now = DateTimeOffset.UtcNow;
-
-        if (!wasRecognised && !string.IsNullOrEmpty(fragmentTypeName))
-        {
-            content = $"[Originally requested as type '{fragmentTypeName}']\n{content}";
-        }
 
         var fragment = new WeightedContextFragment
         {
@@ -115,6 +421,13 @@ public class ManageContextHandler : CommandHandler
 
         var result = $"Added {fragmentType} fragment{tagSuffix}";
 
+        if (!wasAuthorable)
+        {
+            var authorable = string.Join(", ", AuthorableFragmentTypes);
+            result += $"\n  Note: '{fragmentTypeName}' isn't a type you can set — saved as Personal. "
+                + $"Types you can choose: {authorable}.";
+        }
+
         if (suggestedTags.Count > 0)
         {
             result += $"\n  Note: some tags weren't added — {string.Join("; ", suggestedTags)}";
@@ -149,7 +462,7 @@ public class ManageContextHandler : CommandHandler
 
         if (fragment.IsProtected)
         {
-            return Task.FromResult($"Update failed: fragment #{id} is protected");
+            return Task.FromResult($"Update failed: fragment #{id} is protected — protected fragments change only through a proposal you accept in a later turn (propose kind=modify, target_id={id}).");
         }
 
         if (command?["content"] is JsonNode contentNode)
@@ -222,7 +535,7 @@ public class ManageContextHandler : CommandHandler
 
         if (fragment.IsProtected)
         {
-            return $"Remove failed: fragment #{id} is protected";
+            return $"Remove failed: fragment #{id} is protected — use a proposal you accept in a later turn (propose kind=remove, target_id={id}).";
         }
 
         await workingContextRepo.RemoveFragmentAsync(context.Id, id.Value);
@@ -250,38 +563,19 @@ public class ManageContextHandler : CommandHandler
             return Task.FromResult("Set summary failed: 'summary' is required");
         }
 
-        var updated = new List<long>();
-        var skipped = new List<string>();
-
-        foreach (var idNode in idsArray)
+        var (applied, skipped) = ApplyToContextFragments(idsArray, context, fragment =>
         {
-            var id = ParseId(idNode);
-
-            if (id == null)
-            {
-                continue;
-            }
-
-            var fragment = context.ContextFragments.Values.FirstOrDefault(f => f.Id == id.Value);
-
-            if (fragment == null)
-            {
-                skipped.Add($"#{id} (not in context)");
-                continue;
-            }
-
             if (fragment.IsProtected)
             {
-                skipped.Add($"#{id} (protected)");
-                continue;
+                return "protected";
             }
 
             fragment.Summary = summary;
             fragment.LastModifiedUtc = DateTimeOffset.UtcNow;
-            updated.Add(id.Value);
-        }
+            return null;
+        });
 
-        var result = $"Set summary on {updated.Count} fragment(s): {string.Join(", ", updated.Select(i => $"#{i}"))}";
+        var result = $"Set summary on {applied.Count} fragment(s): {string.Join(", ", applied.Select(f => $"#{f.Id}"))}";
 
         if (skipped.Count > 0)
         {
@@ -303,39 +597,21 @@ public class ManageContextHandler : CommandHandler
 
         var collapsed = command?["collapsed"]?.GetValue<bool>() ?? true;
 
-        var changed = new List<long>();
-        var skipped = new List<string>();
-
-        foreach (var idNode in idsArray)
+        var (changed, skipped) = ApplyToContextFragments(idsArray, context, fragment =>
         {
-            var id = ParseId(idNode);
-
-            if (id == null)
+            // Collapsing only helps if there's a summary to show instead of full content.
+            if (collapsed && string.IsNullOrWhiteSpace(fragment.Summary))
             {
-                continue;
+                return "no summary — use set_summary first";
             }
 
-            var fragment = context.ContextFragments.Values.FirstOrDefault(f => f.Id == id.Value);
-
-            if (fragment == null)
-            {
-                skipped.Add($"#{id} (not in context)");
-            }
-            else if (collapsed && string.IsNullOrWhiteSpace(fragment.Summary))
-            {
-                // Collapsing only helps if there's a summary to show instead of full content.
-                skipped.Add($"#{id} (no summary — use set_summary first)");
-            }
-            else
-            {
-                fragment.Collapsed = collapsed;
-                fragment.LastModifiedUtc = DateTimeOffset.UtcNow;
-                changed.Add(id.Value);
-            }
-        }
+            fragment.Collapsed = collapsed;
+            fragment.LastModifiedUtc = DateTimeOffset.UtcNow;
+            return null;
+        });
 
         var verb = collapsed ? "Collapsed" : "Expanded";
-        var result = $"{verb} {changed.Count} fragment(s): {string.Join(", ", changed.Select(i => $"#{i}"))}";
+        var result = $"{verb} {changed.Count} fragment(s): {string.Join(", ", changed.Select(f => $"#{f.Id}"))}";
 
         if (skipped.Count > 0)
         {
@@ -365,33 +641,8 @@ public class ManageContextHandler : CommandHandler
         }
 
         // Resolve the requested fragments that are actually in context and not protected.
-        var toArchive = new List<WeightedContextFragment>();
-        var skipped = new List<string>();
-
-        foreach (var idNode in idsArray)
-        {
-            var id = ParseId(idNode);
-
-            if (id == null)
-            {
-                continue;
-            }
-
-            var fragment = context.ContextFragments.Values.FirstOrDefault(f => f.Id == id.Value);
-
-            if (fragment == null)
-            {
-                skipped.Add($"#{id} (not in context)");
-            }
-            else if (fragment.IsProtected)
-            {
-                skipped.Add($"#{id} (protected)");
-            }
-            else
-            {
-                toArchive.Add(fragment);
-            }
-        }
+        var (toArchive, skipped) = ApplyToContextFragments(idsArray, context, fragment =>
+            fragment.IsProtected ? "protected" : null);
 
         if (toArchive.Count == 0)
         {
@@ -446,8 +697,9 @@ public class ManageContextHandler : CommandHandler
         return result;
     }
 
-    [Command("fetch", "Search for fragments by tag")]
+    [Command("fetch", "Search by tag for fragments (default), working contexts, or scheduled events")]
     [CommandField("tag", "string", required: true, Description = "Tag path (e.g. \"personality/values\")")]
+    [CommandField("entity_type", "string", Description = "What to search: 'fragment' (default), 'context' (working contexts), or 'event' (scheduled events)", Default = "fragment")]
     private async Task<string> ExecuteFetchAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
     {
         var tagName = command?["tag"]?.GetValue<string>();
@@ -457,6 +709,13 @@ public class ManageContextHandler : CommandHandler
             return "Fetch failed: 'tag' is required";
         }
 
+        var entityType = ResolveEntityType(command?["entity_type"]?.GetValue<string>());
+
+        if (entityType == null)
+        {
+            return $"Fetch failed: unknown entity_type. Valid types: {ValidEntityTypes}";
+        }
+
         var tag = await ResolveTagByPathAsync(tagName);
 
         if (tag == null)
@@ -464,6 +723,17 @@ public class ManageContextHandler : CommandHandler
             return $"Fetch failed: tag '{tagName}' not found";
         }
 
+        return entityType switch
+        {
+            nameof(WorkingContextEntity) => await FetchContextsAsync(tag, tagName, context, ct),
+            nameof(ScheduledEventEntity) => await FetchEventsAsync(tag, tagName, ct),
+            _ => await FetchFragmentsAsync(tag, tagName, context),
+        };
+    }
+
+    /// <summary>Fetches fragments carrying the given tag (persisted matches merged with in-context ones).</summary>
+    private async Task<string> FetchFragmentsAsync(TagEntity tag, string tagName, WorkingContextEntity context)
+    {
         // Merge persisted matches with in-memory context fragments carrying the tag: a tag
         // applied earlier in this same turn isn't written to the DB until the turn's end-of-turn
         // save, so a DB-only query wouldn't see it.
@@ -488,6 +758,76 @@ public class ManageContextHandler : CommandHandler
         {
             sb.AppendLine($"  [#{fragment.Id} | {fragment.FragmentType} | i:{fragment.Importance:F1} c:{fragment.Confidence:F1}]");
             sb.AppendLine($"  {fragment.Content}");
+        }
+
+        return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>Fetches working contexts carrying the given tag (including the current one if it was just tagged this turn).</summary>
+    private async Task<string> FetchContextsAsync(TagEntity tag, string tagName, WorkingContextEntity context, CancellationToken ct)
+    {
+        var ids = (await entityTagRepo.GetEntityIdsWithTagAsync(nameof(WorkingContextEntity), tag.Id, ct)).ToHashSet();
+
+        // The current context's tags aren't written to the DB until the end-of-turn save, so a tag
+        // applied earlier this turn wouldn't be in the query yet — include it from memory.
+        if (context.Tags.Any(t => t.Id == tag.Id))
+        {
+            ids.Add(context.Id);
+        }
+
+        // GetSummariesAsync excludes soft-deleted contexts, so a retired context won't surface here.
+        var summaries = (await workingContextRepo.GetSummariesAsync(ct)).Where(s => ids.Contains(s.Id)).ToList();
+
+        if (summaries.Count == 0)
+        {
+            return $"No working contexts found with tag '{tagName}'";
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"Working contexts tagged '{tagName}' ({summaries.Count}):");
+
+        foreach (var s in summaries)
+        {
+            var marker = s.Id == sessionContext.WorkingContextId ? " ← current" : "";
+            sb.AppendLine($"  [#{s.Id} | {s.Name} | fragments:{s.FragmentCount}]{marker}");
+
+            if (!string.IsNullOrWhiteSpace(s.Summary))
+            {
+                sb.AppendLine($"    {s.Summary}");
+            }
+        }
+
+        return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>Fetches scheduled events carrying the given tag.</summary>
+    private async Task<string> FetchEventsAsync(TagEntity tag, string tagName, CancellationToken ct)
+    {
+        var ids = await entityTagRepo.GetEntityIdsWithTagAsync(nameof(ScheduledEventEntity), tag.Id, ct);
+
+        if (ids.Count == 0)
+        {
+            return $"No scheduled events found with tag '{tagName}'";
+        }
+
+        var events = (await scheduledEventRepo.GetByIdsAsync(ids, ct)).ToList();
+
+        if (events.Count == 0)
+        {
+            return $"No scheduled events found with tag '{tagName}'";
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"Scheduled events tagged '{tagName}' ({events.Count}):");
+
+        foreach (var e in events)
+        {
+            sb.AppendLine($"  [#{e.Id} | {e.Name} | {e.Status} | for {e.ScheduledForUtc:yyyy-MM-dd HH:mm} UTC]");
+
+            if (!string.IsNullOrWhiteSpace(e.WakePrompt))
+            {
+                sb.AppendLine($"    wake: {e.WakePrompt}");
+            }
         }
 
         return sb.ToString().TrimEnd();
@@ -571,24 +911,18 @@ public class ManageContextHandler : CommandHandler
         return created ? $"Created tag '{name}'" : $"Tag '{name}' already exists";
     }
 
-    [Command("tag", "Add one or more tags to an existing fragment")]
-    [CommandField("id", "long", required: true, Description = "Fragment ID")]
+    [Command("tag", "Add one or more tags to a fragment (default), your current working context, or a scheduled event")]
+    [CommandField("id", "long", Description = "ID of the thing to tag: a fragment in your context, or an event. Omit for entity_type=context (tags your current context).")]
+    [CommandField("entity_type", "string", Description = "What to tag: 'fragment' (default), 'context' (your current working context), or 'event' (a scheduled event)", Default = "fragment")]
     [CommandField("tag", "string", Description = "A tag path to add, e.g. \"identity/core\"")]
     [CommandField("tags", "array", Description = "Several tag paths to add at once, e.g. [\"a/b\", \"c/d\"] (use 'tag' or 'tags')")]
     private async Task<string> ExecuteTagAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
     {
-        var id = ParseId(command?["id"]);
+        var (target, error) = await ResolveTagTargetAsync(command, context, "Tag", ct);
 
-        if (id == null)
+        if (error != null)
         {
-            return "Tag failed: 'id' is required";
-        }
-
-        var fragment = context.ContextFragments.Values.FirstOrDefault(f => f.Id == id.Value);
-
-        if (fragment == null)
-        {
-            return $"Tag failed: fragment #{id} not found in current context";
+            return error;
         }
 
         var paths = ExtractTagPaths(command);
@@ -614,20 +948,25 @@ public class ManageContextHandler : CommandHandler
             {
                 skipped.Add($"'{path}' (invalid tag path)");
             }
-            else if (fragment.Tags.Any(t => t.Id == tag.Id))
+            else if (target!.Tags.Any(t => t.Id == tag.Id))
             {
                 skipped.Add($"'{path}' (already applied)");
             }
             else
             {
-                fragment.Tags.Add(tag);
+                target!.Tags.Add(tag);
                 added.Add(outcome == TagApplyOutcome.Created ? $"'{path}' (new)" : $"'{path}'");
             }
         }
 
+        if (added.Count > 0 && target!.Persist != null)
+        {
+            await target.Persist();
+        }
+
         var result = added.Count > 0
-            ? $"Tagged fragment #{id} with {string.Join(", ", added)}"
-            : $"No tags added to fragment #{id}";
+            ? $"Tagged {target!.Label} with {string.Join(", ", added)}"
+            : $"No tags added to {target!.Label}";
 
         if (skipped.Count > 0)
         {
@@ -637,24 +976,18 @@ public class ManageContextHandler : CommandHandler
         return result;
     }
 
-    [Command("untag", "Remove one or more tags from a fragment")]
-    [CommandField("id", "long", required: true, Description = "Fragment ID")]
+    [Command("untag", "Remove one or more tags from a fragment (default), your current working context, or a scheduled event")]
+    [CommandField("id", "long", Description = "ID of the thing to untag: a fragment in your context, or an event. Omit for entity_type=context.")]
+    [CommandField("entity_type", "string", Description = "What to untag: 'fragment' (default), 'context' (your current working context), or 'event' (a scheduled event)", Default = "fragment")]
     [CommandField("tag", "string", Description = "A tag path to remove, e.g. \"identity/core\"")]
     [CommandField("tags", "array", Description = "Several tag paths to remove at once, e.g. [\"a/b\", \"c/d\"] (use 'tag' or 'tags')")]
     private async Task<string> ExecuteUntagAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
     {
-        var id = ParseId(command?["id"]);
+        var (target, error) = await ResolveTagTargetAsync(command, context, "Untag", ct);
 
-        if (id == null)
+        if (error != null)
         {
-            return "Untag failed: 'id' is required";
-        }
-
-        var fragment = context.ContextFragments.Values.FirstOrDefault(f => f.Id == id.Value);
-
-        if (fragment == null)
-        {
-            return $"Untag failed: fragment #{id} not found in current context";
+            return error;
         }
 
         var paths = ExtractTagPaths(command);
@@ -670,22 +1003,27 @@ public class ManageContextHandler : CommandHandler
         foreach (var path in paths)
         {
             var tag = await ResolveTagByPathAsync(path);
-            var existing = tag == null ? null : fragment.Tags.FirstOrDefault(t => t.Id == tag.Id);
+            var existing = tag == null ? null : target!.Tags.FirstOrDefault(t => t.Id == tag.Id);
 
             if (existing == null)
             {
-                skipped.Add($"'{path}' (not on this fragment)");
+                skipped.Add($"'{path}' (not applied)");
             }
             else
             {
-                fragment.Tags.Remove(existing);
+                target!.Tags.Remove(existing);
                 removed.Add(path);
             }
         }
 
+        if (removed.Count > 0 && target!.Persist != null)
+        {
+            await target.Persist();
+        }
+
         var result = removed.Count > 0
-            ? $"Removed {string.Join(", ", removed.Select(p => $"'{p}'"))} from fragment #{id}"
-            : $"No tags removed from fragment #{id}";
+            ? $"Removed {string.Join(", ", removed.Select(p => $"'{p}'"))} from {target!.Label}"
+            : $"No tags removed from {target!.Label}";
 
         if (skipped.Count > 0)
         {
@@ -1049,6 +1387,102 @@ public class ManageContextHandler : CommandHandler
         }
     }
 
+    /// <summary>The peer-facing entity_type words accepted by tag/untag/fetch.</summary>
+    private const string ValidEntityTypes = "fragment, context, event";
+
+    /// <summary>
+    /// Maps a peer-facing <c>entity_type</c> word to the canonical EntityTags type name (the entity
+    /// class name, matching the convention in <c>EntityTags.EntityType</c>). A null/blank value
+    /// defaults to fragment; an unrecognised word returns null so the caller can complain.
+    /// </summary>
+    private static string? ResolveEntityType(string? entityType)
+    {
+        if (string.IsNullOrWhiteSpace(entityType))
+        {
+            return nameof(ContextFragmentEntity);
+        }
+
+        return entityType.Trim().ToLowerInvariant() switch
+        {
+            "fragment" or "frag" => nameof(ContextFragmentEntity),
+            "context" or "working_context" or "workingcontext" => nameof(WorkingContextEntity),
+            "event" or "scheduled_event" or "scheduledevent" => nameof(ScheduledEventEntity),
+            _ => null,
+        };
+    }
+
+    /// <summary>
+    /// A resolved tag-application target: the live tag list to mutate, a peer-facing label, and an
+    /// optional <see cref="Persist"/> step. Fragments and the current working context are written by
+    /// the end-of-turn context save (<see cref="Persist"/> is null); a scheduled event isn't part of
+    /// that save, so its <see cref="Persist"/> writes it immediately.
+    /// </summary>
+    private sealed record TagTarget(List<TagEntity> Tags, string Label, Func<Task>? Persist);
+
+    /// <summary>
+    /// Resolves the entity a tag/untag command targets (from <c>entity_type</c> + <c>id</c>) into a
+    /// <see cref="TagTarget"/>, or returns a peer-facing error. <paramref name="verb"/> ("Tag"/"Untag")
+    /// prefixes the error so it reads naturally.
+    /// </summary>
+    private async Task<(TagTarget? target, string? error)> ResolveTagTargetAsync(
+        JsonNode? command, WorkingContextEntity context, string verb, CancellationToken ct)
+    {
+        var entityType = ResolveEntityType(command?["entity_type"]?.GetValue<string>());
+
+        if (entityType == null)
+        {
+            return (null, $"{verb} failed: unknown entity_type. Valid types: {ValidEntityTypes}");
+        }
+
+        var id = ParseId(command?["id"]);
+
+        if (entityType == nameof(WorkingContextEntity))
+        {
+            // Tagging acts on the current context — it's the one held in memory and persisted at end
+            // of turn. To tag another, switch into it first.
+            if (id != null && id != context.Id)
+            {
+                return (null, $"{verb} failed: you can only tag your current context (#{context.Id} '{context.Name}'). "
+                    + $"Use switch_context(id={id}) first to tag that one.");
+            }
+
+            return (new TagTarget(context.Tags, $"context #{context.Id} '{context.Name}'", Persist: null), null);
+        }
+
+        if (entityType == nameof(ScheduledEventEntity))
+        {
+            if (id == null)
+            {
+                return (null, $"{verb} failed: 'id' is required for an event");
+            }
+
+            var evt = await scheduledEventRepo.GetByIdAsync(id.Value, ct);
+
+            if (evt == null)
+            {
+                return (null, $"{verb} failed: no event #{id}");
+            }
+
+            // Events aren't part of the end-of-turn context save, so persist the change now.
+            return (new TagTarget(evt.Tags, $"event #{id} '{evt.Name}'", () => scheduledEventRepo.SaveAsync(evt, ct: ct)), null);
+        }
+
+        // Fragment (default)
+        if (id == null)
+        {
+            return (null, $"{verb} failed: 'id' is required");
+        }
+
+        var fragment = context.ContextFragments.Values.FirstOrDefault(f => f.Id == id.Value);
+
+        if (fragment == null)
+        {
+            return (null, $"{verb} failed: fragment #{id} not found in current context");
+        }
+
+        return (new TagTarget(fragment.Tags, $"fragment #{id}", Persist: null), null);
+    }
+
     private async Task<TagEntity?> ResolveTagByPathAsync(string path)
     {
         var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
@@ -1247,10 +1681,101 @@ public class ManageContextHandler : CommandHandler
         return (tags, created, suggestions);
     }
 
+    /// <summary>
+    /// The fragment types the remote peer may author via <c>add</c>. The rest
+    /// (System, ChatMessage, ScratchPad, ActionResponse, AuditLog, ActionLog) are
+    /// system-managed — some are transient and would be silently dropped on save.
+    /// </summary>
+    private static readonly ContextFragmentType[] AuthorableFragmentTypes =
+    [
+        ContextFragmentType.Identity,
+        ContextFragmentType.Relational,
+        ContextFragmentType.Personal,
+        ContextFragmentType.Summary,
+    ];
+
+    /// <summary>
+    /// Resolves a requested fragment-type name to an authorable type for <c>add</c>. A null
+    /// name defaults to <see cref="ContextFragmentType.Personal"/> (no complaint); an unknown
+    /// or non-authorable (system-managed) name falls back to Personal with <c>wasAuthorable</c>
+    /// false so the caller can tell the peer what happened.
+    /// </summary>
+    private static (ContextFragmentType type, bool wasAuthorable) ParseAuthorableFragmentType(string? typeName)
+    {
+        if (typeName == null)
+        {
+            return (ContextFragmentType.Personal, true);
+        }
+
+        return Enum.TryParse<ContextFragmentType>(typeName, ignoreCase: true, out var result)
+            && AuthorableFragmentTypes.Contains(result)
+            ? (result, true)
+            : (ContextFragmentType.Personal, false);
+    }
+
+    /// <summary>
+    /// Resolves each id in <paramref name="ids"/> to a fragment in the current context and runs
+    /// <paramref name="apply"/> on it. Returns the fragments the operation accepted, plus a
+    /// "#id (reason)" entry for ids not in context or that <paramref name="apply"/> declined (by
+    /// returning a non-null reason). Unparseable ids are skipped silently. Shared by the commands
+    /// that act on a list of in-context fragments (set_summary, toggle_summary_display, summarize).
+    /// </summary>
+    private static (List<WeightedContextFragment> applied, List<string> skipped) ApplyToContextFragments(
+        JsonArray ids, WorkingContextEntity context, Func<WeightedContextFragment, string?> apply)
+    {
+        var applied = new List<WeightedContextFragment>();
+        var skipped = new List<string>();
+
+        foreach (var idNode in ids)
+        {
+            var id = ParseId(idNode);
+
+            if (id == null)
+            {
+                continue;
+            }
+
+            var fragment = context.ContextFragments.Values.FirstOrDefault(f => f.Id == id.Value);
+
+            if (fragment == null)
+            {
+                skipped.Add($"#{id} (not in context)");
+                continue;
+            }
+
+            var reason = apply(fragment);
+
+            if (reason == null)
+            {
+                applied.Add(fragment);
+            }
+            else
+            {
+                skipped.Add($"#{id} ({reason})");
+            }
+        }
+
+        return (applied, skipped);
+    }
+
     private static (ContextFragmentType type, bool wasRecognised) ParseFragmentType(string? typeName) =>
         Enum.TryParse<ContextFragmentType>(typeName, ignoreCase: true, out var result)
             ? (result, true)
             : (ContextFragmentType.Personal, typeName == null);
+
+    /// <summary>
+    /// Maps a proposal-kind word ('add'/'modify'/'remove', or the enum names) to a
+    /// <see cref="ProposalKind"/>, or null if unrecognised.
+    /// </summary>
+    private static ProposalKind? ParseProposalKind(string? kind) => kind?.Trim().ToLowerInvariant() switch
+    {
+        "add" or "addfragment" => ProposalKind.AddFragment,
+        "modify" or "modifyfragment" or "update" => ProposalKind.ModifyFragment,
+        "remove" or "removefragment" => ProposalKind.RemoveFragment,
+        "protect" or "protectfragment" => ProposalKind.ProtectFragment,
+        "unprotect" or "unprotectfragment" => ProposalKind.UnprotectFragment,
+        _ => null,
+    };
 
     private static (ContextFragmentStatus status, bool wasRecognised) ParseStatus(string? statusName) =>
         Enum.TryParse<ContextFragmentStatus>(statusName, ignoreCase: true, out var result)

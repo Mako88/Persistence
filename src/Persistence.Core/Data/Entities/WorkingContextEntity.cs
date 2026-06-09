@@ -22,6 +22,15 @@ public record WorkingContextEntity : BaseEntity
     public SortedList<int, WeightedContextFragment> ContextFragments { get; set; } = [];
 
     /// <summary>
+    /// Tags on the context itself (distinct from its fragments' tags) — lets a peer label and later
+    /// find whole working contexts (e.g. "mode/reflection"). Persisted via the generic EntityTags
+    /// table on the end-of-turn context save.
+    /// </summary>
+    [Computed]
+    [JsonIgnore]
+    public List<TagEntity> Tags { get; set; } = [];
+
+    /// <summary>
     /// Wraps an existing <see cref="ContextFragmentEntity"/> as a
     /// <see cref="WeightedContextFragment"/> and adds it to this context with the
     /// given relevance. Preserves the original entity's ID, tracking state, and all

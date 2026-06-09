@@ -44,7 +44,7 @@ public enum ContextFragmentType
     Identity = 1,
     Relational = 2,
     ChatMessage = 3,
-    Proposal = 4,
+    // 4 was Proposal — now a first-class entity (the Proposals table), not a fragment type.
     Summary = 5,
     ScratchPad = 6, // Fragments of type ScratchPad are never saved to the DB - they exist only in the current session and current working context
     Personal = 7, // Anything the remote peer wants to save that doesn't fit in other categories

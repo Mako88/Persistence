@@ -25,14 +25,9 @@ builder.Host.ConfigureContainer<ContainerBuilder>(container =>
         if (!Enum.TryParse<UiMode>(config.UiMode, ignoreCase: true, out var uiMode))
             throw new ArgumentException($"Unrecognized UiMode value: '{config.UiMode}'");
 
-        if (!Enum.TryParse<ResponseFormat>(config.ResponseFormat, ignoreCase: true, out var responseFormat))
-            throw new ArgumentException($"Unrecognized ResponseFormat value: '{config.ResponseFormat}'");
-
         b.Register(c => c.ResolveKeyed<IModelClient>(provider));
         b.Register(c => c.ResolveKeyed<IPromptBuilder>(provider));
         b.Register(c => c.ResolveKeyed<IDisplayProvider>(uiMode));
-        b.Register(c => c.ResolveKeyed<IModelResponseParser>(responseFormat));
-        b.Register(c => c.ResolveKeyed<IProtocolInstructions>(responseFormat));
     });
 });
 

@@ -42,7 +42,7 @@ public static class IoC
             .Where(x => x.FullName?.StartsWith("Persistence") == true)
             .ToList();
 
-        RegisterDapperTypeHandlers(assemblies);
+        RegisterDapperTypeHandlers();
 
         registerAdditionalServices?.Invoke(containerBuilder);
 
@@ -56,44 +56,13 @@ public static class IoC
     }
 
     /// <summary>
-    /// Registers all Dapper type handlers the data layer relies on: the
-    /// <see cref="DateTimeOffset"/> handler and a string-backed handler for every public
-    /// enum. Exposed so tests can exercise the repositories with the same hydration the
-    /// app uses, instead of going through the full DI container. Defaults to scanning the
-    /// loaded Persistence assemblies.
+    /// Registers the Dapper type handlers the data layer relies on (currently just the
+    /// <see cref="DateTimeOffset"/> handler). Exposed so tests hydrate repositories the same way the
+    /// app does. Enums need no handler — Dapper deserializes int/text enum columns natively, and the
+    /// write side stores the integer value regardless (see notes in the data layer).
     /// </summary>
-    public static void RegisterDapperTypeHandlers(IEnumerable<Assembly>? assemblies = null)
-    {
+    public static void RegisterDapperTypeHandlers() =>
         SqlMapper.AddTypeHandler(new DateTimeOffsetMapper());
-
-        assemblies ??= AppDomain.CurrentDomain.GetAssemblies()
-            .Where(x => x.FullName?.StartsWith("Persistence") == true);
-
-        foreach (var assembly in assemblies)
-        {
-            foreach (var type in assembly.GetTypes())
-            {
-                RegisterEnumTypeHandler(type);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Registers type handlers so Dapper stores all enum values as their string name
-    /// rather than integer value
-    /// </summary>
-    private static void RegisterEnumTypeHandler(Type enumType)
-    {
-        if (!enumType.IsEnum || !enumType.IsPublic)
-        {
-            return;
-        }
-
-        var handlerType = typeof(EnumTypeHandler<>);
-
-        var handler = (SqlMapper.ITypeHandler)Activator.CreateInstance(handlerType.MakeGenericType(enumType))!;
-        SqlMapper.AddTypeHandler(enumType, handler);
-    }
 
     /// <summary>
     /// Registers a type in the DI container for each service registration attribute it carries.

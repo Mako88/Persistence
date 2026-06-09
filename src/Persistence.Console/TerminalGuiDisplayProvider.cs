@@ -112,6 +112,8 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
 
     public void ShowMessageQueued(string text) => Append(outputBuffer, () => output, $"[Queued: {text}]\n");
 
+    public void ShowSystemMessage(string message) => Append(outputBuffer, () => output, $"{message}\n\n");
+
     public void ShowUnknownCommand(string command) => Append(outputBuffer, () => output, $"Unknown command: {command}\n\n");
 
     public void ShowDebugInfo(string info) => Append(debugBuffer, () => debug, info + "\n");

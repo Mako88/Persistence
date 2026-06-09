@@ -176,6 +176,11 @@ public class ApiDisplayProvider : IDisplayProvider
     public void ShowWakeUpEvent(ScheduledEventEntity evt) => Append("wakeup", evt.Name);
 
     /// <summary>
+    /// Appends a system/local message (e.g. a slash-command result) to the log as a "system" event
+    /// </summary>
+    public void ShowSystemMessage(string message) => Append("system", message);
+
+    /// <summary>
     /// Appends an unrecognised slash-command message to the log as an "error" event
     /// </summary>
     public void ShowUnknownCommand(string command) => Append("error", $"Unknown command: {command}");

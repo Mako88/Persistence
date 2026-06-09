@@ -16,11 +16,16 @@ namespace Persistence.Data.Repositories;
 [Singleton]
 public class TagRepository : EntityRepository<TagEntity>, ITagRepository
 {
+    private readonly IEntityTagRepository entityTagRepo;
+
     /// <summary>
     /// Constructor
     /// </summary>
-    public TagRepository(IAppConfig config, ISessionContext sessionContext)
-        : base(config, sessionContext) { }
+    public TagRepository(IAppConfig config, ISessionContext sessionContext, IEntityTagRepository entityTagRepo)
+        : base(config, sessionContext)
+    {
+        this.entityTagRepo = entityTagRepo;
+    }
 
     /// <summary>
     /// Returns all root tags (those with no parent), with children populated
@@ -72,7 +77,7 @@ public class TagRepository : EntityRepository<TagEntity>, ITagRepository
             }
         }
 
-        await ExecuteAsync($"DELETE FROM ContextFragmentTags WHERE TagId IN {toDelete}", ct: ct);
+        await entityTagRepo.RemoveTagsAsync(toDelete);
         await ExecuteAsync($"DELETE FROM Tags WHERE Id IN {toDelete}", ct: ct);
 
         return toDelete.Count;

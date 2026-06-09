@@ -55,9 +55,10 @@ public class WakeUpMonitor : IWakeUpMonitor
     }
 
     /// <summary>
-    /// Finds due events, marks each as triggered, and notifies subscribers
+    /// Finds due events, marks each as triggered, and notifies subscribers. Internal (not on
+    /// <see cref="IWakeUpMonitor"/>) so tests can exercise the fire logic without the 30s timer.
     /// </summary>
-    private async Task CheckAndFireAsync()
+    internal async Task CheckAndFireAsync()
     {
         var dueEvents = (await scheduledEvents.GetDueEventsAsync()).ToList();
 

@@ -17,7 +17,7 @@ public class AppConfig : IAppConfig
     public string ReasoningEffort { get; set; } = "high";
     public bool Streaming { get; set; } = true;
     public string UiMode { get; set; } = "Tui";
-    public string ResponseFormat { get; set; } = "Tagged";
+    public string ProposalApproval { get; set; } = "Self";
     public bool DebugMode { get; set; } = false;
     public int MaxActionIterations { get; set; } = 5;
     public int RequestTimeoutSeconds { get; set; } = 600;
@@ -168,4 +168,21 @@ public enum UiMode
 {
     Tui = 1,
     Api = 2,
+}
+
+/// <summary>
+/// Who may accept a proposal (a change to the peer's own memory, including protected fragments).
+/// </summary>
+public enum ProposalApproval
+{
+    /// <summary>The remote peer accepts its own proposals (after a deliberation gap — it can't
+    /// accept one in the same turn it proposed it).</summary>
+    Self = 0,
+
+    /// <summary>Only the local peer accepts, via their own controls; the remote peer can propose
+    /// and reject but not accept.</summary>
+    Participant = 1,
+
+    /// <summary>Either the remote peer (with the deliberation gap) or the local peer may accept.</summary>
+    Both = 2,
 }

@@ -42,9 +42,10 @@ public class ExecuteActionsHandler : CommandHandler
 
     #region Commands
 
-    [Command("schedule", "Schedule a future event")]
+    [Command("schedule", "Schedule a future event that will wake you for an autonomous turn at the given time")]
     [CommandField("name", "string", required: true, Description = "Event name")]
     [CommandField("scheduled_for", "string", required: true, Description = "UTC datetime in ISO 8601 format, e.g. \"2026-12-01T09:00:00Z\"")]
+    [CommandField("wake_prompt", "string", Description = "A note to yourself, surfaced to you when this wakes you (e.g. \"reconsider whether I still value X\")")]
     [CommandField("notes", "string", Description = "Additional notes")]
     private async Task<string> ExecuteScheduleAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
     {
@@ -76,6 +77,7 @@ public class ExecuteActionsHandler : CommandHandler
             ScheduledForUtc = scheduledFor.UtcDateTime,
             Status = ScheduledEventStatus.Pending,
             Notes = command?["notes"]?.GetValue<string>(),
+            WakePrompt = command?["wake_prompt"]?.GetValue<string>(),
 
             CreatedUtc = now,
             LastModifiedUtc = now,

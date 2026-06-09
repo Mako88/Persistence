@@ -25,6 +25,7 @@ public class TurnHandler : ITurnHandler
     private readonly IWorkingContextRepository workingContextRepo;
     private readonly ITagRepository tagRepo;
     private readonly IActionLogRepository actionLogRepo;
+    private readonly IAuditLogRepository auditLogRepo;
     private readonly ISessionContext sessionContext;
     private readonly IModelClient modelClient;
     private readonly IModelResponseParser responseParser;
@@ -36,6 +37,10 @@ public class TurnHandler : ITurnHandler
 
     private readonly ConcurrentQueue<string> pendingInput = new();
 
+    // System notes queued from outside a turn (e.g. the local peer accepted/rejected a proposal),
+    // surfaced to the peer as transient context at the start of its next turn.
+    private readonly ConcurrentQueue<string> pendingSystemNotes = new();
+
     /// <summary>
     /// Constructor
     /// </summary>
@@ -43,6 +48,7 @@ public class TurnHandler : ITurnHandler
         IWorkingContextRepository workingContextRepo,
         ITagRepository tagRepo,
         IActionLogRepository actionLogRepo,
+        IAuditLogRepository auditLogRepo,
         ISessionContext sessionContext,
         IModelClient modelClient,
         IModelResponseParser responseParser,
@@ -55,6 +61,7 @@ public class TurnHandler : ITurnHandler
         this.workingContextRepo = workingContextRepo;
         this.tagRepo = tagRepo;
         this.actionLogRepo = actionLogRepo;
+        this.auditLogRepo = auditLogRepo;
         this.sessionContext = sessionContext;
         this.modelClient = modelClient;
         this.responseParser = responseParser;
@@ -70,13 +77,27 @@ public class TurnHandler : ITurnHandler
     /// dispatching to action handlers, and stops when the remote peer yields
     /// or the iteration cap is reached
     /// </summary>
-    public async Task ExecuteTurnAsync(string? input = null, CancellationToken ct = default)
+    public async Task ExecuteTurnAsync(string? input = null, string? wakeNote = null, CancellationToken ct = default)
     {
+        // Stamp the turn start so the proposal deliberation gap can tell "proposed this turn"
+        // from "proposed earlier" — a proposal can only be accepted in a later turn.
+        sessionContext.TurnStartedUtc = DateTimeOffset.UtcNow;
+
         var context = await workingContextRepo.GetByIdAsync(sessionContext.WorkingContextId, ct);
 
         if (context == null)
         {
             return;
+        }
+
+        while (pendingSystemNotes.TryDequeue(out var note))
+        {
+            AddSystemNote(context, note);
+        }
+
+        if (wakeNote != null)
+        {
+            AddSystemNote(context, wakeNote);
         }
 
         if (input != null)
@@ -87,6 +108,10 @@ public class TurnHandler : ITurnHandler
         DrainPendingInput(context, annotate: input != null);
 
         var availableTags = await tagRepo.GetAllRootAsync();
+        // The peer's recent self-changes (as of turn start), surfaced in the sensory block so it can
+        // re-orient across sessions. Fetched once: new changes land in the audit log only on the
+        // end-of-turn save, so they'd show up next turn anyway.
+        var recentChanges = await auditLogRepo.GetRecentSelfChangesAsync(5, ct);
         var iteration = 0;
         var hasResponded = false;
 
@@ -97,7 +122,7 @@ public class TurnHandler : ITurnHandler
                 DrainPendingInput(context);
             }
 
-            var segments = promptFormatter.Format(context, availableTags, iteration, config.MaxActionIterations);
+            var segments = promptFormatter.Format(context, availableTags, iteration, config.MaxActionIterations, recentChanges);
             var request = promptBuilder.Build(segments);
             var rawOutput = config.Streaming
                 ? await StreamModelOutputAsync(request, ct)
@@ -109,6 +134,10 @@ public class TurnHandler : ITurnHandler
                 if (iteration < config.MaxActionIterations)
                 {
                     AddParseErrorFeedback(context, rawOutput);
+                    // Count the failed attempt — otherwise a model that never produces a parseable
+                    // response (a real risk with small local models) would loop forever, since the
+                    // increment at the bottom of the loop is skipped by `continue`.
+                    iteration++;
                     continue;
                 }
 
@@ -148,6 +177,22 @@ public class TurnHandler : ITurnHandler
                     "[Turn ended: maximum action iterations reached]"));
             }
 
+            // A switch_context action this round repointed the session at a different working
+            // context. Persist the current one and load the target so the next round (and the
+            // end-of-turn save) operate on the newly-active context.
+            if (sessionContext.WorkingContextId != context.Id)
+            {
+                await workingContextRepo.SaveAsync(context, ct: ct);
+
+                var switched = await workingContextRepo.GetByIdAsync(sessionContext.WorkingContextId, ct);
+                if (switched == null)
+                {
+                    break;
+                }
+
+                context = switched;
+            }
+
             iteration++;
         }
 
@@ -162,6 +207,11 @@ public class TurnHandler : ITurnHandler
     /// before the next model call within the current turn's iteration loop.
     /// </summary>
     public void EnqueueInput(string input) => pendingInput.Enqueue(input);
+
+    /// <summary>
+    /// Queues a system note to surface to the peer at the start of its next turn.
+    /// </summary>
+    public void EnqueueSystemNote(string note) => pendingSystemNotes.Enqueue(note);
 
     /// <summary>
     /// Whether there are any pending input messages waiting to be processed.
@@ -201,6 +251,28 @@ public class TurnHandler : ITurnHandler
     /// ActionResponse fragment is prepended so the remote peer knows the messages
     /// arrived mid-turn.
     /// </summary>
+    /// <summary>
+    /// Injects a system note (a wake-up's framing, or an out-of-band notice like the local peer
+    /// resolving a proposal) as a transient <see cref="ContextFragmentType.ActionResponse"/> fragment
+    /// — informs this turn, not persisted, and not attributed to the local peer.
+    /// </summary>
+    private static void AddSystemNote(WorkingContextEntity context, string note)
+    {
+        var now = DateTimeOffset.UtcNow;
+
+        context.AddFragment(new WeightedContextFragment
+        {
+            FragmentType = ContextFragmentType.ActionResponse,
+            Status = ContextFragmentStatus.Active,
+            Content = note,
+            Importance = 1.0f,
+            Confidence = 1.0f,
+            Relevance = 1.0f,
+            CreatedUtc = now,
+            LastModifiedUtc = now,
+        });
+    }
+
     private void DrainPendingInput(WorkingContextEntity context, bool annotate = true)
     {
         var injected = new List<string>();

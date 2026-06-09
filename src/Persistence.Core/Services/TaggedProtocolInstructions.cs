@@ -7,7 +7,7 @@ namespace Persistence.Services;
 /// command blocks. Designed so prose (replies, thoughts, fragment content) never needs JSON
 /// escaping.
 /// </summary>
-[Singleton(typeof(IProtocolInstructions), ResponseFormat.Tagged)]
+[Singleton(typeof(IProtocolInstructions))]
 public class TaggedProtocolInstructions : IProtocolInstructions
 {
     /// <summary>

@@ -60,9 +60,11 @@ public interface IAppConfig
     string UiMode { get; set; }
 
     /// <summary>
-    /// Selects the remote-peer response wire format ("Json" or "Tagged").
+    /// Who may accept a proposal (a self-change, including to protected fragments):
+    /// "Self" (remote peer, after a deliberation gap), "Participant" (local peer only),
+    /// or "Both".
     /// </summary>
-    string ResponseFormat { get; set; }
+    string ProposalApproval { get; set; }
 
     /// <summary>
     /// When true, displays raw prompts and model responses in the console

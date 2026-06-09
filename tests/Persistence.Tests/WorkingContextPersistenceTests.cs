@@ -32,8 +32,9 @@ public sealed class WorkingContextPersistenceTests : IAsyncLifetime
         var db = new DatabaseManager(config, session, resources, sources);
         await db.InitializeAsync(); // migrate + create system/local/remote sources
 
-        var fragmentRepo = new ContextFragmentRepository(config, session);
-        contextRepo = new WorkingContextRepository(config, session, fragmentRepo);
+        var entityTagRepo = new EntityTagRepository(config);
+        var fragmentRepo = new ContextFragmentRepository(config, session, entityTagRepo);
+        contextRepo = new WorkingContextRepository(config, session, fragmentRepo, entityTagRepo);
     }
 
     public Task DisposeAsync()

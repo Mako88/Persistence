@@ -16,6 +16,12 @@ public record ScheduledEventEntity : BaseEntity
 
     public required ScheduledEventStatus Status { get; set; }
 
+    /// <summary>
+    /// Optional note-to-self the peer leaves when scheduling, surfaced to it when the event wakes
+    /// it (e.g. "reconsider whether I still value X"). Null for a bare reminder.
+    /// </summary>
+    public string? WakePrompt { get; set; }
+
     [Computed]
     [JsonIgnore]
     public List<TagEntity> Tags { get; set; } = [];

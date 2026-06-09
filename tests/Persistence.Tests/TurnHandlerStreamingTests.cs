@@ -46,6 +46,8 @@ public class TurnHandlerStreamingTests
         tagRepo.Setup(t => t.GetAllRootAsync()).ReturnsAsync([]);
 
         var actionLogRepo = new Mock<IActionLogRepository>();
+        var auditLogRepo = new Mock<IAuditLogRepository>();
+        auditLogRepo.Setup(a => a.GetRecentSelfChangesAsync(It.IsAny<int>(), It.IsAny<CancellationToken>())).ReturnsAsync([]);
         actionLogRepo
             .Setup(a => a.LogAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<System.Data.IDbTransaction?>()))
             .Returns(Task.CompletedTask);
@@ -73,7 +75,7 @@ public class TurnHandlerStreamingTests
 
         var promptFormatter = new Mock<IPromptFormatter>();
         promptFormatter
-            .Setup(f => f.Format(It.IsAny<WorkingContextEntity>(), It.IsAny<IEnumerable<TagEntity>>(), It.IsAny<int>(), It.IsAny<int>()))
+            .Setup(f => f.Format(It.IsAny<WorkingContextEntity>(), It.IsAny<IEnumerable<TagEntity>>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<IReadOnlyList<AuditLogEntity>>()))
             .Returns([]);
 
         var promptBuilder = new Mock<IPromptBuilder>();
@@ -102,6 +104,7 @@ public class TurnHandlerStreamingTests
             workingContextRepo.Object,
             tagRepo.Object,
             actionLogRepo.Object,
+            auditLogRepo.Object,
             sessionContext.Object,
             modelClient.Object,
             responseParser.Object,
@@ -121,5 +124,119 @@ public class TurnHandlerStreamingTests
 
         // The non-streaming completion path was not used.
         modelClient.Verify(m => m.CompleteAsync(It.IsAny<PromptRequest>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    private static WorkingContextEntity NewContext(long id, string name) =>
+        new()
+        {
+            Id = id,
+            Name = name,
+            Summary = "s",
+            CreatedUtc = DateTimeOffset.UtcNow,
+            LastModifiedUtc = DateTimeOffset.UtcNow,
+        };
+
+    [Fact]
+    public async Task SwitchingContextMidTurn_SavesCurrentAndLoadsTarget()
+    {
+        // Two contexts; the session starts on A. A ManageContext action on the first round
+        // repoints the session at B (as switch_context does), then the peer continues.
+        var ctxA = NewContext(1, "A");
+        var ctxB = NewContext(2, "B");
+
+        var session = new SessionContext { WorkingContextId = 1 };
+
+        var workingContextRepo = new Mock<IWorkingContextRepository>();
+        workingContextRepo.Setup(r => r.GetByIdAsync(1, It.IsAny<CancellationToken>())).ReturnsAsync(ctxA);
+        workingContextRepo.Setup(r => r.GetByIdAsync(2, It.IsAny<CancellationToken>())).ReturnsAsync(ctxB);
+
+        var saved = new List<WorkingContextEntity>();
+        workingContextRepo
+            .Setup(r => r.SaveAsync(It.IsAny<WorkingContextEntity>(), It.IsAny<System.Data.IDbTransaction?>(), It.IsAny<CancellationToken>()))
+            .Callback<WorkingContextEntity, System.Data.IDbTransaction?, CancellationToken>((c, _, _) => saved.Add(c))
+            .Returns(Task.CompletedTask);
+
+        var tagRepo = new Mock<ITagRepository>();
+        tagRepo.Setup(t => t.GetAllRootAsync()).ReturnsAsync([]);
+
+        var actionLogRepo = new Mock<IActionLogRepository>();
+        var auditLogRepo = new Mock<IAuditLogRepository>();
+        auditLogRepo.Setup(a => a.GetRecentSelfChangesAsync(It.IsAny<int>(), It.IsAny<CancellationToken>())).ReturnsAsync([]);
+
+        var modelClient = new Mock<IModelClient>();
+        modelClient
+            .Setup(m => m.CompleteAsync(It.IsAny<PromptRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync("x");
+
+        // Round 1: a context-management action, then continue. Round 2: respond and stop.
+        var responseParser = new Mock<IModelResponseParser>();
+        responseParser
+            .SetupSequence(p => p.Parse(It.IsAny<string>()))
+            .Returns(new ModelTurn
+            {
+                Actions = [new ModelResponse { Action = ModelAction.ManageContext }],
+                Continue = true,
+                ParsedSuccessfully = true,
+            })
+            .Returns(new ModelTurn
+            {
+                Actions = [new ModelResponse { Action = ModelAction.RespondToUser }],
+                Continue = false,
+                ParsedSuccessfully = true,
+            });
+
+        var promptFormatter = new Mock<IPromptFormatter>();
+        promptFormatter
+            .Setup(f => f.Format(It.IsAny<WorkingContextEntity>(), It.IsAny<IEnumerable<TagEntity>>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<IReadOnlyList<AuditLogEntity>>()))
+            .Returns([]);
+
+        var promptBuilder = new Mock<IPromptBuilder>();
+        promptBuilder
+            .Setup(b => b.Build(It.IsAny<List<PromptSegment>>()))
+            .Returns(new PromptRequest { Messages = [] });
+
+        // The manage-context handler simulates switch_context by repointing the session.
+        var manageHandler = new Mock<IActionHandler>();
+        manageHandler
+            .Setup(h => h.HandleAsync(It.IsAny<WorkingContextEntity>(), It.IsAny<JsonNode?>(), It.IsAny<CancellationToken>()))
+            .Callback(() => session.WorkingContextId = 2)
+            .Returns(Task.CompletedTask);
+
+        var respondHandler = new Mock<IActionHandler>();
+        respondHandler
+            .Setup(h => h.HandleAsync(It.IsAny<WorkingContextEntity>(), It.IsAny<JsonNode?>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        var manageObj = manageHandler.Object;
+        var respondObj = respondHandler.Object;
+        var actionHandlers = new Mock<IIndex<ModelAction, IActionHandler>>();
+        actionHandlers.Setup(i => i.TryGetValue(ModelAction.ManageContext, out manageObj)).Returns(true);
+        actionHandlers.Setup(i => i.TryGetValue(ModelAction.RespondToUser, out respondObj)).Returns(true);
+
+        var config = new AppConfig { Streaming = false, MaxActionIterations = 5 };
+
+        var turnHandler = new TurnHandler(
+            workingContextRepo.Object,
+            tagRepo.Object,
+            actionLogRepo.Object,
+            auditLogRepo.Object,
+            session,
+            modelClient.Object,
+            responseParser.Object,
+            promptFormatter.Object,
+            promptBuilder.Object,
+            actionHandlers.Object,
+            new EventBus(),
+            config);
+
+        await turnHandler.ExecuteTurnAsync();
+
+        // The target context was loaded after the switch...
+        workingContextRepo.Verify(r => r.GetByIdAsync(2, It.IsAny<CancellationToken>()), Times.Once);
+        // ...the round-2 response ran against it...
+        respondHandler.Verify(h => h.HandleAsync(ctxB, It.IsAny<JsonNode?>(), It.IsAny<CancellationToken>()), Times.Once);
+        // ...the old context was persisted at the switch, and the new one is the final save.
+        Assert.Contains(ctxA, saved);
+        Assert.Equal(ctxB, saved[^1]);
     }
 }

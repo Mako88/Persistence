@@ -41,6 +41,28 @@ public class AuditLogRepository : EntityRepository<AuditLogEntity>, IAuditLogRep
         await QueryAsync(
             $"SELECT * FROM AuditLogs WHERE SessionId = {sessionId} ORDER BY CreatedUtc ASC");
 
+    /// <summary>
+    /// Returns the most recent self-changes, newest first. Excludes ChatMessage and System fragment
+    /// changes (conversation/scaffolding, not the peer curating itself) by joining to the fragment
+    /// row for fragment-typed targets. Uses the projection overload so order is preserved and Source
+    /// isn't hydrated (the digest doesn't need it).
+    /// </summary>
+    public async Task<IReadOnlyList<AuditLogEntity>> GetRecentSelfChangesAsync(int limit, CancellationToken ct = default) =>
+        // FragmentType is stored via the same interpolation path, so the excluded types must be
+        // passed as parameters (not hardcoded string literals) to match the stored representation.
+        (await QueryAsync<AuditLogEntity>(
+            $"""
+            SELECT * FROM AuditLogs a
+            WHERE a.TargetType <> 'ContextFragmentEntity'
+               OR a.TargetId IN (
+                    SELECT cf.Id FROM ContextFragments cf
+                    WHERE cf.FragmentType NOT IN ({ContextFragmentType.ChatMessage}, {ContextFragmentType.System})
+               )
+            ORDER BY a.CreatedUtc DESC
+            LIMIT {limit}
+            """,
+            ct)).ToList();
+
     #region Base overrides
 
     /// <summary>

@@ -54,6 +54,30 @@ public class PromptFormatterTests
     }
 
     [Fact]
+    public void RecentChangesAppearInTheSensoryBlockHumanized()
+    {
+        var changes = new List<AuditLogEntity>
+        {
+            new() { SessionId = "s", EventType = AuditEventType.Modified, TargetType = nameof(ContextFragmentEntity), TargetId = 42, SourceId = 1, CreatedUtc = DateTimeOffset.UtcNow.AddMinutes(-2), LastModifiedUtc = DateTimeOffset.UtcNow },
+            new() { SessionId = "s", EventType = AuditEventType.Created, TargetType = nameof(ProposalEntity), TargetId = 7, SourceId = 1, CreatedUtc = DateTimeOffset.UtcNow.AddMinutes(-5), LastModifiedUtc = DateTimeOffset.UtcNow },
+        };
+
+        var sensory = CreateFormatter()
+            .Format(ContextWithFragment("hi"), [], recentChanges: changes)[^1].Content;
+
+        Assert.Contains("Recent changes to your memory:", sensory);
+        Assert.Contains("fragment #42 modified", sensory);
+        Assert.Contains("proposal #7 created", sensory);
+    }
+
+    [Fact]
+    public void NoRecentChangesSectionWhenThereAreNone()
+    {
+        var sensory = CreateFormatter().Format(ContextWithFragment("hi"), [])[^1].Content;
+        Assert.DoesNotContain("Recent changes", sensory);
+    }
+
+    [Fact]
     public void TransientFragmentShowsTransientLabelNotZeroId()
     {
         var now = DateTimeOffset.UtcNow;

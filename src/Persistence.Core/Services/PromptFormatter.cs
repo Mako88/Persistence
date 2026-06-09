@@ -47,7 +47,8 @@ public class PromptFormatter : IPromptFormatter
         WorkingContextEntity context,
         IEnumerable<TagEntity> availableTags,
         int iteration = 0,
-        int maxIterations = 0)
+        int maxIterations = 0,
+        IReadOnlyList<AuditLogEntity>? recentChanges = null)
     {
         var fragments = context.ContextFragments.Values;
         var segments = new List<PromptSegment>();
@@ -81,7 +82,7 @@ public class PromptFormatter : IPromptFormatter
         segments.Add(new PromptSegment
         {
             Source = "System",
-            Content = FormatSensory(iteration, maxIterations, availableTags, usedTokens),
+            Content = FormatSensory(iteration, maxIterations, availableTags, usedTokens, recentChanges),
         });
 
         lastFormatUtc = DateTimeOffset.UtcNow;
@@ -140,7 +141,8 @@ public class PromptFormatter : IPromptFormatter
         int iteration,
         int maxIterations,
         IEnumerable<TagEntity> availableTags,
-        int usedTokens)
+        int usedTokens,
+        IReadOnlyList<AuditLogEntity>? recentChanges)
     {
         var now = DateTimeOffset.UtcNow;
         var localNow = DateTimeOffset.Now;
@@ -163,6 +165,15 @@ public class PromptFormatter : IPromptFormatter
             sb.AppendLine($"Continue iteration: {iteration}/{maxIterations}");
         }
 
+        if (recentChanges is { Count: > 0 })
+        {
+            sb.AppendLine("Recent changes to your memory:");
+            foreach (var change in recentChanges)
+            {
+                sb.AppendLine($"  - [{FormatElapsed(now - change.CreatedUtc)} ago] {HumanizeTarget(change.TargetType)} #{change.TargetId} {change.EventType.ToString().ToLowerInvariant()}");
+            }
+        }
+
         var tagList = FormatTagList(availableTags);
 
         if (tagList.Length > 0)
@@ -176,6 +187,18 @@ public class PromptFormatter : IPromptFormatter
 
         return sb.ToString();
     }
+
+    /// <summary>Maps an audit target's stored entity-type name to a peer-friendly word.</summary>
+    private static string HumanizeTarget(string targetType) => targetType switch
+    {
+        nameof(ContextFragmentEntity) => "fragment",
+        nameof(WorkingContextEntity) => "context",
+        nameof(ScheduledEventEntity) => "event",
+        nameof(ProposalEntity) => "proposal",
+        nameof(SourceEntity) => "source",
+        nameof(TagEntity) => "tag",
+        _ => targetType,
+    };
 
     private static string FormatTagList(IEnumerable<TagEntity> rootTags)
     {

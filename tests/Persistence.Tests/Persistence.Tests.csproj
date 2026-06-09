@@ -10,6 +10,8 @@
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.4" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <!-- Keep Moq >= 4.20.2: the SponsorLink component (scanned git email, sent a hash to a cloud
+         service) shipped in 4.20.0–4.20.1 and was removed in 4.20.2. 4.20.72 is clean. -->
     <PackageReference Include="Moq" Version="4.20.72" />
     <PackageReference Include="SimpleHttpClient" Version="5.1.0" />
     <PackageReference Include="xunit" Version="2.9.3" />

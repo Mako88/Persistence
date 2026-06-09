@@ -16,14 +16,16 @@ namespace Persistence.Data.Repositories;
 public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>, IContextFragmentRepository
 {
     private readonly ISessionContext sessionContext;
+    private readonly IEntityTagRepository entityTagRepo;
 
     /// <summary>
     /// Constructor
     /// </summary>
-    public ContextFragmentRepository(IAppConfig config, ISessionContext sessionContext)
+    public ContextFragmentRepository(IAppConfig config, ISessionContext sessionContext, IEntityTagRepository entityTagRepo)
         : base(config, sessionContext)
     {
         this.sessionContext = sessionContext;
+        this.entityTagRepo = entityTagRepo;
     }
 
     #region Public methods
@@ -50,8 +52,8 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
             $"""
             SELECT cf.*
             FROM ContextFragments cf
-            JOIN ContextFragmentTags cft ON cf.Id = cft.ContextFragmentId
-            WHERE cft.TagId = {tagId} AND cf.IsDeleted = 0
+            JOIN EntityTags et ON cf.Id = et.EntityId AND et.EntityType = {nameof(ContextFragmentEntity)}
+            WHERE et.TagId = {tagId} AND cf.IsDeleted = 0
             """);
 
     /// <summary>
@@ -118,22 +120,8 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
             .GroupBy(x => x.FragmentId)
             .ToDictionary(g => g.Key, g => g.Select(x => x.Source).ToList());
 
-        // Tags for all fragments
-        var tagRows = await connection.SqlBuilder(
-            $"""
-            SELECT cft.ContextFragmentId, t.*
-            FROM ContextFragmentTags cft
-            JOIN Tags t ON cft.TagId = t.Id
-            WHERE cft.ContextFragmentId IN {fragmentIds}
-            """)
-            .QueryAsync<long, TagEntity, (long FragmentId, TagEntity Tag)>(
-                (fragmentId, tag) => (fragmentId, tag),
-                splitOn: "Id",
-                cancellationToken: ct);
-
-        var tagsByFragment = tagRows
-            .GroupBy(x => x.FragmentId)
-            .ToDictionary(g => g.Key, g => g.Select(x => x.Tag).ToList());
+        // Tags for all fragments (via the generic EntityTags table)
+        var tagsByFragment = await entityTagRepo.GetTagsForAsync(nameof(ContextFragmentEntity), fragmentIds, connection, ct);
 
         foreach (var fragment in fragments)
         {
@@ -172,16 +160,8 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
                 transaction, ct);
         }
 
-        await ExecuteAsync(
-            $"DELETE FROM ContextFragmentTags WHERE ContextFragmentId = {entity.Id}",
-            transaction, ct);
-
-        foreach (var tag in entity.Tags)
-        {
-            await ExecuteAsync(
-                $"INSERT INTO ContextFragmentTags (TagId, ContextFragmentId) VALUES ({tag.Id}, {entity.Id})",
-                transaction, ct);
-        }
+        await entityTagRepo.SetTagsAsync(
+            nameof(ContextFragmentEntity), entity.Id, entity.Tags.Select(t => t.Id).ToList(), transaction);
     }
 
     /// <summary>

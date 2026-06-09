@@ -76,6 +76,12 @@ public interface IDisplayProvider
     void ShowChatHistory(IReadOnlyList<(string Role, string Content, DateTimeOffset Timestamp)> messages);
 
     /// <summary>
+    /// Shows a system/local message to the local peer — e.g. the result of a local slash command
+    /// (not a remote-peer reply, not an error).
+    /// </summary>
+    void ShowSystemMessage(string message);
+
+    /// <summary>
     /// Shows an unrecognised slash-command message.
     /// </summary>
     void ShowUnknownCommand(string command);

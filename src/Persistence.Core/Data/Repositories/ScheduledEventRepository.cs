@@ -15,11 +15,16 @@ namespace Persistence.Data.Repositories;
 [Singleton]
 public class ScheduledEventRepository : EntityRepository<ScheduledEventEntity>, IScheduledEventRepository
 {
+    private readonly IEntityTagRepository entityTagRepo;
+
     /// <summary>
     /// Constructor
     /// </summary>
-    public ScheduledEventRepository(IAppConfig config, ISessionContext sessionContext)
-        : base(config, sessionContext) { }
+    public ScheduledEventRepository(IAppConfig config, ISessionContext sessionContext, IEntityTagRepository entityTagRepo)
+        : base(config, sessionContext)
+    {
+        this.entityTagRepo = entityTagRepo;
+    }
 
     #region Public methods
 
@@ -94,22 +99,8 @@ public class ScheduledEventRepository : EntityRepository<ScheduledEventEntity>, 
 
         var eventIds = events.Select(e => e.Id).ToList();
 
-        // Tags for all events
-        var tagRows = await connection.SqlBuilder(
-            $"""
-            SELECT st.ScheduledEventId, t.*
-            FROM ScheduledEventTags st
-            JOIN Tags t ON st.TagId = t.Id
-            WHERE st.ScheduledEventId IN {eventIds}
-            """)
-            .QueryAsync<long, TagEntity, (long EventId, TagEntity Tag)>(
-                (eventId, tag) => (eventId, tag),
-                splitOn: "Id",
-                cancellationToken: ct);
-
-        var tagsByEvent = tagRows
-            .GroupBy(x => x.EventId)
-            .ToDictionary(g => g.Key, g => g.Select(x => x.Tag).ToList());
+        // Tags for all events (via the generic EntityTags table)
+        var tagsByEvent = await entityTagRepo.GetTagsForAsync(nameof(ScheduledEventEntity), eventIds, connection, ct);
 
         foreach (var evt in events)
         {
@@ -120,12 +111,21 @@ public class ScheduledEventRepository : EntityRepository<ScheduledEventEntity>, 
     }
 
     /// <summary>
+    /// Persists the event's tags to the generic EntityTags table (events were previously hydrated
+    /// with tags but had no write path).
+    /// </summary>
+    protected override async Task SaveSubEntitiesAsync(
+        ScheduledEventEntity entity, IDbTransaction transaction, CancellationToken ct = default) =>
+        await entityTagRepo.SetTagsAsync(
+            nameof(ScheduledEventEntity), entity.Id, entity.Tags.Select(t => t.Id).ToList(), transaction);
+
+    /// <summary>
     /// Returns the INSERT statement for a scheduled event
     /// </summary>
     protected override FormattableString GetInsertSql(ScheduledEventEntity entity) =>
         $"""
-        INSERT INTO ScheduledEvents (Name, WorkingContextId, ScheduledForUtc, TriggeredAtUtc, Status, CreatedUtc, LastModifiedUtc, LastAccessedUtc, Notes)
-        VALUES ({entity.Name}, {entity.WorkingContextId}, {entity.ScheduledForUtc}, {entity.TriggeredAtUtc}, {entity.Status}, {entity.CreatedUtc}, {entity.LastModifiedUtc}, {entity.LastAccessedUtc}, {entity.Notes})
+        INSERT INTO ScheduledEvents (Name, WorkingContextId, ScheduledForUtc, TriggeredAtUtc, Status, CreatedUtc, LastModifiedUtc, LastAccessedUtc, Notes, WakePrompt)
+        VALUES ({entity.Name}, {entity.WorkingContextId}, {entity.ScheduledForUtc}, {entity.TriggeredAtUtc}, {entity.Status}, {entity.CreatedUtc}, {entity.LastModifiedUtc}, {entity.LastAccessedUtc}, {entity.Notes}, {entity.WakePrompt})
         """;
 
     /// <summary>
@@ -136,7 +136,8 @@ public class ScheduledEventRepository : EntityRepository<ScheduledEventEntity>, 
         UPDATE ScheduledEvents
         SET Name = {entity.Name}, WorkingContextId = {entity.WorkingContextId}, ScheduledForUtc = {entity.ScheduledForUtc},
             TriggeredAtUtc = {entity.TriggeredAtUtc}, Status = {entity.Status},
-            LastModifiedUtc = {entity.LastModifiedUtc}, LastAccessedUtc = {entity.LastAccessedUtc}, Notes = {entity.Notes}
+            LastModifiedUtc = {entity.LastModifiedUtc}, LastAccessedUtc = {entity.LastAccessedUtc}, Notes = {entity.Notes},
+            WakePrompt = {entity.WakePrompt}
         WHERE Id = {entity.Id}
         """;
 

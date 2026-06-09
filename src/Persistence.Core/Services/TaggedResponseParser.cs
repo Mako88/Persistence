@@ -28,7 +28,7 @@ namespace Persistence.Services;
 /// named-argument function calls, converted to the same JSON command array the handlers
 /// already consume via <see cref="FunctionCallParser"/>.
 /// </summary>
-[Singleton(typeof(IModelResponseParser), ResponseFormat.Tagged)]
+[Singleton(typeof(IModelResponseParser))]
 public partial class TaggedResponseParser : IModelResponseParser
 {
     /// <summary>

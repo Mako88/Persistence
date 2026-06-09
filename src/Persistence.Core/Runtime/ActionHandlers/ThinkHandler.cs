@@ -17,7 +17,7 @@ namespace Persistence.Runtime.ActionHandlers;
 /// display), without being sent to the local peer. ScratchPad fragments are never persisted to
 /// the database — a thought lives only for the current session's working context. To keep a
 /// thought permanently, the remote peer can promote it via <c>manage_context</c> (e.g. add a
-/// Personal or Proposal fragment).
+/// Personal fragment).
 /// </summary>
 [Service(registerAsType: typeof(IActionHandler), key: ModelAction.Think)]
 public class ThinkHandler : IActionHandler

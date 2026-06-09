@@ -7,17 +7,24 @@ namespace Persistence.Runtime;
 public interface ITurnHandler
 {
     /// <summary>
-    /// Executes a full turn. When <paramref name="input"/> is provided, it is
-    /// persisted as the initial message. When null, pending queued input is
-    /// drained as the starting context instead.
+    /// Executes a full turn. When <paramref name="input"/> is provided, it is persisted as the
+    /// initial message. When null, pending queued input is drained as the starting context instead.
+    /// When <paramref name="wakeNote"/> is provided (an autonomous wake-up), it is injected as a
+    /// transient system note so the turn runs with that framing but without a local-peer message.
     /// </summary>
-    Task ExecuteTurnAsync(string? input = null, CancellationToken ct = default);
+    Task ExecuteTurnAsync(string? input = null, string? wakeNote = null, CancellationToken ct = default);
 
     /// <summary>
     /// Queues input from the local peer to be injected into the working context
     /// before the next model call within the current turn's iteration loop.
     /// </summary>
     void EnqueueInput(string input);
+
+    /// <summary>
+    /// Queues a system note (e.g. the local peer accepted/rejected a proposal) to surface to the
+    /// peer as transient context at the start of its next turn. Not attributed to the local peer.
+    /// </summary>
+    void EnqueueSystemNote(string note);
 
     /// <summary>
     /// Whether there are any pending input messages waiting to be processed.

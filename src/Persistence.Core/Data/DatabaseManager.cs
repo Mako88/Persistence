@@ -28,7 +28,7 @@ public class DatabaseManager : IDatabaseManager
         IEmbeddedResourceManager resourceManager,
         ISourceRepository sourceRepository)
     {
-        connectionString = $"Data Source={config.DatabasePath};Foreign Keys=True;";
+        connectionString = SqliteConnectionString.For(config.DatabasePath);
 
         // SQLite won't create missing parent directories, so a DatabasePath like "dbs/qwen.db"
         // would fail on a fresh checkout. Ensure the folder exists.

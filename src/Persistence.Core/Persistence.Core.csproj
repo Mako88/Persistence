@@ -29,10 +29,20 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Lets the test project reach internal members (e.g. WakeUpMonitor.CheckAndFireAsync) to
+         unit-test logic that is intentionally not part of the public interface. -->
+    <InternalsVisibleTo Include="Persistence.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <EmbeddedResource Include="Data\fragment_seeds.json" />
     <EmbeddedResource Include="Data\Migrations\Bootstrap.sql" />
     <EmbeddedResource Include="Data\Migrations\000_InitialCreate.sql" />
     <EmbeddedResource Include="Data\Migrations\001_NarrowSoftDelete.sql" />
+    <EmbeddedResource Include="Data\Migrations\002_AddProposals.sql" />
+    <EmbeddedResource Include="Data\Migrations\003_UniqueFragmentOrder.sql" />
+    <EmbeddedResource Include="Data\Migrations\004_AddWakePrompt.sql" />
+    <EmbeddedResource Include="Data\Migrations\005_GenericTags.sql" />
   </ItemGroup>
 
   <ItemGroup>

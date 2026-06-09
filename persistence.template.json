@@ -9,7 +9,7 @@
   "ReasoningEffort": "high",
   "Streaming": true,
   "UiMode": "Tui",
-  "ResponseFormat": "Tagged",
+  "ProposalApproval": "Self",
   "MaxActionIterations": 5,
   "RequestTimeoutSeconds": 600,
   "DebugMode": false

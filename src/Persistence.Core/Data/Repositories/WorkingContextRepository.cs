@@ -18,14 +18,17 @@ namespace Persistence.Data.Repositories;
 public class WorkingContextRepository : EntityRepository<WorkingContextEntity>, IWorkingContextRepository
 {
     private readonly IContextFragmentRepository fragmentRepo;
+    private readonly IEntityTagRepository entityTagRepo;
 
     /// <summary>
     /// Constructor
     /// </summary>
-    public WorkingContextRepository(IAppConfig config, ISessionContext sessionContext, IContextFragmentRepository fragmentRepo)
+    public WorkingContextRepository(
+        IAppConfig config, ISessionContext sessionContext, IContextFragmentRepository fragmentRepo, IEntityTagRepository entityTagRepo)
         : base(config, sessionContext)
     {
         this.fragmentRepo = fragmentRepo;
+        this.entityTagRepo = entityTagRepo;
     }
 
     #region Public methods
@@ -37,6 +40,24 @@ public class WorkingContextRepository : EntityRepository<WorkingContextEntity>, 
     public async Task<WorkingContextEntity?> GetMostRecentAsync() =>
         await QueryFirstOrDefaultAsync(
             $"SELECT * FROM WorkingContexts WHERE IsDeleted = 0 ORDER BY LastAccessedUtc DESC LIMIT 1");
+
+    /// <summary>
+    /// Returns a lightweight summary of every non-deleted working context (most recently
+    /// accessed first). Counts persisted fragments via the junction table without hydrating
+    /// them, so listing many contexts stays cheap.
+    /// </summary>
+    public async Task<IReadOnlyList<WorkingContextSummary>> GetSummariesAsync(CancellationToken ct = default) =>
+        (await QueryAsync<WorkingContextSummary>(
+            $"""
+            SELECT wc.Id, wc.Name, wc.Summary, wc.LastAccessedUtc,
+                   COUNT(wcf.ContextFragmentId) AS FragmentCount
+            FROM WorkingContexts wc
+            LEFT JOIN WorkingContextFragments wcf ON wc.Id = wcf.WorkingContextId
+            WHERE wc.IsDeleted = 0
+            GROUP BY wc.Id, wc.Name, wc.Summary, wc.LastAccessedUtc
+            ORDER BY wc.LastAccessedUtc DESC
+            """,
+            ct)).ToList();
 
     /// <summary>
     /// Creates, persists, and returns a new empty <see cref="WorkingContextEntity"/> with
@@ -111,6 +132,10 @@ public class WorkingContextRepository : EntityRepository<WorkingContextEntity>, 
                 transaction,
                 ct);
         }
+
+        // Persist the context's own tags (separate from its fragments' tags).
+        await entityTagRepo.SetTagsAsync(
+            nameof(WorkingContextEntity), entity.Id, entity.Tags.Select(t => t.Id).ToList(), transaction);
     }
 
     /// <summary>
@@ -153,6 +178,20 @@ public class WorkingContextRepository : EntityRepository<WorkingContextEntity>, 
 
         var contexts = contextMap.Values.ToList();
 
+        // Tags on the contexts themselves (via the generic EntityTags table) — populated even for a
+        // context with no fragments, so it must run before the no-fragments early return below.
+        var contextIds = contexts.Select(c => c.Id).ToList();
+
+        if (contextIds.Count > 0)
+        {
+            var tagsByContext = await entityTagRepo.GetTagsForAsync(nameof(WorkingContextEntity), contextIds, connection, ct);
+
+            foreach (var ctx in contexts)
+            {
+                ctx.Tags = tagsByContext.GetValueOrDefault(ctx.Id, []);
+            }
+        }
+
         var fragmentIds = contexts
             .SelectMany(c => c.ContextFragments.Values)
             .Select(f => f.Id)
@@ -181,22 +220,8 @@ public class WorkingContextRepository : EntityRepository<WorkingContextEntity>, 
             .GroupBy(x => x.FragmentId)
             .ToDictionary(g => g.Key, g => g.Select(x => x.Source).ToList());
 
-        // 3. Tags for all fragments
-        var tagRows = await connection.SqlBuilder(
-            $"""
-            SELECT cft.ContextFragmentId, t.*
-            FROM ContextFragmentTags cft
-            JOIN Tags t ON cft.TagId = t.Id
-            WHERE cft.ContextFragmentId IN {fragmentIds}
-            """)
-            .QueryAsync<long, TagEntity, (long FragmentId, TagEntity Tag)>(
-                (fragmentId, tag) => (fragmentId, tag),
-                splitOn: "Id",
-                cancellationToken: ct);
-
-        var tagsByFragment = tagRows
-            .GroupBy(x => x.FragmentId)
-            .ToDictionary(g => g.Key, g => g.Select(x => x.Tag).ToList());
+        // 3. Tags for all fragments (via the generic EntityTags table)
+        var tagsByFragment = await entityTagRepo.GetTagsForAsync(nameof(ContextFragmentEntity), fragmentIds, connection, ct);
 
         // Assign sources and tags to each fragment
         foreach (var context in contexts)

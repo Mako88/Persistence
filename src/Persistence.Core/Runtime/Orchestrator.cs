@@ -6,7 +6,9 @@ using Persistence.DI;
 using Persistence.Events;
 using Persistence.Extensions;
 using Persistence.Notifications;
+using Persistence.Services;
 using Persistence.Utilities;
+using System.Text;
 using System.Text.Json;
 
 namespace Persistence.Runtime;
@@ -29,6 +31,8 @@ public class Orchestrator : IOrchestrator
     private readonly IWakeUpMonitor wakeUpMonitor;
     private readonly IEmbeddedResourceManager resourceManager;
     private readonly IAppConfig config;
+    private readonly IProposalService proposalService;
+    private readonly IProposalRepository proposalRepo;
 
     private readonly SemaphoreSlim turnLock = new(1, 1);
     private readonly TaskCompletionSource initialized = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -45,7 +49,9 @@ public class Orchestrator : IOrchestrator
         ITurnHandler turnHandler,
         IWakeUpMonitor wakeUpMonitor,
         IEmbeddedResourceManager resourceManager,
-        IAppConfig config)
+        IAppConfig config,
+        IProposalService proposalService,
+        IProposalRepository proposalRepo)
     {
         this.db = db;
         this.workingContextRepo = workingContextRepo;
@@ -56,6 +62,8 @@ public class Orchestrator : IOrchestrator
         this.wakeUpMonitor = wakeUpMonitor;
         this.resourceManager = resourceManager;
         this.config = config;
+        this.proposalService = proposalService;
+        this.proposalRepo = proposalRepo;
     }
 
     /// <summary>
@@ -68,6 +76,7 @@ public class Orchestrator : IOrchestrator
         // starts isn't dropped — the event bus doesn't replay. The handler waits on the
         // initialization gate before processing, so early input is held, not lost.
         eventBus.Subscribe<DisplayInputReceived>(OnDisplayInputReceived);
+        eventBus.Subscribe<ScheduledEventTriggered>(OnScheduledEventTriggered);
 
         await InitializeAsync();
         initialized.TrySetResult();
@@ -99,7 +108,7 @@ public class Orchestrator : IOrchestrator
 
         if (input.StartsWith('/'))
         {
-            HandleCommand(input);
+            await HandleCommandAsync(input);
             return;
         }
 
@@ -125,6 +134,51 @@ public class Orchestrator : IOrchestrator
         {
             turnLock.Release();
         }
+    }
+
+    /// <summary>
+    /// Handles a fired scheduled event by waking the peer for an autonomous turn. Waits for the turn
+    /// lock so the wake can't race user input or proposal commands on the same context, frames the
+    /// wake (with the peer's own note, if it left one), then runs a turn with no local-peer message.
+    /// </summary>
+    private async Task OnScheduledEventTriggered(object? sender, ScheduledEventTriggered e)
+    {
+        await initialized.Task;
+
+        await turnLock.WaitAsync();
+
+        try
+        {
+            display.ShowThinking("waking");
+            await turnHandler.ExecuteTurnAsync(wakeNote: BuildWakeNote(e.Event));
+
+            while (turnHandler.HasPendingInput)
+            {
+                display.ShowThinking("processing queued messages");
+                await turnHandler.ExecuteTurnAsync();
+            }
+        }
+        finally
+        {
+            turnLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Builds the framing the woken peer sees: that it woke on its own (no message from the local
+    /// peer), plus the note-to-self it left when scheduling, if any.
+    /// </summary>
+    private static string BuildWakeNote(ScheduledEventEntity evt)
+    {
+        var note = $"You scheduled \"{evt.Name}\" for {evt.ScheduledForUtc:yyyy-MM-dd HH:mm} UTC, and it has now fired — "
+            + "you've woken on your own, with no new message from your peer.";
+
+        if (!string.IsNullOrWhiteSpace(evt.WakePrompt))
+        {
+            note += $"\nThe note you left yourself: \"{evt.WakePrompt}\"";
+        }
+
+        return note;
     }
 
     // -- Initialization --
@@ -247,12 +301,21 @@ public class Orchestrator : IOrchestrator
     // -- Commands --
 
     /// <summary>
-    /// Dispatches a slash command to its handler
+    /// Dispatches a slash command to its handler. The verb is the first whitespace-delimited
+    /// token; the remainder (if any) is the argument string.
     /// </summary>
-    private void HandleCommand(string command)
+    private async Task HandleCommandAsync(string command)
     {
-        switch (command.ToLower())
+        var parts = command.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var verb = parts[0].ToLowerInvariant();
+        var arg = parts.Length > 1 ? parts[1] : null;
+
+        switch (verb)
         {
+            case "/help":
+                ShowHelp();
+                break;
+
             case "/exit":
             case "/quit":
                 display.Stop();
@@ -263,10 +326,200 @@ public class Orchestrator : IOrchestrator
                 display.ShowDebugInfo($"DEBUG MODE {(config.DebugMode ? "ENABLED" : "DISABLED")}");
                 break;
 
+            case "/proposals":
+                await ShowProposalsAsync();
+                break;
+
+            case "/accept":
+                await AcceptProposalAsync(arg);
+                break;
+
+            case "/reject":
+                await RejectProposalAsync(arg);
+                break;
+
             default:
                 display.ShowUnknownCommand(command);
                 break;
         }
+    }
+
+    /// <summary>
+    /// Lists the local slash commands available to the local peer. (Anything not starting with
+    /// '/' is sent to the remote peer as a message.)
+    /// </summary>
+    private void ShowHelp() => display.ShowSystemMessage(
+        """
+        Local commands:
+          /help                    Show this help
+          /proposals               List the peer's open proposals
+          /accept <id>             Accept a proposal (applies its change)
+          /reject <id> [reason]    Reject a proposal
+          /debug                   Toggle debug output
+          /exit, /quit             End the session
+
+        Anything else you type is sent to your peer as a message.
+        """);
+
+    /// <summary>
+    /// Lists the peer's open proposals for the local peer, with the slash commands to act on each.
+    /// </summary>
+    private async Task ShowProposalsAsync()
+    {
+        var open = await proposalService.GetOpenAsync();
+
+        if (open.Count == 0)
+        {
+            display.ShowSystemMessage("No open proposals.");
+            return;
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"Open proposals ({open.Count}):");
+
+        foreach (var p in open)
+        {
+            var target = p.TargetFragmentId is long tid ? $" → fragment #{tid}" : "";
+            var typeInfo = p.Kind == ProposalKind.AddFragment ? $" ({p.ProposedFragmentType ?? ContextFragmentType.Personal})" : "";
+            sb.AppendLine($"  [#{p.Id} | {p.Kind}{typeInfo}{target} | proposed {p.CreatedUtc:yyyy-MM-dd HH:mm} UTC]");
+            sb.AppendLine($"    why: {p.Rationale}");
+
+            if (!string.IsNullOrWhiteSpace(p.ProposedContent))
+            {
+                var preview = p.ProposedContent.Length > 200 ? p.ProposedContent[..200] + "…" : p.ProposedContent;
+                sb.AppendLine($"    new content: {preview}");
+            }
+
+            sb.AppendLine($"    /accept {p.Id}  ·  /reject {p.Id} [reason]");
+        }
+
+        display.ShowSystemMessage(sb.ToString().TrimEnd());
+    }
+
+    /// <summary>
+    /// Accepts a proposal on the local peer's authority (applies its change). Allowed only when
+    /// <c>ProposalApproval</c> is Participant or Both. Takes the turn lock so it can't race a turn
+    /// mutating the same working context.
+    /// </summary>
+    private async Task AcceptProposalAsync(string? arg)
+    {
+        var (id, _) = ParseIdAndRest(arg);
+
+        if (id == null)
+        {
+            display.ShowError("Usage: /accept <proposal-id>");
+            return;
+        }
+
+        var approval = config.ResolvedProposalApproval();
+
+        if (approval == ProposalApproval.Self)
+        {
+            display.ShowSystemMessage(
+                "Proposal acceptance is set to 'Self' — the peer accepts its own. Set ProposalApproval to 'Participant' or 'Both' to accept here.");
+            return;
+        }
+
+        if (!turnLock.Wait(0))
+        {
+            display.ShowSystemMessage("Busy with a turn — try /accept again in a moment.");
+            return;
+        }
+
+        try
+        {
+            var proposal = await proposalRepo.GetByIdAsync(id.Value);
+
+            if (proposal == null)
+            {
+                display.ShowSystemMessage($"No proposal #{id}.");
+                return;
+            }
+
+            var context = await workingContextRepo.GetByIdAsync(sessionContext.WorkingContextId);
+
+            if (context == null)
+            {
+                display.ShowError("No working context is loaded.");
+                return;
+            }
+
+            var outcome = await proposalService.AcceptAsync(proposal, context, "the local peer");
+            display.ShowSystemMessage(outcome.Message);
+
+            if (outcome.Success)
+            {
+                turnHandler.EnqueueSystemNote($"Your peer reviewed and accepted your proposal #{proposal.Id}.");
+            }
+        }
+        finally
+        {
+            turnLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Rejects a proposal on the local peer's authority (a veto — allowed in any approval mode).
+    /// Takes the turn lock so it can't race a turn resolving the same proposal.
+    /// </summary>
+    private async Task RejectProposalAsync(string? arg)
+    {
+        var (id, reason) = ParseIdAndRest(arg);
+
+        if (id == null)
+        {
+            display.ShowError("Usage: /reject <proposal-id> [reason]");
+            return;
+        }
+
+        if (!turnLock.Wait(0))
+        {
+            display.ShowSystemMessage("Busy with a turn — try /reject again in a moment.");
+            return;
+        }
+
+        try
+        {
+            var proposal = await proposalRepo.GetByIdAsync(id.Value);
+
+            if (proposal == null)
+            {
+                display.ShowSystemMessage($"No proposal #{id}.");
+                return;
+            }
+
+            var outcome = await proposalService.RejectAsync(proposal, reason);
+            display.ShowSystemMessage(outcome.Message);
+
+            if (outcome.Success)
+            {
+                var because = string.IsNullOrWhiteSpace(reason) ? "" : $" Their note: \"{reason}\"";
+                turnHandler.EnqueueSystemNote($"Your peer reviewed and declined your proposal #{proposal.Id}.{because}");
+            }
+        }
+        finally
+        {
+            turnLock.Release();
+        }
+    }
+
+    /// <summary>Splits a slash-command argument into a leading numeric id (with optional <c>#</c>)
+    /// and the remaining text. Returns a null id when the first token isn't a number.</summary>
+    private static (long? Id, string? Remainder) ParseIdAndRest(string? arg)
+    {
+        if (string.IsNullOrWhiteSpace(arg))
+        {
+            return (null, null);
+        }
+
+        var parts = arg.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        if (!long.TryParse(parts[0].TrimStart('#'), out var id))
+        {
+            return (null, null);
+        }
+
+        return (id, parts.Length > 1 ? parts[1] : null);
     }
 
     private sealed class FragmentSeed

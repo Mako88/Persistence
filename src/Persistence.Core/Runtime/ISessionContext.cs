@@ -30,4 +30,10 @@ public interface ISessionContext
     /// The ID for the 'RemotePeer' source type.
     /// </summary>
     long RemotePeerSourceId { get; set; }
+
+    /// <summary>
+    /// When the current turn began. Set at the start of each turn; used to enforce the proposal
+    /// deliberation gap (a proposal created during the current turn can't be accepted within it).
+    /// </summary>
+    DateTimeOffset TurnStartedUtc { get; set; }
 }

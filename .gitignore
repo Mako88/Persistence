@@ -27,3 +27,6 @@ Thumbs.db
 ## (persistence.template.json is the committed sample; the API's appsettings.json is
 ## framework-only config and is committed.)
 persistence.json
+
+# Test coverage output
+TestResults/

@@ -20,19 +20,6 @@ public class ModelResponse
 }
 
 /// <summary>
-/// The wire format the remote peer responds in. Selects which
-/// <see cref="IModelResponseParser"/> is used. Currently only <see cref="Tagged"/> exists (the
-/// JSON format was removed after the tagged format won out — see ADR-0004); the enum/keyed-strategy
-/// seam is kept so another format can be added without rewiring.
-/// </summary>
-public enum ResponseFormat
-{
-    /// <summary>Tagged format: <c>&lt;think&gt;</c>/<c>&lt;respond&gt;</c> prose tags plus
-    /// <c>&lt;context&gt;</c>/<c>&lt;actions&gt;</c> function-call blocks.</summary>
-    Tagged = 0,
-}
-
-/// <summary>
 /// The types of actions the remote peer can perform in response to input
 /// </summary>
 public enum ModelAction
