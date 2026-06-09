@@ -7,79 +7,173 @@ architectural keystone. The catastrophic failure mode is *silent* truncation —
 peer can **see** its budget and has **hands** to act (summarize / archive), it can curate
 manually. Fully-automated forgetting becomes a convenience layered on later, not a prerequisite.
 
-## Tier 1 — eyes + hands (makes the memory core self-sufficient)
+The "eyes + hands" tier (budget awareness, relevance, summarize/collapse, plain-language errors)
+is **complete** — the memory core is self-sufficient. What remains rounds out self-curation, then
+extends reach.
 
-1. ✅ **Context/budget awareness in the sensory block** — DONE. Calibrated estimate vs.
-   model-aware effective budget, with escalating nudges. (The "eyes.")
+## Tier 1 — rounds out self-curation
 
-2. ✅ **Switch Weight → Relevance** — DONE. Renamed the junction property/column/command field
-   and the prompt header (`w:` → `r:`). The peer now sees/sets "relevance to the current prompt."
+1. ✅ **Browsing + swapping working contexts** — DONE. `list_contexts` (lightweight summaries —
+   name, fragment count, last-accessed, current marked — no fragment hydration), `create_context`
+   (create-only, doesn't auto-switch), and `switch_context` (validates against non-deleted summaries,
+   repoints the session). A mid-turn switch is honored at the iteration boundary: TurnHandler saves the
+   current context and reloads the target, so `continue`-ing after a switch operates on the new context.
+   Per-context *filtering* of the list was skipped — trivial with a handful of contexts; revisit if many.
 
-3. ✅ **summarize_fragments / set_summary commands** — DONE. `summarize_fragments` folds a list
-   into a new Summary fragment and archives the originals from context (recoverable via
-   load/fetch — archive, not delete); `set_summary` attaches a précis without removing. The
-   peer writes the summary text itself (no black-box summarizer). (The "hands.")
+2. ✅ **Implement proposals** — DONE.
+   Proposals are now a first-class entity (`Proposals` table, migration `002`), no longer a fragment
+   type. A proposal carries an *executable* self-change (add/modify/remove a fragment); accepting it
+   applies the change, **including to protected fragments** — the only way they change. `ProposalService`
+   does the mechanics, shared by both surfaces:
+   - **Remote peer:** `propose` / `list_proposals` / `accept_proposal` / `reject_proposal` commands.
+     Self-accept gated by a **deliberation gap** (can't accept in the turn it was proposed — enforced
+     via `ISessionContext.TurnStartedUtc`). `update`/`remove` on a protected fragment point at `propose`.
+   - **Local peer:** `/proposals` / `/accept <id>` / `/reject <id>` slash commands in the Orchestrator,
+     under the turn lock so they can't race a turn.
+   - `ProposalApproval` config (Self / Participant / Both) decides who may accept.
 
-4. ✅ **toggle_summary_display command** — DONE. Collapses a list of fragments to their summaries
-   (header marks `| collapsed`) to reclaim room without losing detail; fully reversible.
+   Follow-up idea (not scheduled): resolved proposals aren't surfaced back to the remote peer
+   (`list_proposals` shows only open ones) — when the local peer accepts/rejects, the peer only sees
+   the *effect*. Could inject a short note into context so the peer learns its proposal was acted on.
 
-5. ✅ **Plain-language command errors** — DONE. `CommandHandler.Humanize` translates JSON
-   type-mismatch messages (e.g. "System.String … System.Int64") into the peer's vocabulary
-   ("a value of type text can't be used where a whole number is expected").
-   ✅ **Extended (small-model hardening pass):** malformed calls are now recoverable (a bad call
-   becomes an `__error__` with a plain reason + snippet; sibling calls and other tags still run,
-   instead of one slip nuking the turn); errors are format-neutral (no JSON syntax shown to a
-   tagged peer); typo'd fields/commands get Levenshtein "did you mean" hints instead of being
-   silently dropped.
-
-## Tier 2 — rounds out self-curation
-
-6. **Implement proposals.**
-   (The `Proposal` fragment type exists but is inert — it's how the peer reasons about changes
-   to itself before committing. Central to the "self-curated" thesis.)
-
-7. **Automated forget / memory decay** (the down-prioritized context item, reborn).
+3. **Automated forget / memory decay** (the down-prioritized context item, reborn).
    (Triggered under budget pressure to start: deterministic, peer-legible rule —
    low-relevance/low-importance/old fragments get **archived, never deleted** (per PRINCIPLE.md),
    `IsProtected` immune, and the sensory block reports what was archived + that it's restorable.
    NOT an LLM compressing memory for the peer — the peer must understand and predict its own
    forgetting. Open question: budget-triggered only vs. ongoing natural decay.)
 
-8. **Allow browsing, filtering, swapping working contexts.**
-   (Multiple contexts = different modes/relationships; the peer needs to see and move between them.)
+## Tier 2 — reach & real-world
 
-9. ✅ **Tag management surface** — DONE. `list_tags` (tree view) and `delete_tag` (permanent for
-   the label only — fragments untouched) added; descriptions spell out reversibility. Rename still
-   open if it's wanted later.
+4. **AnthropicModelClient.** (Real Anthropic provider alongside OpenAI; `LocalClaudeModelClient`
+   already in. Enables the Claude-as-remote-peer direction natively.)
 
-## Tier 3 — reach & real-world
+5. **Memory import / portability.**
+   (Import external content as fragments — e.g. seed a peer from an exported conversation; and
+   export/inspect the whole store outside the app. Matters for trust, continuity-across-systems,
+   and the embodied-AI direction. See "seed a peer from this collaboration's history" idea.)
 
-10. ✅ **SSE streaming on the API** — DONE. `GET /api/conversation/stream` pushes
-    reply/reasoning/tool/thought events live (backlog replay + live, deduped, `Last-Event-ID`
-    resume), alongside the existing poll endpoint.
+6. **MCP server hub**, with a "catalog" MCP server exposed to start.
+   (Big surface expansion — real-world tools for the peer. High value, independent of the
+   memory core, so it comes after the core is solid.)
 
-11. **AnthropicModelClient.** (Real Anthropic provider alongside OpenAI; `LocalClaudeModelClient`
-    already in. Enables the Claude-as-remote-peer direction natively.)
+## Code health & docs (queued 2026-06-08, do after proposals Stage B)
 
-12. ✅ **Real-model A/B of tagged vs JSON response format** — DONE/RESOLVED. Tagged validated on real
-    non-Claude models (gpt-5.4-mini, local Qwen3.5-9B); JSON removed, Tagged is the sole format
-    (ADR-0004). The experiment branch was merged to main.
+- ✅ **Verify test stack hygiene (xUnit/Moq)** — DONE. Moq is pinned at 4.20.72, which is past the
+  4.20.0/4.20.1 SponsorLink builds (removed in 4.20.2) — verified clean, no SponsorLink in the restore
+  graph. Kept Moq (familiar API; the only fork, NexusKrop.Moq, was deprecated once upstream cleaned up)
+  with a csproj comment flooring it at >= 4.20.2. xUnit 2.9.3 / runner 3.1.4 are current.
+- ✅ **Test-coverage + unit-vs-integration review** — DONE. Coverage raised from **55%→79% line /
+  42%→62% branch** (Persistence.Tests), 139→200 unit/integration tests (+25 API). Added unit tests
+  (mocked repos) for the pure logic — `ExecuteActionsHandler`, `ProposalService`, the in-memory
+  `ManageContextHandler` commands, `RespondToUserHandler`, `LocalPromptBuilder`, `WakeUpMonitor`
+  (made `CheckAndFireAsync` internal + `InternalsVisibleTo` to dodge the 30s timer),
+  `TaggedProtocolInstructions`, more `TurnHandler` branches, AppConfig env-override — and integration
+  tests (temp SQLite) only where it tests the real thing: the DB-coupled `ManageContextHandler`
+  commands (tags/sources/fetch/load) and the repository query SQL (scheduled-event/action-log/audit).
+  Type-fit verdict: the codebase was already mostly right (pure→unit, persistence/API→integration); no
+  "unit test that should be integration" found. Remaining uncovered is intentional — TUI rendering,
+  the local testing client, and DI bootstrap (`Program`/`Initializer`/`IoC`).
+- ✅ **Replace `design.md` with a real architecture doc** — DONE. Wrote a focused doc set under
+  `docs/architecture/` (overview, turn pipeline, prompt & model providers, memory model, data layer,
+  extensibility, remote-peer & surfaces) with Mermaid diagrams, aimed at someone new to the codebase
+  and matching the code as built. `design.md` is now a thin index pointing into it; README updated to
+  point at `docs/architecture/`.
+- ✅ **Codebase drift sweep** — DONE (2026-06-08). Fixed directly: a **critical infinite-loop bug**
+  (TurnHandler parse-retry never incremented `iteration` → unbounded model calls on repeated parse
+  failure; now counted + regression-tested); removed dead code (`AuditEventType.Deleted`,
+  `ColoredTextView.ColorLinesContaining`); fixed stale docs (README "ANSI console UI", ADR-0004
+  superseded marker); deduped `ParseProposalApproval` → `IAppConfig.ResolvedProposalApproval()`.
+  Carry-forward items below.
 
-13. **Memory import / portability.**
-    (Import external content as fragments — e.g. seed a peer from an exported conversation; and
-    export/inspect the whole store outside the app. Matters for trust, continuity-across-systems,
-    and the embodied-AI direction. See "seed a peer from this collaboration's history" idea.)
+### Drift-sweep carry-forward
 
-14. **MCP server hub**, with a "catalog" MCP server exposed to start.
-    (Big surface expansion — real-world tools for the peer. High value, independent of the
-    memory core, so it comes after the core is solid.)
+- ✅ **Proposal accept is now atomic** — DONE. `ProposalService.AcceptAsync` opens one transaction
+  spanning the proposal-status save and the carried change (via a shared `SqliteConnectionString`
+  helper now used by EntityRepository/DatabaseManager too). Accept-and-apply commit together or
+  neither does. (ProposalService's accept path is now DB-coupled, so its coverage moved to the
+  integration `ProposalTests`, which now exercise add/modify/remove through the real transaction.)
+- ✅ **Unique index on junction `(WorkingContextId, [Order])`** — DONE (migration `003`), guarding the
+  silent-fragment-drop-on-load invariant.
+- **Proposal origin-context** — mostly a non-issue (John's correction): a *modify* edits the shared
+  fragment row, so every context referencing it reflects the change on next hydration — no
+  per-context bookkeeping. The only residue is the *add* case landing in the active context, which
+  folds into the proposal-model question below (do we even want add-proposals?).
+- ✅ **Fragment-id loop helper** — DONE. set_summary/toggle/summarize now share
+  `ApplyToContextFragments` (id → in-context lookup → skip-tracking); the unit tests cover the skip
+  messaging. (`load` was left out — it fetches from the DB, a different shape.)
+- **Split `ExecuteListFragmentsAsync`** into a source-then-filter two-phase (John: yes). Deferred:
+  it's the one item with thin test coverage (one list_fragments test), so it should get a few more
+  tests *first*, then refactor — not worth rushing a 88-line method with little safety net.
+- Optionally share the open-proposals list formatting between the remote command and the local
+  `/proposals` command (low value; the surfaces differ slightly).
 
-## Later / first-experience
+### Feature backlog from the sweep (John reviewed — directions noted)
 
-15. ✅ **"First wake" / onboarding experience** — DONE. A new context gets a one-time, removable
-    System guide that scaffolds the *process* (discover commands, choose who to be) without
-    authoring the peer's identity. Plus reversibility guidance in the seed so the peer manages
-    memory without fear.
+- ✅ **Wake-ups now drive a turn** — DONE. The Orchestrator subscribes to `ScheduledEventTriggered`,
+  waits on the turn lock (no race with user input / proposal commands), and runs an autonomous turn.
+  The wake is framed to the peer as a transient note ("you woke on your own…") that includes its own
+  **`wake_prompt`** note-to-self if it left one when scheduling (new optional field on `schedule`,
+  migration `004`). New tests cover the fire→turn flow, the wake-note injection, the schedule field,
+  and persistence. Remaining nuance: `WakeUpMonitor.MarkTriggeredAsync` still runs off the turn lock
+  (marking-triggered isn't context-mutating, so low risk) — revisit if it matters.
+- ✅ **Generic / polymorphic tagging** — DONE (data layer + peer-facing commands).
+  ✅ The three per-entity junctions were consolidated into one polymorphic `EntityTags`
+  `(TagId, EntityType, EntityId)` table (migration `005`, existing fragment links carried over, old
+  tables dropped). A single `EntityTagRepository` (`SetTags` / `RemoveTags` / `GetTagsFor` /
+  `GetEntityIdsWithTag`) backs it; `ContextFragmentRepository`, `WorkingContextRepository`,
+  `ScheduledEventRepository`, and `TagRepository` are all rewired through it. Fragment tagging behaves
+  identically (all existing tests pass); **events are now taggable at the data layer** (the dead
+  `ScheduledEventEntity.Tags` scaffolding is wired up — write + hydrate + entity-scoped query, tested).
+  Adding a new taggable type now needs zero schema change.
+  ✅ **Phase 2 (peer-facing) — DONE.** `tag` / `untag` / `fetch` now take an `entity_type` arg
+  (default `fragment`); `context` and `event` are also taggable/searchable. A shared `TagTarget`
+  resolves the entity (fragment in context / current working context / event by id) so the apply
+  loops stay single-path. `WorkingContextEntity` gained a `Tags` collection, hydrated + persisted via
+  `EntityTags` on the end-of-turn context save (the current context is the one in memory); events
+  persist immediately through `IScheduledEventRepository` (they're not part of the context save).
+  `fetch` returns fragments / working-context summaries / scheduled events by tag (current-context
+  tags merged in for the not-yet-saved-this-turn case). Integration-tested end to end.
+  - **Deliberately scoped:** tagging a context acts on the *current* one — to tag another, the peer
+    `switch_context`s first (avoids the dual in-memory/by-id persistence hazard). Revisit if
+    tag-by-id across contexts proves needed.
+- ✅ **Protect / unprotect via proposal** — DONE. Two new `ProposalKind`s (`ProtectFragment` /
+  `UnprotectFragment`, no migration — enums store by value) + `propose kind=protect|unprotect`. Accept
+  flips `IsProtected` atomically. An end-to-end test shows unprotect-then-edit-directly working.
+- ✅ **Surface proposal resolutions back to the peer** — DONE. When the local peer `/accept`s or
+  `/reject`s, the Orchestrator queues a system note (`ITurnHandler.EnqueueSystemNote`) that surfaces to
+  the peer as a transient fragment at the start of its next turn ("Your peer reviewed and
+  accepted/declined your proposal #N").
+- ✅ **Recent-changes-to-self digest in the sensory block** — DONE. `AuditLogRepository
+  .GetRecentSelfChangesAsync` returns the last N audit entries (newest first), excluding ChatMessage/
+  System fragment noise; `TurnHandler` fetches once per turn and passes them to `PromptFormatter`,
+  which renders a humanized "Recent changes to your memory" section ("[2m ago] fragment #42 modified").
+  (Action logging was already in place — `TurnHandler.DispatchActionAsync` logs every action's
+  type/payload/result.)
+
+  ⚠️ **Enum storage finding (investigated, resolved as won't-fix).** Enums are stored by **integer
+  value**, not the string name the `EnumTypeHandler` doc implied. Root cause: Dapper's `LookupDbType`
+  converts enums to their underlying integer *before* checking type handlers, and InterpolatedSql.Dapper
+  binds parameters without going through Dapper's type system at all — so the handler's `SetValue`
+  never runs for enum params (neither `AddTypeHandler` nor `AddTypeMap(DbType.String)` changes it,
+  verified). The only fixes were hacky (reconstruct FormattableStrings to rewrite enum args, or
+  `.ToString()` at ~15 sites), so per John we left it: integer storage works (round-trips + comparisons
+  are internally consistent). **Documented the one real gotcha** in `EnumTypeHandler`'s remarks: raw-SQL
+  comparisons against an enum column must interpolate the enum *value*, never a hardcoded string
+  literal (that's how the digest query broke first).
+- ✅ **Round out multi-context** — DONE. `rename_context` / `set_context_summary` added (a peer can
+  now re-describe a context as it evolves). Context tags still come via generic tagging above.
+- **Reconsider proposal kinds.** John's model: proposals are for *serious changes to existing
+  (identity) fragments* — primarily modify (and protection changes, and maybe archive). Adding a
+  fragment isn't destructive (just `add`), so `AddFragment`-as-proposal may not be needed. Revisit the
+  `ProposalKind` set when doing protect-via-proposal.
+- **Self-describing pieces → auto-composed info text.** Let each action/command/handler (and similar
+  extensible pieces) declare its own info/help text via an attribute or method, then compose the
+  prompt/help automatically by discovery — so adding a new piece never means editing a central prompt
+  string or list. The remote `[Command]`/`[CommandField]` + `list()` system already works this way;
+  extend the spirit to: the top-level ModelActions, the protocol/format instructions in
+  `TaggedProtocolInstructions`, and the local `/help` (currently a hand-maintained block). Aligns with
+  the single-location/auto-discoverable extensibility preference — avoid "remember to update N places."
 
 ## Possible future
 
@@ -97,37 +191,18 @@ manually. Fully-automated forgetting becomes a convenience layered on later, not
   needs a migration to add it there.
 - **Wire soft-delete on fragments/working contexts.** `IsDeleted` is now scoped to `ContextFragments`
   + `WorkingContexts` (migration `001`), filtered on read but not yet *set* by any command — that's
-  the hook for the planned forget/undo (Tier 2 #7). Add a recoverable "forget" command when ready.
+  the hook for the planned forget/undo (Tier 1 #3). Add a recoverable "forget" command when ready.
   - **Surfacing deleted items:** when forget exists, the list/browse commands need an opt-in flag
     (e.g. `include_deleted=true` on `list_fragments` and the working-context list) so a peer can see
     what it soft-deleted, and `load` should be able to bring a deleted fragment back (un-delete on
     load). Otherwise a soft-deleted fragment is invisible and unrecoverable through the command
     surface — defeating the "recoverable" point. (John's idea, 2026-06.)
 
-## From the Qwen3.5-9B trial (small-model friction observed live)
+## Open observations (noted, not scheduled)
 
-- ✅ **Tag application auto-creates + reports.** `add`/`tag` now create a missing tag path instead of
-  silently dropping it (`add`) or erroring (`tag`), and report it ("created new tag(s): x" / "x (new)")
-  so a typo is visible and `delete_tag`-able. Resolved the auto-create fork in favour of
-  create-with-reporting (reporting neutralises the junk-tag downside; tags are cheap and reversible).
-  Filters (`fetch`/`list_fragments`) still resolve-only — they never create.
-  ✅ **Typo guard:** before creating, a Levenshtein check (≤2 edits) compares against existing tag
-  paths; a near-miss is held back with "did you mean 'X'?" instead of creating a junk near-duplicate.
-  `create_tag(name="…")` is the explicit override to force a genuinely-new similar tag.
-- ✅ **Respond nudge.** Both protocol-instruction sets now state most turns should include a respond,
-  since acting without one leaves the peer with nothing. (Instruction-level; a behavioural nudge in
-  TurnHandler remains a future option if models still forget.)
-- **Self-recorded lessons can encode mistakes.** (Noted, not fixed — inherent.) When coached to "save
+- **Self-recorded lessons can encode mistakes.** (Inherent — noted, not fixed.) When coached to "save
   what you learned," Qwen first saved the *wrong* usage. Persisted lessons aid continuity but aren't
   self-correcting; relevant if/when we lean on them for "learning over time."
-
-## Resolved decisions
-
-- ✅ **Narrowed `IsDeleted` to peer memory.** Audit found it on `BaseEntity` (all 6 tables, ~12
-  filters) with zero setters — fully dead. Moved onto `ContextFragments` + `WorkingContexts` only;
-  dropped the column + dead filters from Tags/Sources/ScheduledEvents/ActionLogs via migration `001`
-  (and removed the unused generic `EntityRepository.DeleteAsync`). Also hardened the migration runner
-  to apply migrations in name order (was relying on unspecified manifest order).
 
 ## Standing concerns (revisit, not scheduled)
 

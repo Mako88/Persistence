@@ -68,13 +68,14 @@ is treated as foundational rather than a nice-to-have.
 
 ## Architecture
 
-A .NET 10 solution in three projects:
+A .NET 10 solution:
 
 | Project | Role |
 |---|---|
-| `Persistence.Core` | Domain, data layer (SQLite/Dapper), turn orchestration, model clients, streaming |
-| `Persistence.Console` | Front-ends — an ANSI console UI and a multi-pane Terminal.Gui TUI |
-| `Persistence.Tests` | xUnit test suite |
+| `Persistence.Core` | Domain, data layer (SQLite/Dapper), turn orchestration, model clients, streaming — all the logic |
+| `Persistence.Console` | Front-end — a multi-pane Terminal.Gui TUI |
+| `Persistence.Api` | Front-end — an HTTP/SSE API; also the surface for "Claude as remote peer" (drive a session over REST) |
+| `Persistence.Tests`, `Persistence.Api.Tests` | xUnit test suites |
 
 - **Data layer** — SQLite via Dapper, repository pattern, audit + action logs, soft-delete,
   migrations.
@@ -82,11 +83,14 @@ A .NET 10 solution in three projects:
   provider and UI mode.
 - **Model clients** — keyed by provider. The OpenAI client uses the Responses API (with
   reasoning summaries) over [SimpleHttpClient](https://www.nuget.org/packages/SimpleHttpClient),
-  and supports streaming.
-- **Display providers** — `IDisplayProvider` keyed by `UiMode`; a Console implementation and a
-  Terminal.Gui v1 TUI with live reasoning, tool, and history panes.
+  and supports streaming. Other providers cover OpenAI-compatible local servers and an
+  out-of-band external agent (see [Configuration](#configuration)).
+- **Display providers** — `IDisplayProvider` keyed by `UiMode`: a Terminal.Gui v1 TUI (live
+  reasoning, tool, and history panes) and an HTTP/SSE API surface.
 
-See **[docs/design.md](docs/design.md)** for the schema and component-level design.
+See **[docs/architecture/](docs/architecture/)** for the full architecture reference — the turn
+pipeline, prompt assembly & model providers, the memory model, the data layer, extensibility, and the
+remote-peer/surfaces design (with diagrams).
 
 ## Getting started
 
@@ -121,16 +125,18 @@ Key settings in `persistence.json`:
 
 | Setting | Notes |
 |---|---|
-| `Provider` | `OpenAI` for a real model, or `local` to type the model's responses by hand (infra testing). |
+| `Provider` | `OpenAI` (Responses API), `OpenAiChat` (OpenAI-compatible Chat Completions — local servers like llama.cpp / Ollama / LM Studio), `LocalClaude` (an external agent answers out-of-band via the API), or `local` (type responses by hand; infra testing). |
 | `Model` | Model identifier sent to the provider. |
 | `ApiKey` | Your provider API key. |
-| `UiMode` | `Tui` (multi-pane Terminal.Gui) or `Console` (plain ANSI). |
+| `UiMode` | `Tui` (multi-pane Terminal.Gui) or `Api` (HTTP/SSE endpoints). |
 | `Streaming` | Stream responses (live reasoning) vs. await a full completion. |
 | `ReasoningEffort` | `minimal` / `low` / `medium` / `high` for reasoning-capable models. |
 
-> **Note:** the `local` provider reads responses from the console, which conflicts with the
-> `Tui` front-end (they fight over the terminal). Use `local` with `UiMode: Console`, or use
-> `Tui` with a real provider like `OpenAI`.
+> **Note:** the `local` provider reads responses from the console, so it can't share the
+> terminal with the `Tui` front-end — it's mainly for infrastructure testing. For interactive
+> use, pick a real provider (`OpenAI` / `OpenAiChat`) with `Tui`, or use `LocalClaude` with
+> `UiMode: Api` to act as the remote peer yourself over HTTP (see
+> [docs/architecture/remote-peer-and-surfaces.md](docs/architecture/remote-peer-and-surfaces.md)).
 
 ## Tests
 

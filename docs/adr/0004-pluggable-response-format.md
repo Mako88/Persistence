@@ -9,7 +9,7 @@ models handle poorly. A tagged format (`<think>/<respond>/<context>/<actions>/<c
 function-call command blocks) lets prose be raw and is easier for weaker models — but it's unproven
 versus JSON on a clean (non-Claude) sample.
 
-## Decision
+## Decision (later superseded — see "Update (2026-06-08)" below)
 Make the format a config-selectable strategy: `ResponseFormat` enum → keyed `IModelResponseParser` +
 `IProtocolInstructions`. Keep `Json` and `Tagged` both, decide later (needs a real-model A/B). All
 handler/command logic stays format-agnostic; only the parser and protocol instructions differ.
@@ -27,6 +27,14 @@ removed** (`ModelResponseParser`, `JsonProtocolInstructions`, `ResponseFormat.Js
 sole format. The `ResponseFormat` enum + keyed-strategy seam is **kept** (now single-valued) so a new
 format can be added later without rewiring — cheap insurance, matching the enum-keyed-strategy
 convention.
+
+## Update (2026-06-08): seam simplified
+The single-valued `ResponseFormat` enum + keyed-strategy registration were removed once it was clear
+Tagged was the durable choice — keeping an enum and `ResolveKeyed` plumbing for one value was friction
+without payoff. `IModelResponseParser` / `IProtocolInstructions` now register plainly and the
+`ResponseFormat` config key is gone. The *layering* survives (parser + protocol-instructions are still
+their own format-owned layer, and the format-neutral-messaging rule below still holds), so adding a
+second format later means reintroducing the keyed selection, not rearchitecting.
 
 ## Consequences
 - One parser/instruction set to maintain (Tagged).
