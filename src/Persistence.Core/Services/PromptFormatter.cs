@@ -1,6 +1,8 @@
 using Persistence.Config;
 using Persistence.Data.Entities;
 using Persistence.DI;
+using Persistence.Events;
+using Persistence.Notifications;
 using Persistence.Runtime;
 using System.Text;
 
@@ -19,6 +21,7 @@ public class PromptFormatter : IPromptFormatter
     private readonly IProtocolInstructions protocolInstructions;
     private readonly ITokenUsageTracker usageTracker;
     private readonly IContextWindowProvider contextWindows;
+    private readonly IEventBus eventBus;
 
     private DateTimeOffset? lastFormatUtc;
 
@@ -30,13 +33,15 @@ public class PromptFormatter : IPromptFormatter
         IAppConfig config,
         IProtocolInstructions protocolInstructions,
         ITokenUsageTracker usageTracker,
-        IContextWindowProvider contextWindows)
+        IContextWindowProvider contextWindows,
+        IEventBus eventBus)
     {
         this.sessionContext = sessionContext;
         this.config = config;
         this.protocolInstructions = protocolInstructions;
         this.usageTracker = usageTracker;
         this.contextWindows = contextWindows;
+        this.eventBus = eventBus;
     }
 
     /// <summary>
@@ -242,10 +247,15 @@ public class PromptFormatter : IPromptFormatter
 
         if (budget <= 0)
         {
+            eventBus.FireAndForget(this, new ContextBudgetUpdated(used, 0, 0));
             return $"Context: ~{used} tokens used (no budget configured)";
         }
 
         var percent = (int)Math.Round(100.0 * used / budget);
+
+        // Surface the usage to any UI (e.g. a status-bar gauge); best-effort, off the formatting path.
+        eventBus.FireAndForget(this, new ContextBudgetUpdated(used, budget, percent));
+
         var line = $"Context budget: ~{used}/{budget} tokens (~{percent}% full)";
 
         var nudge = percent switch

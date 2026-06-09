@@ -84,8 +84,9 @@ public class Orchestrator : IOrchestrator
         await InitializeAsync();
         initialized.TrySetResult();
 
-        // Show the current pending events in the display's Schedule view.
+        // Show the current pending events and open-proposal count in the display.
         await RefreshScheduledEventsAsync();
+        await RefreshOpenProposalsAsync();
 
         wakeUpMonitor.Start(ct);
 
@@ -138,6 +139,7 @@ public class Orchestrator : IOrchestrator
 
             // The turn may have scheduled or cancelled events — refresh the Schedule view.
             await RefreshScheduledEventsAsync();
+            await RefreshOpenProposalsAsync();
         }
         finally
         {
@@ -169,6 +171,7 @@ public class Orchestrator : IOrchestrator
 
             // The fired event is no longer pending, and the turn may have scheduled more — refresh.
             await RefreshScheduledEventsAsync();
+            await RefreshOpenProposalsAsync();
         }
         finally
         {
@@ -193,6 +196,23 @@ public class Orchestrator : IOrchestrator
         catch
         {
             // A schedule-view refresh is non-critical; never let it interrupt the session.
+        }
+    }
+
+    /// <summary>
+    /// Pushes the current open-proposal count to the display (e.g. a status-bar indicator).
+    /// Best-effort: a query failure must not break a turn.
+    /// </summary>
+    private async Task RefreshOpenProposalsAsync()
+    {
+        try
+        {
+            var open = await proposalService.GetOpenAsync();
+            display.ShowOpenProposalCount(open.Count);
+        }
+        catch
+        {
+            // A proposals-indicator refresh is non-critical; never let it interrupt the session.
         }
     }
 
@@ -367,10 +387,12 @@ public class Orchestrator : IOrchestrator
 
             case "/accept":
                 await AcceptProposalAsync(arg);
+                await RefreshOpenProposalsAsync();
                 break;
 
             case "/reject":
                 await RejectProposalAsync(arg);
+                await RefreshOpenProposalsAsync();
                 break;
 
             default:

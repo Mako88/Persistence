@@ -55,11 +55,18 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
     private TabView tabView = null!;
     private Label stateLabel = null!;
     private Label modelLabel = null!;
+    private Label budgetLabel = null!;
+    private Label proposalsLabel = null!;
     private Label sessionLabel = null!;
     private Label exitLabel = null!;
 
     private Thread? uiThread;
     private volatile bool ready;
+
+    // Latest status-bar values, retained so a push that arrives before the loop is ready (e.g. the
+    // initial proposal count / first budget calc) can be applied on load rather than lost.
+    private int lastProposalCount;
+    private (int Used, int Budget, int Percent)? lastBudget;
 
     public TerminalGuiDisplayProvider(IEventBus eventBus, ISessionContext sessionContext, IAppConfig config)
     {
@@ -83,6 +90,7 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
         eventBus.Subscribe<ToolInvoked>((_, e) => { ShowToolUse(e.Tool, e.Request, e.Result); return Task.CompletedTask; });
         eventBus.Subscribe<ModelReasoningDelta>((_, e) => { ShowReasoningDelta(e.Delta); return Task.CompletedTask; });
         eventBus.Subscribe<ModelThought>((_, e) => { ShowThought(e.Thought); return Task.CompletedTask; });
+        eventBus.Subscribe<ContextBudgetUpdated>((_, e) => { UpdateBudget(e.UsedTokens, e.BudgetTokens, e.PercentFull); return Task.CompletedTask; });
 
         uiThread = new Thread(RunUi) { IsBackground = true, Name = "tui" };
         uiThread.Start();
@@ -241,6 +249,12 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
         }
 
         Set(scheduleBuffer, () => schedule, sb.ToString());
+    }
+
+    public void ShowOpenProposalCount(int count)
+    {
+        lastProposalCount = count;
+        UpdateStatusSegment(() => proposalsLabel, ProposalsText(count), ProposalsColor(count));
     }
 
     public void ShowChatHistory(IReadOnlyList<(string Role, string Content, DateTimeOffset Timestamp)> messages)
@@ -413,8 +427,9 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
     }
 
     /// <summary>
-    /// Builds the bottom status bar: a state chip (colour reflects state) + model + session + a muted
-    /// /exit hint. Only the state chip changes at runtime; the others are set once here.
+    /// Builds the bottom status bar: a state chip + model + context-budget gauge + open-proposal
+    /// indicator + session + a muted /exit hint. The state, budget and proposal segments change at
+    /// runtime; the others are set once here.
     /// </summary>
     private void BuildStatusBar(ConsoleDriver driver, Toplevel top, int bottomRows)
     {
@@ -423,14 +438,35 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
         var pipe1 = StatusSegment(driver, " │ ", TuiColors.Body, Pos.Right(stateLabel));
         modelLabel = StatusSegment(driver, $"{config.Provider}/{config.Model}", TuiColors.Model, Pos.Right(pipe1));
         var pipe2 = StatusSegment(driver, " │ ", TuiColors.Body, Pos.Right(modelLabel));
-        sessionLabel = StatusSegment(driver, $"Session {sessionContext.SessionId}", TuiColors.Body, Pos.Right(pipe2));
-        var pipe3 = StatusSegment(driver, " │ ", TuiColors.Body, Pos.Right(sessionLabel));
-        exitLabel = StatusSegment(driver, "/exit to quit", TuiColors.Muted, Pos.Right(pipe3));
+        budgetLabel = StatusSegment(driver, BudgetText(null), BudgetColor(0), Pos.Right(pipe2));
+        var pipe3 = StatusSegment(driver, " │ ", TuiColors.Body, Pos.Right(budgetLabel));
+        proposalsLabel = StatusSegment(driver, ProposalsText(0), ProposalsColor(0), Pos.Right(pipe3));
+        var pipe4 = StatusSegment(driver, " │ ", TuiColors.Body, Pos.Right(proposalsLabel));
+        sessionLabel = StatusSegment(driver, $"Session {sessionContext.SessionId}", TuiColors.Body, Pos.Right(pipe4));
+        var pipe5 = StatusSegment(driver, " │ ", TuiColors.Body, Pos.Right(sessionLabel));
+        exitLabel = StatusSegment(driver, "/exit to quit", TuiColors.Muted, Pos.Right(pipe5));
         exitLabel.Width = Dim.Fill();
         exitLabel.AutoSize = false;
 
-        top.Add(stateLabel, pipe1, modelLabel, pipe2, sessionLabel, pipe3, exitLabel);
+        top.Add(stateLabel, pipe1, modelLabel, pipe2, budgetLabel, pipe3, proposalsLabel, pipe4, sessionLabel, pipe5, exitLabel);
     }
+
+    /// <summary>The context-budget gauge text: percent full, or a placeholder before the first turn.</summary>
+    private static string BudgetText(int? percent) => percent is { } p ? $" Context: {p}%" : " Context: —";
+
+    /// <summary>Gauge colour by fullness: green &lt; 60, yellow 60–79, gold 80–94, red 95+.</summary>
+    private static Color BudgetColor(int percent) => percent switch
+    {
+        >= 95 => TuiColors.Error,
+        >= 80 => TuiColors.Gold,
+        >= 60 => TuiColors.Label,
+        _ => TuiColors.Processing,
+    };
+
+    private static string ProposalsText(int count) => $" Proposals: {count}";
+
+    /// <summary>Gold when there are open proposals awaiting a decision, muted when none.</summary>
+    private static Color ProposalsColor(int count) => count > 0 ? TuiColors.Gold : TuiColors.Muted;
 
     private static Label StatusSegment(ConsoleDriver driver, string text, Color fg, Pos x) => new(text)
     {
@@ -530,6 +566,13 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
         // Re-assert focus on the compose box now that the loop is up: Application.Run gives initial
         // focus to the first view, so the SetFocus in BuildLayout doesn't stick on its own.
         input.SetFocus();
+
+        // Apply any status-bar values that arrived before the loop was ready.
+        ShowOpenProposalCount(lastProposalCount);
+        if (lastBudget is { } b)
+        {
+            UpdateBudget(b.Used, b.Budget, b.Percent);
+        }
     }
 
     /// <summary>
@@ -778,6 +821,35 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
 
     /// <summary>Colours the state chip: green while processing (states end with "…"), white when idle.</summary>
     private static Color StateColor(string state) => state.Contains('…') ? TuiColors.Processing : TuiColors.Body;
+
+    /// <summary>Updates the context-budget gauge from a recalculated budget (marshalled to the UI thread).</summary>
+    private void UpdateBudget(int used, int budget, int percent)
+    {
+        lastBudget = (used, budget, percent);
+        UpdateStatusSegment(
+            () => budgetLabel,
+            budget > 0 ? BudgetText(percent) : $" Context: ~{used} tok",
+            BudgetColor(percent));
+    }
+
+    /// <summary>Sets a status-bar segment's text + colour on the UI thread and relays out the bar so
+    /// the following segments shift to fit the new width.</summary>
+    private void UpdateStatusSegment(Func<Label> segment, string text, Color colour)
+    {
+        if (!ready)
+        {
+            return;
+        }
+
+        Application.MainLoop?.Invoke(() =>
+        {
+            var label = segment();
+            label.Text = text;
+            label.ColorScheme = Scheme(Application.Driver, colour, TuiColors.StatusBg);
+            Application.Top?.LayoutSubviews();
+            Application.Top?.SetNeedsDisplay();
+        });
+    }
 
     #endregion
 }

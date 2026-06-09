@@ -183,6 +183,12 @@ public class ApiDisplayProvider : IDisplayProvider
     public void ShowScheduledEvents(IReadOnlyList<ScheduledEventEntity> events) { }
 
     /// <summary>
+    /// No-op for the API surface — the open-proposal count is a status-bar affordance for the TUI;
+    /// API consumers query proposals directly.
+    /// </summary>
+    public void ShowOpenProposalCount(int count) { }
+
+    /// <summary>
     /// Appends a system/local message (e.g. a slash-command result) to the log as a "system" event
     /// </summary>
     public void ShowSystemMessage(string message) => Append("system", message);

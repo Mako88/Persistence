@@ -48,7 +48,12 @@ internal static class TuiPreview
         // Buffered until the loop is ready, then flushed into the panes on load.
         PushSamples(display);
 
-        await display.Start(cts.Token);
+        // Start subscribes to events (incl. the budget gauge) and launches the UI thread; publish a
+        // sample budget reading afterwards so the status-bar gauge has something to show.
+        var startTask = display.Start(cts.Token);
+        bus.FireAndForget(display, new ContextBudgetUpdated(2103, 28000, 8));
+
+        await startTask;
     }
 
     private static void PushSamples(TerminalGuiDisplayProvider d)
@@ -79,6 +84,9 @@ internal static class TuiPreview
         d.ShowUnknownCommand("/foo");
         d.ShowSystemMessage($"[{now.LocalDateTime.ToString("MM/dd/yyyy hh:mm tt")}] Executed /proposals");
         d.ShowError("tag 'persnoality/values' not found — did you mean 'personality/values'?");
+
+        // Status bar — open-proposal indicator (buffered, applied on load).
+        d.ShowOpenProposalCount(2);
 
         // Schedule pane — pending scheduled events the peer set for itself.
         d.ShowScheduledEvents(

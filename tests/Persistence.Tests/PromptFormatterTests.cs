@@ -1,6 +1,7 @@
 using Moq;
 using Persistence.Config;
 using Persistence.Data.Entities;
+using Persistence.Events;
 using Persistence.Runtime;
 using Persistence.Services;
 
@@ -25,7 +26,8 @@ public class PromptFormatterTests
         var config = new AppConfig { MaxInputTokens = maxInputTokens, Model = model };
 
         return new PromptFormatter(
-            session.Object, config, protocol.Object, tracker ?? new TokenUsageTracker(), windows.Object);
+            session.Object, config, protocol.Object, tracker ?? new TokenUsageTracker(), windows.Object,
+            new Mock<IEventBus>().Object);
     }
 
     private static WorkingContextEntity ContextWithFragment(string content)

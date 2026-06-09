@@ -60,6 +60,12 @@ public interface IDisplayProvider
     void ShowScheduledEvents(IReadOnlyList<ScheduledEventEntity> events);
 
     /// <summary>
+    /// Shows how many proposals are currently open/awaiting a decision (a count, pushed whenever it
+    /// changes) — e.g. a status-bar indicator.
+    /// </summary>
+    void ShowOpenProposalCount(int count);
+
+    /// <summary>
     /// Shows an error message.
     /// </summary>
     void ShowError(string message);
