@@ -1,33 +1,91 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Persistence.Config;
 
 /// <summary>
-/// Global app configuration loaded from appsettings.json
+/// Global app configuration loaded from <c>persistence.json</c>.
+///
+/// Model/provider-coupled settings live in named <see cref="ModelProfile"/> entries in
+/// <see cref="Models"/>; <see cref="SelectedModel"/> picks the active one. The model-coupled
+/// <see cref="IAppConfig"/> properties (Provider, Model, ApiKey, token limits, …) delegate to that
+/// active profile, so consumers read them exactly as before. The remaining settings here
+/// (database, UI mode, proposal approval, debug, iteration cap) are shared across models.
+///
+/// The older flat shape (Provider/Model/… at the top level) is still accepted: a config with no
+/// <see cref="Models"/> is migrated into a single profile on load.
 /// </summary>
 public class AppConfig : IAppConfig
 {
+    // --- Shared (non-model) settings ---
     public string DatabasePath { get; set; } = "dbs/continuity.db";
-    public string ApiKey { get; set; } = "";
-    public string Provider { get; set; } = "local";
-    public string Model { get; set; } = "local";
-    public string? ApiBaseUrl { get; set; }
-    public int MaxInputTokens { get; set; } = 8000;
-    public int MaxOutputTokens { get; set; } = 32000;
-    public string ReasoningEffort { get; set; } = "high";
-    public bool Streaming { get; set; } = true;
     public string UiMode { get; set; } = "Tui";
     public string ProposalApproval { get; set; } = "Self";
     public bool DebugMode { get; set; } = false;
     public int MaxActionIterations { get; set; } = 5;
-    public int RequestTimeoutSeconds { get; set; } = 600;
+
+    // --- Model selection ---
+
+    /// <summary>
+    /// The <see cref="ModelProfile.Name"/> of the active profile in <see cref="Models"/>.
+    /// Null/blank or unmatched selects the first profile.
+    /// </summary>
+    public string? SelectedModel { get; set; }
+
+    /// <summary>
+    /// The configured model profiles. Each bundles a provider/model and its coupled settings;
+    /// switch which one is live via <see cref="SelectedModel"/>.
+    /// </summary>
+    public List<ModelProfile> Models { get; set; } = [];
+
+    /// <summary>
+    /// The resolved active profile that the flat <see cref="IAppConfig"/> model properties read
+    /// from. Always non-null after <see cref="ResolveActiveModel"/> (run during load).
+    /// </summary>
+    [JsonIgnore]
+    public ModelProfile ActiveModel { get; private set; } = new();
+
+    // --- Model-coupled IAppConfig properties: delegate to the active profile. ---
+    // [JsonIgnore] so they neither serialize (no duplication with Models) nor deserialize from the
+    // new shape; legacy flat configs are migrated separately in LoadFromFileAsync.
+
+    [JsonIgnore] public string Provider { get => ActiveModel.Provider; set => ActiveModel.Provider = value; }
+    [JsonIgnore] public string Model { get => ActiveModel.Model; set => ActiveModel.Model = value; }
+    [JsonIgnore] public string ApiKey { get => ActiveModel.ApiKey; set => ActiveModel.ApiKey = value; }
+    [JsonIgnore] public string? ApiBaseUrl { get => ActiveModel.ApiBaseUrl; set => ActiveModel.ApiBaseUrl = value; }
+    [JsonIgnore] public int MaxInputTokens { get => ActiveModel.MaxInputTokens; set => ActiveModel.MaxInputTokens = value; }
+    [JsonIgnore] public int MaxOutputTokens { get => ActiveModel.MaxOutputTokens; set => ActiveModel.MaxOutputTokens = value; }
+    [JsonIgnore] public string ReasoningEffort { get => ActiveModel.ReasoningEffort; set => ActiveModel.ReasoningEffort = value; }
+    [JsonIgnore] public bool Streaming { get => ActiveModel.Streaming; set => ActiveModel.Streaming = value; }
+    [JsonIgnore] public int RequestTimeoutSeconds { get => ActiveModel.RequestTimeoutSeconds; set => ActiveModel.RequestTimeoutSeconds = value; }
+
+    /// <summary>
+    /// Resolves <see cref="ActiveModel"/> from <see cref="SelectedModel"/> (case-insensitive name
+    /// match), falling back to the first profile. Ensures at least one profile exists, and syncs
+    /// <see cref="SelectedModel"/> to the resolved profile's name. Idempotent.
+    /// </summary>
+    public AppConfig ResolveActiveModel()
+    {
+        if (Models.Count == 0)
+        {
+            Models.Add(new ModelProfile());
+        }
+
+        ActiveModel = Models.FirstOrDefault(m =>
+            string.Equals(m.Name, SelectedModel, StringComparison.OrdinalIgnoreCase)) ?? Models[0];
+
+        SelectedModel = ActiveModel.Name;
+        return this;
+    }
 
     /// <summary>
     /// Loads the config from the given filepath, falling back to defaults on missing file or
     /// parse error, then applies environment-variable overrides. Any setting can be overridden by
     /// a <c>PERSISTENCE_&lt;PROPERTY&gt;</c> env var (e.g. <c>PERSISTENCE_PROVIDER</c>,
     /// <c>PERSISTENCE_DATABASEPATH</c>, <c>PERSISTENCE_MAXINPUTTOKENS</c>) — case-insensitive,
-    /// matching the property name. Useful for tests, deploys, and ops without editing the file.
+    /// matching the property name. Model-coupled overrides apply to the active profile;
+    /// <c>PERSISTENCE_SELECTEDMODEL</c> switches which profile is active first. Useful for tests,
+    /// deploys, and ops without editing the file.
     /// </summary>
     public static async Task<IAppConfig> LoadAsync(string? path = null)
     {
@@ -77,6 +135,14 @@ public class AppConfig : IAppConfig
     /// </summary>
     private static void ApplyEnvironmentOverrides(AppConfig config)
     {
+        // Switch the active profile first, so any model-coupled overrides below land on it.
+        var selected = Environment.GetEnvironmentVariable(EnvPrefix + nameof(SelectedModel));
+        if (!string.IsNullOrEmpty(selected))
+        {
+            config.SelectedModel = selected;
+            config.ResolveActiveModel();
+        }
+
         var properties = typeof(AppConfig)
             .GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
             .Where(p => p.CanWrite)
@@ -118,21 +184,28 @@ public class AppConfig : IAppConfig
     {
         if (!File.Exists(path))
         {
-            return new AppConfig();
+            return new AppConfig().ResolveActiveModel();
         }
 
         var json = await File.ReadAllTextAsync(path);
 
         try
         {
-            return JsonSerializer.Deserialize<AppConfig>(json, new JsonSerializerOptions
+            var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            var config = JsonSerializer.Deserialize<AppConfig>(json, opts) ?? new AppConfig();
+
+            // Backward-compat: an older flat config has no Models array — migrate its top-level
+            // model fields (Provider/Model/ApiKey/token limits/…) into a single profile.
+            if (config.Models.Count == 0)
             {
-                PropertyNameCaseInsensitive = true
-            }) ?? new AppConfig();
+                config.Models = [JsonSerializer.Deserialize<ModelProfile>(json, opts) ?? new ModelProfile()];
+            }
+
+            return config.ResolveActiveModel();
         }
         catch
         {
-            return new AppConfig();
+            return new AppConfig().ResolveActiveModel();
         }
     }
 }
