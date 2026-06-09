@@ -154,9 +154,24 @@ public class OpenAiModelClient : IModelClient, IDisposable
             throw new InvalidOperationException($"API call failed ({response.StatusCode}): {error}");
         }
 
+        // Accumulate the streamed text so the response can be logged to the Debug pane on completion,
+        // just like the non-streaming path does — otherwise streamed turns would log a request with no
+        // matching response.
+        var responseText = new StringBuilder();
+
         await foreach (var evt in OpenAiResponseStreamParser.ParseAsync(EventData(response, ct), ct))
         {
+            if (evt.Kind == ModelStreamEventKind.OutputTextDelta)
+            {
+                responseText.Append(evt.Text);
+            }
+
             yield return evt;
+        }
+
+        if (config.DebugMode)
+        {
+            display.ShowDebugInfo($"Response:\n{responseText}");
         }
     }
 

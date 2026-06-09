@@ -361,11 +361,6 @@ public class Orchestrator : IOrchestrator
                 display.Stop();
                 break;
 
-            case "/debug":
-                config.DebugMode = !config.DebugMode;
-                display.ShowDebugInfo($"DEBUG MODE {(config.DebugMode ? "ENABLED" : "DISABLED")}");
-                break;
-
             case "/proposals":
                 await ShowProposalsAsync();
                 break;
@@ -395,7 +390,6 @@ public class Orchestrator : IOrchestrator
           /proposals               List the peer's open proposals
           /accept <id>             Accept a proposal (applies its change)
           /reject <id> [reason]    Reject a proposal
-          /debug                   Toggle debug output
           /exit, /quit             End the session
 
         Anything else you type is sent to your peer as a message.

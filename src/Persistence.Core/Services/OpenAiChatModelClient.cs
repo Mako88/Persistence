@@ -161,8 +161,12 @@ public class OpenAiChatModelClient : IModelClient, IDisposable
 
         if (config.DebugMode)
         {
-            var debugContent = string.Join("\n\n", built.Select(m => $"[{m.role}]\n{m.content}"));
-            display.ShowDebugInfo($"Request ({messages.Length} messages):\n{debugContent}\n");
+            // Show the logical prompt segments (each already carries its own fragment header / [Sensory]
+            // marker) rather than the flattened two-message body. The flatten adds inline [role]
+            // attribution labels for the model's benefit; those are noise in the debug view, so we
+            // render the pre-flatten segments here instead.
+            var debugContent = string.Join("\n\n", request.Messages.Select(m => m.Content));
+            display.ShowDebugInfo($"Request:\n{debugContent}");
         }
 
         return new SimpleRequest("/chat/completions", HttpMethod.Post, body);
