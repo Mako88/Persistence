@@ -211,6 +211,12 @@ committing to an approach.
 
 ## Possible future
 
+- **Enum display names via `[Description]`.** Annotate UI-facing enums (e.g. `ScheduledEventStatus`)
+  with `[Description("…")]` and render the description in the UI instead of `value.ToString()` — so
+  e.g. `Triggered` can show as "Complete" without coupling the code identifier to the display text. A
+  small `enum.GetDescription()` helper, used wherever an enum is currently `ToString()`-ed for display.
+
+
 - **Undo stack.** A true undo for context operations. Lower priority because archive-not-delete +
   clear reversibility labelling already make almost everything recoverable (load/fetch); revisit
   if reversible-by-design proves insufficient.
