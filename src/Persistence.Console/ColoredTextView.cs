@@ -82,6 +82,37 @@ internal sealed class ColoredTextView : TextView
 
     #endregion
 
+    #region Mouse
+
+    /// <summary>Lines moved per mouse-wheel notch. Terminal.Gui's default of one line is painfully
+    /// slow for long panes; a larger step makes the wheel usable.</summary>
+    private const int WheelLines = 3;
+
+    public override bool MouseEvent(MouseEvent ev)
+    {
+        if (ev.Flags.HasFlag(MouseFlags.WheeledDown))
+        {
+            return ScrollByLines(WheelLines);
+        }
+
+        if (ev.Flags.HasFlag(MouseFlags.WheeledUp))
+        {
+            return ScrollByLines(-WheelLines);
+        }
+
+        return base.MouseEvent(ev);
+    }
+
+    private bool ScrollByLines(int delta)
+    {
+        var max = Math.Max(0, Lines - Bounds.Height);
+        TopRow = Math.Clamp(TopRow + delta, 0, max);
+        SetNeedsDisplay();
+        return true;
+    }
+
+    #endregion
+
     #region Rendering
 
     // Read-only panes draw via SetReadOnlyColor; override the others too so the same

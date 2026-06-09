@@ -111,7 +111,11 @@ internal static class TuiPreview
             + "budget, or keep them separate for clarity. Keeping separate for now.");
 
         // Actions pane — command invocations. The request is the command's JSON fields (as the real
-        // app sends), rendered one parameter per line.
+        // app sends), rendered one parameter per line. The first sample carries escaped quotes,
+        // apostrophes and newlines to confirm they're decoded for display (no \uXXXX / \n gibberish).
+        d.ShowToolUse("add",
+            """{"content":"First Audit Findings:\n- Memory is lean (~13% full).\n- Lack of specific \"Domain\" tags (e.g. project's).\n- Goal: move from 'narrative' to structured tagging.","fragment_type":"Personal","importance":0.8,"tags":["meta/strategy","audit"]}""",
+            "Added Personal fragment with 2 tag(s) (created new tag(s): audit)");
         d.ShowToolUse("add",
             """{"content":"My name is John.","fragment_type":"Identity","tags":["identity/core"]}""",
             "Added Identity fragment with 1 tag(s)");
@@ -134,7 +138,10 @@ internal static class TuiPreview
             + "like you to pick your own goals :)\n\n"
             + "[#6 | Identity | R:0.9 I:0.9 C:0.5 | protected]\n"
             + "My name is John.\n\n"
-            + "## Command syntax (inside <context> and <actions>)\n"
+            + "## Your Context\n"
+            + "Each fragment is shown with a metadata header: [#ID | Type | R:X I:X C:X | protected]\n"
+            + "Use the exact ID shown to act on a fragment.\n\n"
+            + "## Command syntax (inside `<context>` and `<actions>`)\n"
             + "Each command is a function call with named arguments: command(field=value).\n"
             + "- Numbers and booleans are bare: importance=0.9, is_protected=true.\n"
             + "- Multi-line text uses triple quotes (no escaping needed):\n"

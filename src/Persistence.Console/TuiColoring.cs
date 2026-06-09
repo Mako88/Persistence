@@ -56,9 +56,11 @@ internal static class TuiColoring
     /// immediately before a number (so <c>is_protected</c>, <c>C:\paths</c>, times, etc. don't match).</summary>
     private const string RicMarker = @"[RIC]:(?=\d)";
 
-    /// <summary>The "protected" flag in a header — only when it follows the <c>| </c> separator (so
-    /// <c>is_protected</c> and the word in prose stay uncoloured).</summary>
-    private const string ProtectedFlag = @"(?<=\| )protected\b";
+    /// <summary>The "protected" flag in a *real* header — "protected" following the <c>| </c>
+    /// separator on a line that began with a numeric id (<c>[#42 …</c>). This keeps it from colouring
+    /// the placeholder example header (<c>[#ID | Type | … | protected]</c>) in the prompt's own
+    /// explanation text, where the rest of the header isn't coloured — so the example stays all-white.</summary>
+    private const string ProtectedFlag = @"(?<=\[#\d+[^\]]*\| )protected\b";
 
     /// <summary>A sensory-block field label (the known set from the prompt's [Sensory] block). Matched
     /// by exact label rather than a generic <c>^word:</c> so prose lines that merely start with a
@@ -66,9 +68,15 @@ internal static class TuiColoring
     private const string SensoryLabel =
         @"^(?:Current time \((?:UTC|local)\)|Session|Context(?: budget)?|Time since last prompt|Continue iteration|Recent changes to your memory|Available tags):";
 
-    /// <summary>A line that is nothing but an html-like tag, e.g. <c>&lt;respond&gt;</c> on its own —
-    /// the shape the peer's response tags take, as opposed to a tag mentioned inline in prose.</summary>
-    private const string StandaloneHtmlTag = @"^</?[A-Za-z][\w-]*>$";
+    /// <summary>An html-like tag at the very start of a line, e.g. a leading <c>&lt;respond&gt;</c> or
+    /// <c>&lt;continue&gt;</c> — the shape the peer's response tags take.</summary>
+    private const string LeadingHtmlTag = @"^\s*</?[A-Za-z][\w-]*>";
+
+    /// <summary>A further html-like tag later on a line that <em>began</em> with one — e.g. the closing
+    /// <c>&lt;/continue&gt;</c> in <c>&lt;continue&gt;false&lt;/continue&gt;</c>. Together with
+    /// <see cref="LeadingHtmlTag"/> this colours the peer's inline response tags while leaving tags
+    /// mentioned mid-sentence in the system prompt (which don't start their line) uncoloured.</summary>
+    private const string FollowingHtmlTag = @"(?<=^\s*</?[A-Za-z][\w-]*>[^<]*)</?[A-Za-z][\w-]*>";
 
     /// <summary>An attribute name immediately before <c>=</c>, e.g. <c>content</c> in <c>content="…"</c>.</summary>
     private const string AttributeName = @"\b[A-Za-z_][A-Za-z0-9_]*(?==)";
@@ -92,10 +100,12 @@ internal static class TuiColoring
 
     private static ColoredTextView Attributes(this ColoredTextView v) => v.ColorPattern(AttributeName, TuiColors.Label);
 
-    /// <summary>Colours an html-like tag only when it's alone on its line — the peer's response tags,
-    /// not the protocol tokens mentioned inline in the system prompt.</summary>
-    private static ColoredTextView StandaloneHtmlTags(this ColoredTextView v) =>
-        v.ColorPattern(StandaloneHtmlTag, TuiColors.Gold);
+    /// <summary>Colours the peer's response tags gold — a tag at the start of a line, plus any further
+    /// tags on that same line (so <c>&lt;continue&gt;false&lt;/continue&gt;</c> colours both tags). Tags
+    /// mentioned inside system-prompt prose (not at a line start) stay uncoloured.</summary>
+    private static ColoredTextView ResponseTags(this ColoredTextView v) => v
+        .ColorPattern(LeadingHtmlTag, TuiColors.Gold)
+        .ColorPattern(FollowingHtmlTag, TuiColors.Gold);
 
     /// <summary>Colours the known [Sensory] field labels yellow (and only those — not arbitrary prose).</summary>
     private static ColoredTextView SensoryLabels(this ColoredTextView v) => v.ColorPattern(SensoryLabel, TuiColors.Label);
@@ -170,12 +180,12 @@ internal static class TuiColoring
         .ColorLinesStartingWith("[Sensory]", TuiColors.LightGreen)
         .FragmentHeaders()
         .SensoryLabels()
-        .StandaloneHtmlTags();
+        .ResponseTags();
 
-    /// <summary>The compose hint line (its own row above the input box): the action chords yellow,
-    /// the rest white. (Same colour for all, so substring order doesn't matter.)</summary>
+    /// <summary>The key-bindings hint row (above the input box): the "Key Bindings" label and the
+    /// action chords yellow, the rest white. (Same colour for all, so substring order doesn't matter.)</summary>
     public static ColoredTextView ForComposeHint(this ColoredTextView v) => v
-        .ColorSubstring("Compose", TuiColors.Label)
+        .ColorSubstring("Key Bindings", TuiColors.Label)
         .ColorSubstring("Shift+Enter:", TuiColors.Label)
         .ColorSubstring("Enter:", TuiColors.Label)
         .ColorSubstring("Ctrl+Left/Right:", TuiColors.Label)

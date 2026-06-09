@@ -19,7 +19,10 @@ internal sealed class HighlightedTabView : TabView
     {
         base.Redraw(bounds);
 
-        // When focused, the base already highlighted the selected tab — nothing to do.
+        // When focused (the tab bar or any pane inside it has focus), the base already painted the
+        // selected tab in the bright "hot" colour — yellow consistently means "focused" — so leave it.
+        // When unfocused, paint the selected tab gold instead: it marks the active pane without
+        // claiming the focus colour.
         if (HasFocus || SelectedTab is null || Application.Driver is null)
         {
             return;
@@ -43,7 +46,7 @@ internal sealed class HighlightedTabView : TabView
 
             if (tab == SelectedTab)
             {
-                Driver.SetAttribute(ColorScheme.HotNormal);
+                Driver.SetAttribute(Driver.MakeAttribute(TuiColors.Gold, ColorScheme.Normal.Background));
                 Move(x, y);
                 Driver.AddStr(text);
                 Driver.SetAttribute(GetNormalColor());

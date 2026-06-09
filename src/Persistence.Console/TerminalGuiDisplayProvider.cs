@@ -172,7 +172,7 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
         {
             if (JsonNode.Parse(request) is JsonObject obj && obj.Count > 0)
             {
-                return string.Join("\n", obj.Select(kv => $"    {kv.Key}={kv.Value?.ToJsonString() ?? "null"}"));
+                return string.Join("\n", obj.Select(kv => $"    {kv.Key}={FormatRequestValue(kv.Value)}"));
             }
         }
         catch (JsonException)
@@ -182,6 +182,24 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
 
         return Indent(request, 4);
     }
+
+    /// <summary>
+    /// Renders a single request field value for display. A string is shown decoded (real quotes and
+    /// line breaks, not <c>"</c>/<c>\n</c> escapes), with any internal line breaks indented to sit
+    /// under the field. Numbers/booleans/arrays render as compact JSON with relaxed escaping.
+    /// </summary>
+    private static string FormatRequestValue(JsonNode? value)
+    {
+        if (value is JsonValue jv && jv.TryGetValue<string>(out var s))
+        {
+            return $"\"{s.Replace("\n", "\n        ")}\"";
+        }
+
+        return value?.ToJsonString(RelaxedJson) ?? "null";
+    }
+
+    private static readonly JsonSerializerOptions RelaxedJson =
+        new() { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
     /// <summary>Indents every line of <paramref name="text"/> by <paramref name="spaces"/> columns.</summary>
     private static string Indent(string text, int spaces)
@@ -280,10 +298,11 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
         // All panes share a white base; meaning is carried by per-rule accent colours (TuiColoring).
         var paneScheme = Scheme(driver, TuiColors.Body, Color.Black);
 
-        // Reserve rows at the bottom: 5 for the compose box (hint + input), 1 for the status bar.
-        const int bottomRows = 6;
+        // Reserve rows at the bottom: 1 for the key-bindings hint, 6 for the compose box (a border
+        // plus ~4 input lines, so its scrollbar is usable), and 1 for the status bar.
+        const int bottomRows = 8;
 
-        var outputFrame = new FrameView("Conversation")
+        var outputFrame = new FocusTitleFrameView("Conversation")
         {
             X = 0,
             Y = 0,
@@ -337,16 +356,17 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
             tabView.SelectedTab = allTabs[PreviewInitialTab];
         }
 
-        // Compose area: a colour-keyed hint on its own row, then the bordered multi-line input below.
+        // Compose area: a colour-keyed key-bindings hint on its own row, then the bordered multi-line
+        // input below (titled "Compose", which highlights with focus like the Conversation frame).
         var hint = MakeColoredPaneView(paneScheme).ForComposeHint();
-        hint.Text = "Compose  —  Enter: send · Shift+Enter: newline · Ctrl+Left/Right: tabs · Ctrl+Up/Down: panes";
+        hint.Text = "Key Bindings  —  Enter: send · Shift+Enter: newline · Ctrl+Left/Right: tabs · Ctrl+Up/Down: panes";
         hint.WordWrap = false;
         hint.X = 0;
         hint.Y = Pos.AnchorEnd(bottomRows);
         hint.Width = Dim.Fill();
         hint.Height = 1;
 
-        var inputFrame = new FrameView(string.Empty)
+        var inputFrame = new FocusTitleFrameView("Compose")
         {
             X = 0,
             Y = Pos.AnchorEnd(bottomRows - 1),
@@ -482,6 +502,10 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
             schedule.Text = scheduleBuffer.ToString();
             debug.Text = debugBuffer.ToString();
         }
+
+        // Re-assert focus on the compose box now that the loop is up: Application.Run gives initial
+        // focus to the first view, so the SetFocus in BuildLayout doesn't stick on its own.
+        input.SetFocus();
     }
 
     /// <summary>
@@ -536,8 +560,16 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
             return;
         }
 
-        // Plain Enter sends. Shift+Enter (and other modifiers) fall through so the
-        // multi-line TextView can insert a newline.
+        // Shift+Enter inserts a newline (TextView only binds plain Enter to that, which we repurpose
+        // for "send" below, so we insert it ourselves).
+        if (key == (Key.Enter | Key.ShiftMask))
+        {
+            input.InsertText("\n");
+            e.Handled = true;
+            return;
+        }
+
+        // Plain Enter sends. Other keys fall through to the multi-line TextView.
         if (key != Key.Enter)
         {
             return;
