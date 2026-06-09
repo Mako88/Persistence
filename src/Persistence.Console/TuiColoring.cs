@@ -1,0 +1,161 @@
+using Terminal.Gui;
+
+namespace Persistence.Console;
+
+/// <summary>
+/// The single source of truth for TUI colours. Different *kinds* of information use different
+/// colours, and adjacent elements never share one. Foregrounds avoid dark gray / dark magenta, which
+/// render too dim in common terminal themes. Several semantic names intentionally share a value
+/// (e.g. User/Model/Gold are all gold) so any one can be retuned without touching the others.
+/// </summary>
+internal static class TuiColors
+{
+    public const Color Body = Color.White;            // content / values / dates / session / tag lists
+    public const Color User = Color.Brown;            // "You:" role label (gold)
+    public const Color Peer = Color.Magenta;          // "Remote Peer:" role label (light purple)
+    public const Color Gold = Color.Brown;            // action names, R/I/C, "protected", html-like tags, Pending
+    public const Color Purple = Color.Magenta;        // Request:/Response:, Triggered
+    public const Color Label = Color.BrightYellow;    // field/title labels, markers, compose keys, schedule name, Note
+    public const Color Error = Color.BrightRed;       // error text
+    public const Color SuggestedTag = Color.BrightGreen; // the suggested tag inside a "did you mean" error
+    public const Color Processing = Color.Green;      // status state chip while working (idle is white)
+    public const Color Timestamp = Color.BrightBlue;  // leading [time] stamps
+    public const Color TypeName = Color.BrightCyan;   // a fragment's type name in a header
+    public const Color LightGreen = Color.BrightGreen; // [Sensory] header, [WAKE-UP] line
+    public const Color Model = Color.Brown;           // model name in the status bar (gold)
+    public const Color Muted = Color.Gray;            // de-emphasised text ([Queued], cancelled, /exit hint)
+    public const Color StatusBg = Color.Black;        // status-bar background
+}
+
+/// <summary>
+/// Reusable, composable colour-rule sets for the read-only panes — applied as fluent extensions on
+/// <see cref="ColoredTextView"/>. Small "detector" helpers (<see cref="Timestamps"/>,
+/// <see cref="FragmentHeaders"/>, …) recognise a text pattern and colour it; each pane is then just
+/// the set of detectors it wants. So the display provider stays declarative and the regexes/colours
+/// live in one place.
+///
+/// Convention: rules are first-match-wins per column, so register the most specific (or things that
+/// should "win") before broader ones.
+/// </summary>
+internal static class TuiColoring
+{
+    // --- Shared patterns ---
+
+    /// <summary>A leading timestamp like <c>[06/09/2026 …]</c> — a "[" followed by a digit (so it
+    /// doesn't also match fragment headers like <c>[#6 | …]</c>, which start with "#").</summary>
+    private const string Timestamp = @"^\[\d[^\]]*\]";
+
+    /// <summary>A fragment id like <c>#42</c>.</summary>
+    private const string FragmentId = @"#\d+";
+
+    /// <summary>A fragment's type name — the word right after <c>#42 | </c> in a header.</summary>
+    private const string FragmentTypeName = @"(?<=#\d+ \| )[A-Za-z][A-Za-z]+";
+
+    /// <summary>A start-of-line title up to its colon, e.g. <c>Current time (UTC):</c> (allows indent).</summary>
+    private const string FieldLabel = @"^\s*[A-Za-z][\w ()/]*:";
+
+    /// <summary>An attribute name immediately before <c>=</c>, e.g. <c>content</c> in <c>content="…"</c>.</summary>
+    private const string AttributeName = @"\b[A-Za-z_][A-Za-z0-9_]*(?==)";
+
+    /// <summary>The action name — the first word after the leading timestamp on a header line.</summary>
+    private const string ActionName = @"(?<=\] )[A-Za-z_][A-Za-z0-9_]*";
+
+    /// <summary>An html-like tag the peer emits, e.g. <c>&lt;respond&gt;</c> or <c>&lt;/think&gt;</c>.</summary>
+    private const string HtmlTag = @"</?[A-Za-z][\w-]*>";
+
+    /// <summary>
+    /// The suggested tag inside a "did you mean '…'?" error: the quoted text immediately before the
+    /// closing bracket. Keying off the position (rather than "did you mean") means it still matches
+    /// when the error wraps and the suggestion lands on the continuation line.
+    /// </summary>
+    private const string SuggestedTag = @"(?<=')[^']+(?='[?.]?\]\s*$)";
+
+    /// <summary>An event name at the start of a schedule line, up to the " — " before its date.</summary>
+    private const string ScheduleName = @"^[^—]+(?= — )";
+
+    // --- Detector helpers (recognise a pattern, colour it) ---
+
+    private static ColoredTextView Timestamps(this ColoredTextView v) => v.ColorPattern(Timestamp, TuiColors.Timestamp);
+
+    private static ColoredTextView Labels(this ColoredTextView v) => v.ColorPattern(FieldLabel, TuiColors.Label);
+
+    private static ColoredTextView Attributes(this ColoredTextView v) => v.ColorPattern(AttributeName, TuiColors.Label);
+
+    private static ColoredTextView HtmlTags(this ColoredTextView v) => v.ColorPattern(HtmlTag, TuiColors.Gold);
+
+    /// <summary>Colours a <c>[#id | Type | R:x I:x C:x | protected]</c> header: id yellow, type cyan,
+    /// R/I/C and "protected" gold. Brackets, pipes and values stay white. Reusable across panes.</summary>
+    private static ColoredTextView FragmentHeaders(this ColoredTextView v) => v
+        .ColorPattern(FragmentId, TuiColors.Label)
+        .ColorPattern(FragmentTypeName, TuiColors.TypeName)
+        .ColorSubstring("R:", TuiColors.Gold)
+        .ColorSubstring("I:", TuiColors.Gold)
+        .ColorSubstring("C:", TuiColors.Gold)
+        .ColorSubstring("protected", TuiColors.Gold);
+
+    // --- Per-pane schemes ---
+
+    /// <summary>
+    /// Conversation: the suggested tag inside an error is claimed bright green first; the whole error
+    /// (its first line and any wrapped continuation, detected as a line ending in "]" that isn't a
+    /// fresh "[…" marker) reds over the rest. Then the other markers, timestamp, and role labels.
+    /// </summary>
+    public static ColoredTextView ForConversation(this ColoredTextView v, Color userColor, Color peerColor) => v
+        .ColorPattern(SuggestedTag, TuiColors.SuggestedTag)
+        .ColorLinesStartingWith("[Error", TuiColors.Error)
+        .ColorLine(t => t.TrimEnd().EndsWith("]") && !t.TrimStart().StartsWith("["), TuiColors.Error)
+        .ColorLinesStartingWith("[WAKE-UP", TuiColors.LightGreen)
+        .ColorLinesStartingWith("[Queued", TuiColors.Muted)
+        .ColorSubstring("Unknown command:", TuiColors.Label)   // label only; the command stays white
+        .Timestamps()
+        .ColorSubstring("You:", userColor)
+        .ColorSubstring("Remote Peer:", peerColor);
+
+    /// <summary>Thoughts: just the leading timestamp; thoughts/summaries stay white.</summary>
+    public static ColoredTextView ForThoughts(this ColoredTextView v) => v
+        .Timestamps();
+
+    /// <summary>
+    /// Actions: timestamp, action name (gold), Request:/Response: labels (light purple), attribute
+    /// names (yellow), and any fragment headers in a response (same colours as the Debug tab).
+    /// </summary>
+    public static ColoredTextView ForActions(this ColoredTextView v) => v
+        .Timestamps()
+        .ColorPattern(ActionName, TuiColors.Gold)
+        .ColorSubstring("Request:", TuiColors.Purple)
+        .ColorSubstring("Response:", TuiColors.Purple)
+        .Attributes()
+        .FragmentHeaders();
+
+    /// <summary>
+    /// Schedule: event name (yellow) up to the " — " before its date (white); "Note:" label (yellow)
+    /// with white text; status words tinted (Pending gold, Triggered purple, Cancelled muted).
+    /// </summary>
+    public static ColoredTextView ForSchedule(this ColoredTextView v) => v
+        .ColorPattern(ScheduleName, TuiColors.Label)
+        .ColorSubstring("Note:", TuiColors.Label)
+        .ColorSubstring("Pending", TuiColors.Gold)
+        .ColorSubstring("Triggered", TuiColors.Purple)
+        .ColorSubstring("Cancelled", TuiColors.Muted);
+
+    /// <summary>
+    /// Debug: each entry's leading timestamp; Request/Response (light purple); the sensory header
+    /// (light green); fragment headers (shared detector); field/title labels (yellow); the peer's
+    /// html-like response tags (gold). Values, brackets, pipes and the tag list stay white.
+    /// </summary>
+    public static ColoredTextView ForDebug(this ColoredTextView v) => v
+        .Timestamps()
+        .ColorSubstring("Request", TuiColors.Purple)
+        .ColorSubstring("Response", TuiColors.Purple)
+        .ColorLinesStartingWith("[Sensory]", TuiColors.LightGreen)
+        .FragmentHeaders()
+        .Labels()
+        .HtmlTags();
+
+    /// <summary>The compose-box hint line: the action words yellow, the rest white.</summary>
+    public static ColoredTextView ForComposeHint(this ColoredTextView v) => v
+        .ColorSubstring("Compose", TuiColors.Label)
+        .ColorSubstring("Shift+Enter:", TuiColors.Label)        // claim the full chord first
+        .ColorSubstring("Enter:", TuiColors.Label)              // then the standalone "Enter:"
+        .ColorSubstring("Ctrl+Left/Right:", TuiColors.Label);
+}

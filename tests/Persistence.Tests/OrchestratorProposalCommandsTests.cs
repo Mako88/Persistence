@@ -60,10 +60,11 @@ public sealed class OrchestratorProposalCommandsTests : IAsyncLifetime
             .Setup(t => t.ExecuteTurnAsync(It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
         var wakeUpMonitor = new Mock<IWakeUpMonitor>();
+        var scheduledEventRepo = new ScheduledEventRepository(config, session, entityTagRepo);
 
         orchestrator = new Orchestrator(
             db, contextRepo, session, display.Object, eventBus, turnHandler.Object,
-            wakeUpMonitor.Object, resources, config, proposalService, proposalRepo);
+            wakeUpMonitor.Object, resources, config, proposalService, proposalRepo, scheduledEventRepo);
 
         // RunAsync subscribes to input, initialises the DB, seeds a context, then awaits the
         // (immediately-completed) display — so it returns with the session ready for input.

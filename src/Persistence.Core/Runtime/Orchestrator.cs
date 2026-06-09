@@ -33,6 +33,7 @@ public class Orchestrator : IOrchestrator
     private readonly IAppConfig config;
     private readonly IProposalService proposalService;
     private readonly IProposalRepository proposalRepo;
+    private readonly IScheduledEventRepository scheduledEventRepo;
 
     private readonly SemaphoreSlim turnLock = new(1, 1);
     private readonly TaskCompletionSource initialized = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -51,7 +52,8 @@ public class Orchestrator : IOrchestrator
         IEmbeddedResourceManager resourceManager,
         IAppConfig config,
         IProposalService proposalService,
-        IProposalRepository proposalRepo)
+        IProposalRepository proposalRepo,
+        IScheduledEventRepository scheduledEventRepo)
     {
         this.db = db;
         this.workingContextRepo = workingContextRepo;
@@ -64,6 +66,7 @@ public class Orchestrator : IOrchestrator
         this.config = config;
         this.proposalService = proposalService;
         this.proposalRepo = proposalRepo;
+        this.scheduledEventRepo = scheduledEventRepo;
     }
 
     /// <summary>
@@ -80,6 +83,9 @@ public class Orchestrator : IOrchestrator
 
         await InitializeAsync();
         initialized.TrySetResult();
+
+        // Show the current pending events in the display's Schedule view.
+        await RefreshScheduledEventsAsync();
 
         wakeUpMonitor.Start(ct);
 
@@ -129,6 +135,9 @@ public class Orchestrator : IOrchestrator
                 display.ShowThinking("processing queued messages");
                 await turnHandler.ExecuteTurnAsync();
             }
+
+            // The turn may have scheduled or cancelled events — refresh the Schedule view.
+            await RefreshScheduledEventsAsync();
         }
         finally
         {
@@ -157,10 +166,33 @@ public class Orchestrator : IOrchestrator
                 display.ShowThinking("processing queued messages");
                 await turnHandler.ExecuteTurnAsync();
             }
+
+            // The fired event is no longer pending, and the turn may have scheduled more — refresh.
+            await RefreshScheduledEventsAsync();
         }
         finally
         {
             turnLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Pushes the current set of pending scheduled events for the active context to the display's
+    /// Schedule view. Best-effort: a query failure must not break a turn.
+    /// </summary>
+    private async Task RefreshScheduledEventsAsync()
+    {
+        try
+        {
+            var events = (await scheduledEventRepo.GetByWorkingContextAsync(sessionContext.WorkingContextId))
+                .Where(e => e.Status == ScheduledEventStatus.Pending)
+                .ToList();
+
+            display.ShowScheduledEvents(events);
+        }
+        catch
+        {
+            // A schedule-view refresh is non-critical; never let it interrupt the session.
         }
     }
 
@@ -189,9 +221,17 @@ public class Orchestrator : IOrchestrator
     /// </summary>
     private async Task InitializeAsync()
     {
-        if (string.IsNullOrWhiteSpace(config.ApiKey))
+        // Only warn when the active model genuinely needs a key: a cloud provider hitting its
+        // default endpoint (no ApiBaseUrl) with no key set. Local servers (ApiBaseUrl set) and the
+        // local/LocalClaude providers don't authenticate, so an empty key is expected there.
+        var isCloudProvider = !Enum.TryParse<ModelProvider>(config.Provider, ignoreCase: true, out var provider)
+            || provider is ModelProvider.OpenAI or ModelProvider.OpenAiChat;
+
+        if (isCloudProvider
+            && string.IsNullOrWhiteSpace(config.ApiBaseUrl)
+            && string.IsNullOrWhiteSpace(config.ApiKey))
         {
-            display.ShowError("Warning: ApiKey is not set. Model calls may fail.");
+            display.ShowError($"Warning: ApiKey is not set for model '{config.Model}'. Cloud model calls may fail.");
         }
 
         await db.InitializeAsync();

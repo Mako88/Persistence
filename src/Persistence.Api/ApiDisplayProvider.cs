@@ -176,6 +176,13 @@ public class ApiDisplayProvider : IDisplayProvider
     public void ShowWakeUpEvent(ScheduledEventEntity evt) => Append("wakeup", evt.Name);
 
     /// <summary>
+    /// No-op for the API surface. The pending-events snapshot is pushed on every change, which would
+    /// spam the append-only event log; API consumers see events when they fire (a "wakeup" event). A
+    /// dedicated pending-events endpoint can surface the snapshot if needed later.
+    /// </summary>
+    public void ShowScheduledEvents(IReadOnlyList<ScheduledEventEntity> events) { }
+
+    /// <summary>
     /// Appends a system/local message (e.g. a slash-command result) to the log as a "system" event
     /// </summary>
     public void ShowSystemMessage(string message) => Append("system", message);

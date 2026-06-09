@@ -5,6 +5,8 @@ using Persistence.Events;
 using Persistence.Notifications;
 using Persistence.Runtime;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Terminal.Gui;
 
 namespace Persistence.Console;
@@ -12,16 +14,24 @@ namespace Persistence.Console;
 /// <summary>
 /// Terminal.Gui (v1) implementation of <see cref="IDisplayProvider"/>. Runs the TUI
 /// main loop on a dedicated thread and renders into a multi-pane layout: a framed
-/// conversation pane on the left, a tabbed side column (reasoning / tools / debug /
-/// history) on the right, a multi-line compose box, and a status line at the bottom.
+/// conversation pane on the left (which also shows prior history with timestamps), a tabbed
+/// side column (Reasoning / Actions / Schedule / Debug) on the right, a multi-line compose
+/// box, and a status line at the bottom.
 ///
-/// All pane mutations are marshalled onto the UI thread via
-/// <see cref="MainLoop.Invoke"/>. Output that arrives before the loop is ready
-/// (e.g. chat history shown during initialisation) is buffered and flushed on load.
+/// Per-pane colouring lives in <see cref="TuiColoring"/> (one named call per pane); colours in
+/// <see cref="TuiColors"/>. All pane mutations are marshalled onto the UI thread via
+/// <see cref="MainLoop.Invoke"/>. Output that arrives before the loop is ready is buffered and
+/// flushed on load.
 /// </summary>
 [Singleton(typeof(IDisplayProvider), UiMode.Tui)]
 public class TerminalGuiDisplayProvider : IDisplayProvider
 {
+    /// <summary>Fixed-width local timestamp (leading zeros) used for every in-pane stamp.</summary>
+    private const string TimeFormat = "MM/dd/yyyy hh:mm tt";
+
+    // Preview-only: which side-column tab to open on (set by the --preview harness for screenshots).
+    internal static int PreviewInitialTab;
+
     private readonly IEventBus eventBus;
     private readonly ISessionContext sessionContext;
     private readonly IAppConfig config;
@@ -33,17 +43,20 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
     private readonly StringBuilder outputBuffer = new();
     private readonly StringBuilder reasoningBuffer = new();
     private readonly StringBuilder toolsBuffer = new();
+    private readonly StringBuilder scheduleBuffer = new();
     private readonly StringBuilder debugBuffer = new();
-    private readonly StringBuilder historyBuffer = new();
 
     private TextView output = null!;
     private TextView reasoning = null!;
     private TextView tools = null!;
+    private TextView schedule = null!;
     private TextView debug = null!;
-    private TextView history = null!;
     private TextView input = null!;
     private TabView tabView = null!;
-    private Label statusLabel = null!;
+    private Label stateLabel = null!;
+    private Label modelLabel = null!;
+    private Label sessionLabel = null!;
+    private Label exitLabel = null!;
 
     private Thread? uiThread;
     private volatile bool ready;
@@ -94,7 +107,7 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
 
     public void ShowReply(string reply)
     {
-        Append(outputBuffer, () => output, $"Assistant: {reply}\n\n");
+        Append(outputBuffer, () => output, $"{Stamp()}Remote Peer: {reply}\n\n");
         SetStatus("idle");
     }
 
@@ -110,29 +123,102 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
         SetStatus("idle");
     }
 
-    public void ShowMessageQueued(string text) => Append(outputBuffer, () => output, $"[Queued: {text}]\n");
+    public void ShowMessageQueued(string text) => Append(outputBuffer, () => output, $"[Queued: {text}]\n\n");
 
     public void ShowSystemMessage(string message) => Append(outputBuffer, () => output, $"{message}\n\n");
 
     public void ShowUnknownCommand(string command) => Append(outputBuffer, () => output, $"Unknown command: {command}\n\n");
 
-    public void ShowDebugInfo(string info) => Append(debugBuffer, () => debug, info + "\n");
+    public void ShowDebugInfo(string info) => Append(debugBuffer, () => debug, $"{Stamp()}{info}\n");
 
-    public void ShowReasoning(string summary) => Append(reasoningBuffer, () => reasoning, summary + "\n\n");
+    public void ShowReasoning(string summary) => Append(reasoningBuffer, () => reasoning, $"{Stamp()}{summary}\n\n");
 
     public void ShowReasoningDelta(string delta) => Append(reasoningBuffer, () => reasoning, delta);
 
-    public void ShowThought(string thought) => Append(reasoningBuffer, () => reasoning, $"\n💭 {thought}\n\n");
+    public void ShowThought(string thought) => Append(reasoningBuffer, () => reasoning, $"{Stamp()}{thought}\n\n");
 
-    public void ShowToolUse(string tool, string request, string result) =>
-        Append(toolsBuffer, () => tools, $"▸ {tool}\n  request:  {request}\n  response: {result}\n\n");
+    public void ShowToolUse(string tool, string request, string result)
+    {
+        // Header line carries the timestamp + action name; the Request/Response labels sit on their
+        // own lines with their content indented beneath — one request parameter per line.
+        var sb = new StringBuilder();
+        sb.AppendLine($"{Stamp()}{tool}");
+        sb.AppendLine("    Request:");
+        sb.AppendLine(FormatRequestParameters(request));
+        sb.AppendLine("    Response:");
+        sb.AppendLine(Indent(result, 8));
+        sb.AppendLine();
+
+        Append(toolsBuffer, () => tools, sb.ToString());
+    }
+
+    /// <summary>
+    /// Renders a command's request fields one-per-line and indented. The request is the command's
+    /// JSON fields; each property becomes <c>name=value</c>. Falls back to the raw (indented) text if
+    /// it isn't a JSON object.
+    /// </summary>
+    private static string FormatRequestParameters(string request)
+    {
+        try
+        {
+            if (JsonNode.Parse(request) is JsonObject obj && obj.Count > 0)
+            {
+                return string.Join("\n", obj.Select(kv => $"        {kv.Key}={kv.Value?.ToJsonString() ?? "null"}"));
+            }
+        }
+        catch (JsonException)
+        {
+            // Not JSON — fall through to the raw rendering.
+        }
+
+        return Indent(request, 8);
+    }
+
+    /// <summary>Indents every line of <paramref name="text"/> by <paramref name="spaces"/> columns.</summary>
+    private static string Indent(string text, int spaces)
+    {
+        var pad = new string(' ', spaces);
+        return string.Join("\n", text.Split('\n').Select(line => pad + line));
+    }
+
+    /// <summary>
+    /// Replaces the Schedule pane with the current set of pending scheduled events (a snapshot,
+    /// not an append-log — the orchestrator pushes the full list whenever it changes).
+    /// </summary>
+    public void ShowScheduledEvents(IReadOnlyList<ScheduledEventEntity> events)
+    {
+        var sb = new StringBuilder();
+
+        if (events.Count == 0)
+        {
+            sb.AppendLine("No scheduled events.");
+        }
+        else
+        {
+            // "name — date — status", date without leading zeros; a blank line between entries.
+            foreach (var e in events.OrderBy(e => e.ScheduledForUtc))
+            {
+                sb.AppendLine($"{e.Name} — {e.ScheduledForUtc.LocalDateTime:M/d/yyyy h:mm tt} — {e.Status}");
+
+                if (!string.IsNullOrWhiteSpace(e.WakePrompt))
+                {
+                    sb.AppendLine($"    Note: {e.WakePrompt}");
+                }
+
+                sb.AppendLine();
+            }
+        }
+
+        Set(scheduleBuffer, () => schedule, sb.ToString());
+    }
 
     public void ShowChatHistory(IReadOnlyList<(string Role, string Content, DateTimeOffset Timestamp)> messages)
     {
+        // History now lives in the main conversation pane, shown on startup with timestamps.
         foreach (var (role, content, ts) in messages)
         {
-            var who = role == "user" ? "You" : "Assistant";
-            Append(historyBuffer, () => history, $"[{ts.LocalDateTime:g}] {who}: {content}\n\n");
+            var who = role == "user" ? "You" : "Remote Peer";
+            Append(outputBuffer, () => output, $"[{ts.LocalDateTime.ToString(TimeFormat)}] {who}: {content}\n\n");
         }
     }
 
@@ -175,50 +261,32 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
     {
         var driver = Application.Driver;
 
-        // Base dark theme. Read-only panes keep their colour on focus (Focus == Normal)
-        // so they never flash to a different background.
-        var baseTheme = Scheme(driver, Color.White, Color.Black);
+        var baseTheme = Scheme(driver, TuiColors.Body, Color.Black);
         Colors.TopLevel = baseTheme;
         Colors.Base = baseTheme;
         Colors.Dialog = baseTheme;
         Colors.Menu = baseTheme;
         top.ColorScheme = baseTheme;
 
-        // Each pane gets a distinct foreground so content is identifiable at a glance.
-        var conversationScheme = Scheme(driver, Color.White, Color.Black);
-        var reasoningScheme = Scheme(driver, Color.BrightCyan, Color.Black);
-        var toolsScheme = Scheme(driver, Color.BrightGreen, Color.Black);
-        var debugScheme = Scheme(driver, Color.Gray, Color.Black);
-        var historyScheme = Scheme(driver, Color.White, Color.Black);
+        // All panes share a white base; meaning is carried by per-rule accent colours (TuiColoring).
+        var paneScheme = Scheme(driver, TuiColors.Body, Color.Black);
 
-        // Reserve rows at the bottom: 4 for the compose box, 1 for the status bar.
-        const int bottomRows = 5;
+        // Reserve rows at the bottom: 5 for the compose box (hint + input), 1 for the status bar.
+        const int bottomRows = 6;
 
         var outputFrame = new FrameView("Conversation")
         {
             X = 0,
             Y = 0,
-            Width = Dim.Percent(70),
+            Width = Dim.Percent(62),
             Height = Dim.Fill(bottomRows),
             ColorScheme = baseTheme,
         };
-        // outputFrame is the stable parent, so output always has a SuperView —
-        // required before constructing its ScrollBarView.
-        // Rules are first-match-wins per column: register whole-line marker tints first,
-        // then the role label/body split.
-        var conversation = MakeColoredPaneView(conversationScheme);
-        conversation
-            .ColorLinesStartingWith("[Error", Color.BrightRed)
-            .ColorLinesStartingWith("[WAKE-UP", Color.BrightMagenta)
-            .ColorLinesStartingWith("[Queued", Color.BrightYellow)
-            .ColorLinesStartingWith("Unknown command", Color.BrightYellow)
-            .ColorPrefix("You: ", Color.BrightCyan, Color.Cyan)
-            .ColorPrefix("Assistant: ", Color.BrightGreen, Color.White);
-        output = conversation;
+        output = MakeColoredPaneView(paneScheme).ForConversation(TuiColors.User, TuiColors.Peer);
         outputFrame.Add(output);
         AddScrollbar(output);
 
-        tabView = new TabView
+        tabView = new HighlightedTabView
         {
             X = Pos.Right(outputFrame),
             Y = 0,
@@ -227,48 +295,28 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
             ColorScheme = baseTheme,
         };
 
-        // Each tab's content is a stable container View that owns the TextView and its
-        // scrollbar. TabView only attaches the *selected* tab's view to the visual tree,
-        // so without this wrapper a non-selected pane's TextView would have a null
-        // SuperView and ScrollBarView's ctor would throw.
-        reasoning = MakePaneView(reasoningScheme);
+        // Use ColoredTextView everywhere so read-only text renders at full brightness (a plain
+        // read-only TextView dims its text). Each pane's colours are one named call into TuiColoring.
+        reasoning = MakeColoredPaneView(paneScheme).ForThoughts();
+        tools = MakeColoredPaneView(paneScheme).ForActions();
+        schedule = MakeColoredPaneView(paneScheme).ForSchedule();
+        debug = MakeColoredPaneView(paneScheme).ForDebug();
 
-        // Tools pane: highlight the "▸ name" header and the request/response labels so each
-        // tool invocation is scannable at a glance.
-        var toolsView = MakeColoredPaneView(toolsScheme);
-        toolsView
-            .ColorLinesStartingWith("▸", Color.BrightYellow)
-            .ColorSubstring("request:", Color.Cyan)
-            .ColorSubstring("response:", Color.BrightGreen);
-        tools = toolsView;
+        // Tab titles get a space of horizontal padding on each side.
+        tabView.AddTab(new TabView.Tab(" Thoughts ", WrapPane(reasoning, paneScheme)), andSelect: true);
+        tabView.AddTab(new TabView.Tab(" Actions ", WrapPane(tools, paneScheme)), andSelect: false);
+        tabView.AddTab(new TabView.Tab(" Schedule ", WrapPane(schedule, paneScheme)), andSelect: false);
+        tabView.AddTab(new TabView.Tab(" Debug ", WrapPane(debug, paneScheme)), andSelect: false);
 
-        // Debug pane: highlight the request/response headers, sensory block, fragment
-        // headers, and field labels so the dumps are scannable. Base text stays gray.
-        var debugView = MakeColoredPaneView(debugScheme);
-        debugView
-            .ColorLinesStartingWith("Request", Color.BrightYellow)
-            .ColorLinesStartingWith("Response", Color.BrightYellow)
-            .ColorLinesStartingWith("[Sensory]", Color.BrightMagenta)
-            .ColorPattern(@"^\[#\d+[^\]]*\]", Color.BrightCyan)
-            .ColorPattern(@"^[A-Za-z][\w ()/]*:", Color.Cyan);
-        debug = debugView;
+        // Preview can open on a specific tab (for screenshots); defaults to the first.
+        var allTabs = tabView.Tabs.ToList();
+        if (PreviewInitialTab > 0 && PreviewInitialTab < allTabs.Count)
+        {
+            tabView.SelectedTab = allTabs[PreviewInitialTab];
+        }
 
-        // History shares the conversation's role coloring (lines are "[time] You: …"),
-        // with the timestamp dimmed so the role/content stands out.
-        var historyView = MakeColoredPaneView(historyScheme);
-        historyView
-            .ColorPattern(@"^\[[^\]]+\]", Color.DarkGray)
-            .ColorSubstring("You:", Color.BrightCyan)
-            .ColorSubstring("Assistant:", Color.BrightGreen);
-        history = historyView;
-
-        tabView.AddTab(new TabView.Tab("Reasoning", WrapPane(reasoning, reasoningScheme)), andSelect: true);
-        tabView.AddTab(new TabView.Tab("Tools", WrapPane(tools, toolsScheme)), andSelect: false);
-        tabView.AddTab(new TabView.Tab("Debug", WrapPane(debug, debugScheme)), andSelect: false);
-        tabView.AddTab(new TabView.Tab("History", WrapPane(history, historyScheme)), andSelect: false);
-
-        // Multi-line compose box. Enter sends; Shift+Enter inserts a newline.
-        var inputFrame = new FrameView("Compose  —  Enter to send, Shift+Enter for newline")
+        // Compose box: a coloured hint line on top, the multi-line input below.
+        var inputFrame = new FrameView(string.Empty)
         {
             X = 0,
             Y = Pos.AnchorEnd(bottomRows),
@@ -276,10 +324,14 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
             Height = bottomRows - 1,
             ColorScheme = baseTheme,
         };
+        var hint = MakeColoredPaneView(paneScheme).ForComposeHint();
+        hint.Text = "Compose  —  Enter: send · Shift+Enter: newline · Ctrl+Left/Right: switch panes";
+        hint.Height = 1;
+        hint.WordWrap = false;
         input = new TextView
         {
             X = 0,
-            Y = 0,
+            Y = 1,
             Width = Dim.Fill(),
             Height = Dim.Fill(),
             Multiline = true,
@@ -287,22 +339,41 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
             ColorScheme = baseTheme,
         };
         input.KeyPress += OnInputKeyPress;
-        inputFrame.Add(input);
+        inputFrame.Add(hint, input);
 
-        // Status bar: white on dark gray — visible but not glaring.
-        statusLabel = new Label(BuildStatusText("idle"))
-        {
-            X = 0,
-            Y = Pos.AnchorEnd(1),
-            Width = Dim.Fill(),
-            Height = 1,
-            AutoSize = false,
-            ColorScheme = Scheme(driver, Color.White, Color.DarkGray),
-        };
-
-        top.Add(outputFrame, tabView, inputFrame, statusLabel);
+        BuildStatusBar(driver, top, bottomRows);
+        top.Add(outputFrame, tabView, inputFrame);
         input.SetFocus();
     }
+
+    /// <summary>
+    /// Builds the bottom status bar: a state chip (colour reflects state) + model + session + a muted
+    /// /exit hint. Only the state chip changes at runtime; the others are set once here.
+    /// </summary>
+    private void BuildStatusBar(ConsoleDriver driver, Toplevel top, int bottomRows)
+    {
+        // Pipe separators are their own white segments so each content segment keeps its own colour.
+        stateLabel = StatusSegment(driver, StateText("idle"), StateColor("idle"), x: 0);
+        var pipe1 = StatusSegment(driver, " │ ", TuiColors.Body, Pos.Right(stateLabel));
+        modelLabel = StatusSegment(driver, $"{config.Provider}/{config.Model}", TuiColors.Model, Pos.Right(pipe1));
+        var pipe2 = StatusSegment(driver, " │ ", TuiColors.Body, Pos.Right(modelLabel));
+        sessionLabel = StatusSegment(driver, $"Session {sessionContext.SessionId}", TuiColors.Body, Pos.Right(pipe2));
+        var pipe3 = StatusSegment(driver, " │ ", TuiColors.Body, Pos.Right(sessionLabel));
+        exitLabel = StatusSegment(driver, "/exit to quit", TuiColors.Muted, Pos.Right(pipe3));
+        exitLabel.Width = Dim.Fill();
+        exitLabel.AutoSize = false;
+
+        top.Add(stateLabel, pipe1, modelLabel, pipe2, sessionLabel, pipe3, exitLabel);
+    }
+
+    private static Label StatusSegment(ConsoleDriver driver, string text, Color fg, Pos x) => new(text)
+    {
+        X = x,
+        Y = Pos.AnchorEnd(1),
+        Height = 1,
+        AutoSize = true,
+        ColorScheme = Scheme(driver, fg, TuiColors.StatusBg),
+    };
 
     private static ColorScheme Scheme(ConsoleDriver driver, Color fg, Color bg) => new()
     {
@@ -311,17 +382,6 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
         HotNormal = driver.MakeAttribute(Color.BrightYellow, bg),
         HotFocus = driver.MakeAttribute(Color.BrightYellow, bg),
         Disabled = driver.MakeAttribute(Color.DarkGray, bg),
-    };
-
-    private static TextView MakePaneView(ColorScheme scheme) => new()
-    {
-        ReadOnly = true,
-        WordWrap = true,
-        X = 0,
-        Y = 0,
-        Width = Dim.Fill(),
-        Height = Dim.Fill(),
-        ColorScheme = scheme,
     };
 
     private static ColoredTextView MakeColoredPaneView(ColorScheme scheme) => new()
@@ -392,23 +452,49 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
             output.Text = outputBuffer.ToString();
             reasoning.Text = reasoningBuffer.ToString();
             tools.Text = toolsBuffer.ToString();
+            schedule.Text = scheduleBuffer.ToString();
             debug.Text = debugBuffer.ToString();
-            history.Text = historyBuffer.ToString();
         }
-
-        // Re-apply the tab selection now that layout is complete. TabView computes the
-        // content view's bounds when a tab is selected; at AddTab time (before layout)
-        // those bounds are wrong, so the first tab renders blank until re-selected.
-        var selected = tabView.SelectedTab;
-        tabView.SelectedTab = null;
-        tabView.SelectedTab = selected;
     }
 
     private void OnInputKeyPress(View.KeyEventEventArgs e)
     {
+        var key = e.KeyEvent.Key;
+
+        // Ctrl+→ / Ctrl+← cycle the side-column tabs without leaving the compose box. (Ctrl+Arrows is
+        // used rather than Ctrl+Tab because Windows Terminal intercepts Ctrl+Tab for its own tabs;
+        // Ctrl+Tab is still handled below for terminals that pass it through.)
+        if (key == (Key.CtrlMask | Key.CursorRight))
+        {
+            CycleTab(1);
+            e.Handled = true;
+            return;
+        }
+
+        if (key == (Key.CtrlMask | Key.CursorLeft))
+        {
+            CycleTab(-1);
+            e.Handled = true;
+            return;
+        }
+
+        if (key == (Key.CtrlMask | Key.Tab))
+        {
+            CycleTab(1);
+            e.Handled = true;
+            return;
+        }
+
+        if (key == (Key.CtrlMask | Key.BackTab) || key == (Key.CtrlMask | Key.ShiftMask | Key.Tab))
+        {
+            CycleTab(-1);
+            e.Handled = true;
+            return;
+        }
+
         // Plain Enter sends. Shift+Enter (and other modifiers) fall through so the
         // multi-line TextView can insert a newline.
-        if (e.KeyEvent.Key != Key.Enter)
+        if (key != Key.Enter)
         {
             return;
         }
@@ -425,7 +511,7 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
 
         // Echo the submitted input to the conversation pane — unlike a raw console,
         // the TextView doesn't leave the typed text visible anywhere.
-        Append(outputBuffer, () => output, $"You: {text}\n\n");
+        Append(outputBuffer, () => output, $"{Stamp()}You: {text}\n\n");
 
         // Repaint now so the input box visibly clears on keypress, then dispatch the turn
         // off the UI thread — the subscriber chain runs synchronously up to its first
@@ -436,9 +522,33 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
             ex => ShowError(ex.Message));
     }
 
+    /// <summary>Selects the tab <paramref name="direction"/> steps from the current one, wrapping.</summary>
+    private void CycleTab(int direction)
+    {
+        var tabs = tabView.Tabs.ToList();
+
+        if (tabs.Count == 0)
+        {
+            return;
+        }
+
+        var current = tabs.IndexOf(tabView.SelectedTab);
+        if (current < 0)
+        {
+            current = 0;
+        }
+
+        var next = ((current + direction) % tabs.Count + tabs.Count) % tabs.Count;
+        tabView.SelectedTab = tabs[next];
+        tabView.SetNeedsDisplay();
+    }
+
     #endregion
 
     #region Helpers
+
+    /// <summary>A leading fixed-width local timestamp for a conversation/reasoning/action line.</summary>
+    private static string Stamp() => $"[{DateTimeOffset.Now.LocalDateTime.ToString(TimeFormat)}] ";
 
     /// <summary>
     /// Appends text to a pane's buffer and, when the loop is ready, pushes the
@@ -467,6 +577,26 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
         });
     }
 
+    /// <summary>
+    /// Replaces a pane's buffer with <paramref name="text"/> (for snapshot panes like Schedule that
+    /// show current state rather than an append-only log).
+    /// </summary>
+    private void Set(StringBuilder buffer, Func<TextView> view, string text)
+    {
+        lock (sync)
+        {
+            buffer.Clear();
+            buffer.Append(text);
+        }
+
+        if (!ready)
+        {
+            return;
+        }
+
+        Application.MainLoop?.Invoke(() => view().Text = text);
+    }
+
     private void SetStatus(string state)
     {
         if (!ready)
@@ -474,11 +604,20 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
             return;
         }
 
-        Application.MainLoop?.Invoke(() => statusLabel.Text = BuildStatusText(state));
+        Application.MainLoop?.Invoke(() =>
+        {
+            stateLabel.Text = StateText(state);
+            stateLabel.ColorScheme = Scheme(Application.Driver, StateColor(state), TuiColors.StatusBg);
+            // The chip's width changes with the text; relayout so the model/info segments follow.
+            Application.Top?.LayoutSubviews();
+            Application.Top?.SetNeedsDisplay();
+        });
     }
 
-    private string BuildStatusText(string state) =>
-        $" {state}  │  Session {sessionContext.SessionId}  │  {config.Provider} / {config.Model}  │  /exit to quit";
+    private static string StateText(string state) => $" {state}";
+
+    /// <summary>Colours the state chip: green while processing (states end with "…"), white when idle.</summary>
+    private static Color StateColor(string state) => state.Contains('…') ? TuiColors.Processing : TuiColors.Body;
 
     #endregion
 }

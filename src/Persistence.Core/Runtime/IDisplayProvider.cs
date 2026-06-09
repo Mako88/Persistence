@@ -55,6 +55,11 @@ public interface IDisplayProvider
     void ShowWakeUpEvent(ScheduledEventEntity evt);
 
     /// <summary>
+    /// Shows the current set of pending scheduled events (a snapshot, pushed whenever it changes).
+    /// </summary>
+    void ShowScheduledEvents(IReadOnlyList<ScheduledEventEntity> events);
+
+    /// <summary>
     /// Shows an error message.
     /// </summary>
     void ShowError(string message);
