@@ -171,4 +171,13 @@ internal static class TuiColoring
         .FragmentHeaders()
         .SensoryLabels()
         .StandaloneHtmlTags();
+
+    /// <summary>The compose hint line (its own row above the input box): the action chords yellow,
+    /// the rest white. (Same colour for all, so substring order doesn't matter.)</summary>
+    public static ColoredTextView ForComposeHint(this ColoredTextView v) => v
+        .ColorSubstring("Compose", TuiColors.Label)
+        .ColorSubstring("Shift+Enter:", TuiColors.Label)
+        .ColorSubstring("Enter:", TuiColors.Label)
+        .ColorSubstring("Ctrl+Left/Right:", TuiColors.Label)
+        .ColorSubstring("Ctrl+Up/Down:", TuiColors.Label);
 }

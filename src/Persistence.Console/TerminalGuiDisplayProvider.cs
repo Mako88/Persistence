@@ -317,6 +317,19 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
         tabView.AddTab(new TabView.Tab(" Schedule ", WrapPane(schedule, paneScheme)), andSelect: false);
         tabView.AddTab(new TabView.Tab(" Debug ", WrapPane(debug, paneScheme)), andSelect: false);
 
+        // Tab switching is reserved for Ctrl+Left/Right (handled on the focused view). Drop TabView's
+        // built-in plain-arrow bindings so a stray Left/Right doesn't change tabs when the tab bar or a
+        // pane has focus — plain arrows should just move the cursor / scroll the focused pane.
+        tabView.ClearKeybinding(Key.CursorLeft);
+        tabView.ClearKeybinding(Key.CursorRight);
+
+        // Ctrl+Arrows navigate from any pane (or the input): Left/Right switch tabs, Up/Down cycle
+        // focus through the visible panes so each can be scrolled with the keyboard.
+        foreach (var pane in new[] { output, reasoning, tools, schedule, debug })
+        {
+            pane.KeyPress += OnNavKeyPress;
+        }
+
         // Preview can open on a specific tab (for screenshots); defaults to the first.
         var allTabs = tabView.Tabs.ToList();
         if (PreviewInitialTab > 0 && PreviewInitialTab < allTabs.Count)
@@ -324,14 +337,21 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
             tabView.SelectedTab = allTabs[PreviewInitialTab];
         }
 
-        // Compose box: the hint rides on the frame's top border (its title); the multi-line input
-        // fills the box beneath it.
-        var inputFrame = new FrameView("Compose  —  Enter: send · Shift+Enter: newline · Ctrl+Left/Right: switch panes")
+        // Compose area: a colour-keyed hint on its own row, then the bordered multi-line input below.
+        var hint = MakeColoredPaneView(paneScheme).ForComposeHint();
+        hint.Text = "Compose  —  Enter: send · Shift+Enter: newline · Ctrl+Left/Right: tabs · Ctrl+Up/Down: panes";
+        hint.WordWrap = false;
+        hint.X = 0;
+        hint.Y = Pos.AnchorEnd(bottomRows);
+        hint.Width = Dim.Fill();
+        hint.Height = 1;
+
+        var inputFrame = new FrameView(string.Empty)
         {
             X = 0,
-            Y = Pos.AnchorEnd(bottomRows),
+            Y = Pos.AnchorEnd(bottomRows - 1),
             Width = Dim.Fill(),
-            Height = bottomRows - 1,
+            Height = bottomRows - 2,
             ColorScheme = baseTheme,
         };
         input = new TextView
@@ -346,9 +366,10 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
         };
         input.KeyPress += OnInputKeyPress;
         inputFrame.Add(input);
+        AddScrollbar(input);
 
         BuildStatusBar(driver, top, bottomRows);
-        top.Add(outputFrame, tabView, inputFrame);
+        top.Add(outputFrame, tabView, hint, inputFrame);
         input.SetFocus();
     }
 
@@ -463,37 +484,54 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
         }
     }
 
+    /// <summary>
+    /// Shared key handling for the read-only panes: Ctrl+Arrows navigate (Left/Right switch tabs,
+    /// Up/Down cycle pane focus). Plain keys are left alone so each pane scrolls normally.
+    /// </summary>
+    private void OnNavKeyPress(View.KeyEventEventArgs e)
+    {
+        if (HandleNavKey(e.KeyEvent.Key))
+        {
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>
+    /// Ctrl+Arrow navigation, shared by the compose box and the panes. Returns true if it consumed
+    /// the key. Ctrl+Left/Right switch side-column tabs; Ctrl+Up/Down cycle keyboard focus through the
+    /// visible panes (so each can be scrolled). Ctrl+Tab/Ctrl+Shift+Tab are kept as a fallback for
+    /// terminals that pass them through (Windows Terminal eats Ctrl+Tab for its own tabs).
+    /// </summary>
+    private bool HandleNavKey(Key key)
+    {
+        switch (key)
+        {
+            case Key.CtrlMask | Key.CursorRight:
+            case Key.CtrlMask | Key.Tab:
+                CycleTab(1);
+                return true;
+            case Key.CtrlMask | Key.CursorLeft:
+            case Key.CtrlMask | Key.BackTab:
+            case Key.CtrlMask | Key.ShiftMask | Key.Tab:
+                CycleTab(-1);
+                return true;
+            case Key.CtrlMask | Key.CursorDown:
+                CyclePaneFocus(1);
+                return true;
+            case Key.CtrlMask | Key.CursorUp:
+                CyclePaneFocus(-1);
+                return true;
+            default:
+                return false;
+        }
+    }
+
     private void OnInputKeyPress(View.KeyEventEventArgs e)
     {
         var key = e.KeyEvent.Key;
 
-        // Ctrl+→ / Ctrl+← cycle the side-column tabs without leaving the compose box. (Ctrl+Arrows is
-        // used rather than Ctrl+Tab because Windows Terminal intercepts Ctrl+Tab for its own tabs;
-        // Ctrl+Tab is still handled below for terminals that pass it through.)
-        if (key == (Key.CtrlMask | Key.CursorRight))
+        if (HandleNavKey(key))
         {
-            CycleTab(1);
-            e.Handled = true;
-            return;
-        }
-
-        if (key == (Key.CtrlMask | Key.CursorLeft))
-        {
-            CycleTab(-1);
-            e.Handled = true;
-            return;
-        }
-
-        if (key == (Key.CtrlMask | Key.Tab))
-        {
-            CycleTab(1);
-            e.Handled = true;
-            return;
-        }
-
-        if (key == (Key.CtrlMask | Key.BackTab) || key == (Key.CtrlMask | Key.ShiftMask | Key.Tab))
-        {
-            CycleTab(-1);
             e.Handled = true;
             return;
         }
@@ -551,6 +589,37 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
         tabView.SetNeedsDisplay();
     }
 
+    /// <summary>
+    /// Moves keyboard focus <paramref name="direction"/> steps through the visible panes — the
+    /// conversation, the active side pane, and the compose box — wrapping. Lets the user scroll any
+    /// pane from the keyboard without changing which tab is selected.
+    /// </summary>
+    private void CyclePaneFocus(int direction)
+    {
+        var targets = new View[] { output, ActiveSidePane(), input };
+        var current = Array.FindIndex(targets, t => t.HasFocus);
+        if (current < 0)
+        {
+            current = targets.Length - 1;   // nothing tracked yet — treat as if on the input
+        }
+
+        var next = ((current + direction) % targets.Length + targets.Length) % targets.Length;
+        targets[next].SetFocus();
+    }
+
+    /// <summary>The text pane shown by the currently selected side-column tab.</summary>
+    private TextView ActiveSidePane()
+    {
+        var index = tabView.Tabs.ToList().IndexOf(tabView.SelectedTab);
+        return index switch
+        {
+            1 => tools,
+            2 => schedule,
+            3 => debug,
+            _ => reasoning,
+        };
+    }
+
     #endregion
 
     #region Helpers
@@ -581,7 +650,7 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
         {
             var v = view();
             v.Text = snapshot;
-            v.MoveEnd();
+            ScrollToBottom(v);
         });
     }
 
@@ -602,7 +671,24 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
             return;
         }
 
-        Application.MainLoop?.Invoke(() => view().Text = text);
+        Application.MainLoop?.Invoke(() =>
+        {
+            var v = view();
+            v.Text = text;
+            ScrollToBottom(v);
+        });
+    }
+
+    /// <summary>
+    /// Scrolls a read-only pane to the bottom so the newest content is visible, without stealing focus
+    /// (the input keeps it). Sets the top row directly rather than moving the cursor, so it scrolls
+    /// even when the pane isn't focused.
+    /// </summary>
+    private static void ScrollToBottom(TextView view)
+    {
+        var bottom = Math.Max(0, view.Lines - view.Bounds.Height);
+        view.TopRow = bottom;
+        view.SetNeedsDisplay();
     }
 
     private void SetStatus(string state)
