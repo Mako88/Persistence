@@ -66,6 +66,10 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
         this.eventBus = eventBus;
         this.sessionContext = sessionContext;
         this.config = config;
+
+        // The TUI has a dedicated Debug pane, so request/response logging is always on here — there's
+        // a place to show it and no console to clutter. (The API surface still honours config.DebugMode.)
+        config.DebugMode = true;
     }
 
     /// <summary>
@@ -129,7 +133,10 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
 
     public void ShowUnknownCommand(string command) => Append(outputBuffer, () => output, $"Unknown command: {command}\n\n");
 
-    public void ShowDebugInfo(string info) => Append(debugBuffer, () => debug, $"{Stamp()}{info}\n");
+    // Trim trailing whitespace so every debug entry is separated by exactly one blank line, matching
+    // the other panes (model responses often arrive with their own trailing newline, which would
+    // otherwise add a second blank line here).
+    public void ShowDebugInfo(string info) => Append(debugBuffer, () => debug, $"{Stamp()}{info.TrimEnd()}\n\n");
 
     public void ShowReasoning(string summary) => Append(reasoningBuffer, () => reasoning, $"{Stamp()}{summary}\n\n");
 
@@ -139,14 +146,16 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
 
     public void ShowToolUse(string tool, string request, string result)
     {
-        // Header line carries the timestamp + action name; the Request/Response labels sit on their
-        // own lines with their content indented beneath — one request parameter per line.
+        // Header line carries the timestamp + action name; the Request/Response labels sit flush
+        // beneath it with their content indented under each — one request parameter per line — and a
+        // blank line between the request and the response for separation.
         var sb = new StringBuilder();
         sb.AppendLine($"{Stamp()}{tool}");
-        sb.AppendLine("    Request:");
+        sb.AppendLine("Request:");
         sb.AppendLine(FormatRequestParameters(request));
-        sb.AppendLine("    Response:");
-        sb.AppendLine(Indent(result, 8));
+        sb.AppendLine();
+        sb.AppendLine("Response:");
+        sb.AppendLine(Indent(result, 4));
         sb.AppendLine();
 
         Append(toolsBuffer, () => tools, sb.ToString());
@@ -163,7 +172,7 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
         {
             if (JsonNode.Parse(request) is JsonObject obj && obj.Count > 0)
             {
-                return string.Join("\n", obj.Select(kv => $"        {kv.Key}={kv.Value?.ToJsonString() ?? "null"}"));
+                return string.Join("\n", obj.Select(kv => $"    {kv.Key}={kv.Value?.ToJsonString() ?? "null"}"));
             }
         }
         catch (JsonException)
@@ -171,7 +180,7 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
             // Not JSON — fall through to the raw rendering.
         }
 
-        return Indent(request, 8);
+        return Indent(request, 4);
     }
 
     /// <summary>Indents every line of <paramref name="text"/> by <paramref name="spaces"/> columns.</summary>
@@ -315,8 +324,9 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
             tabView.SelectedTab = allTabs[PreviewInitialTab];
         }
 
-        // Compose box: a coloured hint line on top, the multi-line input below.
-        var inputFrame = new FrameView(string.Empty)
+        // Compose box: the hint rides on the frame's top border (its title); the multi-line input
+        // fills the box beneath it.
+        var inputFrame = new FrameView("Compose  —  Enter: send · Shift+Enter: newline · Ctrl+Left/Right: switch panes")
         {
             X = 0,
             Y = Pos.AnchorEnd(bottomRows),
@@ -324,14 +334,10 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
             Height = bottomRows - 1,
             ColorScheme = baseTheme,
         };
-        var hint = MakeColoredPaneView(paneScheme).ForComposeHint();
-        hint.Text = "Compose  —  Enter: send · Shift+Enter: newline · Ctrl+Left/Right: switch panes";
-        hint.Height = 1;
-        hint.WordWrap = false;
         input = new TextView
         {
             X = 0,
-            Y = 1,
+            Y = 0,
             Width = Dim.Fill(),
             Height = Dim.Fill(),
             Multiline = true,
@@ -339,7 +345,7 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
             ColorScheme = baseTheme,
         };
         input.KeyPress += OnInputKeyPress;
-        inputFrame.Add(hint, input);
+        inputFrame.Add(input);
 
         BuildStatusBar(driver, top, bottomRows);
         top.Add(outputFrame, tabView, inputFrame);
@@ -509,9 +515,11 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
             return;
         }
 
-        // Echo the submitted input to the conversation pane — unlike a raw console,
-        // the TextView doesn't leave the typed text visible anywhere.
-        Append(outputBuffer, () => output, $"{Stamp()}You: {text}\n\n");
+        // Echo the submitted input to the conversation pane — unlike a raw console, the TextView
+        // doesn't leave the typed text visible anywhere. A slash command echoes as "Executed /foo"
+        // (not "You: …") to make clear it ran locally and was never sent to the remote peer.
+        var echo = text.StartsWith('/') ? $"Executed {text}" : $"You: {text}";
+        Append(outputBuffer, () => output, $"{Stamp()}{echo}\n\n");
 
         // Repaint now so the input box visibly clears on keypress, then dispatch the turn
         // off the UI thread — the subscriber chain runs synchronously up to its first

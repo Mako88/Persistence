@@ -45,23 +45,36 @@ internal static class TuiColoring
     /// doesn't also match fragment headers like <c>[#6 | …]</c>, which start with "#").</summary>
     private const string Timestamp = @"^\[\d[^\]]*\]";
 
-    /// <summary>A fragment id like <c>#42</c>.</summary>
-    private const string FragmentId = @"#\d+";
+    /// <summary>A fragment id like <c>#42</c>, but only inside a header (<c>[#42 | …</c>) — so a bare
+    /// "#5" in prose (e.g. a "recent changes" line) isn't mistaken for one.</summary>
+    private const string FragmentId = @"(?<=\[)#\d+(?= \|)";
 
     /// <summary>A fragment's type name — the word right after <c>#42 | </c> in a header.</summary>
     private const string FragmentTypeName = @"(?<=#\d+ \| )[A-Za-z][A-Za-z]+";
 
-    /// <summary>A start-of-line title up to its colon, e.g. <c>Current time (UTC):</c> (allows indent).</summary>
-    private const string FieldLabel = @"^\s*[A-Za-z][\w ()/]*:";
+    /// <summary>The R:/I:/C: relevance/importance/confidence markers in a header — a letter + colon
+    /// immediately before a number (so <c>is_protected</c>, <c>C:\paths</c>, times, etc. don't match).</summary>
+    private const string RicMarker = @"[RIC]:(?=\d)";
+
+    /// <summary>The "protected" flag in a header — only when it follows the <c>| </c> separator (so
+    /// <c>is_protected</c> and the word in prose stay uncoloured).</summary>
+    private const string ProtectedFlag = @"(?<=\| )protected\b";
+
+    /// <summary>A sensory-block field label (the known set from the prompt's [Sensory] block). Matched
+    /// by exact label rather than a generic <c>^word:</c> so prose lines that merely start with a
+    /// "word:" (or wrap to look like it) aren't coloured.</summary>
+    private const string SensoryLabel =
+        @"^(?:Current time \((?:UTC|local)\)|Session|Context(?: budget)?|Time since last prompt|Continue iteration|Recent changes to your memory|Available tags):";
+
+    /// <summary>A line that is nothing but an html-like tag, e.g. <c>&lt;respond&gt;</c> on its own —
+    /// the shape the peer's response tags take, as opposed to a tag mentioned inline in prose.</summary>
+    private const string StandaloneHtmlTag = @"^</?[A-Za-z][\w-]*>$";
 
     /// <summary>An attribute name immediately before <c>=</c>, e.g. <c>content</c> in <c>content="…"</c>.</summary>
     private const string AttributeName = @"\b[A-Za-z_][A-Za-z0-9_]*(?==)";
 
     /// <summary>The action name — the first word after the leading timestamp on a header line.</summary>
     private const string ActionName = @"(?<=\] )[A-Za-z_][A-Za-z0-9_]*";
-
-    /// <summary>An html-like tag the peer emits, e.g. <c>&lt;respond&gt;</c> or <c>&lt;/think&gt;</c>.</summary>
-    private const string HtmlTag = @"</?[A-Za-z][\w-]*>";
 
     /// <summary>
     /// The suggested tag inside a "did you mean '…'?" error: the quoted text immediately before the
@@ -77,21 +90,25 @@ internal static class TuiColoring
 
     private static ColoredTextView Timestamps(this ColoredTextView v) => v.ColorPattern(Timestamp, TuiColors.Timestamp);
 
-    private static ColoredTextView Labels(this ColoredTextView v) => v.ColorPattern(FieldLabel, TuiColors.Label);
-
     private static ColoredTextView Attributes(this ColoredTextView v) => v.ColorPattern(AttributeName, TuiColors.Label);
 
-    private static ColoredTextView HtmlTags(this ColoredTextView v) => v.ColorPattern(HtmlTag, TuiColors.Gold);
+    /// <summary>Colours an html-like tag only when it's alone on its line — the peer's response tags,
+    /// not the protocol tokens mentioned inline in the system prompt.</summary>
+    private static ColoredTextView StandaloneHtmlTags(this ColoredTextView v) =>
+        v.ColorPattern(StandaloneHtmlTag, TuiColors.Gold);
+
+    /// <summary>Colours the known [Sensory] field labels yellow (and only those — not arbitrary prose).</summary>
+    private static ColoredTextView SensoryLabels(this ColoredTextView v) => v.ColorPattern(SensoryLabel, TuiColors.Label);
 
     /// <summary>Colours a <c>[#id | Type | R:x I:x C:x | protected]</c> header: id yellow, type cyan,
-    /// R/I/C and "protected" gold. Brackets, pipes and values stay white. Reusable across panes.</summary>
+    /// R/I/C and "protected" gold. Brackets, pipes and values stay white. Each part is matched by a
+    /// position-anchored pattern, so these colours only land inside an actual header, never in prose.
+    /// Reusable across panes.</summary>
     private static ColoredTextView FragmentHeaders(this ColoredTextView v) => v
         .ColorPattern(FragmentId, TuiColors.Label)
         .ColorPattern(FragmentTypeName, TuiColors.TypeName)
-        .ColorSubstring("R:", TuiColors.Gold)
-        .ColorSubstring("I:", TuiColors.Gold)
-        .ColorSubstring("C:", TuiColors.Gold)
-        .ColorSubstring("protected", TuiColors.Gold);
+        .ColorPattern(RicMarker, TuiColors.Gold)
+        .ColorPattern(ProtectedFlag, TuiColors.Gold);
 
     // --- Per-pane schemes ---
 
@@ -107,6 +124,7 @@ internal static class TuiColoring
         .ColorLinesStartingWith("[WAKE-UP", TuiColors.LightGreen)
         .ColorLinesStartingWith("[Queued", TuiColors.Muted)
         .ColorSubstring("Unknown command:", TuiColors.Label)   // label only; the command stays white
+        .ColorSubstring("Executed", TuiColors.Muted)           // local-command echo, not a peer message
         .Timestamps()
         .ColorSubstring("You:", userColor)
         .ColorSubstring("Remote Peer:", peerColor);
@@ -139,23 +157,18 @@ internal static class TuiColoring
         .ColorSubstring("Cancelled", TuiColors.Muted);
 
     /// <summary>
-    /// Debug: each entry's leading timestamp; Request/Response (light purple); the sensory header
-    /// (light green); fragment headers (shared detector); field/title labels (yellow); the peer's
-    /// html-like response tags (gold). Values, brackets, pipes and the tag list stay white.
+    /// Debug shows the raw prompt and response, so it colours only unambiguous structure — never
+    /// prose. Each entry's leading timestamp; the Request/Response header right after it (light
+    /// purple); the sensory header (light green) and its known field labels (yellow); fragment
+    /// headers (shared detector); and html-like tags only when alone on a line (the peer's response
+    /// tags). Everything else — instruction text, message bodies, values — stays white.
     /// </summary>
     public static ColoredTextView ForDebug(this ColoredTextView v) => v
         .Timestamps()
-        .ColorSubstring("Request", TuiColors.Purple)
-        .ColorSubstring("Response", TuiColors.Purple)
+        .ColorPattern(@"(?<=\] )Request\b", TuiColors.Purple)   // only the entry header, not the word in prose
+        .ColorPattern(@"(?<=\] )Response\b", TuiColors.Purple)
         .ColorLinesStartingWith("[Sensory]", TuiColors.LightGreen)
         .FragmentHeaders()
-        .Labels()
-        .HtmlTags();
-
-    /// <summary>The compose-box hint line: the action words yellow, the rest white.</summary>
-    public static ColoredTextView ForComposeHint(this ColoredTextView v) => v
-        .ColorSubstring("Compose", TuiColors.Label)
-        .ColorSubstring("Shift+Enter:", TuiColors.Label)        // claim the full chord first
-        .ColorSubstring("Enter:", TuiColors.Label)              // then the standalone "Enter:"
-        .ColorSubstring("Ctrl+Left/Right:", TuiColors.Label);
+        .SensoryLabels()
+        .StandaloneHtmlTags();
 }

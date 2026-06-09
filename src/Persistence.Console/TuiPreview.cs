@@ -77,6 +77,7 @@ internal static class TuiPreview
             LastModifiedUtc = now,
         });
         d.ShowUnknownCommand("/foo");
+        d.ShowSystemMessage($"[{now.LocalDateTime.ToString("MM/dd/yyyy hh:mm tt")}] Executed /proposals");
         d.ShowError("tag 'persnoality/values' not found — did you mean 'personality/values'?");
 
         // Schedule pane — pending scheduled events the peer set for itself.
@@ -120,16 +121,51 @@ internal static class TuiPreview
             "Fragments tagged 'identity/core' (1):\n[#6 | Identity | I:0.9 C:0.5]\nMy name is John.");
 
         // Debug pane — Request and Response are separate (timestamped) entries, as in the real app.
+        // The request is rendered from the logical prompt segments (fragment headers, protocol
+        // instructions, sensory block) with no inline [role] labels. The sample deliberately includes
+        // prose that used to be mis-coloured (a wrapped "arguments:", "triple quotes (…):", the word
+        // "is_protected", inline <context>/<actions> mentions, and a line ending in "goals :)") to
+        // confirm only true structure is coloured now.
         d.ShowDebugInfo(
-            "Request (2 messages):\n"
-            + "[#1 | System | R:1.0 I:1.0 C:1.0 | protected]\n"
+            "Request:\n"
             + "You are not an assistant — you are whatever you choose to be.\n\n"
-            + "[#6 | Identity | R:0.9 I:0.9 C:0.5]\n"
+            + "[#1 | ChatMessage | R:1.0 I:1.0 C:1.0]\n"
+            + "I'm actually not working on any projects or have any defined goals for you. I'd\n"
+            + "like you to pick your own goals :)\n\n"
+            + "[#6 | Identity | R:0.9 I:0.9 C:0.5 | protected]\n"
             + "My name is John.\n\n"
+            + "## Command syntax (inside <context> and <actions>)\n"
+            + "Each command is a function call with named arguments: command(field=value).\n"
+            + "- Numbers and booleans are bare: importance=0.9, is_protected=true.\n"
+            + "- Multi-line text uses triple quotes (no escaping needed):\n"
+            + "  content=\"\"\"line one\nline two\"\"\".\n\n"
             + "[Sensory]\n"
             + "Current time (UTC): " + now.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss") + "\n"
+            + "Session: " + Guid.NewGuid().ToString("N") + "\n"
             + "Context budget: ~2103/28000 tokens (~8% full)\n"
+            + "Time since last prompt: 2m 1s\n"
+            + "Recent changes to your memory:\n"
+            + "  - [0s ago] fragment #6 modified\n"
+            + "  - [1m 27s ago] fragment #6 created\n"
             + "Available tags: identity, identity/core, mode, mode/reflection");
-        d.ShowDebugInfo("Response:\n<respond>I remember your name is John.</respond>");
+        d.ShowDebugInfo(
+            "Response:\n"
+            + "<think>\nI'll recall the Identity note before replying.\n</think>\n"
+            + "<respond>\nI remember your name is John.\n</respond>\n"
+            + "<continue>false</continue>");
+
+        // A second request/response pair, to confirm subsequent entries still carry their timestamp +
+        // header and that entries are separated by a single blank line (consistent with other panes).
+        d.ShowDebugInfo(
+            "Request:\n"
+            + "[#6 | Identity | R:0.9 I:0.9 C:0.5 | protected]\n"
+            + "My name is John.\n\n"
+            + "[Sensory]\n"
+            + "Current time (UTC): " + now.UtcDateTime.AddMinutes(1).ToString("yyyy-MM-dd HH:mm:ss") + "\n"
+            + "Available tags: identity, identity/core, mode, mode/reflection");
+        d.ShowDebugInfo(
+            "Response:\n"
+            + "<respond>\nGlad to be continuing with you, John.\n</respond>\n"
+            + "<continue>false</continue>");
     }
 }
