@@ -30,3 +30,7 @@ persistence.json
 
 # Test coverage output
 TestResults/
+
+## TUI preview scratch — screenshots + capture script for visual review,
+## pushed to a throwaway branch when needed, never to main.
+tui-preview/
