@@ -99,7 +99,16 @@ internal static class TuiPreview
                 WorkingContextId = 1,
                 ScheduledForUtc = now.UtcDateTime.AddHours(3),
                 Status = ScheduledEventStatus.Pending,
-                CreatedUtc = now,
+                CreatedUtc = now.AddHours(-1),
+                LastModifiedUtc = now,
+            },
+            new ScheduledEventEntity
+            {
+                Name = "first wake reflection",
+                WorkingContextId = 1,
+                ScheduledForUtc = now.UtcDateTime.AddHours(-2),
+                Status = ScheduledEventStatus.Triggered,
+                CreatedUtc = now.AddHours(-5),
                 LastModifiedUtc = now,
             },
         ]);

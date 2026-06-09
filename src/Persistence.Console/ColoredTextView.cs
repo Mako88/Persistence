@@ -82,6 +82,42 @@ internal sealed class ColoredTextView : TextView
 
     #endregion
 
+    #region Keyboard
+
+    /// <summary>
+    /// Optional hook (set on read-only panes): invoked with a printable character the user typed while
+    /// this pane had focus, so the host can redirect it to the compose box. Lets the local peer just
+    /// start typing from anywhere and have it land where input is actually accepted.
+    /// </summary>
+    public Action<string>? OnPrintableInput { get; set; }
+
+    public override bool ProcessKey(KeyEvent kb)
+    {
+        // A printable keystroke on a read-only pane is redirected to the input (carrying the char).
+        if (ReadOnly && OnPrintableInput is not null && IsPrintable(kb))
+        {
+            OnPrintableInput(((char)kb.KeyValue).ToString());
+            return true;
+        }
+
+        var handled = base.ProcessKey(kb);
+
+        // Consume plain cursor keys so they only move the cursor / scroll this pane — never shift focus
+        // to an adjacent pane. (Pane switching is Ctrl+Left/Right; pane focus is Ctrl+Up/Down.)
+        if (kb.Key is Key.CursorLeft or Key.CursorRight or Key.CursorUp or Key.CursorDown)
+        {
+            return true;
+        }
+
+        return handled;
+    }
+
+    /// <summary>A plain printable character (a letter/digit/symbol/space), not a chord or special key.</summary>
+    private static bool IsPrintable(KeyEvent kb) =>
+        !kb.IsCtrl && !kb.IsAlt && kb.KeyValue >= 32 && kb.KeyValue != 127 && kb.KeyValue < 0x10000;
+
+    #endregion
+
     #region Mouse
 
     /// <summary>Lines moved per mouse-wheel notch. Terminal.Gui's default of one line is painfully

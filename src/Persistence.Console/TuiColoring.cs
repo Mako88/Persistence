@@ -91,9 +91,6 @@ internal static class TuiColoring
     /// </summary>
     private const string SuggestedTag = @"(?<=')[^']+(?='[?.]?\]\s*$)";
 
-    /// <summary>An event name at the start of a schedule line, up to the " — " before its date.</summary>
-    private const string ScheduleName = @"^[^—]+(?= — )";
-
     // --- Detector helpers (recognise a pattern, colour it) ---
 
     private static ColoredTextView Timestamps(this ColoredTextView v) => v.ColorPattern(Timestamp, TuiColors.Timestamp);
@@ -118,7 +115,7 @@ internal static class TuiColoring
         .ColorPattern(FragmentId, TuiColors.Label)
         .ColorPattern(FragmentTypeName, TuiColors.TypeName)
         .ColorPattern(RicMarker, TuiColors.Gold)
-        .ColorPattern(ProtectedFlag, TuiColors.Gold);
+        .ColorPattern(ProtectedFlag, TuiColors.Error);   // "protected" stands out in red
 
     // --- Per-pane schemes ---
 
@@ -156,14 +153,18 @@ internal static class TuiColoring
         .FragmentHeaders();
 
     /// <summary>
-    /// Schedule: event name (yellow) up to the " — " before its date (white); "Note:" label (yellow)
-    /// with white text; status words tinted (Pending gold, Triggered purple, Cancelled muted).
+    /// Schedule: each event's name (light purple) on its own line, then indented label/value rows —
+    /// labels (yellow) with white values, except the status (Pending gold, Triggered/complete green,
+    /// Cancelled muted).
     /// </summary>
     public static ColoredTextView ForSchedule(this ColoredTextView v) => v
-        .ColorPattern(ScheduleName, TuiColors.Label)
+        .ColorLine(t => t.Length > 0 && !char.IsWhiteSpace(t[0]) && t != "No scheduled events.", TuiColors.Purple)
+        .ColorSubstring("Scheduled At:", TuiColors.Label)
+        .ColorSubstring("Scheduled For:", TuiColors.Label)
+        .ColorSubstring("Status:", TuiColors.Label)
         .ColorSubstring("Note:", TuiColors.Label)
         .ColorSubstring("Pending", TuiColors.Gold)
-        .ColorSubstring("Triggered", TuiColors.Purple)
+        .ColorSubstring("Triggered", TuiColors.Processing)
         .ColorSubstring("Cancelled", TuiColors.Muted);
 
     /// <summary>
@@ -182,10 +183,11 @@ internal static class TuiColoring
         .SensoryLabels()
         .ResponseTags();
 
-    /// <summary>The key-bindings hint row (above the input box): the "Key Bindings" label and the
-    /// action chords yellow, the rest white. (Same colour for all, so substring order doesn't matter.)</summary>
+    /// <summary>The key-bindings hint row (above the input box): the "Key Bindings" header in purple
+    /// (so it's distinct from the yellow chords sitting just below the yellow "Compose" title); the
+    /// chord keys yellow; the rest white.</summary>
     public static ColoredTextView ForComposeHint(this ColoredTextView v) => v
-        .ColorSubstring("Key Bindings", TuiColors.Label)
+        .ColorSubstring("Key Bindings", TuiColors.Purple)
         .ColorSubstring("Shift+Enter:", TuiColors.Label)
         .ColorSubstring("Enter:", TuiColors.Label)
         .ColorSubstring("Ctrl+Left/Right:", TuiColors.Label)

@@ -4,14 +4,14 @@ using Terminal.Gui;
 namespace Persistence.Console;
 
 /// <summary>
-/// A <see cref="TabView"/> that always paints the <em>selected</em> tab's title in the "hot"
-/// (highlighted) colour, even when the tab bar itself isn't focused.
+/// A <see cref="TabView"/> that always paints the <em>selected</em> tab's title itself: yellow when a
+/// pane inside the tab bar holds focus, gold otherwise. "Yellow means focused"; gold marks the active
+/// tab when focus is elsewhere (e.g. the compose box).
 ///
-/// Terminal.Gui v1 only uses <see cref="ColorScheme.HotNormal"/>/<see cref="ColorScheme.HotFocus"/>
-/// for the selected tab while <c>TabView.HasFocus</c> is true. In this app the compose box holds
-/// focus, so out of the box the selected tab would render in the plain (white) colour until the user
-/// clicks it — there'd be no visible indication of the active pane on load. After the base draw we
-/// re-colour the selected tab's title ourselves so the active pane is always obvious.
+/// We paint it unconditionally rather than leaning on Terminal.Gui's own highlight, because v1 only
+/// applies its "hot" colour while <c>TabView.HasFocus</c> is true — and that flag doesn't reliably
+/// track focus moving into a pane inside the tab, which made the highlight flicker between gold and
+/// yellow. Driving it from the focus state directly keeps it consistent.
 /// </summary>
 internal sealed class HighlightedTabView : TabView
 {
@@ -19,14 +19,15 @@ internal sealed class HighlightedTabView : TabView
     {
         base.Redraw(bounds);
 
-        // When focused (the tab bar or any pane inside it has focus), the base already painted the
-        // selected tab in the bright "hot" colour — yellow consistently means "focused" — so leave it.
-        // When unfocused, paint the selected tab gold instead: it marks the active pane without
-        // claiming the focus colour.
-        if (HasFocus || SelectedTab is null || Application.Driver is null)
+        if (SelectedTab is null || Application.Driver is null)
         {
             return;
         }
+
+        // Focused when this tab bar — or any pane nested inside the selected tab — holds focus. (TG's
+        // HasFocus alone doesn't always reflect a focused descendant, so also consult the focus chain.)
+        var focused = HasFocus || MostFocused is not null || Focused is not null;
+        var colour = focused ? TuiColors.Label : TuiColors.Gold;
 
         // Mirror TabRowView's layout: titles sit on row 1 when the top line is shown (the default),
         // starting one column in, each separated by a single column. We only need the selected one.
@@ -46,7 +47,7 @@ internal sealed class HighlightedTabView : TabView
 
             if (tab == SelectedTab)
             {
-                Driver.SetAttribute(Driver.MakeAttribute(TuiColors.Gold, ColorScheme.Normal.Background));
+                Driver.SetAttribute(Driver.MakeAttribute(colour, ColorScheme.Normal.Background));
                 Move(x, y);
                 Driver.AddStr(text);
                 Driver.SetAttribute(GetNormalColor());

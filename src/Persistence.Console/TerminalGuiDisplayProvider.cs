@@ -222,10 +222,14 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
         }
         else
         {
-            // "name — date — status", date without leading zeros; a blank line between entries.
+            // Event name on its own line, then indented label/value rows; dates without leading
+            // zeros; a blank line between entries.
             foreach (var e in events.OrderBy(e => e.ScheduledForUtc))
             {
-                sb.AppendLine($"{e.Name} — {e.ScheduledForUtc.LocalDateTime:M/d/yyyy h:mm tt} — {e.Status}");
+                sb.AppendLine(e.Name);
+                sb.AppendLine($"    Scheduled At: {e.CreatedUtc.LocalDateTime:M/d/yyyy h:mm tt}");
+                sb.AppendLine($"    Scheduled For: {e.ScheduledForUtc.LocalDateTime:M/d/yyyy h:mm tt}");
+                sb.AppendLine($"    Status: {e.Status}");
 
                 if (!string.IsNullOrWhiteSpace(e.WakePrompt))
                 {
@@ -330,6 +334,11 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
         schedule = MakeColoredPaneView(paneScheme).ForSchedule();
         debug = MakeColoredPaneView(paneScheme).ForDebug();
 
+        // The Schedule pane colours its event-name lines by their column-0 position; word-wrap would
+        // drop a long Note's continuation to column 0 and mis-colour it as a name, so keep its lines
+        // unwrapped (the detail rows are short; a long note scrolls rather than wraps).
+        schedule.WordWrap = false;
+
         // Tab titles get a space of horizontal padding on each side.
         tabView.AddTab(new TabView.Tab(" Thoughts ", WrapPane(reasoning, paneScheme)), andSelect: true);
         tabView.AddTab(new TabView.Tab(" Actions ", WrapPane(tools, paneScheme)), andSelect: false);
@@ -343,10 +352,17 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
         tabView.ClearKeybinding(Key.CursorRight);
 
         // Ctrl+Arrows navigate from any pane (or the input): Left/Right switch tabs, Up/Down cycle
-        // focus through the visible panes so each can be scrolled with the keyboard.
+        // focus through the visible panes so each can be scrolled with the keyboard. Plain typing on a
+        // pane jumps to the compose box (carrying the character), since that's the only place input is
+        // accepted.
         foreach (var pane in new[] { output, reasoning, tools, schedule, debug })
         {
             pane.KeyPress += OnNavKeyPress;
+
+            if (pane is ColoredTextView coloured)
+            {
+                coloured.OnPrintableInput = RedirectTypingToInput;
+            }
         }
 
         // Preview can open on a specific tab (for screenshots); defaults to the first.
@@ -359,7 +375,7 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
         // Compose area: a colour-keyed key-bindings hint on its own row, then the bordered multi-line
         // input below (titled "Compose", which highlights with focus like the Conversation frame).
         var hint = MakeColoredPaneView(paneScheme).ForComposeHint();
-        hint.Text = "Key Bindings  —  Enter: send · Shift+Enter: newline · Ctrl+Left/Right: tabs · Ctrl+Up/Down: panes";
+        hint.Text = "Key Bindings  —  Enter: Send · Shift+Enter: Newline · Ctrl+Left/Right: Tabs · Ctrl+Up/Down: Panes";
         hint.WordWrap = false;
         hint.X = 0;
         hint.Y = Pos.AnchorEnd(bottomRows);
@@ -374,12 +390,15 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
             Height = bottomRows - 2,
             ColorScheme = baseTheme,
         };
-        input = new TextView
+        // A ColoredTextView (with no rules) so the compose box shares the pane behaviour: plain arrows
+        // move the cursor without jumping focus, and the wheel scrolls at a usable speed.
+        input = new ColoredTextView
         {
             X = 0,
             Y = 0,
             Width = Dim.Fill(),
             Height = Dim.Fill(),
+            ReadOnly = false,
             Multiline = true,
             WordWrap = true,
             ColorScheme = baseTheme,
@@ -470,7 +489,12 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
     /// </summary>
     private static void AddScrollbar(TextView view)
     {
-        var scrollbar = new ScrollBarView(view, isVertical: true, showBothScrollIndicator: false);
+        var scrollbar = new ScrollBarView(view, isVertical: true, showBothScrollIndicator: false)
+        {
+            // Don't let the scrollbar take keyboard focus — it would interfere with Ctrl+Up/Down
+            // cycling focus through the panes (and isn't keyboard-driven here anyway).
+            CanFocus = false,
+        };
 
         view.DrawContent += _ =>
         {
@@ -637,6 +661,16 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
 
         var next = ((current + direction) % targets.Length + targets.Length) % targets.Length;
         targets[next].SetFocus();
+    }
+
+    /// <summary>
+    /// Moves focus to the compose box and inserts <paramref name="text"/> — used when the local peer
+    /// starts typing while a (read-only) pane has focus, so the keystroke isn't lost.
+    /// </summary>
+    private void RedirectTypingToInput(string text)
+    {
+        input.SetFocus();
+        input.InsertText(text);
     }
 
     /// <summary>The text pane shown by the currently selected side-column tab.</summary>
