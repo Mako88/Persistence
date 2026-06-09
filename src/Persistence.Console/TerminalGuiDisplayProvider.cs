@@ -46,6 +46,11 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
     private readonly StringBuilder scheduleBuffer = new();
     private readonly StringBuilder debugBuffer = new();
 
+    // The Actions pane is a list of collapsible entries (rebuilt into toolsBuffer on change);
+    // actionHeaderRows maps each entry to its header line, so a toggle can resolve a cursor/click row.
+    private readonly List<ActionEntry> actionEntries = [];
+    private List<int> actionHeaderRows = [];
+
     private TextView output = null!;
     private TextView reasoning = null!;
     private TextView tools = null!;
@@ -154,19 +159,146 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
 
     public void ShowToolUse(string tool, string request, string result)
     {
-        // Header line carries the timestamp + action name; the Request/Response labels sit flush
-        // beneath it with their content indented under each — one request parameter per line — and a
-        // blank line between the request and the response for separation.
-        var sb = new StringBuilder();
-        sb.AppendLine($"{Stamp()}{tool}");
-        sb.AppendLine("Request:");
-        sb.AppendLine(FormatRequestParameters(request));
-        sb.AppendLine();
-        sb.AppendLine("Response:");
-        sb.AppendLine(Indent(result, 4));
-        sb.AppendLine();
+        var entry = new ActionEntry(Stamp(), tool, FormatRequestParameters(request), Indent(result, 4));
 
-        Append(toolsBuffer, () => tools, sb.ToString());
+        lock (sync)
+        {
+            actionEntries.Add(entry);
+        }
+
+        RenderActions(scrollToBottom: true);
+    }
+
+    /// <summary>
+    /// One Actions-pane entry. Shown collapsed (just the header) by default; expanding reveals the
+    /// request parameters and the response.
+    /// </summary>
+    private sealed class ActionEntry(string time, string command, string request, string response)
+    {
+        public string Time { get; } = time;
+        public string Command { get; } = command;
+        public string Request { get; } = request;     // pre-formatted, one parameter per line
+        public string Response { get; } = response;    // pre-formatted (indented)
+        public bool Collapsed { get; set; } = true;
+    }
+
+    /// <summary>
+    /// Rebuilds the Actions pane from <see cref="actionEntries"/>: a collapse marker + timestamp +
+    /// command per entry, with the request/response revealed when expanded. Records each entry's header
+    /// line so a toggle can map a cursor/click row back to its entry.
+    /// </summary>
+    private void RenderActions(bool scrollToBottom)
+    {
+        var sb = new StringBuilder();
+        var headerRows = new List<int>();
+        string snapshot;
+
+        lock (sync)
+        {
+            var row = 0;
+            foreach (var e in actionEntries)
+            {
+                headerRows.Add(row);
+                sb.AppendLine($"{(e.Collapsed ? "▶" : "▼")} {e.Time}{e.Command}");
+                row++;
+
+                if (!e.Collapsed)
+                {
+                    sb.AppendLine("Request:");
+                    row++;
+                    foreach (var line in e.Request.Split('\n'))
+                    {
+                        sb.AppendLine(line);
+                        row++;
+                    }
+
+                    sb.AppendLine();
+                    row++;
+                    sb.AppendLine("Response:");
+                    row++;
+                    foreach (var line in e.Response.Split('\n'))
+                    {
+                        sb.AppendLine(line);
+                        row++;
+                    }
+                }
+
+                sb.AppendLine();
+                row++;
+            }
+
+            actionHeaderRows = headerRows;
+            toolsBuffer.Clear();
+            toolsBuffer.Append(sb.ToString());
+            snapshot = sb.ToString();
+        }
+
+        if (!ready)
+        {
+            return;
+        }
+
+        Application.MainLoop?.Invoke(() =>
+        {
+            tools.Text = snapshot;
+            if (scrollToBottom)
+            {
+                ScrollToBottom(tools);
+            }
+            else
+            {
+                tools.SetNeedsDisplay();
+            }
+        });
+    }
+
+    /// <summary>
+    /// Toggles the collapse state of the Actions entry whose header is at or above <paramref name="row"/>
+    /// (the line the user activated), then re-renders and parks the cursor on that entry's header.
+    /// </summary>
+    private void ToggleActionAt(int row)
+    {
+        int index;
+
+        lock (sync)
+        {
+            index = -1;
+            for (var i = 0; i < actionHeaderRows.Count; i++)
+            {
+                if (actionHeaderRows[i] <= row)
+                {
+                    index = i;
+                }
+                else
+                {
+                    break;
+                }
+            }
+
+            if (index < 0)
+            {
+                return;
+            }
+
+            actionEntries[index].Collapsed = !actionEntries[index].Collapsed;
+        }
+
+        RenderActions(scrollToBottom: false);
+
+        // Keep the toggled entry's header under the cursor so the view doesn't jump.
+        if (ready)
+        {
+            Application.MainLoop?.Invoke(() =>
+            {
+                int headerRow;
+                lock (sync)
+                {
+                    headerRow = index < actionHeaderRows.Count ? actionHeaderRows[index] : 0;
+                }
+
+                tools.CursorPosition = new Point(0, headerRow);
+            });
+        }
     }
 
     /// <summary>
@@ -377,6 +509,12 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
             {
                 coloured.OnPrintableInput = RedirectTypingToInput;
             }
+        }
+
+        // Actions entries collapse/expand on Enter or click.
+        if (tools is ColoredTextView toolsView)
+        {
+            toolsView.OnLineActivated = ToggleActionAt;
         }
 
         // Preview can open on a specific tab (for screenshots); defaults to the first.

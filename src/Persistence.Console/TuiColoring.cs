@@ -45,6 +45,14 @@ internal static class TuiColoring
     /// doesn't also match fragment headers like <c>[#6 | …]</c>, which start with "#").</summary>
     private const string Timestamp = @"^\[\d[^\]]*\]";
 
+    /// <summary>The Actions collapse marker (▶ collapsed / ▼ expanded) at the start of an entry header.</summary>
+    private const string CollapseMarker = @"^[▶▼]";
+
+    /// <summary>A timestamp anywhere on a line — used in the Actions pane, where the entry header is
+    /// "▶ [time] command" so the stamp isn't at the start. Still keyed on "[" + digit, so it won't
+    /// match a fragment header (which starts "[#…").</summary>
+    private const string EntryTimestamp = @"\[\d[^\]]*\]";
+
     /// <summary>A fragment id like <c>#42</c>, but only inside a header (<c>[#42 | …</c>) — so a bare
     /// "#5" in prose (e.g. a "recent changes" line) isn't mistaken for one.</summary>
     private const string FragmentId = @"(?<=\[)#\d+(?= \|)";
@@ -141,11 +149,14 @@ internal static class TuiColoring
         .Timestamps();
 
     /// <summary>
-    /// Actions: timestamp, action name (gold), Request:/Response: labels (light purple), attribute
-    /// names (yellow), and any fragment headers in a response (same colours as the Debug tab).
+    /// Actions: a collapse marker (muted) + timestamp + action name (gold) on each entry's header;
+    /// when expanded, Request:/Response: labels (light purple), attribute names (yellow), and any
+    /// fragment headers in a response (same colours as the Debug tab). The timestamp follows the
+    /// marker so it's matched unanchored (a header is the only place a "[digit…]" appears here).
     /// </summary>
     public static ColoredTextView ForActions(this ColoredTextView v) => v
-        .Timestamps()
+        .ColorPattern(CollapseMarker, TuiColors.Muted)
+        .ColorPattern(EntryTimestamp, TuiColors.Timestamp)
         .ColorPattern(ActionName, TuiColors.Gold)
         .ColorSubstring("Request:", TuiColors.Purple)
         .ColorSubstring("Response:", TuiColors.Purple)

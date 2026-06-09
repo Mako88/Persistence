@@ -17,6 +17,13 @@ internal sealed class HighlightedTabView : TabView
 {
     public override void Redraw(Rect bounds)
     {
+        // The four short tabs always fit, but TG can leave TabScrollOffset > 0 from an early layout
+        // pass and then draw a spurious left-scroll "◄". Pin it to 0 so that arrow never shows.
+        if (TabScrollOffset != 0)
+        {
+            TabScrollOffset = 0;
+        }
+
         base.Redraw(bounds);
 
         if (SelectedTab is null || Application.Driver is null)

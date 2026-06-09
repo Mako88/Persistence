@@ -91,12 +91,26 @@ internal sealed class ColoredTextView : TextView
     /// </summary>
     public Action<string>? OnPrintableInput { get; set; }
 
+    /// <summary>
+    /// Optional hook (set on read-only panes): invoked with the cursor's line index when the user
+    /// "activates" a line (Enter, or a left-click — which moves the cursor first). Lets a pane make
+    /// its lines interactive, e.g. expand/collapse an entry.
+    /// </summary>
+    public Action<int>? OnLineActivated { get; set; }
+
     public override bool ProcessKey(KeyEvent kb)
     {
         // A printable keystroke on a read-only pane is redirected to the input (carrying the char).
         if (ReadOnly && OnPrintableInput is not null && IsPrintable(kb))
         {
             OnPrintableInput(((char)kb.KeyValue).ToString());
+            return true;
+        }
+
+        // Enter activates the current line (e.g. toggles an entry) when a handler is wired.
+        if (kb.Key == Key.Enter && OnLineActivated is not null)
+        {
+            OnLineActivated(CurrentRow);
             return true;
         }
 
@@ -134,6 +148,15 @@ internal sealed class ColoredTextView : TextView
         if (ev.Flags.HasFlag(MouseFlags.WheeledUp))
         {
             return ScrollByLines(-WheelLines);
+        }
+
+        // A left-click activates the clicked line (Enter-equivalent): let the base move the cursor to
+        // the click first, then report the now-current line.
+        if (ev.Flags.HasFlag(MouseFlags.Button1Clicked) && OnLineActivated is not null)
+        {
+            base.MouseEvent(ev);
+            OnLineActivated(CurrentRow);
+            return true;
         }
 
         return base.MouseEvent(ev);
