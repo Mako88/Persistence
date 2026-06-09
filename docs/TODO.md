@@ -199,6 +199,16 @@ Carry-forward:
 - **Schedule tab name.** Went with "Schedule" (alternatives: Agenda, Upcoming, Wake-ups, Reminders) —
   revisit if a better fit emerges.
 
+## Turn pipeline — think-before-act ordering (noted 2026-06-09)
+
+Observation: models emit `<think>` in the *same* turn/response as their action and reply commands, so
+the thinking doesn't actually precede (and inform) the other commands — it's parsed and surfaced
+alongside them, not before. Consider making a `think` execute and return *before* the rest of the
+turn's commands run (e.g. a first pass that surfaces reasoning, then a second pass with that reasoning
+in context for the actions/reply), so thinking genuinely shapes what follows. Needs care: extra model
+round-trips, and how it interacts with `<continue>` and the iteration budget. Investigate before
+committing to an approach.
+
 ## Possible future
 
 - **Undo stack.** A true undo for context operations. Lower priority because archive-not-delete +
