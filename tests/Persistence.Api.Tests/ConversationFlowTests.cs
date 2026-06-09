@@ -262,7 +262,7 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
     {
         const string marker = "RELEVANCE_TEST a fragment whose relevance we will lower.";
 
-        // Add a fragment at default relevance (1.0 -> header shows r:1.0).
+        // Add a fragment at default relevance (1.0 -> header shows R:1.0).
         await api.RunTurnAsync(
             "remember something low priority",
             $$"""
@@ -291,7 +291,7 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
         // The junction relevance should round-trip through save/reload into the header.
         var after = await api.SendAndGetPendingAsync("what's in context now?");
         Assert.Contains("RELEVANCE_TEST", after!.Prompt);
-        Assert.Contains("r:0.2", after.Prompt);
+        Assert.Contains("R:0.2", after.Prompt);
     }
 
     [Fact]
@@ -652,7 +652,7 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
 
     private static long ExtractFragmentId(string prompt, string fragmentType)
     {
-        // Fragment headers look like: [#5 | Identity | r:1.0 i:0.9 c:1.0]
+        // Fragment headers look like: [#5 | Identity | R:1.0 I:0.9 C:1.0]
         var match = System.Text.RegularExpressions.Regex.Match(
             prompt, $@"#(\d+) \| {fragmentType} ");
         Assert.True(match.Success, $"No {fragmentType} fragment header found in prompt.");
