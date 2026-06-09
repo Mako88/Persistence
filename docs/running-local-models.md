@@ -16,14 +16,36 @@ llama-server -m <model>.gguf \
   --host 127.0.0.1 --port 8080
 ```
 
-## Persistence config (env overrides or persistence.json)
+## Persistence config
+
+Add a model profile to `persistence.json` and point `SelectedModel` at it (profiles are described in
+the [README](../README.md#configuration)):
+
+```jsonc
+{
+  "SelectedModel": "local",
+  "Models": [
+    {
+      "Name": "local",
+      "Provider": "OpenAiChat",
+      "Model": "local",                         // llama.cpp ignores it
+      "ApiBaseUrl": "http://127.0.0.1:8080/v1",
+      "MaxInputTokens": 28000,                  // ≤ the server's -c, minus output headroom
+      "MaxOutputTokens": 4096,
+      "Streaming": false,
+      "RequestTimeoutSeconds": 600              // local prompt-ingest is slow; don't cancel early
+    }
+  ]
+}
+```
+
+Or override per-run without editing the file (model-coupled vars apply to the active profile):
 
 ```
+PERSISTENCE_SELECTEDMODEL=local
 PERSISTENCE_PROVIDER=OpenAiChat
 PERSISTENCE_APIBASEURL=http://127.0.0.1:8080/v1
-PERSISTENCE_MODEL=<anything; llama.cpp ignores it>
-PERSISTENCE_RESPONSEFORMAT=Tagged
-PERSISTENCE_REQUESTTIMEOUTSECONDS=600   # local prompt-ingest can be slow; don't let the client cancel
+PERSISTENCE_REQUESTTIMEOUTSECONDS=600
 ```
 
 ## Performance findings (2026-06, Qwen3.5-9B on a 1080 Ti)
@@ -56,3 +78,35 @@ PERSISTENCE_REQUESTTIMEOUTSECONDS=600   # local prompt-ingest can be slow; don't
   ~2 GB at 64k). With a 6.7 GB model on 11 GB, 32k is comfortable.
 - Bigger window = more continuity headroom (less truncation), **not** more speed — a fuller prompt is
   slower to re-ingest each turn. Pair larger windows with curation.
+
+## Gemma 12B (gemma-4-12B-it, Q4_K_M) findings — 2026-06, same 1080 Ti
+
+Verified end-to-end with Persistence (two-way connection, multi-turn). Launch recipe:
+
+```
+llama-server -m gemma-4-12B-it-q4_k_m.gguf ^
+  -ngl 99 -c 32768 --parallel 1 --jinja --reasoning-budget 0 -t 4 ^
+  --host 127.0.0.1 --port 8080
+```
+
+- **It's a thinking model → `--reasoning-budget 0` is mandatory.** Without it, the reply lands in
+  `reasoning_content` and `message.content` is **empty** — `OpenAiChatModelClient` reads `content`, so
+  every turn would fail to parse. With it disabled, content comes through cleanly. (Same lesson as
+  Qwen, but here the symptom is empty replies, not just slowness.)
+- **System role is accepted.** Unlike Qwen's stricter template, llama.cpp's Gemma `--jinja` path takes
+  the one-system-plus-one-user shape `OpenAiChatModelClient` already sends — no template error.
+- **Vulkan shader warm-up dominates the first call** (~8 tok/s), then settles to **~85 tok/s prompt
+  eval, ~30 tok/s generation**. Do a throwaway warm-up request before timing anything.
+- **KV cache is cheap thanks to sliding-window attention (SWA).** At 32k: **992 MiB** total — 512 MiB
+  global (scales ~16 KiB/token) + 480 MiB sliding-window (**fixed** regardless of context). So the
+  global part is the only thing that grows; 8k→32k cost only +384 MiB.
+- **VRAM is the real ceiling, not system RAM.** Fully offloaded (`-ngl 99`), weights (7.4 GB) + KV +
+  compute live in VRAM, which on a single-GPU desktop is **shared with Windows**. 32k leaves ~1.7 GB
+  free for desktop spikes; 64k is reachable only if you keep other GPU apps minimal. Freeing system
+  RAM doesn't raise the context ceiling for a GPU-resident model (it only helps load/host buffers).
+- **Sizing `MaxInputTokens`:** keep it below the server's `-c` minus generation headroom. For `-c
+  32768` we use `MaxInputTokens=28000` + `MaxOutputTokens=4096` (the client sends the latter as
+  `max_tokens`; the two must fit in one window).
+- **Schema-following quirk:** the 12B sometimes wrote `type=`/`tag=` instead of `fragment_type=`/
+  `tags=`; the command layer's unknown-field "did you mean?" hints caught it gracefully (fragment still
+  added, just untyped/untagged). A sharper model follows the command schema more reliably.

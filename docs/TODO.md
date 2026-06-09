@@ -175,6 +175,30 @@ extends reach.
   `TaggedProtocolInstructions`, and the local `/help` (currently a hand-maintained block). Aligns with
   the single-location/auto-discoverable extensibility preference — avoid "remember to update N places."
 
+## TUI / front-end (in progress 2026-06-09)
+
+Done this pass: history folded into the main conversation pane with timestamps (History tab removed);
+`You`/`Remote Peer` role labels; per-kind colour palette tuned for legibility (no dark gray; cyan/blue
+kept non-adjacent); timestamps in conversation/reasoning/actions; `Tools`→`Actions`; `Reasoning`→
+`Thoughts`; new `Schedule` tab (order Thoughts → Actions → Schedule → Debug, padded titles) backed by
+an Orchestrator push of pending events via `IDisplayProvider.ShowScheduledEvents`; black status bar
+with state/model/session segments; the selected tab title stays highlighted even when unfocused
+(`HighlightedTabView`); Ctrl+Left/Right pane switching (Ctrl+Tab fallback) + hint; a `--preview` mode
+for visual iteration.
+
+Carry-forward:
+- **Collapsible Actions pane.** Rebuild the Actions tab as a tree: each entry `[time] command`
+  collapsed; expand shows request + response in two distinct colours. (Currently a timestamped text
+  log.) Terminal.Gui v1 `TreeView` is the likely widget.
+- **Context-budget gauge in the status bar.** Needs the budget value plumbed to the display (e.g. a
+  `ModelBudgetUpdated` event from `PromptFormatter`/`TurnHandler`); the display doesn't compute it.
+- **Open-proposals indicator in the status bar.** Orchestrator push of the open-proposal count
+  (mirrors the `ShowScheduledEvents` wiring) → a status segment.
+- **Dynamic history load on scroll-up.** The conversation shows the startup history batch; load older
+  messages when the user scrolls to the top.
+- **Schedule tab name.** Went with "Schedule" (alternatives: Agenda, Upcoming, Wake-ups, Reminders) —
+  revisit if a better fit emerges.
+
 ## Possible future
 
 - **Undo stack.** A true undo for context operations. Lower priority because archive-not-delete +

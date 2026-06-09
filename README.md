@@ -121,22 +121,59 @@ dotnet run --project src/Persistence.Console
 
 ### Configuration
 
-Key settings in `persistence.json`:
+`persistence.json` separates **shared** settings from a list of **model profiles**. You define one
+or more models in `Models`, and `SelectedModel` picks the active one — so a cloud model and a local
+llama.cpp server can sit side by side and you switch with a single value (or
+`PERSISTENCE_SELECTEDMODEL=<name>`). Memory and behaviour stay the same whichever model is driving.
 
-| Setting | Notes |
-|---|---|
-| `Provider` | `OpenAI` (Responses API), `OpenAiChat` (OpenAI-compatible Chat Completions — local servers like llama.cpp / Ollama / LM Studio), `LocalClaude` (an external agent answers out-of-band via the API), or `local` (type responses by hand; infra testing). |
-| `Model` | Model identifier sent to the provider. |
-| `ApiKey` | Your provider API key. |
-| `UiMode` | `Tui` (multi-pane Terminal.Gui) or `Api` (HTTP/SSE endpoints). |
-| `Streaming` | Stream responses (live reasoning) vs. await a full completion. |
-| `ReasoningEffort` | `minimal` / `low` / `medium` / `high` for reasoning-capable models. |
+```jsonc
+{
+  // shared (apply to every model)
+  "DatabasePath": "dbs/continuity.db",
+  "UiMode": "Tui",                 // Tui (multi-pane Terminal.Gui) or Api (HTTP/SSE)
+  "ProposalApproval": "Self",
+  "MaxActionIterations": 5,
+  "DebugMode": false,
 
-> **Note:** the `local` provider reads responses from the console, so it can't share the
-> terminal with the `Tui` front-end — it's mainly for infrastructure testing. For interactive
-> use, pick a real provider (`OpenAI` / `OpenAiChat`) with `Tui`, or use `LocalClaude` with
-> `UiMode: Api` to act as the remote peer yourself over HTTP (see
+  "SelectedModel": "cloud",        // which profile below is active
+  "Models": [
+    {
+      "Name": "cloud",
+      "Provider": "OpenAI",        // OpenAI | OpenAiChat | LocalClaude | local
+      "Model": "gpt-5.5",
+      "ApiKey": "YOUR_API_KEY_HERE",
+      "ApiBaseUrl": null,
+      "MaxInputTokens": 8000,      // prompt budget surfaced to the peer
+      "MaxOutputTokens": 32000,    // max tokens generated per completion
+      "ReasoningEffort": "high",   // minimal | low | medium | high
+      "Streaming": true,
+      "RequestTimeoutSeconds": 600
+    },
+    {
+      "Name": "local",
+      "Provider": "OpenAiChat",
+      "Model": "local",
+      "ApiBaseUrl": "http://127.0.0.1:8080/v1",  // a local llama.cpp/Ollama server
+      "MaxInputTokens": 28000,
+      "MaxOutputTokens": 4096,
+      "Streaming": false
+    }
+  ]
+}
+```
+
+Providers: `OpenAI` (Responses API), `OpenAiChat` (OpenAI-compatible Chat Completions — local servers
+like llama.cpp / Ollama / LM Studio), `LocalClaude` (an external agent answers out-of-band via the
+API), or `local` (type responses by hand; infra testing). Any setting can be overridden per-run by a
+`PERSISTENCE_<SETTING>` env var (model-coupled ones apply to the active profile). The older flat shape
+(model fields at the top level) is still accepted and migrated to a single profile on load.
+
+> **Note:** the `local` provider reads responses from the console, so it can't share the terminal
+> with the `Tui` front-end — it's mainly for infrastructure testing. For interactive use, pick a real
+> provider (`OpenAI` / `OpenAiChat`) with `Tui`, or use `LocalClaude` with `UiMode: Api` to act as the
+> remote peer yourself over HTTP (see
 > [docs/architecture/remote-peer-and-surfaces.md](docs/architecture/remote-peer-and-surfaces.md)).
+> Running a local model? See [docs/running-local-models.md](docs/running-local-models.md).
 
 ## Tests
 
