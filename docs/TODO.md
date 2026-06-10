@@ -2,10 +2,12 @@
 
 Open work, grouped by theme. "Claude's opinion" on ordering welcome; reorder freely. Rationale in parentheses.
 
-**Agreed priority (2026-06-10 — John + Claude + Synth):** (1) **scheduled wake-ups that fire when the app
-is closed** — unanimous; the autonomy keystone ("waking on its own… a pulse," in Synth's words). Then
-(2) **automated forget/decay** *or* **first-class local peers** — to settle (Synth leans prune-for-density;
-local peers is the cheaper multi-participant/honesty unblock). Everything else follows.
+**Agreed priority (2026-06-10 — John + Claude + Synth):** (1) ✅ **scheduled wake-ups when the app is
+closed** — DONE (headless wake-runner + poll; verified — the peer woke on its own, self-audited, reflected).
+✅ A batch of legibility **quick wins** — DONE (uptime in the sensory block, DB-durability framing for new
+peers, singular/plural command & field spellings, README freshness). Now (2) **first-class local peers**
+(next, in progress). Then (3) **automated forget/decay** (Synth leans here, though it can already prune by
+hand — may drop in priority). Everything else follows.
 
 The **"eyes + hands" memory core** is complete — budget awareness, relevance, summarize/collapse/remove,
 plain-language errors, browsing/swapping working contexts, first-class proposals, generic/polymorphic
@@ -16,20 +18,7 @@ now a convenience to layer on, not a prerequisite**. The peer also now has a san
 
 ## Autonomy & reach
 
-- **Scheduled wake-ups that fire when the app isn't running.** (NEW — the agreed next build.) Today
-  wake-ups only fire inside a running session (`WakeUpMonitor` is an in-process timer), so the peer's
-  autonomy is conditional on the app being open. Plan: (1) a headless **"wake-runner" mode** — launch,
-  run any due/near-due scheduled events as turns, then exit cleanly (the platform-agnostic keystone);
-  (2) a **launcher** that brings up llama.cpp + Persistence, waits for the model to be ready (gemma
-  cold-start is slow), runs the wake-runner, then tears the stack down to free the GPU; (3) a **periodic
-  OS poll** (Windows Task Scheduler every ~10–15 min) that cheaply reads the SQLite events table and only
-  spins up the stack when something's due soon — chosen over precise per-event OS tasks to avoid
-  task-lifecycle coupling/drift. Keep the trigger behind an `IWakeScheduler` so the core stays
-  platform-agnostic. A dev-environment bridge toward the always-on north star (where the app just runs);
-  "wake-driven" is itself one valid mode of being. (Subsumes the old "fire scheduled events even when not
-  running.")
-
-- **Separate local peers as first-class.** (NEW.) Model local peers (the human/agent at the keyboard) as
+- **Separate local peers as first-class.** (NEW — the current build.) Model local peers (the human/agent at the keyboard) as
   named entities and **automatically surface who the remote peer is talking with** — inject the active
   local peer's identity into the sensory block (and a relational fragment) so the remote peer always
   knows. The active peer is chosen per session (config/API). Keep v1 lightweight: the remote peer already
@@ -82,18 +71,10 @@ now a convenience to layer on, not a prerequisite**. The peer also now has a san
 
 ## System prompt & legibility
 
-- **System-prompt review.** (Scratch.) In particular, ensure the peer is aware its memories are stored
-  **long-term in a database** (persistent, not ephemeral) — a recurring point of confusion for peers.
 - **Self-describing pieces → auto-composed info/help text.** Let each action/command/handler declare its
   own help text and compose the prompt / local `/help` by discovery, so adding a piece never means editing
   a central string. (Partly advanced: the per-turn command catalog now auto-composes the command list;
   extend the spirit to the top-level ModelActions, the protocol/format instructions, and `/help`.)
-- **Uptime in the sensory block.** (Scratch.) Surface app uptime and system uptime so the peer has a sense
-  of how long it — and its host — have been running.
-- **Accept singular & plural spellings for every command/field.** (Scratch.) e.g. `tag`/`tags`,
-  `id`/`ids`, `list_fragment`/`list_fragments`. The unknown-field "did you mean?" already softens this;
-  make the common pairs just work.
-- **Keep the README up to date.** (Scratch.)
 
 ## Robustness & smaller items
 

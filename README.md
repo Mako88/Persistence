@@ -52,7 +52,8 @@ runs roughly like this:
    - *Respond to user* — say something back to the local peer.
    - *Manage context* — edit its own memory: add, revise, archive, tag, or re-prioritize
      fragments. This is how the remote peer curates what it carries forward.
-   - *Execute actions* — do something operational, e.g. schedule a wake-up or query its logs.
+   - *Execute actions* — do something operational, e.g. schedule a wake-up, query its logs, or run a
+     command in its sandboxed container "computer" (web search/browse + scripting).
 4. **Apply & loop.** The action is applied and recorded (every change is audited). If the
    reply is flagged `continue`, the updated context is sent back for another iteration — so
    the remote peer can, say, answer *and then* tidy its memory before yielding. Otherwise the
@@ -111,7 +112,7 @@ cp persistence.template.json persistence.json
 
 `persistence.json` is gitignored — it holds your API key and never gets committed. Any
 setting can also be overridden by an environment variable named `PERSISTENCE_<SETTING>`
-(e.g. `PERSISTENCE_PROVIDER`, `PERSISTENCE_DATABASEPATH`), which takes precedence over the file.
+(e.g. `PERSISTENCE_PROVIDER`, `PERSISTENCE_DATABASEDIRECTORY`), which takes precedence over the file.
 
 Then run:
 
@@ -129,11 +130,13 @@ llama.cpp server can sit side by side and you switch with a single value (or
 ```jsonc
 {
   // shared (apply to every model)
-  "DatabasePath": "dbs/continuity.db",
+  "DatabaseDirectory": "dbs",      // base folder for each model's store; an absolute path here makes
+                                   // the store independent of the working directory
   "UiMode": "Tui",                 // Tui (multi-pane Terminal.Gui) or Api (HTTP/SSE)
   "ProposalApproval": "Self",
   "MaxActionIterations": 5,
   "DebugMode": false,
+  "Container": { "Enabled": false },  // the peer's sandboxed "computer" (web tools + scripting); see below
 
   "SelectedModel": "cloud",        // which profile below is active
   "Models": [
@@ -141,6 +144,7 @@ llama.cpp server can sit side by side and you switch with a single value (or
       "Name": "cloud",
       "Provider": "OpenAI",        // OpenAI | OpenAiChat | LocalClaude | local
       "Model": "gpt-5.5",
+      "DatabasePath": "cloud.db",  // this model's store; a bare name lands under DatabaseDirectory
       "ApiKey": "YOUR_API_KEY_HERE",
       "ApiBaseUrl": null,
       "MaxInputTokens": 8000,      // prompt budget surfaced to the peer
@@ -153,6 +157,7 @@ llama.cpp server can sit side by side and you switch with a single value (or
       "Name": "local",
       "Provider": "OpenAiChat",
       "Model": "local",
+      "DatabasePath": "local.db",
       "ApiBaseUrl": "http://127.0.0.1:8080/v1",  // a local llama.cpp/Ollama server
       "MaxInputTokens": 28000,
       "MaxOutputTokens": 4096,
@@ -184,10 +189,13 @@ dotnet test
 ## Status & roadmap
 
 Working today: the full turn loop, SQLite continuity store with provenance and audit
-trails, context-management and action commands, scheduled wake-ups, OpenAI Responses-API
-client with streaming, and both front-ends. Still in progress: streaming the parsed reply
-(not just reasoning), richer migration/backup tooling, and a headless TUI test harness.
-Expect rough edges.
+trails, context-management and action commands, scheduled wake-ups (including a headless
+wake-runner that fires them when no front-end is open — see
+[scripts/wake/](scripts/wake/)), a sandboxed container "computer" giving the peer web
+search/browse + scripting (see [container/](container/)), OpenAI Responses-API client with
+streaming, local OpenAI-compatible models, and both front-ends. Still in progress: streaming
+the parsed reply (not just reasoning), richer migration/backup tooling, first-class local
+peers, and automatic memory decay. Expect rough edges.
 
 ## License
 
