@@ -48,7 +48,7 @@ public enum ContextFragmentType
     Summary = 5,
     ScratchPad = 6, // Fragments of type ScratchPad are never saved to the DB - they exist only in the current session and current working context
     Personal = 7, // Anything the remote peer wants to save that doesn't fit in other categories
-    ActionResponse = 8, // Fragments of this type are also not saved to the DB, and are only included in the first context sent immediately following action execution
+    ActionResponse = 8, // Command/tool results. Persisted (so research/tool output survives across turns); kept lean by the raw-context decay, which archives old ones.
     AuditLog = 9,
     ActionLog = 10,
 }

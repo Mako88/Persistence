@@ -194,6 +194,26 @@ public class ManageContextHandlerUnitTests
     }
 
     [Fact]
+    public async Task ListLargestOrdersBySizeDescendingAndRespectsLimit()
+    {
+        var context = Context();
+        context.AddFragment(Fragment(10, new string('a', 50)));
+        context.AddFragment(Fragment(11, new string('b', 500)));  // biggest
+        context.AddFragment(Fragment(12, new string('c', 200)));  // middle
+
+        var result = await RunAsync(context, """{ "list_largest": { "limit": 2 } }""");
+
+        Assert.Contains("top 2 by size", result);
+        // Biggest two listed, in size order; the smallest is omitted by the limit.
+        var idxBiggest = result.IndexOf("#11", StringComparison.Ordinal);
+        var idxMiddle = result.IndexOf("#12", StringComparison.Ordinal);
+        Assert.True(idxBiggest >= 0 && idxMiddle >= 0);
+        Assert.True(idxBiggest < idxMiddle); // #11 (500) before #12 (200)
+        Assert.DoesNotContain("#10", result); // smallest dropped by limit
+        Assert.Contains("~500 chars", result);
+    }
+
+    [Fact]
     public async Task SummarizeFailsWhenNothingIsEligible()
     {
         var context = Context();

@@ -40,6 +40,14 @@ public class AppConfig : IAppConfig
     public int MaxActionIterations { get; set; } = 5;
 
     /// <summary>
+    /// How many recent "raw" fragments (conversation messages + command/tool results) to keep in the
+    /// active context. Older ones are archived out (kept in the store, searchable and restorable) to
+    /// keep the context lean and turns fast. The peer's authored fragments are never auto-archived.
+    /// 0 disables auto-archival.
+    /// </summary>
+    public int RawContextWindow { get; set; } = 30;
+
+    /// <summary>
     /// The peer's sandboxed "computer" reached via the <c>shell</c> command. Off by default; see
     /// <see cref="ContainerSettings"/>. Nested values are overridable via <c>PERSISTENCE_CONTAINER_*</c>.
     /// </summary>

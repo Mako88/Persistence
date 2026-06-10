@@ -90,6 +90,10 @@ public class TurnHandler : ITurnHandler
             return;
         }
 
+        // Keep the context lean: archive raw fragments (old conversation + tool results) beyond the
+        // recent window. Done before this turn's input is added, so the new message is always kept.
+        var archiveNote = await ArchiveOldRawFragmentsAsync(context);
+
         while (pendingSystemNotes.TryDequeue(out var note))
         {
             AddSystemNote(context, note);
@@ -133,7 +137,7 @@ public class TurnHandler : ITurnHandler
                 DrainPendingInput(context);
             }
 
-            var segments = promptFormatter.Format(context, availableTags, iteration, config.MaxActionIterations, recentChanges, recentActions);
+            var segments = promptFormatter.Format(context, availableTags, iteration, config.MaxActionIterations, recentChanges, recentActions, archiveNote);
             var request = promptBuilder.Build(segments);
             var rawOutput = config.Streaming
                 ? await StreamModelOutputAsync(request, ct)
@@ -217,6 +221,59 @@ public class TurnHandler : ITurnHandler
             unsubscribeActions();
         }
     }
+
+    /// <summary>
+    /// Archives "raw" fragments (conversation messages + command/tool results) beyond the configured
+    /// recent window, to keep the active context lean and turns fast. Archival is reversible: the
+    /// fragment is detached from the context (junction removed) but kept in the store, so it stays
+    /// searchable and restorable with <c>load</c>. The peer's authored fragments are never touched.
+    /// Returns a sensory note describing what was archived, or null if nothing was.
+    /// </summary>
+    private async Task<string?> ArchiveOldRawFragmentsAsync(WorkingContextEntity context)
+    {
+        var toArchive = SelectRawFragmentsToArchive(context, config.RawContextWindow);
+
+        if (toArchive.Count == 0)
+        {
+            return null;
+        }
+
+        foreach (var fragment in toArchive)
+        {
+            await workingContextRepo.RemoveFragmentAsync(context.Id, fragment.Id);
+            context.ContextFragments.Remove(fragment.Order);
+        }
+
+        var ids = string.Join(", ", toArchive.Select(f => $"#{f.Id}"));
+        return $"Auto-archived {toArchive.Count} older raw fragment(s) ({ids}) to keep your context lean — "
+            + "not deleted: search for them with list_fragments(relevant_to=…, in_current_context=false) "
+            + "and bring any back with load.";
+    }
+
+    /// <summary>
+    /// The raw fragments (oldest first) to archive: everything of a raw type (conversation + tool
+    /// results) beyond the most recent <paramref name="window"/>. Authored fragments are never
+    /// selected; a window of 0 disables archival. Pure (no DB) for testability.
+    /// </summary>
+    internal static IReadOnlyList<WeightedContextFragment> SelectRawFragmentsToArchive(
+        WorkingContextEntity context, int window)
+    {
+        if (window <= 0)
+        {
+            return [];
+        }
+
+        var raw = context.ContextFragments.Values
+            .Where(f => IsRawType(f.FragmentType) && f.Id > 0)
+            .OrderBy(f => f.Order)
+            .ToList();
+
+        return raw.Count <= window ? [] : raw.Take(raw.Count - window).ToList();
+    }
+
+    /// <summary>Raw, auto-archivable fragment types — the transcript and tool output, not the peer's notes.</summary>
+    private static bool IsRawType(ContextFragmentType type) =>
+        type is ContextFragmentType.ChatMessage or ContextFragmentType.ActionResponse;
 
     /// <summary>
     /// A one-line summary of a command the peer ran this turn — its name, a short request snippet, and
@@ -342,9 +399,9 @@ public class TurnHandler : ITurnHandler
                 FragmentType = ContextFragmentType.ChatMessage,
                 Status = ContextFragmentStatus.Active,
                 Content = message,
-                Importance = 1.0f,
-                Confidence = 1.0f,
-                Relevance = 1.0f,
+                Importance = 0.3f, // raw transcript — deprioritised vs. the peer's authored notes
+                Confidence = 0.5f,
+                Relevance = 0.5f,
                 Sources = [new SourceEntity
                 {
                     Id = sessionContext.LocalPeerSourceId,
@@ -403,9 +460,11 @@ public class TurnHandler : ITurnHandler
             FragmentType = ContextFragmentType.ChatMessage,
             Status = ContextFragmentStatus.Active,
             Content = input,
-            Importance = 1.0f,
-            Confidence = 1.0f,
-            Relevance = 1.0f,
+            // Raw transcript: low defaults so it's deprioritised vs. the peer's authored notes (and
+            // is a natural archive/prune candidate). The substance lives in the fragments the peer writes.
+            Importance = 0.3f,
+            Confidence = 0.5f,
+            Relevance = 0.5f,
             Sources = [new SourceEntity
             {
                 Id = sessionContext.LocalPeerSourceId,

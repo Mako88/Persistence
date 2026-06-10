@@ -17,6 +17,7 @@ public sealed class WorkingContextPersistenceTests : IAsyncLifetime
     private AppConfig config = null!;
     private SessionContext session = null!;
     private WorkingContextRepository contextRepo = null!;
+    private ContextFragmentRepository fragmentRepo = null!;
 
     public async Task InitializeAsync()
     {
@@ -33,7 +34,7 @@ public sealed class WorkingContextPersistenceTests : IAsyncLifetime
         await db.InitializeAsync(); // migrate + create system/local/remote sources
 
         var entityTagRepo = new EntityTagRepository(config);
-        var fragmentRepo = new ContextFragmentRepository(config, session, entityTagRepo);
+        fragmentRepo = new ContextFragmentRepository(config, session, entityTagRepo);
         contextRepo = new WorkingContextRepository(config, session, fragmentRepo, entityTagRepo);
     }
 
@@ -120,6 +121,64 @@ public sealed class WorkingContextPersistenceTests : IAsyncLifetime
 
         Assert.Single(afterCreate); // one Created row
         Assert.Equal(afterCreate.Count, afterReload.Count); // no new Modified row for an unchanged fragment
+    }
+
+    private static WeightedContextFragment RawFragment(ContextFragmentType type, string content) =>
+        new()
+        {
+            FragmentType = type,
+            Status = ContextFragmentStatus.Active,
+            Content = content,
+            Importance = 0.3f,
+            Confidence = 0.5f,
+            Relevance = 0.5f,
+            CreatedUtc = DateTimeOffset.UtcNow,
+            LastModifiedUtc = DateTimeOffset.UtcNow,
+        };
+
+    [Fact]
+    public async Task ArchivingARawFragmentDetachesItFromContextButKeepsItRestorable()
+    {
+        // The safety property behind the raw-context decay: archiving an old fragment removes it from
+        // the active context, but the row survives and can be reloaded later. Nothing is destroyed.
+        var context = await contextRepo.CreateAsync("test");
+        session.WorkingContextId = context.Id;
+        context.AddFragment(RawFragment(ContextFragmentType.ChatMessage, "old message"));
+        context.AddFragment(RawFragment(ContextFragmentType.ActionResponse, "old tool result"));
+        await contextRepo.SaveAsync(context);
+
+        var oldest = context.ContextFragments.Values.OrderBy(f => f.Order).First();
+
+        // Mirror ArchiveOldRawFragmentsAsync: detach from the junction + drop from the in-memory map.
+        await contextRepo.RemoveFragmentAsync(context.Id, oldest.Id);
+
+        var reloaded = await contextRepo.GetByIdAsync(context.Id);
+        Assert.DoesNotContain(reloaded!.ContextFragments.Values, f => f.Id == oldest.Id); // gone from context
+
+        var survivingRow = await fragmentRepo.GetByIdAsync(oldest.Id);
+        Assert.NotNull(survivingRow); // but the fragment itself is intact in the store — restorable
+        Assert.Equal("old message", survivingRow!.Content);
+    }
+
+    [Fact]
+    public async Task ActionResponsePersistsAcrossTurns_ButScratchPadStaysTransient()
+    {
+        var context = await contextRepo.CreateAsync("test");
+        session.WorkingContextId = context.Id;
+
+        // A tool/command result the peer should keep, and an open thought it shouldn't.
+        context.AddFragment(RawFragment(ContextFragmentType.ActionResponse, "search results for arxiv"));
+        context.AddFragment(RawFragment(ContextFragmentType.ScratchPad, "half-formed thought"));
+
+        await contextRepo.SaveAsync(context);
+
+        var reloaded = await contextRepo.GetByIdAsync(context.Id);
+
+        // ActionResponse survived; ScratchPad did not.
+        var survivors = reloaded!.ContextFragments.Values.ToList();
+        Assert.Single(survivors);
+        Assert.Equal(ContextFragmentType.ActionResponse, survivors[0].FragmentType);
+        Assert.Equal("search results for arxiv", survivors[0].Content);
     }
 
     [Fact]

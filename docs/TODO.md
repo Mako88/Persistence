@@ -6,8 +6,8 @@ Open work, grouped by theme. "Claude's opinion" on ordering welcome; reorder fre
 closed** — DONE (headless wake-runner + poll; verified — the peer woke on its own, self-audited, reflected).
 ✅ A batch of legibility **quick wins** — DONE (uptime in the sensory block, DB-durability framing for new
 peers, singular/plural command & field spellings, README freshness). Now (2) **first-class local peers**
-(next, in progress). Then (3) **automated forget/decay** (Synth leans here, though it can already prune by
-hand — may drop in priority). Everything else follows.
+— DONE. Then (3) **automated forget/decay** — first phase DONE (raw-context decay + research persistence;
+see below). Remaining: the importance/relevance heuristic pruning-candidate surface. Everything else follows.
 
 The **"eyes + hands" memory core** is complete — budget awareness, relevance, summarize/collapse/remove,
 plain-language errors, browsing/swapping working contexts, first-class proposals, generic/polymorphic
@@ -37,11 +37,17 @@ now a convenience to layer on, not a prerequisite**. The peer also now has a san
   (each client identifies its local peer). Cheap interim hardening if multi-process lingers: WAL +
   busy-timeout (stops hard lock failures; does NOT fix lost-updates — that needs the single-owner model).
 
-- **Automated forget / memory decay.** (The remaining self-curation item.) Budget-triggered to start: a
-  deterministic, peer-legible rule — low-relevance/low-importance/old fragments get **archived, never
-  deleted** (PRINCIPLE.md), `IsProtected` immune, and the sensory block reports what was archived + that
-  it's restorable. NOT an LLM compressing memory — the peer must understand and predict its own
-  forgetting. Open question: budget-triggered only vs. ongoing natural decay. (Pairs with wiring
+- **Automated forget / memory decay.** ✅ **First phase DONE (2026-06-10).** *Raw-context decay + research
+  persistence:* raw material — conversation (`ChatMessage`) and tool/command results (`ActionResponse`) —
+  is **archived (never deleted) once it falls outside a recent window** (`RawContextWindow`, default 30);
+  peer-authored fragments (Identity/Relational/Personal/Summary) are never touched. The sensory block
+  reports what was archived and that it's restorable (`list_fragments(relevant_to=…, in_current_context=false)`
+  → `load`). `ActionResponse` is now **persisted** (was transient), so research/tool output survives across
+  turns; `list_largest` lets the peer see what's taking space; onboarding teaches "capture what matters into
+  your own fragment — the raw version scrolls out." Deterministic and peer-legible (not an LLM compressing
+  memory). **Remaining:** the *budget/heuristic* layer — a low-relevance × low-importance × age
+  pruning-candidate surface (a shortcut command that proposes what to summarize/archive when the budget
+  tightens), and the open question of budget-triggered only vs. ongoing natural decay. (Pairs with wiring
   soft-delete + include-deleted surfacing, under "Possible future".)
 
 - **Peer's computer — follow-ups.** (NEW, from this session's container work.) The sandboxed container +

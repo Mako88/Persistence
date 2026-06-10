@@ -71,7 +71,8 @@ public class PromptFormatter : IPromptFormatter
         int iteration = 0,
         int maxIterations = 0,
         IReadOnlyList<AuditLogEntity>? recentChanges = null,
-        IReadOnlyList<string>? recentActions = null)
+        IReadOnlyList<string>? recentActions = null,
+        string? archiveNote = null)
     {
         var fragments = context.ContextFragments.Values;
         var segments = new List<PromptSegment>();
@@ -120,7 +121,7 @@ public class PromptFormatter : IPromptFormatter
         segments.Add(new PromptSegment
         {
             Source = "System",
-            Content = FormatSensory(iteration, maxIterations, availableTags, usedTokens, recentChanges, recentActions),
+            Content = FormatSensory(iteration, maxIterations, availableTags, usedTokens, recentChanges, recentActions, archiveNote),
         });
 
         lastFormatUtc = DateTimeOffset.UtcNow;
@@ -181,7 +182,8 @@ public class PromptFormatter : IPromptFormatter
         IEnumerable<TagEntity> availableTags,
         int usedTokens,
         IReadOnlyList<AuditLogEntity>? recentChanges,
-        IReadOnlyList<string>? recentActions)
+        IReadOnlyList<string>? recentActions,
+        string? archiveNote)
     {
         var now = DateTimeOffset.UtcNow;
         var localNow = DateTimeOffset.Now;
@@ -222,6 +224,11 @@ public class PromptFormatter : IPromptFormatter
             {
                 sb.AppendLine($"  - {action}");
             }
+        }
+
+        if (!string.IsNullOrEmpty(archiveNote))
+        {
+            sb.AppendLine(archiveNote);
         }
 
         if (recentChanges is { Count: > 0 })

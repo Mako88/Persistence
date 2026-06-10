@@ -278,12 +278,14 @@ public class WorkingContextRepository : EntityRepository<WorkingContextEntity>, 
     #region Private
 
     /// <summary>
-    /// Returns true for fragment types that exist only in the in-memory context
-    /// and should never be written to the database
+    /// Returns true for fragment types that exist only in the in-memory context and are never written
+    /// to the database. Only <see cref="ContextFragmentType.ScratchPad"/> (open thoughts) is transient
+    /// now — command results (<see cref="ContextFragmentType.ActionResponse"/>) are persisted so the
+    /// peer's research/tool output survives across turns; the raw-context decay keeps them from piling
+    /// up by archiving old ones.
     /// </summary>
-    private static bool IsTransientType(ContextFragmentType type) => type is
-        ContextFragmentType.ActionResponse or
-        ContextFragmentType.ScratchPad;
+    private static bool IsTransientType(ContextFragmentType type) =>
+        type is ContextFragmentType.ScratchPad;
 
     #endregion
 }

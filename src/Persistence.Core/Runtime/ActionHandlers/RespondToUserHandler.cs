@@ -44,9 +44,10 @@ public class RespondToUserHandler : IActionHandler
             FragmentType = ContextFragmentType.ChatMessage,
             Status = ContextFragmentStatus.Active,
             Content = reply,
-            Importance = 1.0f,
-            Confidence = 1.0f,
-            Relevance = 1.0f,
+            // Raw transcript — low defaults so it's deprioritised vs. the peer's authored notes.
+            Importance = 0.3f,
+            Confidence = 0.5f,
+            Relevance = 0.5f,
             Sources = [new SourceEntity
             {
                 Id = sessionContext.RemotePeerSourceId,

@@ -1236,6 +1236,41 @@ public class ManageContextHandler : CommandHandler
         return sb.ToString().TrimEnd();
     }
 
+    [Command("list_largest", "List the fragments taking up the most space in your context (largest first), to help you decide what to summarize or remove when clearing room.")]
+    [CommandField("limit", "int", Description = "How many to show", Default = "20")]
+    private Task<string> ExecuteListLargestAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
+    {
+        var limit = command?["limit"]?.GetValue<int>() ?? 20;
+
+        var largest = context.ContextFragments.Values
+            .OrderByDescending(f => f.Content?.Length ?? 0)
+            .Take(Math.Max(1, limit))
+            .ToList();
+
+        if (largest.Count == 0)
+        {
+            return Task.FromResult("No fragments in your context.");
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"Largest fragments in your context (top {largest.Count} by size):");
+
+        foreach (var fragment in largest)
+        {
+            var chars = fragment.Content?.Length ?? 0;
+            var idLabel = fragment.Id > 0 ? $"#{fragment.Id}" : "transient";
+            var preview = (fragment.Summary ?? fragment.Content ?? string.Empty).Replace('\n', ' ').Trim();
+            if (preview.Length > 60)
+            {
+                preview = preview[..60] + "…";
+            }
+
+            sb.AppendLine($"  {idLabel} | {fragment.FragmentType} | ~{chars} chars | {preview}");
+        }
+
+        return Task.FromResult(sb.ToString().TrimEnd());
+    }
+
     [Command("list_fragments", "List fragments with optional filtering")]
     [CommandField("type", "string", Description = "Filter by fragment type (Identity, Relational, Personal, etc.)")]
     [CommandField("tag", "string", Description = "Filter by tag path")]

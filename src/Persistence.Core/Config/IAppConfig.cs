@@ -83,6 +83,12 @@ public interface IAppConfig
     int MaxActionIterations { get; set; }
 
     /// <summary>
+    /// How many recent raw fragments (conversation + tool results) to keep in the active context
+    /// before archiving older ones (kept in the store, searchable/restorable). 0 disables it.
+    /// </summary>
+    int RawContextWindow { get; set; }
+
+    /// <summary>
     /// Whether the compact command list is appended to the end of each turn by default. The peer can
     /// toggle it per session via <c>toggle_command_list</c>; full schemas remain available via <c>list()</c>.
     /// </summary>

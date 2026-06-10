@@ -21,5 +21,6 @@ public interface IPromptFormatter
         int iteration = 0,
         int maxIterations = 0,
         IReadOnlyList<AuditLogEntity>? recentChanges = null,
-        IReadOnlyList<string>? recentActions = null);
+        IReadOnlyList<string>? recentActions = null,
+        string? archiveNote = null);
 }
