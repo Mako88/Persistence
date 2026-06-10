@@ -719,6 +719,13 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
             debug.Text = debugBuffer.ToString();
         }
 
+        // Open each append-log pane at its newest content (e.g. the conversation shows the latest
+        // message, not the oldest history line).
+        ScrollToBottom(output);
+        ScrollToBottom(reasoning);
+        ScrollToBottom(tools);
+        ScrollToBottom(debug);
+
         // Re-assert focus on the compose box now that the loop is up: Application.Run gives initial
         // focus to the first view, so the SetFocus in BuildLayout doesn't stick on its own.
         input.SetFocus();

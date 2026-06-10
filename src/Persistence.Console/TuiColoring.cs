@@ -21,7 +21,7 @@ internal static class TuiColors
     public const Color Error = Color.BrightRed;       // error text, "protected"
     public const Color SuggestedTag = Color.BrightGreen; // the suggested tag inside a "did you mean" error
     public const Color Processing = Color.BrightGreen; // status state chip while thinking (idle is gray)
-    public const Color Timestamp = Color.Green;       // leading [time] stamps (dark green)
+    public const Color Timestamp = Color.BrightGreen; // leading [time] stamps
     public const Color TypeName = Color.BrightMagenta; // a fragment's type name in a header (light purple)
     public const Color LightGreen = Color.BrightGreen; // [WAKE-UP] line, focus highlight
     public const Color Model = Color.BrightYellow;    // model name in the status bar
@@ -66,6 +66,12 @@ internal static class TuiColoring
     /// the same line (so only a real header's bracket matches, not a stray <c>]</c> in prose).</summary>
     private const string HeaderCloseBracket = @"(?<=\[#\d[^\]]*)\]";
 
+    /// <summary>A <c>|</c> separator inside a fragment header (preceded by <c>[#digit…</c> on the line).</summary>
+    private const string HeaderPipe = @"(?<=\[#\d[^\]]*)\|";
+
+    /// <summary>A numeric value right after an R:/I:/C: marker (the relevance/importance/confidence number).</summary>
+    private const string RicValue = @"(?<=[RIC]:)[\d.]+";
+
     /// <summary>A fragment's type name — the word right after <c>#42 | </c> in a header.</summary>
     private const string FragmentTypeName = @"(?<=#\d+ \| )[A-Za-z][A-Za-z]+";
 
@@ -76,7 +82,9 @@ internal static class TuiColoring
     /// <summary>The "protected" flag in a *real* header — "protected" following the <c>| </c>
     /// separator on a line that began with a numeric id (<c>[#42 …</c>). This keeps it from colouring
     /// the placeholder example header (<c>[#ID | Type | … | protected]</c>) in the prompt's own
-    /// explanation text, where the rest of the header isn't coloured — so the example stays all-white.</summary>
+    /// explanation text, where the rest of the header isn't coloured — so the example stays all-white.
+    /// (A header that word-wraps puts "protected]" on a continuation line indistinguishable from the
+    /// example's, so we deliberately don't try to colour it there — keeping the example clean wins.)</summary>
     private const string ProtectedFlag = @"(?<=\[#\d+[^\]]*\| )protected\b";
 
     /// <summary>A sensory-block field label (the known set from the prompt's [Sensory] block). Matched
@@ -108,6 +116,10 @@ internal static class TuiColoring
     /// </summary>
     private const string SuggestedTag = @"(?<=')[^']+(?='[?.]?\]\s*$)";
 
+    /// <summary>The quoted suggestion right after "did you mean '" — the inline form used in command
+    /// results (e.g. the Actions pane), where the suggestion isn't at the end of the line.</summary>
+    private const string SuggestedInline = @"(?<=did you mean ')[^']+(?=')";
+
     // --- Detector helpers (recognise a pattern, colour it) ---
 
     private static ColoredTextView Timestamps(this ColoredTextView v) => v.ColorPattern(Timestamp, TuiColors.Timestamp);
@@ -121,20 +133,28 @@ internal static class TuiColoring
         .ColorPattern(LeadingHtmlTag, TuiColors.Gold)
         .ColorPattern(FollowingHtmlTag, TuiColors.Gold);
 
-    /// <summary>Colours the known [Sensory] field labels yellow (and only those — not arbitrary prose).</summary>
-    private static ColoredTextView SensoryLabels(this ColoredTextView v) => v.ColorPattern(SensoryLabel, TuiColors.Gold);
+    /// <summary>Colours the known [Sensory] field labels green (and only those — not arbitrary prose).</summary>
+    private static ColoredTextView SensoryLabels(this ColoredTextView v) => v.ColorPattern(SensoryLabel, TuiColors.Label);
 
-    /// <summary>Colours a <c>[#id | Type | R:x I:x C:x | protected]</c> header: brackets green, id
-    /// green, type light purple, R/I/C yellow, "protected" red. Pipes and values stay white. Each part
-    /// is matched by a position-anchored pattern, so these colours only land inside an actual header,
-    /// never in prose. Reusable across panes.</summary>
+    /// <summary>Colours a "did you mean '…'" suggestion green — both the end-of-line error form and the
+    /// inline command-result form — so a suggested fix stands out wherever an error offers one.</summary>
+    private static ColoredTextView Suggestions(this ColoredTextView v) => v
+        .ColorPattern(SuggestedTag, TuiColors.SuggestedTag)
+        .ColorPattern(SuggestedInline, TuiColors.SuggestedTag);
+
+    /// <summary>Colours a <c>[#id | Type | R:x I:x C:x | protected]</c> header so the whole thing
+    /// stands out: brackets, id, pipes and the R/I/C values green; type light purple; the R/I/C markers
+    /// yellow; "protected" red (even when the header wraps). Each part is matched by a position-anchored
+    /// pattern, so these colours only land inside an actual header, never in prose. Reusable across panes.</summary>
     private static ColoredTextView FragmentHeaders(this ColoredTextView v) => v
         .ColorPattern(HeaderOpenBracket, TuiColors.Bracket)
         .ColorPattern(HeaderCloseBracket, TuiColors.Bracket)
+        .ColorPattern(HeaderPipe, TuiColors.Bracket)
         .ColorPattern(FragmentId, TuiColors.Label)
         .ColorPattern(FragmentTypeName, TuiColors.TypeName)
         .ColorPattern(RicMarker, TuiColors.Gold)
-        .ColorPattern(ProtectedFlag, TuiColors.Error);   // "protected" stands out in red
+        .ColorPattern(RicValue, TuiColors.Bracket)
+        .ColorPattern(ProtectedFlag, TuiColors.Error);         // "protected" stands out in red
 
     // --- Per-pane schemes ---
 
@@ -144,13 +164,13 @@ internal static class TuiColoring
     /// fresh "[…" marker) reds over the rest. Then the other markers, timestamp, and role labels.
     /// </summary>
     public static ColoredTextView ForConversation(this ColoredTextView v, Color userColor, Color peerColor) => v
-        .ColorPattern(SuggestedTag, TuiColors.SuggestedTag)
+        .Suggestions()
         .ColorLinesStartingWith("[Error", TuiColors.Error)
         .ColorLine(t => t.TrimEnd().EndsWith("]") && !t.TrimStart().StartsWith("["), TuiColors.Error)
-        .ColorLinesStartingWith("[WAKE-UP", TuiColors.LightGreen)
+        .ColorLinesStartingWith("[WAKE-UP", TuiColors.Gold)
         .ColorLinesStartingWith("[Queued", TuiColors.Muted)
-        .ColorSubstring("Unknown command:", TuiColors.Label)   // label only; the command stays white
-        .ColorSubstring("Executed", TuiColors.Muted)           // local-command echo, not a peer message
+        .ColorSubstring("Unknown command:", TuiColors.Error)        // label red; the command stays white
+        .ColorPattern(@"(?<=Executed ).+", TuiColors.Gold)          // the echoed local command, in yellow
         .Timestamps()
         .ColorSubstring("You:", userColor)
         .ColorSubstring("Remote Peer:", peerColor);
@@ -166,6 +186,7 @@ internal static class TuiColoring
     /// marker so it's matched unanchored (a header is the only place a "[digit…]" appears here).
     /// </summary>
     public static ColoredTextView ForActions(this ColoredTextView v) => v
+        .Suggestions()                                          // a "did you mean" hint in a result
         .ColorPattern(CollapseMarker, TuiColors.Muted)
         .ColorPattern(EntryTimestamp, TuiColors.Timestamp)
         .ColorPattern(ActionName, TuiColors.Gold)
@@ -186,7 +207,7 @@ internal static class TuiColoring
         .ColorSubstring("Status:", TuiColors.Label)
         .ColorSubstring("Note:", TuiColors.Label)
         .ColorSubstring("Pending", TuiColors.Gold)
-        .ColorSubstring("Triggered", TuiColors.Processing)
+        .ColorSubstring("Triggered", TuiColors.TabUnfocused)
         .ColorSubstring("Cancelled", TuiColors.Muted);
 
     /// <summary>
@@ -198,8 +219,8 @@ internal static class TuiColoring
     /// </summary>
     public static ColoredTextView ForDebug(this ColoredTextView v) => v
         .Timestamps()
-        .ColorPattern(@"(?<=\] )Request\b", TuiColors.Purple)   // only the entry header, not the word in prose
-        .ColorPattern(@"(?<=\] )Response\b", TuiColors.Purple)
+        .ColorPattern(@"(?<=\] )Request[^:\n]*:", TuiColors.Purple)   // the whole entry header incl. its colon
+        .ColorPattern(@"(?<=\] )Response[^:\n]*:", TuiColors.Purple)
         .ColorLinesStartingWith("[Sensory]", TuiColors.Gold)
         .FragmentHeaders()
         .SensoryLabels()
