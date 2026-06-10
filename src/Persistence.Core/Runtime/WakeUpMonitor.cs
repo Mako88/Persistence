@@ -41,7 +41,7 @@ public class WakeUpMonitor : IWakeUpMonitor
             try
             {
                 await Task.Delay(TimeSpan.FromSeconds(30), ct);
-                await CheckAndFireAsync();
+                await CheckAndFireAsync(ct);
             }
             catch (OperationCanceledException)
             {
@@ -55,10 +55,11 @@ public class WakeUpMonitor : IWakeUpMonitor
     }
 
     /// <summary>
-    /// Finds due events, marks each as triggered, and notifies subscribers. Internal (not on
-    /// <see cref="IWakeUpMonitor"/>) so tests can exercise the fire logic without the 30s timer.
+    /// Finds due events, marks each as triggered, and notifies subscribers (awaiting each subscriber's
+    /// handler — so a wake turn runs to completion before the next event fires). Used by the 30s poll
+    /// loop and, as a single sweep, by the headless wake-runner.
     /// </summary>
-    internal async Task CheckAndFireAsync()
+    public async Task CheckAndFireAsync(CancellationToken ct = default)
     {
         var dueEvents = (await scheduledEvents.GetDueEventsAsync()).ToList();
 
@@ -68,7 +69,7 @@ public class WakeUpMonitor : IWakeUpMonitor
             {
                 // Mark before publishing so a persistence failure can't notify subscribers of an
                 // event still flagged Pending.
-                await scheduledEvents.MarkTriggeredAsync(evt);
+                await scheduledEvents.MarkTriggeredAsync(evt, ct: ct);
                 await eventBus.PublishAsync(this, new ScheduledEventTriggered(evt));
             }
             catch (Exception)
