@@ -89,6 +89,16 @@ public class PromptFormatterTests
     }
 
     [Fact]
+    public void SensoryBlockReportsAppAndSystemUptime()
+    {
+        var sensory = CreateFormatter()
+            .Format(ContextWithFragment("hi"), [])[^1].Content;
+
+        Assert.Contains("App uptime:", sensory);
+        Assert.Contains("System uptime:", sensory);
+    }
+
+    [Fact]
     public void RecentChangesAppearInTheSensoryBlockHumanized()
     {
         var changes = new List<AuditLogEntity>

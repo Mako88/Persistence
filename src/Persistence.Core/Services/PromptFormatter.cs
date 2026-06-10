@@ -4,6 +4,7 @@ using Persistence.DI;
 using Persistence.Events;
 using Persistence.Notifications;
 using Persistence.Runtime;
+using System.Diagnostics;
 using System.Text;
 
 namespace Persistence.Services;
@@ -25,6 +26,16 @@ public class PromptFormatter : IPromptFormatter
     private readonly IEventBus eventBus;
 
     private DateTimeOffset? lastFormatUtc;
+
+    // When this process started, for the app-uptime line. Captured once; falls back to load time if the
+    // process start time isn't readable on the platform.
+    private static readonly DateTimeOffset ProcessStartUtc = ReadProcessStartUtc();
+
+    private static DateTimeOffset ReadProcessStartUtc()
+    {
+        try { return Process.GetCurrentProcess().StartTime.ToUniversalTime(); }
+        catch { return DateTimeOffset.UtcNow; }
+    }
 
     /// <summary>
     /// Constructor
@@ -175,6 +186,7 @@ public class PromptFormatter : IPromptFormatter
         sb.AppendLine($"Current time (UTC): {now:yyyy-MM-dd HH:mm:ss}");
         sb.AppendLine($"Current time (local): {localNow:yyyy-MM-dd HH:mm:ss zzz}");
         sb.AppendLine($"Session: {sessionContext.SessionId}");
+        sb.AppendLine($"App uptime: {FormatDuration(now - ProcessStartUtc)} | System uptime: {FormatDuration(TimeSpan.FromMilliseconds(Environment.TickCount64))}");
         sb.AppendLine(FormatContextBudget(usedTokens));
 
         if (lastFormatUtc.HasValue)
@@ -245,6 +257,14 @@ public class PromptFormatter : IPromptFormatter
         < 60 => $"{elapsed.TotalSeconds:F0}s",
         < 3600 => $"{elapsed.TotalMinutes:F0}m {elapsed.Seconds}s",
         _ => $"{elapsed.TotalHours:F0}h {elapsed.Minutes}m",
+    };
+
+    /// <summary>Like <see cref="FormatElapsed"/> but surfaces days, for long-running uptimes.</summary>
+    private static string FormatDuration(TimeSpan t) => t.TotalDays switch
+    {
+        >= 1 => $"{(int)t.TotalDays}d {t.Hours}h {t.Minutes}m",
+        _ when t.TotalHours >= 1 => $"{(int)t.TotalHours}h {t.Minutes}m",
+        _ => $"{(int)t.TotalMinutes}m {t.Seconds}s",
     };
 
     /// <summary>

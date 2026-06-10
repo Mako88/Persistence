@@ -8,13 +8,24 @@ namespace Persistence.Tests;
 
 public class CommandHandlerTests
 {
-    /// <summary>Minimal concrete handler exposing a single "echo" command.</summary>
+    /// <summary>Minimal concrete handler exposing an "echo" command and a "pick" command that (like the
+    /// real tag command) declares both singular and plural spellings of the same field.</summary>
     private sealed class TestHandler(IEventBus bus) : CommandHandler(bus)
     {
         [Command("echo", "Echo the text back")]
         [CommandField("text", "string", required: true)]
         private Task<string> Echo(WorkingContextEntity context, JsonNode? command, CancellationToken ct) =>
             Task.FromResult($"echoed: {command?["text"]?.GetValue<string>()}");
+
+        [Command("pick", "Pick tags")]
+        [CommandField("tag", "string")]
+        [CommandField("tags", "array")]
+        private Task<string> Pick(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
+        {
+            var single = command?["tag"]?.GetValue<string>();
+            var many = command?["tags"]?.AsArray()?.Count ?? 0;
+            return Task.FromResult($"tag={single ?? "none"} tags={many}");
+        }
     }
 
     private static WorkingContextEntity NewContext() =>
@@ -86,6 +97,39 @@ public class CommandHandlerTests
         Assert.Equal("echoed: hi", tool.Result.Split('\n')[0]); // command still ran
         Assert.Contains("response structure", tool.Result);
         Assert.Contains("top level", tool.Result);
+    }
+
+    [Fact]
+    public async Task AcceptsSingularOrPluralCommandName()
+    {
+        var (handler, published) = CreateHandler();
+
+        // "echos" is the plural of the declared "echo" — it should resolve, not error.
+        await handler.HandleAsync(NewContext(), JsonNode.Parse("""{ "echos": { "text": "hi" } }"""));
+
+        Assert.Equal("echoed: hi", Assert.Single(published).Result);
+    }
+
+    [Fact]
+    public async Task AcceptsSingularOrPluralFieldName()
+    {
+        var (handler, published) = CreateHandler();
+
+        // "texts" is the plural of the declared "text" field — re-keyed to "text", not silently ignored.
+        await handler.HandleAsync(NewContext(), JsonNode.Parse("""{ "echo": { "texts": "hi" } }"""));
+
+        Assert.Equal("echoed: hi", Assert.Single(published).Result);
+    }
+
+    [Fact]
+    public async Task DoesNotMangleCommandsThatDeclareBothSingularAndPluralFields()
+    {
+        var (handler, published) = CreateHandler();
+
+        // 'pick' declares both `tag` and `tags`; a `tags` array must NOT be moved onto `tag`.
+        await handler.HandleAsync(NewContext(), JsonNode.Parse("""{ "pick": { "tags": ["a", "b"] } }"""));
+
+        Assert.Equal("tag=none tags=2", Assert.Single(published).Result);
     }
 
     [Fact]

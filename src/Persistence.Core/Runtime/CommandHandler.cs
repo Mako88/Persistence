@@ -113,7 +113,9 @@ public abstract class CommandHandler : IActionHandler
             return FormatParseError(fields);
         }
 
-        if (!commands.TryGetValue(type, out var info))
+        // Accept a singular/plural spelling of the command name (e.g. list_fragment/list_fragments).
+        if (!commands.TryGetValue(type, out var info)
+            && !(TogglePlural(type) is { } altName && commands.TryGetValue(altName, out info)))
         {
             var available = string.Join(", ", commands.Keys.Order());
             var suggestion = ClosestMatch(type, commands.Keys);
@@ -121,6 +123,9 @@ public abstract class CommandHandler : IActionHandler
             return $"Unknown command: '{type}'.{didYouMean} Available: {available}. " +
                    "Send a `list` command for full schemas.";
         }
+
+        // Accept singular/plural spellings of field names too (e.g. tag/tags, id/ids).
+        NormalizeFieldVariants(fields, info);
 
         string result;
 
@@ -374,6 +379,51 @@ public abstract class CommandHandler : IActionHandler
         }
 
         return string.Join(", ", received.Select(kvp => $"{kvp.Key}={kvp.Value?.ToJsonString() ?? "null"}"));
+    }
+
+    /// <summary>
+    /// The singular↔plural counterpart of a name by toggling a trailing "s" (e.g. tag↔tags,
+    /// id↔ids, list_fragment↔list_fragments). Null for names too short to toggle safely. Only the
+    /// regular -s rule is needed — every command and field name in this codebase is regular.
+    /// </summary>
+    private static string? TogglePlural(string name) =>
+        name.Length < 2 ? null : name.EndsWith('s') ? name[..^1] : name + "s";
+
+    /// <summary>
+    /// Re-keys any field the peer spelled in the other number (singular vs plural) to the name the
+    /// command actually declares, so e.g. <c>tag=</c> works where <c>tags=</c> is expected and vice
+    /// versa. Only fills in a declared field that wasn't already provided exactly.
+    /// </summary>
+    private static void NormalizeFieldVariants(JsonObject? fields, CommandInfo info)
+    {
+        if (fields is null || fields.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var field in info.Fields)
+        {
+            if (fields.ContainsKey(field.Name) || TogglePlural(field.Name) is not { } alt)
+            {
+                continue;
+            }
+
+            // If the variant is itself a declared field, the command already accepts both spellings
+            // explicitly (e.g. tag's `tag` and `tags`) — leave the peer's input alone.
+            if (info.Fields.Any(f => string.Equals(f.Name, alt, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            var providedKey = fields.Select(kvp => kvp.Key)
+                .FirstOrDefault(k => string.Equals(k, alt, StringComparison.OrdinalIgnoreCase));
+
+            if (providedKey != null && fields.TryGetPropertyValue(providedKey, out var node))
+            {
+                fields.Remove(providedKey);
+                fields[field.Name] = node;
+            }
+        }
     }
 
     private static Dictionary<string, CommandInfo> DiscoverCommands(Type handlerType)
