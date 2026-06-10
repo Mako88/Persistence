@@ -6,7 +6,7 @@ namespace Persistence.Services.Container;
 /// <see cref="Output"/> carries the combined, capped output.
 /// </summary>
 public readonly record struct ContainerExecResult(
-    bool Allowed, string? RejectionReason, string Output, bool TimedOut, bool Truncated);
+    bool Allowed, string? RejectionReason, string Output, bool TimedOut, bool Truncated, int ExitCode);
 
 /// <summary>
 /// Runs a command line inside the peer's sandboxed container "computer". Enforces the deny-by-default

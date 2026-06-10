@@ -39,7 +39,7 @@ public class ContainerExecutor : IContainerExecutor
         if (CheckAllowlist(commandLine, settings.Allowlist) is { } rejection)
         {
             return new ContainerExecResult(Allowed: false, rejection, Output: string.Empty,
-                TimedOut: false, Truncated: false);
+                TimedOut: false, Truncated: false, ExitCode: 0);
         }
 
         var cwd = string.IsNullOrEmpty(session.ContainerCwd) ? settings.WorkingDir : session.ContainerCwd;
@@ -69,7 +69,8 @@ public class ContainerExecutor : IContainerExecutor
             RejectionReason: null,
             Output: Combine(output, result.Stderr),
             result.TimedOut,
-            result.Truncated);
+            result.Truncated,
+            result.ExitCode);
     }
 
     /// <summary>

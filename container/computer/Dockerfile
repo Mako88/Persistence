@@ -12,8 +12,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libasound2 libpangocairo-1.0-0 libpango-1.0-0 libcairo2 libatspi2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Token-efficient static page extraction (fetch_url).
-RUN pip3 install --no-cache-dir --break-system-packages trafilatura
+# Token-efficient static page extraction (fetch_url). lxml_html_clean is required since lxml split
+# out lxml.html.clean — without it trafilatura fails to import.
+RUN pip3 install --no-cache-dir --break-system-packages trafilatura lxml_html_clean
 
 # Vercel agent-browser CLI + its Chrome for Testing (general/JS browsing). `install` is best-effort at
 # build time; if the browser download is flaky here, `agent-browser install` can be re-run at runtime.

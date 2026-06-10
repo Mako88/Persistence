@@ -89,7 +89,7 @@ public class ExecuteActionsHandlerTests
         containerExecutor
             .Setup(e => e.ExecuteAsync("ls", It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ContainerExecResult(Allowed: true, RejectionReason: null,
-                Output: "notes.txt\nresearch/", TimedOut: false, Truncated: false));
+                Output: "notes.txt\nresearch/", TimedOut: false, Truncated: false, ExitCode: 0));
 
         var result = await RunAsync("""{ "shell": { "command": "ls" } }""");
 
@@ -106,7 +106,7 @@ public class ExecuteActionsHandlerTests
             .Setup(e => e.ExecuteAsync("gcc evil.c", It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ContainerExecResult(Allowed: false,
                 RejectionReason: "'gcc' is not permitted in your computer. Allowed: ls, python.",
-                Output: "", TimedOut: false, Truncated: false));
+                Output: "", TimedOut: false, Truncated: false, ExitCode: 0));
 
         var result = await RunAsync("""{ "shell": { "command": "gcc evil.c" } }""");
 
@@ -123,12 +123,27 @@ public class ExecuteActionsHandlerTests
         containerExecutor
             .Setup(e => e.ExecuteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ContainerExecResult(Allowed: true, RejectionReason: null,
-                Output: "partial", TimedOut: true, Truncated: true));
+                Output: "partial", TimedOut: true, Truncated: true, ExitCode: -1));
 
         var result = await RunAsync("""{ "shell": { "command": "python slow.py" } }""");
 
         Assert.Contains("timed out", result);
         Assert.Contains("truncated", result);
+    }
+
+    [Fact]
+    public async Task ShellSurfacesNonZeroExitWithEmptyOutput()
+    {
+        config.Container.Enabled = true;
+        containerExecutor
+            .Setup(e => e.ExecuteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContainerExecResult(Allowed: true, RejectionReason: null,
+                Output: "", TimedOut: false, Truncated: false, ExitCode: 2));
+
+        var result = await RunAsync("""{ "shell": { "command": "fetch_url https://x" } }""");
+
+        // A failure with no output must not read as a silent success.
+        Assert.Contains("exited with code 2", result);
     }
 
     [Fact]

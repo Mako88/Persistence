@@ -77,7 +77,15 @@ public class ExecuteActionsHandler : CommandHandler
             return result.RejectionReason!;
         }
 
-        var output = string.IsNullOrWhiteSpace(result.Output) ? "(no output)" : result.Output;
+        var hasText = !string.IsNullOrWhiteSpace(result.Output);
+        var output = hasText ? result.Output : "(no output)";
+
+        // Surface failures so the peer is never left guessing — a non-zero exit with no output would
+        // otherwise read as a silent success.
+        if (result.ExitCode != 0 && !result.TimedOut)
+        {
+            output += $"\n[exited with code {result.ExitCode}]";
+        }
 
         if (result.TimedOut)
         {
