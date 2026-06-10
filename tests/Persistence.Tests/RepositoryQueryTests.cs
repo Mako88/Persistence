@@ -49,11 +49,7 @@ public sealed class RepositoryQueryTests : IAsyncLifetime
 
     public Task DisposeAsync()
     {
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-        if (File.Exists(dbPath))
-        {
-            File.Delete(dbPath);
-        }
+        TestDatabase.Cleanup(dbPath);
         return Task.CompletedTask;
     }
 

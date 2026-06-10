@@ -39,12 +39,7 @@ public sealed class WorkingContextPersistenceTests : IAsyncLifetime
 
     public Task DisposeAsync()
     {
-        // Drop pooled handles so the temp file can be deleted on Windows.
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-        if (File.Exists(dbPath))
-        {
-            File.Delete(dbPath);
-        }
+        TestDatabase.Cleanup(dbPath);
         return Task.CompletedTask;
     }
 

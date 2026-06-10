@@ -123,6 +123,12 @@ public class Orchestrator : IOrchestrator
         {
             turnHandler.EnqueueInput(input);
             display.ShowMessageQueued(input);
+
+            // The turn holding the lock may already be past its drain loop (mid-refresh, about to
+            // release), in which case nothing would pick up what we just queued. Try to drain it
+            // ourselves: if the lock is still held we return and the holder drains on release; if
+            // it has since freed, we re-acquire and drain here. Either way the input isn't stranded.
+            await DrainQueuedInputAsync();
             return;
         }
 
@@ -130,21 +136,18 @@ public class Orchestrator : IOrchestrator
         {
             display.ShowThinking();
             await turnHandler.ExecuteTurnAsync(input);
-
-            while (turnHandler.HasPendingInput)
-            {
-                display.ShowThinking("processing queued messages");
-                await turnHandler.ExecuteTurnAsync();
-            }
-
-            // The turn may have scheduled or cancelled events — refresh the Schedule view.
-            await RefreshScheduledEventsAsync();
-            await RefreshOpenProposalsAsync();
+            await DrainPendingTurnsThenRefreshAsync();
         }
         finally
         {
             turnLock.Release();
         }
+
+        // Input can be enqueued in the gap between this turn's final drain check and the release
+        // above (the two refresh queries run inside the lock). Without this it would sit unprocessed
+        // until the next input or scheduled wake. Drain it now, re-acquiring the lock, so queued
+        // input is never stranded and stays in FIFO order.
+        await DrainQueuedInputAsync();
     }
 
     /// <summary>
@@ -162,20 +165,56 @@ public class Orchestrator : IOrchestrator
         {
             display.ShowThinking("waking");
             await turnHandler.ExecuteTurnAsync(wakeNote: BuildWakeNote(e.Event));
-
-            while (turnHandler.HasPendingInput)
-            {
-                display.ShowThinking("processing queued messages");
-                await turnHandler.ExecuteTurnAsync();
-            }
-
-            // The fired event is no longer pending, and the turn may have scheduled more — refresh.
-            await RefreshScheduledEventsAsync();
-            await RefreshOpenProposalsAsync();
+            await DrainPendingTurnsThenRefreshAsync();
         }
         finally
         {
             turnLock.Release();
+        }
+
+        // As in OnDisplayInputReceived: catch input enqueued in the lock-release window so a wake
+        // that coincides with a user message doesn't leave that message stranded.
+        await DrainQueuedInputAsync();
+    }
+
+    /// <summary>
+    /// Drains queued local-peer input (one turn per pass) and then refreshes the schedule and
+    /// open-proposal views. The shared body of the input and wake turn-runners; the caller MUST
+    /// hold <see cref="turnLock"/>.
+    /// </summary>
+    private async Task DrainPendingTurnsThenRefreshAsync()
+    {
+        while (turnHandler.HasPendingInput)
+        {
+            display.ShowThinking("processing queued messages");
+            await turnHandler.ExecuteTurnAsync();
+        }
+
+        // The turn may have scheduled or cancelled events, or resolved proposals — refresh the views.
+        await RefreshScheduledEventsAsync();
+        await RefreshOpenProposalsAsync();
+    }
+
+    /// <summary>
+    /// Catches input enqueued in the window between a turn's final drain check and its lock release
+    /// (the post-turn refresh queries run inside the lock). Re-acquires the lock if it's free and
+    /// drains; if another invocation holds it, that holder owns the drain — and runs this itself
+    /// after releasing — so we simply return. Loops so input arriving during one drain's own refresh
+    /// is caught too. Preserves the "only one turn at a time" invariant (drains only under the lock)
+    /// and FIFO order (each pass drains the whole queue oldest-first).
+    /// </summary>
+    private async Task DrainQueuedInputAsync()
+    {
+        while (turnHandler.HasPendingInput && turnLock.Wait(0))
+        {
+            try
+            {
+                await DrainPendingTurnsThenRefreshAsync();
+            }
+            finally
+            {
+                turnLock.Release();
+            }
         }
     }
 
