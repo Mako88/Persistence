@@ -64,6 +64,8 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
     private Label proposalsLabel = null!;
     private Label sessionLabel = null!;
     private Label exitLabel = null!;
+    private View statusBar = null!;
+    private readonly List<Label> statusSegments = [];
 
     private Thread? uiThread;
     private volatile bool ready;
@@ -526,13 +528,15 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
 
         // Compose area: a colour-keyed key-bindings hint on its own row, then the bordered multi-line
         // input below (titled "Compose", which highlights with focus like the Conversation frame).
+        const string hintText = "—  Enter: Send · Shift+Enter: Newline · Ctrl+Left/Right: Tabs · Ctrl+Up/Down: Panes  —";
         var hint = MakeColoredPaneView(paneScheme).ForComposeHint();
-        hint.Text = "Key Bindings  —  Enter: Send · Shift+Enter: Newline · Ctrl+Left/Right: Tabs · Ctrl+Up/Down: Panes";
+        hint.Text = hintText;
         hint.WordWrap = false;
-        hint.X = 0;
         hint.Y = Pos.AnchorEnd(bottomRows);
-        hint.Width = Dim.Fill();
         hint.Height = 1;
+        // Size to the text and centre it (rather than filling the width left-aligned).
+        hint.Width = Dim.Sized(hintText.Length);
+        hint.X = Pos.Center();
 
         var inputFrame = new FocusTitleFrameView("Compose")
         {
@@ -571,7 +575,11 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
     /// </summary>
     private void BuildStatusBar(ConsoleDriver driver, Toplevel top, int bottomRows)
     {
-        // Pipe separators are their own white segments so each content segment keeps its own colour.
+        // The bar is a container centred horizontally; its segments chain left-to-right inside it, and
+        // the container is re-sized to their total width whenever a segment's text changes so it stays
+        // centred. Pipe separators are their own white segments so each content segment keeps its colour.
+        statusBar = new View { X = Pos.Center(), Y = Pos.AnchorEnd(1), Height = 1, Width = Dim.Sized(1) };
+
         stateLabel = StatusSegment(driver, StateText("idle"), StateColor("idle"), x: 0);
         var pipe1 = StatusSegment(driver, " │ ", TuiColors.Body, Pos.Right(stateLabel));
         modelLabel = StatusSegment(driver, $"{config.Provider}/{config.Model}", TuiColors.Model, Pos.Right(pipe1));
@@ -583,11 +591,18 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
         sessionLabel = StatusSegment(driver, $"Session {sessionContext.SessionId}", TuiColors.Body, Pos.Right(pipe4));
         var pipe5 = StatusSegment(driver, " │ ", TuiColors.Body, Pos.Right(sessionLabel));
         exitLabel = StatusSegment(driver, "/exit to quit", TuiColors.Muted, Pos.Right(pipe5));
-        exitLabel.Width = Dim.Fill();
-        exitLabel.AutoSize = false;
 
-        top.Add(stateLabel, pipe1, modelLabel, pipe2, budgetLabel, pipe3, proposalsLabel, pipe4, sessionLabel, pipe5, exitLabel);
+        Label[] segments = [stateLabel, pipe1, modelLabel, pipe2, budgetLabel, pipe3, proposalsLabel, pipe4, sessionLabel, pipe5, exitLabel];
+        statusSegments.AddRange(segments);
+        statusBar.Add(segments);
+        top.Add(statusBar);
+        RecenterStatusBar();
     }
+
+    /// <summary>Re-sizes the status-bar container to the total width of its segments so Pos.Center keeps
+    /// it centred as segment texts (state / budget / proposals) change width.</summary>
+    private void RecenterStatusBar() =>
+        statusBar.Width = Dim.Sized(statusSegments.Sum(s => s.Text.RuneCount));
 
     /// <summary>The context-budget gauge text: percent full, or a placeholder before the first turn.</summary>
     private static string BudgetText(int? percent) => percent is { } p ? $" Context: {p}%" : " Context: —";
@@ -609,7 +624,7 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
     private static Label StatusSegment(ConsoleDriver driver, string text, Color fg, Pos x) => new(text)
     {
         X = x,
-        Y = Pos.AnchorEnd(1),
+        Y = 0,   // relative to the status-bar container, which is itself anchored to the last row
         Height = 1,
         AutoSize = true,
         ColorScheme = Scheme(driver, fg, TuiColors.StatusBg),
@@ -619,8 +634,8 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
     {
         Normal = driver.MakeAttribute(fg, bg),
         Focus = driver.MakeAttribute(fg, bg),
-        HotNormal = driver.MakeAttribute(Color.BrightYellow, bg),
-        HotFocus = driver.MakeAttribute(Color.BrightYellow, bg),
+        HotNormal = driver.MakeAttribute(Color.BrightGreen, bg),
+        HotFocus = driver.MakeAttribute(Color.BrightGreen, bg),
         Disabled = driver.MakeAttribute(Color.DarkGray, bg),
     };
 
@@ -949,7 +964,8 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
         {
             stateLabel.Text = StateText(state);
             stateLabel.ColorScheme = Scheme(Application.Driver, StateColor(state), TuiColors.StatusBg);
-            // The chip's width changes with the text; relayout so the model/info segments follow.
+            // The chip's width changes with the text; re-size + relayout so the bar stays centred.
+            RecenterStatusBar();
             Application.Top?.LayoutSubviews();
             Application.Top?.SetNeedsDisplay();
         });
@@ -984,6 +1000,7 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
             var label = segment();
             label.Text = text;
             label.ColorScheme = Scheme(Application.Driver, colour, TuiColors.StatusBg);
+            RecenterStatusBar();
             Application.Top?.LayoutSubviews();
             Application.Top?.SetNeedsDisplay();
         });

@@ -12,10 +12,11 @@ internal static class TuiColors
 {
     public const Color Body = Color.White;            // content / values / dates / session / tag lists
     public const Color User = Color.Brown;            // "You:" role label (gold)
-    public const Color Peer = Color.Magenta;          // "Remote Peer:" role label (light purple)
+    public const Color Peer = Color.BrightMagenta;    // "Remote Peer:" role label (bright purple)
     public const Color Gold = Color.Brown;            // action names, R/I/C, "protected", html-like tags, Pending
-    public const Color Purple = Color.Magenta;        // Request:/Response:, Triggered
-    public const Color Label = Color.BrightYellow;    // field/title labels, markers, compose keys, schedule name, Note
+    public const Color Purple = Color.BrightMagenta;  // Request:/Response:, Triggered
+    public const Color Label = Color.BrightGreen;     // field/title labels, markers, compose keys, schedule name, Note
+    public const Color TabUnfocused = Color.Green;    // selected-but-unfocused side tab (dark green)
     public const Color Error = Color.BrightRed;       // error text
     public const Color SuggestedTag = Color.BrightGreen; // the suggested tag inside a "did you mean" error
     public const Color Processing = Color.Green;      // status state chip while working (idle is white)
@@ -194,11 +195,9 @@ internal static class TuiColoring
         .SensoryLabels()
         .ResponseTags();
 
-    /// <summary>The key-bindings hint row (above the input box): the "Key Bindings" header in purple
-    /// (so it's distinct from the yellow chords sitting just below the yellow "Compose" title); the
-    /// chord keys yellow; the rest white.</summary>
+    /// <summary>The centred key-bindings hint row (above the input box): the chord keys accented, the
+    /// framing dashes and connective text white.</summary>
     public static ColoredTextView ForComposeHint(this ColoredTextView v) => v
-        .ColorSubstring("Key Bindings", TuiColors.Purple)
         .ColorSubstring("Shift+Enter:", TuiColors.Label)
         .ColorSubstring("Enter:", TuiColors.Label)
         .ColorSubstring("Ctrl+Left/Right:", TuiColors.Label)

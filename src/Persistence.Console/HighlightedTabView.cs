@@ -34,7 +34,7 @@ internal sealed class HighlightedTabView : TabView
         // Focused when this tab bar — or any pane nested inside the selected tab — holds focus. (TG's
         // HasFocus alone doesn't always reflect a focused descendant, so also consult the focus chain.)
         var focused = HasFocus || MostFocused is not null || Focused is not null;
-        var colour = focused ? TuiColors.Label : TuiColors.Gold;
+        var colour = focused ? TuiColors.Label : TuiColors.TabUnfocused;
 
         // Mirror TabRowView's layout: titles sit on row 1 when the top line is shown (the default),
         // starting one column in, each separated by a single column. We only need the selected one.
