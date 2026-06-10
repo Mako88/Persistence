@@ -82,10 +82,15 @@ internal static class TuiColoring
     /// <summary>The "protected" flag in a *real* header — "protected" following the <c>| </c>
     /// separator on a line that began with a numeric id (<c>[#42 …</c>). This keeps it from colouring
     /// the placeholder example header (<c>[#ID | Type | … | protected]</c>) in the prompt's own
-    /// explanation text, where the rest of the header isn't coloured — so the example stays all-white.
-    /// (A header that word-wraps puts "protected]" on a continuation line indistinguishable from the
-    /// example's, so we deliberately don't try to colour it there — keeping the example clean wins.)</summary>
+    /// explanation text, where the rest of the header isn't coloured — so the example stays all-white.</summary>
     private const string ProtectedFlag = @"(?<=\[#\d+[^\]]*\| )protected\b";
+
+    /// <summary>"protected" on a header's <em>wrapped continuation</em> line — where the <c>[#42</c>
+    /// prefix sits on the previous visual row, so <see cref="ProtectedFlag"/> can't see it. Matches
+    /// "protected" before the closing <c>]</c> on a line with no <c>[</c> of its own. (This also
+    /// reddens the placeholder example header's wrapped "protected]" — an accepted trade-off so a real
+    /// header's "protected" is always red, even when it wraps.)</summary>
+    private const string ProtectedFlagWrapped = @"(?<=^[^\[]*)protected(?=\]\s*$)";
 
     /// <summary>A sensory-block field label (the known set from the prompt's [Sensory] block). Matched
     /// by exact label rather than a generic <c>^word:</c> so prose lines that merely start with a
@@ -154,7 +159,8 @@ internal static class TuiColoring
         .ColorPattern(FragmentTypeName, TuiColors.TypeName)
         .ColorPattern(RicMarker, TuiColors.Gold)
         .ColorPattern(RicValue, TuiColors.Bracket)
-        .ColorPattern(ProtectedFlag, TuiColors.Error);         // "protected" stands out in red
+        .ColorPattern(ProtectedFlag, TuiColors.Error)          // "protected" stands out in red…
+        .ColorPattern(ProtectedFlagWrapped, TuiColors.Error);  // …including on a wrapped header line
 
     // --- Per-pane schemes ---
 
