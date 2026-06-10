@@ -112,8 +112,7 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
         var fid = ExtractFragmentId(pending!.Prompt, "Identity");
 
         var client = api.CreateClient();
-        var since = (await client.GetFromJsonAsync<ApiTestFixture.EventsDto>(
-            "/api/conversation/events?since=0", new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)))!.Latest;
+        var since = await api.LatestSeqAsync(client);
 
         await client.PostAsJsonAsync("/api/peer/respond", new
         {
@@ -126,9 +125,8 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
             <continue>false</continue>
             """,
         });
-        await Task.Delay(300);
 
-        var events = await api.EventsSinceAsync(client, since);
+        var events = await api.WaitForTurnAsync(client, since);
         Assert.Contains("Fragments tagged 'values'", Detail(events, "tool"));
     }
 
@@ -155,8 +153,7 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
         Assert.True(ids.Count >= 2, "expected two marked fragments to summarize");
 
         var client = api.CreateClient();
-        var since = (await client.GetFromJsonAsync<ApiTestFixture.EventsDto>(
-            "/api/conversation/events?since=0", new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)))!.Latest;
+        var since = await api.LatestSeqAsync(client);
 
         await client.PostAsJsonAsync("/api/peer/respond", new
         {
@@ -168,9 +165,8 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
             <continue>false</continue>
             """,
         });
-        await Task.Delay(300);
 
-        Assert.Contains("Folded 2 fragment(s)", Detail(await api.EventsSinceAsync(client, since), "tool"));
+        Assert.Contains("Folded 2 fragment(s)", Detail(await api.WaitForTurnAsync(client, since), "tool"));
 
         // The originals are archived from context; the new Summary fragment is present, and a
         // following prompt no longer shows the folded details.
@@ -195,8 +191,7 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
         var fid = ExtractFragmentId(pending!.Prompt, "Personal");
 
         var client = api.CreateClient();
-        var since = (await client.GetFromJsonAsync<ApiTestFixture.EventsDto>(
-            "/api/conversation/events?since=0", new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)))!.Latest;
+        var since = await api.LatestSeqAsync(client);
 
         await client.PostAsJsonAsync("/api/peer/respond", new
         {
@@ -208,9 +203,8 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
             <continue>false</continue>
             """,
         });
-        await Task.Delay(300);
 
-        Assert.Contains("Set summary on 1 fragment(s)", Detail(await api.EventsSinceAsync(client, since), "tool"));
+        Assert.Contains("Set summary on 1 fragment(s)", Detail(await api.WaitForTurnAsync(client, since), "tool"));
 
         // The fragment is still in context (set_summary doesn't remove it).
         var after = await api.SendAndGetPendingAsync("still there?");
@@ -237,6 +231,7 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
         var fid = ExtractFragmentIdsWithContent(pending!.Prompt, "TOGGLE_TEST").First();
 
         var client = api.CreateClient();
+        var since = await api.LatestSeqAsync(client);
         await client.PostAsJsonAsync("/api/peer/respond", new
         {
             id = pending.Id,
@@ -248,7 +243,7 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
             <continue>false</continue>
             """,
         });
-        await Task.Delay(300);
+        await api.WaitForTurnAsync(client, since);
 
         // Now the full text should be gone from the prompt, replaced by the summary.
         var after = await api.SendAndGetPendingAsync("what's in context now?");
@@ -276,6 +271,7 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
         var fid = ExtractFragmentIdsWithContent(pending!.Prompt, "RELEVANCE_TEST").First();
 
         var client = api.CreateClient();
+        var since = await api.LatestSeqAsync(client);
         await client.PostAsJsonAsync("/api/peer/respond", new
         {
             id = pending.Id,
@@ -286,7 +282,7 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
             <continue>false</continue>
             """,
         });
-        await Task.Delay(300);
+        await api.WaitForTurnAsync(client, since);
 
         // The junction relevance should round-trip through save/reload into the header.
         var after = await api.SendAndGetPendingAsync("what's in context now?");
@@ -529,8 +525,7 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
         var fid = ExtractFragmentId(pending!.Prompt, "Personal");
 
         var client = api.CreateClient();
-        var since = (await client.GetFromJsonAsync<ApiTestFixture.EventsDto>(
-            "/api/conversation/events?since=0", new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)))!.Latest;
+        var since = await api.LatestSeqAsync(client);
 
         await client.PostAsJsonAsync("/api/peer/respond", new
         {
@@ -542,9 +537,8 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
             <continue>false</continue>
             """,
         });
-        await Task.Delay(300);
 
-        var tools = Detail(await api.EventsSinceAsync(client, since), "tool");
+        var tools = Detail(await api.WaitForTurnAsync(client, since), "tool");
         Assert.Contains("Audit trail", tools);
         Assert.DoesNotContain("Error", tools);
     }
@@ -565,8 +559,7 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
         var fid = ExtractFragmentId(pending!.Prompt, "Identity");
 
         var client = api.CreateClient();
-        var since = (await client.GetFromJsonAsync<ApiTestFixture.EventsDto>(
-            "/api/conversation/events?since=0", new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)))!.Latest;
+        var since = await api.LatestSeqAsync(client);
 
         await client.PostAsJsonAsync("/api/peer/respond", new
         {
@@ -578,9 +571,8 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
             <continue>false</continue>
             """,
         });
-        await Task.Delay(300);
 
-        Assert.Contains("protected", Detail(await api.EventsSinceAsync(client, since), "tool"));
+        Assert.Contains("protected", Detail(await api.WaitForTurnAsync(client, since), "tool"));
     }
 
     [Fact]
@@ -592,9 +584,9 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
         var pending = await WaitPending(client);
         // Answer with no tags at all → unparseable.
         await client.PostAsJsonAsync("/api/peer/respond", new { id = pending!.Id, response = "just prose, no tags" });
-        await Task.Delay(300);
 
-        // The turn re-prompts rather than crashing: a new pending prompt should appear.
+        // The turn re-prompts rather than crashing: a new pending prompt should appear (WaitPending
+        // polls until the re-prompt is parked — no fixed delay needed).
         var reprompt = await WaitPending(client);
         Assert.NotNull(reprompt);
         Assert.NotEqual(pending.Id, reprompt!.Id);
@@ -619,8 +611,8 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
             id = first!.Id,
             response = "<think>Step one, keep going.</think><continue>true</continue>",
         });
-        await Task.Delay(300);
 
+        // continue=true re-prompts with the next iteration's pending — WaitPending polls for it.
         var second = await WaitPending(client);
         Assert.NotNull(second);
         Assert.NotEqual(first.Id, second!.Id);

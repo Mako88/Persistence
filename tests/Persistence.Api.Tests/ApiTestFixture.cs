@@ -55,10 +55,9 @@ public sealed class ApiTestFixture : WebApplicationFactory<Program>
             new { id = pending!.Id, response = peerResponse });
         respond.EnsureSuccessStatusCode();
 
-        // Let the turn finish applying after the completion is supplied.
-        await Task.Delay(300);
-
-        return await EventsSinceAsync(client, sinceBefore);
+        // Wait for the turn to finish applying (rather than betting on a fixed delay), then return
+        // everything it produced.
+        return await WaitForTurnAsync(client, sinceBefore);
     }
 
     /// <summary>Submits input without answering, returning the parked remote-peer prompt.</summary>
@@ -111,9 +110,12 @@ public sealed class ApiTestFixture : WebApplicationFactory<Program>
                 if (resp.StatusCode == System.Net.HttpStatusCode.OK)
                 {
                     var pending = await resp.Content.ReadFromJsonAsync<PendingDto>(JsonOpts);
+                    var since = await LatestSeqAsync(client);
                     await client.PostAsJsonAsync("/api/peer/respond",
                         new { id = pending!.Id, response = "<respond>ready</respond><continue>false</continue>" });
-                    await Task.Delay(200);
+                    // Wait for the probe turn to finish (its reply lands) so the orchestrator is
+                    // settled and subscribed before the first real turn — no fixed-delay guess.
+                    await WaitForTurnAsync(client, since);
                     ready = true;
                     break;
                 }
@@ -131,10 +133,51 @@ public sealed class ApiTestFixture : WebApplicationFactory<Program>
         return dto?.Events ?? [];
     }
 
-    private async Task<long> LatestSeqAsync(HttpClient client)
+    /// <summary>The latest event sequence number — capture before a turn to scope a later wait.</summary>
+    public async Task<long> LatestSeqAsync(HttpClient client)
     {
         var dto = await client.GetFromJsonAsync<EventsDto>("/api/conversation/events?since=0", JsonOpts);
         return dto?.Latest ?? 0;
+    }
+
+    /// <summary>
+    /// Waits for a turn to finish applying after its response is supplied, then returns the events it
+    /// produced. The API exposes no explicit "turn complete" signal, and the orchestrator releases its
+    /// turn lock only *after* a couple of post-turn refresh queries — later than the last event it
+    /// publishes. So we wait for quiescence: poll until the turn has produced output and the event
+    /// stream has then gone quiet across a short settle window, which reliably lands after the lock is
+    /// released (so the next turn's input can't race into the release gap). Adaptive and bounded —
+    /// strictly better than a fixed delay. For turns that re-prompt (continue=true / unparseable),
+    /// poll for the new pending prompt instead of calling this.
+    /// </summary>
+    public async Task<IReadOnlyList<ConversationEvent>> WaitForTurnAsync(HttpClient client, long since)
+    {
+        const int settlePolls = 4; // ~100ms of quiet after the last event
+        var events = await EventsSinceAsync(client, since);
+        var lastCount = events.Count;
+        var quiet = 0;
+
+        for (var i = 0; i < 200; i++)
+        {
+            await Task.Delay(25);
+            events = await EventsSinceAsync(client, since);
+
+            if (events.Count > 0 && events.Count == lastCount)
+            {
+                if (++quiet >= settlePolls)
+                {
+                    return events;
+                }
+            }
+            else
+            {
+                quiet = 0;
+            }
+
+            lastCount = events.Count;
+        }
+
+        return events;
     }
 
     private static async Task<PendingDto?> WaitForPendingAsync(HttpClient client)
