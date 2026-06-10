@@ -1,10 +1,12 @@
 using Moq;
+using Persistence.Config;
 using Persistence.Data.Entities;
 using Persistence.Data.Repositories;
 using Persistence.Events;
 using Persistence.Notifications;
 using Persistence.Runtime;
 using Persistence.Runtime.ActionHandlers;
+using Persistence.Services.Container;
 using System.Data;
 using System.Text.Json.Nodes;
 
@@ -20,6 +22,8 @@ public class ExecuteActionsHandlerTests
     private readonly Mock<IScheduledEventRepository> scheduledEventRepo = new();
     private readonly Mock<IAuditLogRepository> auditLogRepo = new();
     private readonly Mock<IActionLogRepository> actionLogRepo = new();
+    private readonly Mock<IContainerExecutor> containerExecutor = new();
+    private readonly AppConfig config = new();
     private readonly SessionContext session = new() { SessionId = "S1", WorkingContextId = 7 };
     private readonly List<ToolInvoked> published = [];
     private readonly ExecuteActionsHandler handler;
@@ -44,7 +48,8 @@ public class ExecuteActionsHandlerTests
         var bus = new EventBus();
         bus.Subscribe<ToolInvoked>((_, e) => { published.Add(e); return Task.CompletedTask; });
         handler = new ExecuteActionsHandler(
-            scheduledEventRepo.Object, auditLogRepo.Object, actionLogRepo.Object, session, bus);
+            scheduledEventRepo.Object, auditLogRepo.Object, actionLogRepo.Object, session,
+            containerExecutor.Object, config, bus);
     }
 
     private static WorkingContextEntity Context() =>
@@ -55,6 +60,75 @@ public class ExecuteActionsHandlerTests
         published.Clear();
         await handler.HandleAsync(Context(), JsonNode.Parse(json));
         return published.Single().Result;
+    }
+
+    [Fact]
+    public async Task ShellRequiresACommand()
+    {
+        config.Container.Enabled = true;
+        var result = await RunAsync("""{ "shell": { } }""");
+        Assert.Contains("'command' is required", result);
+    }
+
+    [Fact]
+    public async Task ShellShortCircuitsWhenContainerDisabled()
+    {
+        config.Container.Enabled = false; // default
+
+        var result = await RunAsync("""{ "shell": { "command": "ls" } }""");
+
+        Assert.Contains("isn't available", result);
+        // Never touches the executor when disabled.
+        containerExecutor.Verify(e => e.ExecuteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ShellRunsCommandAndReturnsOutputAndAudits()
+    {
+        config.Container.Enabled = true;
+        containerExecutor
+            .Setup(e => e.ExecuteAsync("ls", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContainerExecResult(Allowed: true, RejectionReason: null,
+                Output: "notes.txt\nresearch/", TimedOut: false, Truncated: false));
+
+        var result = await RunAsync("""{ "shell": { "command": "ls" } }""");
+
+        Assert.Contains("notes.txt", result);
+        // Exec is audited to the action log (queryable later, independent of context).
+        actionLogRepo.Verify(r => r.LogAsync("shell", "ls", It.IsAny<string?>(), It.IsAny<IDbTransaction?>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ShellReturnsRejectionWhenCommandNotAllowed()
+    {
+        config.Container.Enabled = true;
+        containerExecutor
+            .Setup(e => e.ExecuteAsync("gcc evil.c", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContainerExecResult(Allowed: false,
+                RejectionReason: "'gcc' is not permitted in your computer. Allowed: ls, python.",
+                Output: "", TimedOut: false, Truncated: false));
+
+        var result = await RunAsync("""{ "shell": { "command": "gcc evil.c" } }""");
+
+        Assert.Contains("'gcc' is not permitted", result);
+        // A rejected command is still audited, marked as rejected.
+        actionLogRepo.Verify(r => r.LogAsync("shell", "gcc evil.c",
+            It.Is<string?>(s => s != null && s.Contains("rejected")), It.IsAny<IDbTransaction?>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ShellFlagsTimeoutAndTruncation()
+    {
+        config.Container.Enabled = true;
+        containerExecutor
+            .Setup(e => e.ExecuteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContainerExecResult(Allowed: true, RejectionReason: null,
+                Output: "partial", TimedOut: true, Truncated: true));
+
+        var result = await RunAsync("""{ "shell": { "command": "python slow.py" } }""");
+
+        Assert.Contains("timed out", result);
+        Assert.Contains("truncated", result);
     }
 
     [Fact]

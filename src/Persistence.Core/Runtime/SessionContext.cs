@@ -45,4 +45,9 @@ public class SessionContext : ISessionContext
     /// on; seeded from config at startup and toggled by the peer via <c>toggle_command_list</c>.
     /// </summary>
     public bool SurfaceCommandsEnabled { get; set; } = true;
+
+    /// <summary>
+    /// The peer's current working directory inside its container; persisted across <c>shell</c> calls.
+    /// </summary>
+    public string ContainerCwd { get; set; } = string.Empty;
 }

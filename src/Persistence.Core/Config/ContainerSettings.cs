@@ -1,0 +1,45 @@
+namespace Persistence.Config;
+
+/// <summary>
+/// Settings for the peer's "computer" — a sandboxed Docker container reached through the
+/// <c>shell</c> command. Shared infra (not model-coupled). The <see cref="Allowlist"/> is a
+/// deny-by-default *curation* of which programs the peer may invoke, with clear errors for the rest;
+/// because it includes interpreters (python/bash), the real security boundary is the container's
+/// isolation (non-privileged, dropped capabilities, read-only rootfs except <see cref="WorkingDir"/>,
+/// resource limits, no host mounts, egress-only) — see the container assets.
+/// </summary>
+public class ContainerSettings
+{
+    /// <summary>Whether the <c>shell</c> command is available. Off until the container is running.</summary>
+    public bool Enabled { get; set; } = false;
+
+    /// <summary>Name (or id) of the running container to <c>docker exec</c> into.</summary>
+    public string Name { get; set; } = "persistence-computer";
+
+    /// <summary>Optional Docker host (passed as <c>DOCKER_HOST</c>); null uses the default socket/pipe.</summary>
+    public string? DockerHost { get; set; }
+
+    /// <summary>Directory the peer starts in and returns to — its persistent workspace ("sense of place").</summary>
+    public string WorkingDir { get; set; } = "/work";
+
+    /// <summary>
+    /// Programs the peer may invoke (deny-by-default). v1 covers web tools, interpreters, and basic
+    /// file/navigation utilities — enough for a "lab" while keeping unknown programs rejected.
+    /// </summary>
+    public string[] Allowlist { get; set; } =
+    [
+        // Web
+        "web_search", "fetch_url", "agent-browser", "curl",
+        // Scripting / interpreters
+        "python", "python3", "pip", "pip3", "node", "npm", "sh", "bash",
+        // Navigation / files / text
+        "cd", "ls", "pwd", "cat", "echo", "mkdir", "mv", "cp", "rm", "touch",
+        "grep", "head", "tail", "wc", "find", "sed", "awk", "which", "env",
+    ];
+
+    /// <summary>Per-command timeout in seconds.</summary>
+    public int TimeoutSeconds { get; set; } = 60;
+
+    /// <summary>Cap on captured output bytes (token efficiency); excess is truncated with a marker.</summary>
+    public int MaxOutputBytes { get; set; } = 8000;
+}

@@ -1,0 +1,5 @@
+# Container scripts and config run inside Linux — keep LF so shebangs/parsers don't choke on CRLF.
+container/computer/tools/* text eol=lf
+*.sh text eol=lf
+container/**/*.yml text eol=lf
+container/**/Dockerfile text eol=lf

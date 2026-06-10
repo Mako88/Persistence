@@ -1,0 +1,20 @@
+#!/bin/sh
+# web_search "query" [count] — keyless web search via the private SearXNG instance.
+# Returns a compact, token-efficient list of results (title, url, snippet).
+set -eu
+
+query="${1:-}"
+count="${2:-5}"
+
+if [ -z "$query" ]; then
+  echo "usage: web_search \"query\" [count]" >&2
+  exit 1
+fi
+
+curl -fsS -G "${SEARXNG_URL:-http://searxng:8080}/search" \
+  --data-urlencode "q=${query}" \
+  --data-urlencode "format=json" \
+  | jq -r --argjson n "${count}" '
+      .results[:$n][]
+      | "• \(.title)\n  \(.url)\n  \((.content // "") | gsub("\\s+";" ") )\n"
+    '

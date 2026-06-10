@@ -43,4 +43,11 @@ public interface ISessionContext
     /// it via <c>toggle_command_list</c>. Session-scoped — resets to the configured default each run.
     /// </summary>
     bool SurfaceCommandsEnabled { get; set; }
+
+    /// <summary>
+    /// The peer's current working directory inside its container "computer", persisted across the
+    /// otherwise-stateless <c>shell</c> invocations so it keeps a sense of place. Blank means
+    /// "not yet set" — the executor seeds it from the configured working dir.
+    /// </summary>
+    string ContainerCwd { get; set; }
 }

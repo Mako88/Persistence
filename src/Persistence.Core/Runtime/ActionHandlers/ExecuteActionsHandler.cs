@@ -1,8 +1,10 @@
+using Persistence.Config;
 using Persistence.Data.Entities;
 using Persistence.Data.Repositories;
 using Persistence.DI;
 using Persistence.Events;
 using Persistence.Services;
+using Persistence.Services.Container;
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -23,6 +25,8 @@ public class ExecuteActionsHandler : CommandHandler
     private readonly IAuditLogRepository auditLogRepo;
     private readonly IActionLogRepository actionLogRepo;
     private readonly ISessionContext sessionContext;
+    private readonly IContainerExecutor containerExecutor;
+    private readonly IAppConfig config;
 
     /// <summary>
     /// Constructor
@@ -32,15 +36,67 @@ public class ExecuteActionsHandler : CommandHandler
         IAuditLogRepository auditLogRepo,
         IActionLogRepository actionLogRepo,
         ISessionContext sessionContext,
+        IContainerExecutor containerExecutor,
+        IAppConfig config,
         IEventBus eventBus) : base(eventBus)
     {
         this.scheduledEventRepo = scheduledEventRepo;
         this.auditLogRepo = auditLogRepo;
         this.actionLogRepo = actionLogRepo;
         this.sessionContext = sessionContext;
+        this.containerExecutor = containerExecutor;
+        this.config = config;
     }
 
     #region Commands
+
+    [Command("shell", "Run a command in your computer — a sandboxed container with web tools (web_search, fetch_url, agent-browser), scripting (python, bash, node), and file/navigation utilities. Your working directory persists between calls; files in your working area survive across sessions. Only allowlisted programs run; send shell(command=\"ls\") to look around.")]
+    [CommandField("command", "string", required: true, Description = "The command line to run, e.g. web_search \"rust async\", or cd notes && ls, or python script.py")]
+    private async Task<string> ExecuteShellAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
+    {
+        var commandLine = command?["command"]?.GetValue<string>();
+
+        if (string.IsNullOrWhiteSpace(commandLine))
+        {
+            return "Shell failed: 'command' is required";
+        }
+
+        if (!config.Container.Enabled)
+        {
+            return "Your computer isn't available yet (the container is disabled). Your peer needs to start it and enable it in config.";
+        }
+
+        var result = await containerExecutor.ExecuteAsync(commandLine, ct);
+
+        // Audit every exec so it's queryable later via query_action_log, independent of context.
+        await actionLogRepo.LogAsync("shell", commandLine,
+            result.Allowed ? Summarize(result.Output) : $"rejected: {result.RejectionReason}");
+
+        if (!result.Allowed)
+        {
+            return result.RejectionReason!;
+        }
+
+        var output = string.IsNullOrWhiteSpace(result.Output) ? "(no output)" : result.Output;
+
+        if (result.TimedOut)
+        {
+            output += "\n[timed out — the command ran longer than the allowed time and was stopped]";
+        }
+
+        if (result.Truncated)
+        {
+            output += "\n[output truncated]";
+        }
+
+        return output;
+    }
+
+    private static string Summarize(string output)
+    {
+        var firstLine = output.Split('\n', 2)[0];
+        return firstLine.Length <= 200 ? firstLine : firstLine[..200];
+    }
 
     [Command("schedule", "Schedule a future event that will wake you for an autonomous turn at the given time")]
     [CommandField("name", "string", required: true, Description = "Event name")]

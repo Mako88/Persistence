@@ -1,0 +1,17 @@
+#!/bin/sh
+# fetch_url <url> — fetch a page and return its main content as clean markdown (token-efficient).
+# For static/article pages; for JS-heavy sites or interaction, use `agent-browser open <url>`.
+set -eu
+
+url="${1:-}"
+
+if [ -z "$url" ]; then
+  echo "usage: fetch_url <url>" >&2
+  exit 1
+fi
+
+# trafilatura strips nav/ads/boilerplate and emits markdown of the main content.
+trafilatura --markdown -u "$url" 2>/dev/null || {
+  echo "fetch failed (could not extract content): $url" >&2
+  exit 1
+}

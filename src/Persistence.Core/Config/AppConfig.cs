@@ -39,6 +39,12 @@ public class AppConfig : IAppConfig
     public bool DebugMode { get; set; } = false;
     public int MaxActionIterations { get; set; } = 5;
 
+    /// <summary>
+    /// The peer's sandboxed "computer" reached via the <c>shell</c> command. Off by default; see
+    /// <see cref="ContainerSettings"/>. Nested values are overridable via <c>PERSISTENCE_CONTAINER_*</c>.
+    /// </summary>
+    public ContainerSettings Container { get; set; } = new();
+
     // --- Model selection ---
 
     /// <summary>
@@ -194,6 +200,27 @@ public class AppConfig : IAppConfig
                 // Unconvertible value — leave the file/default value in place.
             }
         }
+
+        ApplyContainerEnvironmentOverrides(config);
+    }
+
+    /// <summary>
+    /// Overrides the nested <see cref="ContainerSettings"/> ops knobs from <c>PERSISTENCE_CONTAINER_*</c>
+    /// env vars. The generic reflection loop above only handles scalar props directly on
+    /// <see cref="AppConfig"/>, so the high-value container settings are wired explicitly here
+    /// (the allowlist stays file-configured — an array doesn't map cleanly to a single env value).
+    /// </summary>
+    private static void ApplyContainerEnvironmentOverrides(AppConfig config)
+    {
+        string? Env(string suffix) =>
+            Environment.GetEnvironmentVariable($"{EnvPrefix}CONTAINER_{suffix}");
+
+        if (Env("ENABLED") is { } enabled && bool.TryParse(enabled, out var en)) config.Container.Enabled = en;
+        if (Env("NAME") is { Length: > 0 } name) config.Container.Name = name;
+        if (Env("DOCKERHOST") is { Length: > 0 } host) config.Container.DockerHost = host;
+        if (Env("WORKINGDIR") is { Length: > 0 } dir) config.Container.WorkingDir = dir;
+        if (Env("TIMEOUTSECONDS") is { } t && int.TryParse(t, out var ts)) config.Container.TimeoutSeconds = ts;
+        if (Env("MAXOUTPUTBYTES") is { } m && int.TryParse(m, out var mb)) config.Container.MaxOutputBytes = mb;
     }
 
     private static async Task<AppConfig> LoadFromFileAsync(string path)

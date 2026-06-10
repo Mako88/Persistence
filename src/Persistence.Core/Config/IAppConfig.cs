@@ -93,4 +93,9 @@ public interface IAppConfig
     /// slow local models can spend a long time just ingesting a large prompt before responding.
     /// </summary>
     int RequestTimeoutSeconds { get; set; }
+
+    /// <summary>
+    /// The peer's sandboxed "computer" reached via the <c>shell</c> command (off by default).
+    /// </summary>
+    ContainerSettings Container { get; set; }
 }

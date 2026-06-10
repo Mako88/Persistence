@@ -1,0 +1,18 @@
+# Minimal SearXNG override merged over the image defaults. The key change is enabling the JSON output
+# format the `web_search` tool relies on. Local-only instance (no host port published).
+use_default_settings: true
+
+server:
+  # Local, private instance — this is not internet-exposed. Change if you ever publish it.
+  secret_key: "persistence-local-change-me"
+  limiter: false
+  image_proxy: false
+
+search:
+  formats:
+    - html
+    - json
+
+engines:
+  - name: wikipedia
+    disabled: false

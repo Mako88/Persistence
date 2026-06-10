@@ -1,0 +1,45 @@
+# The peer's "computer": a sandboxed workspace reached only through Persistence's `shell` command
+# (docker exec into the `computer` service). SearXNG provides keyless search on a private network.
+#
+# Security model: the container — not Persistence's allowlist — is the real boundary. `computer` runs
+# non-privileged, drops all capabilities, forbids privilege escalation, has resource limits, and has
+# NO host bind-mounts (only the named `work` volume persists the peer's files). Egress to the internet
+# is allowed (the web tools need it); nothing is published to the host.
+name: persistence
+
+services:
+  searxng:
+    image: searxng/searxng:latest
+    container_name: persistence-searxng
+    networks: [lab]
+    volumes:
+      - ./searxng:/etc/searxng:rw
+    environment:
+      - SEARXNG_BASE_URL=http://searxng:8080/
+    restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+
+  computer:
+    build: ./computer
+    image: persistence-computer
+    container_name: persistence-computer   # must match ContainerSettings.Name
+    networks: [lab]
+    working_dir: /work
+    volumes:
+      - work:/work                          # the peer's persistent workspace (no host paths)
+    environment:
+      - SEARXNG_URL=http://searxng:8080
+    command: ["sleep", "infinity"]          # stay alive for `docker exec`
+    restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    pids_limit: 512
+    mem_limit: 2g
+    depends_on: [searxng]
+
+networks:
+  lab:
+    driver: bridge
+
+volumes:
+  work:
