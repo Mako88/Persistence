@@ -204,12 +204,18 @@ public class ProposalServiceTests
     }
 
     [Fact]
-    public async Task GetOpenDelegatesToRepository()
+    public async Task GetOpenReturnsTheRepositoryProposalsUnchangedAndInOrder()
     {
-        proposalRepo.Setup(r => r.GetOpenAsync(It.IsAny<CancellationToken>())).ReturnsAsync([Open(ProposalKind.AddFragment, content: "x")]);
+        var first = Open(ProposalKind.AddFragment, content: "first");
+        var second = Open(ProposalKind.RemoveFragment, content: "second");
+        proposalRepo.Setup(r => r.GetOpenAsync(It.IsAny<CancellationToken>())).ReturnsAsync([first, second]);
 
-        var open = await service.GetOpenAsync();
+        var open = (await service.GetOpenAsync()).ToList();
 
-        Assert.Single(open);
+        // Verify the service passes the repo's results through untouched (same instances, same
+        // order) — not merely that it returns *a* count, which a stubbed mock would satisfy trivially.
+        Assert.Equal(2, open.Count);
+        Assert.Same(first, open[0]);
+        Assert.Same(second, open[1]);
     }
 }

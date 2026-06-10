@@ -20,13 +20,13 @@ public class LocalPromptBuilderTests
 
         Assert.Equal(2, request.Messages.Count);
 
+        // Exact content — ordering and the "\n\n--\n\n" separator both matter; a builder that
+        // reordered or dropped the delimiter would still pass a loose Contains check.
         var system = request.Messages.Single(m => m.Role == "system");
-        Assert.Contains("sys one", system.Content);
-        Assert.Contains("sys two", system.Content);
+        Assert.Equal("sys one\n\n--\n\nsys two", system.Content);
 
         var user = request.Messages.Single(m => m.Role == "user");
-        Assert.Contains("main one", user.Content);
-        Assert.Contains("main two", user.Content);
+        Assert.Equal("main one\n\n--\n\nmain two", user.Content);
     }
 
     [Fact]

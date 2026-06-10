@@ -20,7 +20,7 @@ public class StreamingTests : IClassFixture<ApiTestFixture>
     /// timeout elapses. Parses the `data:` JSON of each frame.
     /// </summary>
     private static async Task<List<SseEvent>> ReadEventsAsync(
-        Stream stream, int count, TimeSpan timeout, CancellationToken ct)
+        Stream stream, int count, TimeSpan timeout, CancellationToken ct, List<string>? rawJson = null)
     {
         using var reader = new StreamReader(stream);
         var events = new List<SseEvent>();
@@ -38,6 +38,7 @@ public class StreamingTests : IClassFixture<ApiTestFixture>
                     if (e is not null)
                     {
                         events.Add(e);
+                        rawJson?.Add(json);
                     }
                 }
             }
@@ -70,7 +71,8 @@ public class StreamingTests : IClassFixture<ApiTestFixture>
         Assert.Equal("text/event-stream", streamResp.Content.Headers.ContentType?.MediaType);
 
         var stream = await streamResp.Content.ReadAsStreamAsync();
-        var events = await ReadEventsAsync(stream, count: 1000, TimeSpan.FromSeconds(4), CancellationToken.None);
+        var raw = new List<string>();
+        var events = await ReadEventsAsync(stream, count: 1000, TimeSpan.FromSeconds(4), CancellationToken.None, raw);
 
         Assert.NotEmpty(events);
         Assert.Contains(events, e => e.Kind == "thought" && e.Text == "noting");
@@ -79,8 +81,17 @@ public class StreamingTests : IClassFixture<ApiTestFixture>
         // Sequences strictly increasing and unique — no duplicates across the replay boundary.
         var seqs = events.Select(e => e.Seq).ToList();
         Assert.Equal(seqs.OrderBy(s => s).Distinct().ToList(), seqs);
-        // Successful deserialization into Seq/Kind/Text proves the data: payload is camelCase.
-        Assert.All(events, e => Assert.False(string.IsNullOrEmpty(e.Kind)));
+
+        // Browser clients depend on camelCase keys. The Web deserializer above is case-insensitive,
+        // so it can't prove casing — assert against the raw `data:` JSON directly: camelCase keys
+        // present, PascalCase absent.
+        var payload = raw[0];
+        Assert.Contains("\"seq\":", payload);
+        Assert.Contains("\"kind\":", payload);
+        Assert.Contains("\"text\":", payload);
+        Assert.DoesNotContain("\"Seq\":", payload);
+        Assert.DoesNotContain("\"Kind\":", payload);
+        Assert.DoesNotContain("\"Text\":", payload);
     }
 
     [Fact]

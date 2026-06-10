@@ -28,6 +28,42 @@ public class LocalClaudeModelClientTests
     }
 
     [Fact]
+    public void FlattensAllMessagesWithRoleLabelsInOrderSeparatedByBlankLines()
+    {
+        var broker = new RemotePeerBroker();
+        var client = new LocalClaudeModelClient(broker);
+
+        _ = client.CompleteAsync(Request(
+            ("system", "you are a peer"),
+            ("user", "hi"),
+            ("assistant", "earlier reply")));
+
+        // Exact layout matters: each message becomes a [role] label line, then its content, then a
+        // blank line; trailing whitespace trimmed. Normalise newlines so the assertion is
+        // platform-independent (StringBuilder.AppendLine uses the OS line ending).
+        var prompt = broker.TryGetPending()!.Prompt.Replace("\r\n", "\n");
+
+        Assert.Equal(
+            "[system]\nyou are a peer\n\n[user]\nhi\n\n[assistant]\nearlier reply",
+            prompt);
+    }
+
+    [Fact]
+    public async Task CancellingTheTurnDropsThePendingRequestAndCancelsTheCompletion()
+    {
+        var broker = new RemotePeerBroker();
+        var client = new LocalClaudeModelClient(broker);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var completion = client.CompleteAsync(Request(("user", "hello")), cts.Token);
+
+        // A cancelled turn must not leave a stale request a late response could resolve.
+        await Assert.ThrowsAsync<TaskCanceledException>(() => completion);
+        Assert.Null(broker.TryGetPending());
+    }
+
+    [Fact]
     public async Task StreamYieldsResponseThenCompleted()
     {
         var broker = new RemotePeerBroker();

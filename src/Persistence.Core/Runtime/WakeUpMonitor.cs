@@ -64,8 +64,19 @@ public class WakeUpMonitor : IWakeUpMonitor
 
         foreach (var evt in dueEvents)
         {
-            await scheduledEvents.MarkTriggeredAsync(evt);
-            await eventBus.PublishAsync(this, new ScheduledEventTriggered(evt));
+            try
+            {
+                // Mark before publishing so a persistence failure can't notify subscribers of an
+                // event still flagged Pending.
+                await scheduledEvents.MarkTriggeredAsync(evt);
+                await eventBus.PublishAsync(this, new ScheduledEventTriggered(evt));
+            }
+            catch (Exception)
+            {
+                // Isolate per-event failures: one event failing to persist or notify must not starve
+                // the others in this sweep. A failed event stays Pending and due, so it is retried on
+                // the next poll.
+            }
         }
     }
 }

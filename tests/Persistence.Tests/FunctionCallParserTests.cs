@@ -158,11 +158,14 @@ public class FunctionCallParserTests
     public void ErrorSnippetIsCappedAndSingleLine()
     {
         var longArg = new string('x', 200);
-        var call = SingleCall($"add(content={longArg}"); // unterminated-ish bareword call (no close paren)
+        // Include a newline so the single-line collapse is actually exercised, not assumed.
+        var call = SingleCall($"add(content={longArg}\nmore=stuff"); // unterminated bareword call (no close paren)
         var (_, fields) = Unwrap(call);
 
         var text = fields["text"]!.GetValue<string>();
         Assert.True(text.Length <= 81, $"snippet should be capped, was {text.Length}");
+        Assert.DoesNotContain('\n', text);
+        Assert.DoesNotContain('\r', text);
     }
 
     [Fact]

@@ -43,9 +43,37 @@ public class RespondToUserHandlerTests
     }
 
     [Fact]
+    public async Task AcceptsAnObjectPayloadWithATextProperty()
+    {
+        // The model may emit either a bare string or { "text": ... }; both must reply identically.
+        var (handler, replies) = Create();
+        var context = Context();
+
+        await handler.HandleAsync(context, new JsonObject { ["text"] = "from object" });
+
+        Assert.Equal("from object", Assert.Single(context.ContextFragments.Values).Content);
+        Assert.Equal(["from object"], replies);
+    }
+
+    [Fact]
     public async Task ThrowsWithoutATextPayload()
     {
         var (handler, _) = Create();
         await Assert.ThrowsAsync<InvalidOperationException>(() => handler.HandleAsync(Context(), null));
+    }
+
+    [Fact]
+    public async Task ThrowsWhenObjectPayloadLacksAText()
+    {
+        // An object missing the "text" key is a malformed payload, not an empty reply — it must
+        // surface as an error rather than silently posting nothing.
+        var (handler, replies) = Create();
+        var context = Context();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => handler.HandleAsync(context, new JsonObject { ["message"] = "wrong key" }));
+
+        Assert.Empty(context.ContextFragments.Values);
+        Assert.Empty(replies);
     }
 }

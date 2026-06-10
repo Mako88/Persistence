@@ -107,6 +107,13 @@ public class TurnHandlerTests
 
         // First parse failed → fed back and retried; second succeeded.
         h.Model.Verify(m => m.CompleteAsync(It.IsAny<PromptRequest>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
+
+        // ...and the feedback was actually injected into the context (carrying the unparseable raw
+        // output back to the model), not just a bare retry. The harness's model returns "raw".
+        Assert.Contains(h.Context.ContextFragments.Values, f =>
+            f.FragmentType == ContextFragmentType.ActionResponse
+            && f.Content.Contains("could not be parsed")
+            && f.Content.Contains("raw"));
     }
 
     [Fact]
