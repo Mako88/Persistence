@@ -1651,7 +1651,19 @@ public class ManageContextHandler : CommandHandler
         var created = new List<string>();
         var suggestions = new List<string>();
 
-        if (tagsNode is not JsonArray tagsArray)
+        // Accept either an array (tags=["a/b", "c/d"]) or a single tag string (tag="a/b") — the
+        // latter arrives e.g. when a peer writes `add(... tag="a/b")` (re-keyed from the singular).
+        JsonArray tagsArray;
+        if (tagsNode is JsonArray array)
+        {
+            tagsArray = array;
+        }
+        else if (tagsNode is JsonValue value && value.TryGetValue<string>(out var single)
+                 && !string.IsNullOrWhiteSpace(single))
+        {
+            tagsArray = new JsonArray(single);
+        }
+        else
         {
             return (tags, created, suggestions);
         }

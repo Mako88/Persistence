@@ -75,6 +75,19 @@ public sealed class ManageContextHandlerIntegrationTests : IAsyncLifetime
         return published.Single().Result;
     }
 
+    [Fact]
+    public async Task AddAcceptsASingleTagStringNotJustAnArray()
+    {
+        var context = await NewContextAsync();
+
+        // `add(... tag="x")` — the singular field is re-keyed to `tags` and accepted as one tag,
+        // instead of triggering a "did you mean tags?" hint and applying nothing.
+        var result = await RunAsync(context, """{ "add": { "content": "a note", "tag": "topic/alpha" } }""");
+
+        Assert.Contains("1 tag(s)", result);
+        Assert.Contains("topic/alpha", result);
+    }
+
     private static WeightedContextFragment Note(string content) =>
         new()
         {
