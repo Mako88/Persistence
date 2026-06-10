@@ -126,6 +126,17 @@ public class ContainerExecutorTests
     }
 
     [Fact]
+    public async Task GetLogsRunsDockerLogsForTheNamedContainer()
+    {
+        SetupRunner(stderr: "uwsgi: rate limited");  // services often log to stderr
+
+        var logs = await executor.GetLogsAsync("persistence-searxng", 20, CancellationToken.None);
+
+        Assert.Contains("rate limited", logs);
+        Assert.Equal(["logs", "--tail", "20", "persistence-searxng"], CapturedArgs());
+    }
+
+    [Fact]
     public async Task StderrIsLabelledInTheCombinedOutput()
     {
         SetupRunner(stdout: "out", stderr: "boom");

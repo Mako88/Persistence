@@ -77,8 +77,20 @@ public class ExecuteActionsHandler : CommandHandler
             return result.RejectionReason!;
         }
 
-        var hasText = !string.IsNullOrWhiteSpace(result.Output);
-        var output = hasText ? result.Output : "(no output)";
+        // Always make the outcome legible — success OR failure — so no command is ambiguous.
+        string output;
+        if (!string.IsNullOrWhiteSpace(result.Output))
+        {
+            output = result.Output;
+        }
+        else if (result.ExitCode == 0 && !result.TimedOut)
+        {
+            output = "(command completed, no output)";
+        }
+        else
+        {
+            output = "(no output)";
+        }
 
         // Surface failures so the peer is never left guessing — a non-zero exit with no output would
         // otherwise read as a silent success.
@@ -104,6 +116,37 @@ public class ExecuteActionsHandler : CommandHandler
     {
         var firstLine = output.Split('\n', 2)[0];
         return firstLine.Length <= 200 ? firstLine : firstLine[..200];
+    }
+
+    [Command("container_logs", "View recent logs from your computer's containers, to troubleshoot it yourself. 'computer' is your box; 'search' is the search service (useful when web_search misbehaves).")]
+    [CommandField("service", "string", Description = "Which container: 'computer' (default) or 'search'", Default = "computer")]
+    [CommandField("lines", "int", Description = "How many recent log lines to show", Default = "50")]
+    private async Task<string> ExecuteContainerLogsAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
+    {
+        if (!config.Container.Enabled)
+        {
+            return "Your computer isn't available yet (the container is disabled). Your peer needs to start it and enable it in config.";
+        }
+
+        var service = command?["service"]?.GetValue<string>()?.Trim().ToLowerInvariant() ?? "computer";
+        var lines = command?["lines"]?.GetValue<int>() ?? 50;
+
+        var containerName = service switch
+        {
+            "computer" => config.Container.Name,
+            "search" => config.Container.SearchContainerName,
+            _ => null,
+        };
+
+        if (containerName is null)
+        {
+            return $"Unknown service '{service}'. Available: computer, search.";
+        }
+
+        var logs = await containerExecutor.GetLogsAsync(containerName, lines, ct);
+        await actionLogRepo.LogAsync("container_logs", service, Summarize(logs));
+
+        return $"[{service} logs — last {lines} lines]\n{logs}";
     }
 
     [Command("schedule", "Schedule a future event that will wake you for an autonomous turn at the given time")]

@@ -73,6 +73,34 @@ public class ContainerExecutor : IContainerExecutor
             result.ExitCode);
     }
 
+    /// <inheritdoc />
+    public async Task<string> GetLogsAsync(string containerName, int lines, CancellationToken ct)
+    {
+        var settings = config.Container;
+
+        var env = settings.DockerHost is { Length: > 0 } host
+            ? new Dictionary<string, string> { ["DOCKER_HOST"] = host }
+            : null;
+
+        var result = await processRunner.RunAsync(
+            "docker",
+            ["logs", "--tail", lines.ToString(), containerName],
+            settings.TimeoutSeconds,
+            settings.MaxOutputBytes,
+            env,
+            ct);
+
+        // `docker logs` interleaves the container's stdout and stderr; many services log to stderr,
+        // so merge both plainly (no [stderr] label — for logs it's all just "the logs").
+        var logs = (result.Stdout + result.Stderr).Trim();
+        if (logs.Length == 0)
+        {
+            logs = "(no logs)";
+        }
+
+        return result.Truncated ? logs + "\n[output truncated]" : logs;
+    }
+
     /// <summary>
     /// Returns null if every segment's program is allowlisted, otherwise a peer-facing rejection
     /// message naming the offending program and the allowed set.

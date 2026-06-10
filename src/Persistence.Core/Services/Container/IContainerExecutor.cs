@@ -15,4 +15,10 @@ public readonly record struct ContainerExecResult(
 public interface IContainerExecutor
 {
     Task<ContainerExecResult> ExecuteAsync(string commandLine, CancellationToken ct);
+
+    /// <summary>
+    /// Returns the last <paramref name="lines"/> log lines of a container (host-side
+    /// <c>docker logs</c>), so the peer can troubleshoot its own computer.
+    /// </summary>
+    Task<string> GetLogsAsync(string containerName, int lines, CancellationToken ct);
 }

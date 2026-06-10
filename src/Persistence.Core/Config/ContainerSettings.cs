@@ -16,6 +16,9 @@ public class ContainerSettings
     /// <summary>Name (or id) of the running container to <c>docker exec</c> into.</summary>
     public string Name { get; set; } = "persistence-computer";
 
+    /// <summary>Name of the search (SearXNG) container, so the peer can read its logs to troubleshoot search.</summary>
+    public string SearchContainerName { get; set; } = "persistence-searxng";
+
     /// <summary>Optional Docker host (passed as <c>DOCKER_HOST</c>); null uses the default socket/pipe.</summary>
     public string? DockerHost { get; set; }
 

@@ -132,6 +132,56 @@ public class ExecuteActionsHandlerTests
     }
 
     [Fact]
+    public async Task ShellReportsSuccessWhenACommandProducesNoOutput()
+    {
+        config.Container.Enabled = true;
+        containerExecutor
+            .Setup(e => e.ExecuteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContainerExecResult(Allowed: true, RejectionReason: null,
+                Output: "", TimedOut: false, Truncated: false, ExitCode: 0));
+
+        var result = await RunAsync("""{ "shell": { "command": "mkdir notes" } }""");
+
+        // A no-output success must read as a success, not an ambiguous blank.
+        Assert.Contains("completed", result);
+    }
+
+    [Fact]
+    public async Task ContainerLogsReturnsLogsForKnownServiceAndAudits()
+    {
+        config.Container.Enabled = true;
+        containerExecutor
+            .Setup(e => e.GetLogsAsync("persistence-searxng", It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync("uwsgi error: too many requests");
+
+        var result = await RunAsync("""{ "container_logs": { "service": "search" } }""");
+
+        Assert.Contains("too many requests", result);
+        actionLogRepo.Verify(r => r.LogAsync("container_logs", "search", It.IsAny<string?>(), It.IsAny<IDbTransaction?>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ContainerLogsRejectsAnUnknownService()
+    {
+        config.Container.Enabled = true;
+
+        var result = await RunAsync("""{ "container_logs": { "service": "nope" } }""");
+
+        Assert.Contains("Unknown service", result);
+        containerExecutor.Verify(e => e.GetLogsAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ContainerLogsShortCircuitsWhenContainerDisabled()
+    {
+        config.Container.Enabled = false;
+
+        var result = await RunAsync("""{ "container_logs": { } }""");
+
+        Assert.Contains("isn't available", result);
+    }
+
+    [Fact]
     public async Task ShellSurfacesNonZeroExitWithEmptyOutput()
     {
         config.Container.Enabled = true;
