@@ -9,8 +9,9 @@ namespace Persistence.Config;
 /// Model/provider-coupled settings live in named <see cref="ModelProfile"/> entries in
 /// <see cref="Models"/>; <see cref="SelectedModel"/> picks the active one. The model-coupled
 /// <see cref="IAppConfig"/> properties (Provider, Model, ApiKey, token limits, …) delegate to that
-/// active profile, so consumers read them exactly as before. The remaining settings here
-/// (database, UI mode, proposal approval, debug, iteration cap) are shared across models.
+/// active profile, so consumers read them exactly as before. <see cref="DatabasePath"/> is part of
+/// that model-coupled set — each model keeps its own continuity store. The remaining settings here
+/// (UI mode, proposal approval, debug, iteration cap) are shared across models.
 ///
 /// The older flat shape (Provider/Model/… at the top level) is still accepted: a config with no
 /// <see cref="Models"/> is migrated into a single profile on load.
@@ -18,9 +19,23 @@ namespace Persistence.Config;
 public class AppConfig : IAppConfig
 {
     // --- Shared (non-model) settings ---
-    public string DatabasePath { get; set; } = "dbs/continuity.db";
+
+    /// <summary>
+    /// Base folder for model stores whose <see cref="ModelProfile.DatabasePath"/> is a bare filename
+    /// (or unset). Defaults to <c>dbs</c>; point it at an absolute path (e.g. the repo root) so the
+    /// store resolves the same regardless of the process working directory.
+    /// </summary>
+    public string DatabaseDirectory { get; set; } = ModelProfile.DefaultDatabaseDirectory;
+
     public string UiMode { get; set; } = "Tui";
     public string ProposalApproval { get; set; } = "Self";
+
+    /// <summary>
+    /// Whether the compact command list is appended to the end of each turn by default (the peer can
+    /// toggle it per session via <c>toggle_command_list</c>). On by default so the peer always knows
+    /// what it can do.
+    /// </summary>
+    public bool SurfaceCommands { get; set; } = true;
     public bool DebugMode { get; set; } = false;
     public int MaxActionIterations { get; set; } = 5;
 
@@ -49,6 +64,7 @@ public class AppConfig : IAppConfig
     // [JsonIgnore] so they neither serialize (no duplication with Models) nor deserialize from the
     // new shape; legacy flat configs are migrated separately in LoadFromFileAsync.
 
+    [JsonIgnore] public string DatabasePath { get => ActiveModel.ResolveDatabasePath(DatabaseDirectory); set => ActiveModel.DatabasePath = value; }
     [JsonIgnore] public string Provider { get => ActiveModel.Provider; set => ActiveModel.Provider = value; }
     [JsonIgnore] public string Model { get => ActiveModel.Model; set => ActiveModel.Model = value; }
     [JsonIgnore] public string ApiKey { get => ActiveModel.ApiKey; set => ActiveModel.ApiKey = value; }

@@ -10,9 +10,40 @@ namespace Persistence.Config;
 public class ModelProfile
 {
     /// <summary>
+    /// Default directory for continuity stores when a profile's <see cref="DatabasePath"/> is a bare
+    /// filename (or unset). Keeps each model's database tidily under one folder.
+    /// </summary>
+    public const string DefaultDatabaseDirectory = "dbs";
+
+    /// <summary>
     /// Friendly name used to select this profile (see <see cref="AppConfig.SelectedModel"/>).
     /// </summary>
     public string Name { get; set; } = "default";
+
+    /// <summary>
+    /// Path to this model's SQLite continuity store, so each model keeps its own memory. A bare
+    /// filename (no directory) is resolved under <see cref="DefaultDatabaseDirectory"/>; a path with
+    /// a directory (relative or absolute) is used as-is. When null/blank, defaults to
+    /// <c>{DefaultDatabaseDirectory}/{Name}.db</c>. See <see cref="ResolveDatabasePath"/>.
+    /// </summary>
+    public string? DatabasePath { get; set; }
+
+    /// <summary>
+    /// The effective database path for this profile: an explicit <see cref="DatabasePath"/> (bare
+    /// filenames placed under <paramref name="baseDirectory"/>), or <c>{baseDirectory}/{Name}.db</c>
+    /// when none is set. A <see cref="DatabasePath"/> that already carries a directory (relative or
+    /// absolute) wins as-is — the base directory only applies to bare filenames.
+    /// </summary>
+    /// <param name="baseDirectory">Folder for bare-filename stores; blank falls back to
+    /// <see cref="DefaultDatabaseDirectory"/>. Pass <see cref="AppConfig.DatabaseDirectory"/>.</param>
+    public string ResolveDatabasePath(string baseDirectory = DefaultDatabaseDirectory)
+    {
+        var dir = string.IsNullOrWhiteSpace(baseDirectory) ? DefaultDatabaseDirectory : baseDirectory.Trim();
+        var raw = string.IsNullOrWhiteSpace(DatabasePath) ? $"{Name}.db" : DatabasePath.Trim();
+        return string.IsNullOrEmpty(Path.GetDirectoryName(raw))
+            ? Path.Combine(dir, raw)
+            : raw;
+    }
 
     /// <summary>
     /// API provider that determines the request/response shape (e.g. "OpenAI", "OpenAiChat",

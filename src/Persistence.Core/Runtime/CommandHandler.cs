@@ -403,4 +403,27 @@ public abstract class CommandHandler : IActionHandler
     private record CommandInfo(string Name, string Description, CommandFieldAttribute[] Fields, MethodInfo Method);
 
     #endregion
+
+    #region Command description (for catalog / surfacing)
+
+    /// <summary>
+    /// A read-only projection of a discovered command — name, description, and fields — for callers
+    /// that need to describe the command surface without the dispatch internals (e.g.
+    /// <see cref="ICommandCatalog"/>). Excludes the backing <see cref="MethodInfo"/>.
+    /// </summary>
+    public readonly record struct CommandSummary(
+        string Name, string Description, IReadOnlyList<CommandFieldAttribute> Fields);
+
+    /// <summary>
+    /// Describes the commands a handler type exposes, reusing the same cached reflection that backs
+    /// dispatch and <c>list()</c> (so it shares the cache with an already-constructed handler and
+    /// does not re-reflect). Does not construct the handler — purely metadata.
+    /// </summary>
+    public static IReadOnlyList<CommandSummary> DescribeCommands(Type handlerType) =>
+        Cache.GetOrAdd(handlerType, DiscoverCommands)
+            .Values
+            .Select(c => new CommandSummary(c.Name, c.Description, c.Fields))
+            .ToList();
+
+    #endregion
 }

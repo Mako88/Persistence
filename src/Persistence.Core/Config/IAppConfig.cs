@@ -11,9 +11,15 @@ public interface IAppConfig
     string ApiKey { get; set; }
 
     /// <summary>
-    /// Path to the SQLite database file
+    /// Path to the SQLite database file (resolved per active model under <see cref="DatabaseDirectory"/>)
     /// </summary>
     string DatabasePath { get; set; }
+
+    /// <summary>
+    /// Base folder for model stores addressed by a bare filename; point at an absolute path (e.g. the
+    /// repo root) to make the store location independent of the process working directory.
+    /// </summary>
+    string DatabaseDirectory { get; set; }
 
     /// <summary>
     /// Maximum tokens the model is allowed to generate per completion
@@ -75,6 +81,12 @@ public interface IAppConfig
     /// Maximum number of action iterations per turn before the loop is forcibly ended
     /// </summary>
     int MaxActionIterations { get; set; }
+
+    /// <summary>
+    /// Whether the compact command list is appended to the end of each turn by default. The peer can
+    /// toggle it per session via <c>toggle_command_list</c>; full schemas remain available via <c>list()</c>.
+    /// </summary>
+    bool SurfaceCommands { get; set; }
 
     /// <summary>
     /// HTTP request timeout (seconds) for model calls; -1 disables it. Generous by default because

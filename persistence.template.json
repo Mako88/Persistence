@@ -1,5 +1,4 @@
 {
-  "DatabasePath": "dbs/continuity.db",
   "UiMode": "Tui",
   "ProposalApproval": "Self",
   "MaxActionIterations": 5,
@@ -11,6 +10,7 @@
       "Name": "cloud",
       "Provider": "OpenAI",
       "Model": "gpt-5.5",
+      "DatabasePath": "cloud.db",
       "ApiKey": "YOUR_API_KEY_HERE",
       "ApiBaseUrl": null,
       "MaxInputTokens": 8000,
@@ -23,6 +23,7 @@
       "Name": "local",
       "Provider": "OpenAiChat",
       "Model": "local",
+      "DatabasePath": "local.db",
       "ApiKey": "",
       "ApiBaseUrl": "http://127.0.0.1:8080/v1",
       "MaxInputTokens": 28000,

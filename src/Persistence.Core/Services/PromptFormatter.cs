@@ -19,6 +19,7 @@ public class PromptFormatter : IPromptFormatter
     private readonly ISessionContext sessionContext;
     private readonly IAppConfig config;
     private readonly IProtocolInstructions protocolInstructions;
+    private readonly ICommandCatalog commandCatalog;
     private readonly ITokenUsageTracker usageTracker;
     private readonly IContextWindowProvider contextWindows;
     private readonly IEventBus eventBus;
@@ -32,6 +33,7 @@ public class PromptFormatter : IPromptFormatter
         ISessionContext sessionContext,
         IAppConfig config,
         IProtocolInstructions protocolInstructions,
+        ICommandCatalog commandCatalog,
         ITokenUsageTracker usageTracker,
         IContextWindowProvider contextWindows,
         IEventBus eventBus)
@@ -39,6 +41,7 @@ public class PromptFormatter : IPromptFormatter
         this.sessionContext = sessionContext;
         this.config = config;
         this.protocolInstructions = protocolInstructions;
+        this.commandCatalog = commandCatalog;
         this.usageTracker = usageTracker;
         this.contextWindows = contextWindows;
         this.eventBus = eventBus;
@@ -78,6 +81,21 @@ public class PromptFormatter : IPromptFormatter
             Source = "System",
             Content = protocolInstructions.GetInstructions(),
         });
+
+        // The compact command list sits between the syntax rules (above) and the sensory block
+        // (below): the instructions teach *how* to write a command, this enumerates *which* commands
+        // exist. Default on so the peer always knows its options, but toggleable — the local model
+        // re-ingests the whole prompt every turn, so a peer that has the commands memorised can hide
+        // this to save tokens (full per-field schemas remain available via list()). Kept above the
+        // budget estimate below so its token cost is reflected in the readout.
+        if (sessionContext.SurfaceCommandsEnabled)
+        {
+            segments.Add(new PromptSegment
+            {
+                Source = "System",
+                Content = commandCatalog.GetCompactListing(),
+            });
+        }
 
         // Estimate the prompt's token usage so the peer can see how full its context is. Summed
         // over everything assembled so far plus the sensory block's own (roughly fixed) size, so

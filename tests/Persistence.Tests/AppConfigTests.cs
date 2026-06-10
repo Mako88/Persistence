@@ -2,6 +2,7 @@ using Persistence.Config;
 
 namespace Persistence.Tests;
 
+[Collection("EnvironmentVariables")]
 public class AppConfigTests
 {
     [Fact]

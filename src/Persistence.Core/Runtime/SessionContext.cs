@@ -39,4 +39,10 @@ public class SessionContext : ISessionContext
     /// deliberation gap (a proposal created during the current turn can't be accepted within it).
     /// </summary>
     public DateTimeOffset TurnStartedUtc { get; set; }
+
+    /// <summary>
+    /// Whether the compact command list is appended to the end of each turn's context. Defaults to
+    /// on; seeded from config at startup and toggled by the peer via <c>toggle_command_list</c>.
+    /// </summary>
+    public bool SurfaceCommandsEnabled { get; set; } = true;
 }

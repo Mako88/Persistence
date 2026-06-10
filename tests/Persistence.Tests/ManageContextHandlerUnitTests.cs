@@ -75,6 +75,20 @@ public class ManageContextHandlerUnitTests
     }
 
     [Fact]
+    public async Task ToggleCommandListOffThenOnFlipsTheSessionFlag()
+    {
+        Assert.True(session.SurfaceCommandsEnabled); // default-on
+
+        var offResult = await RunAsync(Context(), """{ "toggle_command_list": { "show": false } }""");
+        Assert.False(session.SurfaceCommandsEnabled);
+        Assert.Contains("toggle_command_list(show=true)", offResult); // tells the peer how to re-enable
+
+        var onResult = await RunAsync(Context(), """{ "toggle_command_list": { "show": true } }""");
+        Assert.True(session.SurfaceCommandsEnabled);
+        Assert.Contains("shown at the end of each turn", onResult);
+    }
+
+    [Fact]
     public async Task RemoveTakesFragmentOutOfContext()
     {
         var context = Context();

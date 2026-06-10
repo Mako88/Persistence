@@ -296,6 +296,7 @@ public class Orchestrator : IOrchestrator
         await db.InitializeAsync();
 
         sessionContext.SessionId = Guid.NewGuid().ToString("N");
+        sessionContext.SurfaceCommandsEnabled = config.SurfaceCommands;
 
         var context = await workingContextRepo.GetMostRecentAsync();
 

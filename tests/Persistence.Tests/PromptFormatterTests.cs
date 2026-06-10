@@ -10,15 +10,21 @@ namespace Persistence.Tests;
 public class PromptFormatterTests
 {
     private const string ProtocolMarker = "<<PROTOCOL-INSTRUCTIONS>>";
+    private const string CommandsMarker = "[Commands] <<COMMAND-CATALOG>>";
 
     private static PromptFormatter CreateFormatter(
-        int maxInputTokens = 8000, ITokenUsageTracker? tracker = null, string model = "local")
+        int maxInputTokens = 8000, ITokenUsageTracker? tracker = null, string model = "local",
+        bool surfaceCommands = false)
     {
         var session = new Mock<ISessionContext>();
         session.SetupGet(s => s.SessionId).Returns("test-session");
+        session.SetupGet(s => s.SurfaceCommandsEnabled).Returns(surfaceCommands);
 
         var protocol = new Mock<IProtocolInstructions>();
         protocol.Setup(p => p.GetInstructions()).Returns(ProtocolMarker);
+
+        var catalog = new Mock<ICommandCatalog>();
+        catalog.Setup(c => c.GetCompactListing()).Returns(CommandsMarker);
 
         var windows = new Mock<IContextWindowProvider>();
         windows.Setup(w => w.GetContextWindow(It.IsAny<string>())).Returns(200000);
@@ -26,8 +32,8 @@ public class PromptFormatterTests
         var config = new AppConfig { MaxInputTokens = maxInputTokens, Model = model };
 
         return new PromptFormatter(
-            session.Object, config, protocol.Object, tracker ?? new TokenUsageTracker(), windows.Object,
-            new Mock<IEventBus>().Object);
+            session.Object, config, protocol.Object, catalog.Object, tracker ?? new TokenUsageTracker(),
+            windows.Object, new Mock<IEventBus>().Object);
     }
 
     private static WorkingContextEntity ContextWithFragment(string content)
@@ -53,6 +59,33 @@ public class PromptFormatterTests
         });
 
         return context;
+    }
+
+    [Fact]
+    public void AppendsCommandSegmentWhenSurfacingEnabled()
+    {
+        var segments = CreateFormatter(surfaceCommands: true)
+            .Format(ContextWithFragment("hi"), []);
+
+        var commandsIdx = segments.FindIndex(s => s.Content.Contains(CommandsMarker));
+        var protocolIdx = segments.FindIndex(s => s.Content.Contains(ProtocolMarker));
+        var sensoryIdx = segments.FindIndex(s => s.Content.Contains("[Sensory]"));
+
+        Assert.True(commandsIdx >= 0, "command segment should be present when surfacing is enabled");
+        // Ordered between the syntax rules and the sensory block (the altitude decision).
+        Assert.True(protocolIdx < commandsIdx && commandsIdx < sensoryIdx);
+    }
+
+    [Fact]
+    public void OmitsCommandSegmentWhenSurfacingDisabled()
+    {
+        var segments = CreateFormatter(surfaceCommands: false)
+            .Format(ContextWithFragment("hi"), []);
+
+        Assert.DoesNotContain(segments, s => s.Content.Contains(CommandsMarker));
+        // The other trailing segments are unaffected.
+        Assert.Contains(segments, s => s.Content.Contains(ProtocolMarker));
+        Assert.Contains(segments, s => s.Content.Contains("[Sensory]"));
     }
 
     [Fact]

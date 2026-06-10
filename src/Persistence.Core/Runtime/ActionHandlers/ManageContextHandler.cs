@@ -621,6 +621,18 @@ public class ManageContextHandler : CommandHandler
         return Task.FromResult(result);
     }
 
+    [Command("toggle_command_list", "Show or hide the compact command list appended to the end of each turn. Hiding it saves context tokens; you can still send list() any time for full schemas.")]
+    [CommandField("show", "bool", Description = "true to show the command list each turn, false to hide it", Default = "true")]
+    private Task<string> ExecuteToggleCommandListAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
+    {
+        var show = command?["show"]?.GetValue<bool>() ?? true;
+        sessionContext.SurfaceCommandsEnabled = show;
+
+        return Task.FromResult(show
+            ? "Command list is now shown at the end of each turn."
+            : "Command list hidden. Send toggle_command_list(show=true) to bring it back, or list() for full schemas anytime.");
+    }
+
     [Command("summarize_fragments", "Fold several fragments into one new Summary fragment and archive the originals from context")]
     [CommandField("ids", "array", required: true, Description = "Fragment IDs to fold into the summary, e.g. [3, 5, 7]")]
     [CommandField("summary", "string", required: true, Description = "The summary text (you write it — this is not auto-generated)")]
