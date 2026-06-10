@@ -259,7 +259,18 @@ public abstract class EntityRepository<T> : IEntityRepository<T> where T : BaseE
     /// the database keeps the constructor default <see cref="BaseEntity.IsNew"/> = true and
     /// would be re-inserted on the next save.
     /// </summary>
-    protected static void Track(BaseEntity entity)
+    /// <remarks>
+    /// Generic on the concrete type so the snapshot is serialized with the <em>same</em> contract
+    /// the change-detection in <see cref="SaveInternalAsync"/> uses (<c>Serialize(entity)</c> where
+    /// <c>entity</c> is statically <typeparamref name="TEntity"/>). <see cref="JsonSerializer"/>
+    /// picks its contract from the compile-time type, not the runtime type: snapshotting as the base
+    /// <see cref="BaseEntity"/> would capture only the base fields, so the comparison against the
+    /// full-shape serialization would never match and a genuinely-unchanged entity would be
+    /// re-saved and re-audited on every save. Sub-entities tracked by a parent repository must pass
+    /// the type their own repository saves them as (see
+    /// <see cref="WorkingContextRepository.TrackSubEntities"/>).
+    /// </remarks>
+    protected static void Track<TEntity>(TEntity entity) where TEntity : BaseEntity
     {
         entity.IsNew = false;
         entity.OriginalState = JsonSerializer.Serialize(entity);
@@ -372,7 +383,7 @@ public abstract class EntityRepository<T> : IEntityRepository<T> where T : BaseE
     /// </summary>
     private async Task WriteAuditAsync(
         AuditEventType eventType,
-        BaseEntity entity,
+        T entity,
         IDbTransaction transaction,
         long? sourceId = null,
         CancellationToken ct = default)

@@ -265,7 +265,11 @@ public class WorkingContextRepository : EntityRepository<WorkingContextEntity>, 
     {
         foreach (var fragment in entity.ContextFragments.Values)
         {
-            Track(fragment);
+            // Snapshot as ContextFragmentEntity (not the runtime WeightedContextFragment) so the
+            // OriginalState matches the shape the fragment repository serializes for its own
+            // change-detection. The junction-only properties (Relevance/Order/Collapsed) live on
+            // WeightedContextFragment and are not part of the fragment row's change tracking.
+            Track<ContextFragmentEntity>(fragment);
         }
     }
 

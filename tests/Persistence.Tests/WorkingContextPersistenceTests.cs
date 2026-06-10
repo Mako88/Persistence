@@ -84,6 +84,49 @@ public sealed class WorkingContextPersistenceTests : IAsyncLifetime
         Assert.Single(reloaded!.ContextFragments);
     }
 
+    private static WeightedContextFragment PersonalFragment(string content, long sourceId) =>
+        new()
+        {
+            FragmentType = ContextFragmentType.Personal,
+            Status = ContextFragmentStatus.Active,
+            Content = content,
+            Importance = 0.5f,
+            Confidence = 0.5f,
+            Relevance = 1.0f,
+            Sources = [new SourceEntity
+            {
+                Id = sourceId,
+                SourceType = SourceType.RemotePeer,
+                CreatedUtc = DateTimeOffset.UtcNow,
+                LastModifiedUtc = DateTimeOffset.UtcNow,
+            }],
+            CreatedUtc = DateTimeOffset.UtcNow,
+            LastModifiedUtc = DateTimeOffset.UtcNow,
+        };
+
+    [Fact]
+    public async Task ReloadingAndSavingUnchangedFragmentDoesNotReAudit()
+    {
+        var auditRepo = new AuditLogRepository(config, session);
+
+        var context = await contextRepo.CreateAsync("test");
+        session.WorkingContextId = context.Id;
+        context.AddFragment(PersonalFragment("a memory", session.RemotePeerSourceId));
+        await contextRepo.SaveAsync(context);
+
+        var fragmentId = context.ContextFragments.Values.Single().Id;
+        var afterCreate = (await auditRepo.GetByTargetAsync(nameof(ContextFragmentEntity), fragmentId)).ToList();
+
+        // Simulate a later turn that does NOT touch this fragment: load fresh, save.
+        var loaded = await contextRepo.GetByIdAsync(context.Id);
+        await contextRepo.SaveAsync(loaded!);
+
+        var afterReload = (await auditRepo.GetByTargetAsync(nameof(ContextFragmentEntity), fragmentId)).ToList();
+
+        Assert.Single(afterCreate); // one Created row
+        Assert.Equal(afterCreate.Count, afterReload.Count); // no new Modified row for an unchanged fragment
+    }
+
     [Fact]
     public async Task ReloadingAndSavingDoesNotReinsertExistingFragments()
     {
