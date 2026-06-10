@@ -115,6 +115,17 @@ public class TurnHandler : ITurnHandler
         var iteration = 0;
         var hasResponded = false;
 
+        // Collect the commands run this turn (across continue-iterations), so the peer can see its own
+        // recent actions in the sensory block and build on them rather than re-planning what it just did.
+        var recentActions = new List<string>();
+        var unsubscribeActions = eventBus.Subscribe<ToolInvoked>((_, e) =>
+        {
+            recentActions.Add(SummarizeAction(e));
+            return Task.CompletedTask;
+        });
+
+        try
+        {
         while (iteration <= config.MaxActionIterations)
         {
             if (iteration > 0)
@@ -122,7 +133,7 @@ public class TurnHandler : ITurnHandler
                 DrainPendingInput(context);
             }
 
-            var segments = promptFormatter.Format(context, availableTags, iteration, config.MaxActionIterations, recentChanges);
+            var segments = promptFormatter.Format(context, availableTags, iteration, config.MaxActionIterations, recentChanges, recentActions);
             var request = promptBuilder.Build(segments);
             var rawOutput = config.Streaming
                 ? await StreamModelOutputAsync(request, ct)
@@ -200,6 +211,26 @@ public class TurnHandler : ITurnHandler
         // Transient fragment types (ActionResponse, ScratchPad) are automatically
         // skipped by SaveSubEntitiesAsync.
         await workingContextRepo.SaveAsync(context, ct: ct);
+        }
+        finally
+        {
+            unsubscribeActions();
+        }
+    }
+
+    /// <summary>
+    /// A one-line summary of a command the peer ran this turn — its name, a short request snippet, and
+    /// the gist of the result — for the "actions you've taken this turn" sensory line.
+    /// </summary>
+    private static string SummarizeAction(ToolInvoked e)
+    {
+        static string Clip(string? s, int max) =>
+            string.IsNullOrEmpty(s) ? "" : (s.Length <= max ? s : s[..max] + "…");
+
+        var request = Clip(e.Request?.Replace('\n', ' ').Trim(), 70);
+        var resultLine = e.Result?.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+
+        return $"{e.Tool}({request}) → {Clip(resultLine, 120)}";
     }
 
     /// <summary>

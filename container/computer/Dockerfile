@@ -6,7 +6,7 @@ FROM node:22-bookworm-slim
 # System deps: python (scripting + trafilatura), curl/jq (web_search), and the shared libraries a
 # headless Chrome needs (for agent-browser's general/JS browsing).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      python3 python3-pip curl jq ca-certificates git \
+      python3 python3-pip curl jq ca-certificates git poppler-utils \
       fonts-liberation libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
       libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 \
       libasound2 libpangocairo-1.0-0 libpango-1.0-0 libcairo2 libatspi2.0-0 \

@@ -20,5 +20,6 @@ public interface IPromptFormatter
         IEnumerable<TagEntity> availableTags,
         int iteration = 0,
         int maxIterations = 0,
-        IReadOnlyList<AuditLogEntity>? recentChanges = null);
+        IReadOnlyList<AuditLogEntity>? recentChanges = null,
+        IReadOnlyList<string>? recentActions = null);
 }

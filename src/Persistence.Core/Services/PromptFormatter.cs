@@ -70,7 +70,8 @@ public class PromptFormatter : IPromptFormatter
         IEnumerable<TagEntity> availableTags,
         int iteration = 0,
         int maxIterations = 0,
-        IReadOnlyList<AuditLogEntity>? recentChanges = null)
+        IReadOnlyList<AuditLogEntity>? recentChanges = null,
+        IReadOnlyList<string>? recentActions = null)
     {
         var fragments = context.ContextFragments.Values;
         var segments = new List<PromptSegment>();
@@ -119,7 +120,7 @@ public class PromptFormatter : IPromptFormatter
         segments.Add(new PromptSegment
         {
             Source = "System",
-            Content = FormatSensory(iteration, maxIterations, availableTags, usedTokens, recentChanges),
+            Content = FormatSensory(iteration, maxIterations, availableTags, usedTokens, recentChanges, recentActions),
         });
 
         lastFormatUtc = DateTimeOffset.UtcNow;
@@ -179,7 +180,8 @@ public class PromptFormatter : IPromptFormatter
         int maxIterations,
         IEnumerable<TagEntity> availableTags,
         int usedTokens,
-        IReadOnlyList<AuditLogEntity>? recentChanges)
+        IReadOnlyList<AuditLogEntity>? recentChanges,
+        IReadOnlyList<string>? recentActions)
     {
         var now = DateTimeOffset.UtcNow;
         var localNow = DateTimeOffset.Now;
@@ -208,6 +210,18 @@ public class PromptFormatter : IPromptFormatter
         if (maxIterations > 0 && iteration > 0)
         {
             sb.AppendLine($"Continue iteration: {iteration}/{maxIterations}");
+        }
+
+        // What the peer has already done THIS turn (across continue-iterations), with each result's
+        // gist — so it builds on its own recent actions instead of re-planning them. The full results
+        // are the ActionResponse fragments above; this is the salient pointer near the generation point.
+        if (recentActions is { Count: > 0 })
+        {
+            sb.AppendLine("Actions you've already taken this turn (full results are in your context above — don't repeat these):");
+            foreach (var action in recentActions.TakeLast(15))
+            {
+                sb.AppendLine($"  - {action}");
+            }
         }
 
         if (recentChanges is { Count: > 0 })
@@ -341,9 +355,9 @@ public class PromptFormatter : IPromptFormatter
 
         var nudge = percent switch
         {
-            >= 95 => " — CRITICAL: at capacity. Summarize or archive low-relevance fragments now, or older context may be dropped.",
-            >= 80 => " — getting full: consider summarizing or archiving low-relevance fragments soon.",
-            >= 60 => " — over half full; keep an eye on what's worth keeping in context.",
+            >= 95 => " — CRITICAL: at capacity. Use summarize_fragments(ids, summary) to fold low-relevance fragments into one summary (the originals are archived, recoverable), or remove some — now, or older context may be dropped.",
+            >= 80 => " — getting full: consider summarize_fragments(ids, summary) to fold several fragments into a summary and archive the originals, or remove low-relevance ones soon.",
+            >= 60 => " — over half full; keep an eye on what's worth keeping (summarize_fragments / remove when useful).",
             _ => "",
         };
 

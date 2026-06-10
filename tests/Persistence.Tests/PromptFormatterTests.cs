@@ -131,6 +131,32 @@ public class PromptFormatterTests
     }
 
     [Fact]
+    public void SensoryShowsActionsTakenThisTurn()
+    {
+        var actions = new[]
+        {
+            "shell(web_search \"x\") → • a result",
+            "add(content=…) → Added Personal fragment",
+        };
+
+        var sensory = CreateFormatter()
+            .Format(ContextWithFragment("hi"), [], recentActions: actions)[^1].Content;
+
+        Assert.Contains("Actions you've already taken this turn", sensory);
+        Assert.Contains("web_search", sensory);
+    }
+
+    [Fact]
+    public void BudgetWarningNamesTheSummarizeTool()
+    {
+        // A tiny budget makes the prompt read as over-capacity, triggering the nudge.
+        var sensory = CreateFormatter(maxInputTokens: 10)
+            .Format(ContextWithFragment("hi"), [])[^1].Content;
+
+        Assert.Contains("summarize_fragments", sensory);
+    }
+
+    [Fact]
     public void SensoryBlockReportsAppAndSystemUptime()
     {
         var sensory = CreateFormatter()

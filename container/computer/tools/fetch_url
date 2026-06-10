@@ -1,6 +1,7 @@
 #!/bin/sh
-# fetch_url <url> — fetch a page and return its main content as clean markdown (token-efficient).
-# For static/article pages; for JS-heavy sites or interaction, use `agent-browser open <url>`.
+# fetch_url <url> — fetch a page and return its main content as clean text (token-efficient).
+# Content-type aware: PDFs are extracted with pdftotext, everything else with trafilatura (HTML →
+# markdown). For JS-heavy sites use `agent-browser open <url>`; for raw bytes, `curl` is available.
 # On failure it surfaces the underlying error (never swallows it) so the peer can see what went wrong.
 set -eu
 
@@ -11,8 +12,29 @@ if [ -z "$url" ]; then
   exit 1
 fi
 
-# Capture stderr separately so a real error (network, rate-limit, parse) can be reported, not hidden.
-out=$(trafilatura --markdown -u "$url" 2>/tmp/fetch_err) || true
+# Decide PDF vs. not: by extension, or by the server's Content-Type (a HEAD request).
+is_pdf=0
+case "$url" in
+  *.pdf | *.pdf\?* ) is_pdf=1 ;;
+  * )
+    ctype=$(curl -fsSIL "$url" 2>/dev/null | tr -d '\r' | awk -F': ' 'tolower($1)=="content-type"{print tolower($2)}' | tail -n1)
+    case "$ctype" in *application/pdf* ) is_pdf=1 ;; esac
+    ;;
+esac
+
+if [ "$is_pdf" = "1" ]; then
+  tmp=$(mktemp)
+  if ! curl -fsSL "$url" -o "$tmp" 2>/tmp/fetch_err; then
+    echo "fetch_url: could not download PDF $url" >&2
+    [ -s /tmp/fetch_err ] && { echo "details:" >&2; tail -n 8 /tmp/fetch_err >&2; }
+    rm -f "$tmp"; exit 1
+  fi
+  out=$(pdftotext -q "$tmp" - 2>/tmp/fetch_err) || true
+  rm -f "$tmp"
+else
+  # trafilatura strips nav/ads/boilerplate and emits markdown of the main content.
+  out=$(trafilatura --markdown -u "$url" 2>/tmp/fetch_err) || true
+fi
 
 if [ -n "$out" ]; then
   printf '%s\n' "$out"
