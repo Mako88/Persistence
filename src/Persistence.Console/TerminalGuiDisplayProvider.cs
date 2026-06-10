@@ -528,7 +528,7 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
 
         // Compose area: a colour-keyed key-bindings hint on its own row, then the bordered multi-line
         // input below (titled "Compose", which highlights with focus like the Conversation frame).
-        const string hintText = "—  Enter: Send · Shift+Enter: Newline · Ctrl+Left/Right: Tabs · Ctrl+Up/Down: Panes  —";
+        const string hintText = "Enter: Send · Shift+Enter: Newline · Ctrl+Left/Right: Tabs · Ctrl+Up/Down: Panes";
         var hint = MakeColoredPaneView(paneScheme).ForComposeHint();
         hint.Text = hintText;
         hint.WordWrap = false;
@@ -582,7 +582,10 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
 
         stateLabel = StatusSegment(driver, StateText("idle"), StateColor("idle"), x: 0);
         var pipe1 = StatusSegment(driver, " │ ", TuiColors.Body, Pos.Right(stateLabel));
-        modelLabel = StatusSegment(driver, $"{config.Provider}/{config.Model}", TuiColors.Model, Pos.Right(pipe1));
+        // Provider purple · "/" white · model yellow.
+        var providerLabel = StatusSegment(driver, config.Provider, TuiColors.Purple, Pos.Right(pipe1));
+        var slashLabel = StatusSegment(driver, "/", TuiColors.Body, Pos.Right(providerLabel));
+        modelLabel = StatusSegment(driver, config.Model, TuiColors.Model, Pos.Right(slashLabel));
         var pipe2 = StatusSegment(driver, " │ ", TuiColors.Body, Pos.Right(modelLabel));
         budgetLabel = StatusSegment(driver, BudgetText(null), BudgetColor(0), Pos.Right(pipe2));
         var pipe3 = StatusSegment(driver, " │ ", TuiColors.Body, Pos.Right(budgetLabel));
@@ -592,7 +595,7 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
         var pipe5 = StatusSegment(driver, " │ ", TuiColors.Body, Pos.Right(sessionLabel));
         exitLabel = StatusSegment(driver, "/exit to quit", TuiColors.Muted, Pos.Right(pipe5));
 
-        Label[] segments = [stateLabel, pipe1, modelLabel, pipe2, budgetLabel, pipe3, proposalsLabel, pipe4, sessionLabel, pipe5, exitLabel];
+        Label[] segments = [stateLabel, pipe1, providerLabel, slashLabel, modelLabel, pipe2, budgetLabel, pipe3, proposalsLabel, pipe4, sessionLabel, pipe5, exitLabel];
         statusSegments.AddRange(segments);
         statusBar.Add(segments);
         top.Add(statusBar);
@@ -607,13 +610,13 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
     /// <summary>The context-budget gauge text: percent full, or a placeholder before the first turn.</summary>
     private static string BudgetText(int? percent) => percent is { } p ? $" Context: {p}%" : " Context: —";
 
-    /// <summary>Gauge colour by fullness: green &lt; 60, yellow 60–79, gold 80–94, red 95+.</summary>
+    /// <summary>Gauge colour by fullness: dark green → light green → yellow → red as it fills.</summary>
     private static Color BudgetColor(int percent) => percent switch
     {
-        >= 95 => TuiColors.Error,
-        >= 80 => TuiColors.Gold,
-        >= 60 => TuiColors.Label,
-        _ => TuiColors.Processing,
+        >= 95 => TuiColors.Error,         // red
+        >= 80 => TuiColors.Gold,          // yellow
+        >= 50 => TuiColors.LightGreen,    // light green
+        _ => TuiColors.TabUnfocused,      // dark green
     };
 
     private static string ProposalsText(int count) => $" Proposals: {count}";
@@ -973,8 +976,8 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
 
     private static string StateText(string state) => $" {state}";
 
-    /// <summary>Colours the state chip: green while processing (states end with "…"), white when idle.</summary>
-    private static Color StateColor(string state) => state.Contains('…') ? TuiColors.Processing : TuiColors.Body;
+    /// <summary>Colours the state chip: bright green while thinking (states end with "…"), gray when idle.</summary>
+    private static Color StateColor(string state) => state.Contains('…') ? TuiColors.Processing : TuiColors.Muted;
 
     /// <summary>Updates the context-budget gauge from a recalculated budget (marshalled to the UI thread).</summary>
     private void UpdateBudget(int used, int budget, int percent)

@@ -3,9 +3,8 @@ using Terminal.Gui;
 namespace Persistence.Console;
 
 /// <summary>
-/// A <see cref="FrameView"/> whose title is drawn yellow while the frame holds focus and white
-/// otherwise — "yellow means focused", consistent with the tabs — with the border left white either
-/// way.
+/// A <see cref="FrameView"/> whose title is drawn light green while the frame holds focus and dark
+/// green otherwise — matching the tabs (brighter = focused) — with the border left white either way.
 ///
 /// Terminal.Gui draws a frame's title and border from the same colour-scheme slot (Normal when
 /// focused), so a scheme alone can't colour the title without also colouring the border. Instead we
@@ -30,7 +29,7 @@ internal sealed class FocusTitleFrameView : FrameView
         // "Focused" means the focused view lives inside this frame — HasFocus alone doesn't reliably
         // propagate to the container, so also consult the focused-subview chain.
         var focused = HasFocus || MostFocused is not null || Focused is not null;
-        var colour = focused ? TuiColors.Label : TuiColors.Body;
+        var colour = focused ? TuiColors.Label : TuiColors.TabUnfocused;
         Driver.SetAttribute(Driver.MakeAttribute(colour, ColorScheme.Normal.Background));
 
         // Sit the title on the top border, a couple of columns in (matching TG's own title placement),

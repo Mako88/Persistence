@@ -3,28 +3,29 @@ using Terminal.Gui;
 namespace Persistence.Console;
 
 /// <summary>
-/// The single source of truth for TUI colours. Different *kinds* of information use different
-/// colours, and adjacent elements never share one. Foregrounds avoid dark gray / dark magenta, which
-/// render too dim in common terminal themes. Several semantic names intentionally share a value
-/// (e.g. User/Model/Gold are all gold) so any one can be retuned without touching the others.
+/// The single source of truth for TUI colours. The accent palette is deliberately just five hues —
+/// dark green, light green, light yellow, light red, light purple — over neutral white (content) and
+/// gray (de-emphasis). Several semantic names intentionally share a value so any one can be retuned
+/// without touching the others.
 /// </summary>
 internal static class TuiColors
 {
     public const Color Body = Color.White;            // content / values / dates / session / tag lists
-    public const Color User = Color.Brown;            // "You:" role label (gold)
-    public const Color Peer = Color.BrightMagenta;    // "Remote Peer:" role label (bright purple)
-    public const Color Gold = Color.Brown;            // action names, R/I/C, "protected", html-like tags, Pending
-    public const Color Purple = Color.BrightMagenta;  // Request:/Response:, Triggered
+    public const Color User = Color.BrightYellow;     // "You:" role label
+    public const Color Peer = Color.BrightMagenta;    // "Remote Peer:" role label (light purple)
+    public const Color Gold = Color.BrightYellow;     // action names, R/I/C, html-like tags, Pending, sensory block
+    public const Color Purple = Color.BrightMagenta;  // Request:/Response:, fragment type, provider, Triggered
     public const Color Label = Color.BrightGreen;     // field/title labels, markers, compose keys, schedule name, Note
-    public const Color TabUnfocused = Color.Green;    // selected-but-unfocused side tab (dark green)
-    public const Color Error = Color.BrightRed;       // error text
+    public const Color Bracket = Color.BrightGreen;   // the [ ] around a fragment header
+    public const Color TabUnfocused = Color.Green;    // selected-but-unfocused side tab / inactive pane title (dark green)
+    public const Color Error = Color.BrightRed;       // error text, "protected"
     public const Color SuggestedTag = Color.BrightGreen; // the suggested tag inside a "did you mean" error
-    public const Color Processing = Color.Green;      // status state chip while working (idle is white)
-    public const Color Timestamp = Color.BrightBlue;  // leading [time] stamps
-    public const Color TypeName = Color.BrightCyan;   // a fragment's type name in a header
-    public const Color LightGreen = Color.BrightGreen; // [Sensory] header, [WAKE-UP] line
-    public const Color Model = Color.Brown;           // model name in the status bar (gold)
-    public const Color Muted = Color.Gray;            // de-emphasised text ([Queued], cancelled, /exit hint)
+    public const Color Processing = Color.BrightGreen; // status state chip while thinking (idle is gray)
+    public const Color Timestamp = Color.Green;       // leading [time] stamps (dark green)
+    public const Color TypeName = Color.BrightMagenta; // a fragment's type name in a header (light purple)
+    public const Color LightGreen = Color.BrightGreen; // [WAKE-UP] line, focus highlight
+    public const Color Model = Color.BrightYellow;    // model name in the status bar
+    public const Color Muted = Color.Gray;            // de-emphasised text ([Queued], cancelled, idle, /exit hint)
     public const Color StatusBg = Color.Black;        // status-bar background
 }
 
@@ -57,6 +58,13 @@ internal static class TuiColoring
     /// <summary>A fragment id like <c>#42</c>, but only inside a header (<c>[#42 | …</c>) — so a bare
     /// "#5" in prose (e.g. a "recent changes" line) isn't mistaken for one.</summary>
     private const string FragmentId = @"(?<=\[)#\d+(?= \|)";
+
+    /// <summary>The opening <c>[</c> of a fragment header — the bracket immediately before <c>#digit</c>.</summary>
+    private const string HeaderOpenBracket = @"\[(?=#\d)";
+
+    /// <summary>The closing <c>]</c> of a fragment header — a <c>]</c> preceded by <c>[#digit…</c> on
+    /// the same line (so only a real header's bracket matches, not a stray <c>]</c> in prose).</summary>
+    private const string HeaderCloseBracket = @"(?<=\[#\d[^\]]*)\]";
 
     /// <summary>A fragment's type name — the word right after <c>#42 | </c> in a header.</summary>
     private const string FragmentTypeName = @"(?<=#\d+ \| )[A-Za-z][A-Za-z]+";
@@ -114,13 +122,15 @@ internal static class TuiColoring
         .ColorPattern(FollowingHtmlTag, TuiColors.Gold);
 
     /// <summary>Colours the known [Sensory] field labels yellow (and only those — not arbitrary prose).</summary>
-    private static ColoredTextView SensoryLabels(this ColoredTextView v) => v.ColorPattern(SensoryLabel, TuiColors.Label);
+    private static ColoredTextView SensoryLabels(this ColoredTextView v) => v.ColorPattern(SensoryLabel, TuiColors.Gold);
 
-    /// <summary>Colours a <c>[#id | Type | R:x I:x C:x | protected]</c> header: id yellow, type cyan,
-    /// R/I/C and "protected" gold. Brackets, pipes and values stay white. Each part is matched by a
-    /// position-anchored pattern, so these colours only land inside an actual header, never in prose.
-    /// Reusable across panes.</summary>
+    /// <summary>Colours a <c>[#id | Type | R:x I:x C:x | protected]</c> header: brackets green, id
+    /// green, type light purple, R/I/C yellow, "protected" red. Pipes and values stay white. Each part
+    /// is matched by a position-anchored pattern, so these colours only land inside an actual header,
+    /// never in prose. Reusable across panes.</summary>
     private static ColoredTextView FragmentHeaders(this ColoredTextView v) => v
+        .ColorPattern(HeaderOpenBracket, TuiColors.Bracket)
+        .ColorPattern(HeaderCloseBracket, TuiColors.Bracket)
         .ColorPattern(FragmentId, TuiColors.Label)
         .ColorPattern(FragmentTypeName, TuiColors.TypeName)
         .ColorPattern(RicMarker, TuiColors.Gold)
@@ -190,7 +200,7 @@ internal static class TuiColoring
         .Timestamps()
         .ColorPattern(@"(?<=\] )Request\b", TuiColors.Purple)   // only the entry header, not the word in prose
         .ColorPattern(@"(?<=\] )Response\b", TuiColors.Purple)
-        .ColorLinesStartingWith("[Sensory]", TuiColors.LightGreen)
+        .ColorLinesStartingWith("[Sensory]", TuiColors.Gold)
         .FragmentHeaders()
         .SensoryLabels()
         .ResponseTags();
