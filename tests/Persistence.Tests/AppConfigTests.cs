@@ -15,6 +15,24 @@ public class AppConfigTests
         Assert.Equal("Tui", config.UiMode);
         Assert.Equal("high", config.ReasoningEffort);
         Assert.Equal("local", config.Provider);
+        Assert.Equal("Local Peer", config.SelectedLocalPeer); // back-compat default
+    }
+
+    [Fact]
+    public async Task LoadsSelectedLocalPeerAndDescriptions()
+    {
+        var json = """
+        {
+          "SelectedLocalPeer": "John",
+          "LocalPeers": [ { "Name": "John", "Description": "the steward" } ]
+        }
+        """;
+
+        await using var temp = new TempFile(json);
+        var config = await AppConfig.LoadAsync(temp.Path);
+
+        Assert.Equal("John", config.SelectedLocalPeer);
+        Assert.Equal("the steward", Assert.Single(config.LocalPeers).Description);
     }
 
     [Fact]

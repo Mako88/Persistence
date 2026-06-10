@@ -45,6 +45,19 @@ public class AppConfig : IAppConfig
     /// </summary>
     public ContainerSettings Container { get; set; } = new();
 
+    /// <summary>
+    /// The active local peer's name — who the remote peer is talking with by default. The Console uses
+    /// this; an API caller can override it per request with an <c>X-Local-Peer</c> header.
+    /// Defaults to "Local Peer" (back-compat). Overridable via <c>PERSISTENCE_SELECTEDLOCALPEER</c>.
+    /// </summary>
+    public string SelectedLocalPeer { get; set; } = "Local Peer";
+
+    /// <summary>
+    /// Optional descriptions for known local peers, surfaced to the remote peer. Names not listed are
+    /// still accepted (just without a description).
+    /// </summary>
+    public List<LocalPeerProfile> LocalPeers { get; set; } = [];
+
     // --- Model selection ---
 
     /// <summary>

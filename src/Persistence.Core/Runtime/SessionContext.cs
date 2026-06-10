@@ -50,4 +50,9 @@ public class SessionContext : ISessionContext
     /// The peer's current working directory inside its container; persisted across <c>shell</c> calls.
     /// </summary>
     public string ContainerCwd { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The name of the local peer the remote peer is currently talking with. Set per input.
+    /// </summary>
+    public string ActiveLocalPeerName { get; set; } = string.Empty;
 }

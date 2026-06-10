@@ -82,6 +82,33 @@ public sealed class ApiTestFixture : WebApplicationFactory<Program>
         await client.PostAsJsonAsync("/api/peer/respond", new { id = pending!.Id, response = peerResponse });
     }
 
+    /// <summary>
+    /// Runs a full turn with an <c>X-Local-Peer</c> header identifying who's speaking, and returns the
+    /// prompt the remote peer saw (so a test can assert the peer was announced). Completes the turn so
+    /// the shared fixture is left clean.
+    /// </summary>
+    public async Task<string> RunTurnAsLocalPeerAsync(string input, string peerResponse, string localPeer)
+    {
+        var client = CreateClient();
+        await EnsureReadyAsync(client);
+        var since = await LatestSeqAsync(client);
+
+        var request = new HttpRequestMessage(HttpMethod.Post, "/api/conversation/send")
+        {
+            Content = JsonContent.Create(new { input }),
+        };
+        request.Headers.Add("X-Local-Peer", localPeer);
+        (await client.SendAsync(request)).EnsureSuccessStatusCode();
+
+        var pending = await WaitForPendingAsync(client);
+        Assert.NotNull(pending);
+        var prompt = pending!.Prompt;
+
+        await client.PostAsJsonAsync("/api/peer/respond", new { id = pending.Id, response = peerResponse });
+        await WaitForTurnAsync(client, since);
+        return prompt;
+    }
+
     /// <summary>Ensures the fixture is initialized (used before opening a stream).</summary>
     public Task EnsureReadyAsync() => EnsureReadyAsync(CreateClient());
 

@@ -88,6 +88,48 @@ public class PromptFormatterTests
         Assert.Contains(segments, s => s.Content.Contains("[Sensory]"));
     }
 
+    private static (PromptFormatter Formatter, SessionContext Session) CreateFormatterWithSession(AppConfig config)
+    {
+        var session = new SessionContext { SessionId = "s" };
+        var protocol = new Mock<IProtocolInstructions>();
+        protocol.Setup(p => p.GetInstructions()).Returns(ProtocolMarker);
+        var catalog = new Mock<ICommandCatalog>();
+        catalog.Setup(c => c.GetCompactListing()).Returns(CommandsMarker);
+        var windows = new Mock<IContextWindowProvider>();
+        windows.Setup(w => w.GetContextWindow(It.IsAny<string>())).Returns(200000);
+
+        var formatter = new PromptFormatter(session, config, protocol.Object, catalog.Object,
+            new TokenUsageTracker(), windows.Object, new Mock<IEventBus>().Object);
+        return (formatter, session);
+    }
+
+    [Fact]
+    public void SensoryAnnouncesTheActiveLocalPeerWithDescription()
+    {
+        var config = new AppConfig { LocalPeers = [new LocalPeerProfile { Name = "John", Description = "the steward" }] };
+        var (formatter, session) = CreateFormatterWithSession(config);
+        session.ActiveLocalPeerName = "John";
+
+        var sensory = formatter.Format(ContextWithFragment("hi"), [])[^1].Content;
+
+        Assert.Contains("You are speaking with: John — the steward", sensory);
+    }
+
+    [Fact]
+    public void SensoryFlagsAPeerSwitch()
+    {
+        var (formatter, session) = CreateFormatterWithSession(new AppConfig());
+
+        session.ActiveLocalPeerName = "John";
+        formatter.Format(ContextWithFragment("hi"), []); // establishes John as the last-seen peer
+
+        session.ActiveLocalPeerName = "Claude";
+        var sensory = formatter.Format(ContextWithFragment("hi"), [])[^1].Content;
+
+        Assert.Contains("You are speaking with: Claude", sensory);
+        Assert.Contains("(changed from John)", sensory);
+    }
+
     [Fact]
     public void SensoryBlockReportsAppAndSystemUptime()
     {

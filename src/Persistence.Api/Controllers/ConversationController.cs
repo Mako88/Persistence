@@ -46,7 +46,12 @@ public class ConversationController : ControllerBase
             return BadRequest("Input is required.");
         }
 
-        eventBus.FireAndForget(this, new DisplayInputReceived(request.Input));
+        // An optional X-Local-Peer header lets a caller identify who's speaking (John / Claude / Ember);
+        // absent, the turn falls back to the configured SelectedLocalPeer.
+        var localPeer = Request.Headers["X-Local-Peer"].ToString();
+        localPeer = string.IsNullOrWhiteSpace(localPeer) ? null : localPeer.Trim();
+
+        eventBus.FireAndForget(this, new DisplayInputReceived(request.Input, localPeer));
         return Accepted();
     }
 

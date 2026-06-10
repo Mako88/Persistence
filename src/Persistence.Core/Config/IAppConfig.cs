@@ -98,4 +98,14 @@ public interface IAppConfig
     /// The peer's sandboxed "computer" reached via the <c>shell</c> command (off by default).
     /// </summary>
     ContainerSettings Container { get; set; }
+
+    /// <summary>
+    /// The active local peer's name (default; an <c>X-Local-Peer</c> header overrides it per API request).
+    /// </summary>
+    string SelectedLocalPeer { get; set; }
+
+    /// <summary>
+    /// Optional descriptions for known local peers, surfaced to the remote peer.
+    /// </summary>
+    List<LocalPeerProfile> LocalPeers { get; set; }
 }

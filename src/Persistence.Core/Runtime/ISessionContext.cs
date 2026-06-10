@@ -50,4 +50,11 @@ public interface ISessionContext
     /// "not yet set" — the executor seeds it from the configured working dir.
     /// </summary>
     string ContainerCwd { get; set; }
+
+    /// <summary>
+    /// The name of the local peer the remote peer is currently talking with (e.g. "John", "Claude").
+    /// Set per input from the active selection / <c>X-Local-Peer</c> header; surfaced in the sensory
+    /// block. <see cref="LocalPeerSourceId"/> tracks this peer's source for message attribution.
+    /// </summary>
+    string ActiveLocalPeerName { get; set; }
 }

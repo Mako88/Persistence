@@ -40,6 +40,18 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
     }
 
     [Fact]
+    public async Task XLocalPeerHeader_AnnouncesThePeerInThePrompt()
+    {
+        var prompt = await api.RunTurnAsLocalPeerAsync(
+            "hi there",
+            "<respond>hello</respond><continue>false</continue>",
+            localPeer: "Claude");
+
+        // The header-supplied peer is surfaced in the sensory block the remote peer sees.
+        Assert.Contains("You are speaking with: Claude", prompt);
+    }
+
+    [Fact]
     public async Task ManageContext_AddIsApplied()
     {
         var events = await api.RunTurnAsync(

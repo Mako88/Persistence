@@ -4,6 +4,11 @@
   "MaxActionIterations": 5,
   "DebugMode": false,
 
+  "SelectedLocalPeer": "Local Peer",
+  "LocalPeers": [
+    { "Name": "Local Peer", "Description": "the person at the keyboard" }
+  ],
+
   "SelectedModel": "cloud",
   "Models": [
     {

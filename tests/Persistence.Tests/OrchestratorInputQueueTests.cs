@@ -79,7 +79,7 @@ public sealed class OrchestratorInputQueueTests : IAsyncLifetime
 
         orchestrator = new Orchestrator(
             db, contextRepo, session, display.Object, eventBus, turnHandler,
-            wakeUpMonitor.Object, resources, config, proposalService, proposalRepo, scheduledEventRepo.Object);
+            wakeUpMonitor.Object, resources, config, proposalService, proposalRepo, scheduledEventRepo.Object, sources);
 
         // RunAsync subscribes to input, initialises the DB, seeds a context, then awaits the
         // (immediately-completed) display — so it returns with the session ready for input. The

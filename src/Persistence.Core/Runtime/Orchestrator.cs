@@ -34,6 +34,7 @@ public class Orchestrator : IOrchestrator
     private readonly IProposalService proposalService;
     private readonly IProposalRepository proposalRepo;
     private readonly IScheduledEventRepository scheduledEventRepo;
+    private readonly ISourceRepository sourceRepository;
 
     private readonly SemaphoreSlim turnLock = new(1, 1);
     private readonly TaskCompletionSource initialized = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -53,7 +54,8 @@ public class Orchestrator : IOrchestrator
         IAppConfig config,
         IProposalService proposalService,
         IProposalRepository proposalRepo,
-        IScheduledEventRepository scheduledEventRepo)
+        IScheduledEventRepository scheduledEventRepo,
+        ISourceRepository sourceRepository)
     {
         this.db = db;
         this.workingContextRepo = workingContextRepo;
@@ -67,6 +69,7 @@ public class Orchestrator : IOrchestrator
         this.proposalService = proposalService;
         this.proposalRepo = proposalRepo;
         this.scheduledEventRepo = scheduledEventRepo;
+        this.sourceRepository = sourceRepository;
     }
 
     /// <summary>
@@ -131,6 +134,10 @@ public class Orchestrator : IOrchestrator
         // Hold input that arrives during startup until initialization completes (the session
         // context / working context must be set before a turn can run).
         await initialized.Task;
+
+        // Set who's speaking (header-supplied name, else the configured default) so the turn attributes
+        // this message to the right local peer and the sensory block announces them.
+        await SetActiveLocalPeerAsync(e.LocalPeerName);
 
         if (input.StartsWith('/'))
         {
@@ -316,6 +323,7 @@ public class Orchestrator : IOrchestrator
 
         sessionContext.SessionId = Guid.NewGuid().ToString("N");
         sessionContext.SurfaceCommandsEnabled = config.SurfaceCommands;
+        await SetActiveLocalPeerAsync(null); // seed the active local peer from the configured default
 
         var context = await workingContextRepo.GetMostRecentAsync();
 
@@ -339,6 +347,24 @@ public class Orchestrator : IOrchestrator
             .ToList();
 
         display.ShowChatHistory(recentMessages);
+    }
+
+    /// <summary>
+    /// Resolves who the remote peer is talking with — the given name, or the configured default —
+    /// recording it on the session and pointing <see cref="ISessionContext.LocalPeerSourceId"/> at that
+    /// peer's source (created on demand) so their messages are attributed to them.
+    /// </summary>
+    private async Task SetActiveLocalPeerAsync(string? name)
+    {
+        var resolved = string.IsNullOrWhiteSpace(name) ? config.SelectedLocalPeer : name.Trim();
+
+        if (string.IsNullOrWhiteSpace(resolved))
+        {
+            resolved = "Local Peer";
+        }
+
+        sessionContext.ActiveLocalPeerName = resolved;
+        sessionContext.LocalPeerSourceId = await sourceRepository.EnsureLocalPeerSourceAsync(resolved);
     }
 
     /// <summary>

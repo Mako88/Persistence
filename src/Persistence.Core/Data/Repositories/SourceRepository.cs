@@ -46,6 +46,30 @@ public class SourceRepository : EntityRepository<SourceEntity>, ISourceRepositor
     public async Task<SourceEntity?> GetByNameAsync(string name, CancellationToken ct = default) =>
         await QueryFirstOrDefaultAsync($"SELECT * FROM Sources WHERE Name = {name} COLLATE NOCASE", ct);
 
+    /// <inheritdoc />
+    public async Task<long> EnsureLocalPeerSourceAsync(string name, CancellationToken ct = default)
+    {
+        var id = await ExecuteScalarAsync<long?>(
+            $"SELECT Id FROM Sources WHERE SourceType = {SourceType.LocalPeer} AND Name = {name} COLLATE NOCASE LIMIT 1");
+
+        if (id == null)
+        {
+            var now = DateTimeOffset.UtcNow;
+            var source = new SourceEntity
+            {
+                SourceType = SourceType.LocalPeer,
+                Name = name,
+                CreatedUtc = now,
+                LastModifiedUtc = now,
+            };
+
+            await SaveAsync(source);
+            id = source.Id;
+        }
+
+        return id.Value;
+    }
+
     /// <summary>
     /// Returns all sources
     /// </summary>

@@ -54,7 +54,7 @@ public sealed class WakeRunnerTests : IAsyncLifetime
 
         orchestrator = new Orchestrator(
             db, contextRepo, session, display.Object, eventBus, turnHandler,
-            wakeUpMonitor, resources, config, proposalService, proposalRepo, scheduledEventRepo);
+            wakeUpMonitor, resources, config, proposalService, proposalRepo, scheduledEventRepo, sources);
 
         // Create the schema + a working context the scheduled event can reference (FK).
         await db.InitializeAsync();

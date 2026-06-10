@@ -27,6 +27,9 @@ public class PromptFormatter : IPromptFormatter
 
     private DateTimeOffset? lastFormatUtc;
 
+    // The local-peer name surfaced last turn, to flag a switch so the peer can load the right relations.
+    private string? lastLocalPeerName;
+
     // When this process started, for the app-uptime line. Captured once; falls back to load time if the
     // process start time isn't readable on the platform.
     private static readonly DateTimeOffset ProcessStartUtc = ReadProcessStartUtc();
@@ -186,6 +189,13 @@ public class PromptFormatter : IPromptFormatter
         sb.AppendLine($"Current time (UTC): {now:yyyy-MM-dd HH:mm:ss}");
         sb.AppendLine($"Current time (local): {localNow:yyyy-MM-dd HH:mm:ss zzz}");
         sb.AppendLine($"Session: {sessionContext.SessionId}");
+
+        var speakingWith = FormatSpeakingWith();
+        if (speakingWith.Length > 0)
+        {
+            sb.AppendLine(speakingWith);
+        }
+
         sb.AppendLine($"App uptime: {FormatDuration(now - ProcessStartUtc)} | System uptime: {FormatDuration(TimeSpan.FromMilliseconds(Environment.TickCount64))}");
         sb.AppendLine(FormatContextBudget(usedTokens));
 
@@ -221,6 +231,39 @@ public class PromptFormatter : IPromptFormatter
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// The "you are speaking with: …" line. Adds the peer's configured description if known, and flags
+    /// a switch from the previous turn so the peer can load the relevant relational fragments. Empty
+    /// when no active local peer is set.
+    /// </summary>
+    private string FormatSpeakingWith()
+    {
+        var name = sessionContext.ActiveLocalPeerName;
+
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return string.Empty;
+        }
+
+        var description = config.LocalPeers?
+            .FirstOrDefault(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase))?.Description;
+
+        var line = $"You are speaking with: {name}";
+
+        if (!string.IsNullOrWhiteSpace(description))
+        {
+            line += $" — {description}";
+        }
+
+        if (lastLocalPeerName != null && !string.Equals(lastLocalPeerName, name, StringComparison.OrdinalIgnoreCase))
+        {
+            line += $" (changed from {lastLocalPeerName})";
+        }
+
+        lastLocalPeerName = name;
+        return line;
     }
 
     /// <summary>Maps an audit target's stored entity-type name to a peer-friendly word.</summary>
