@@ -50,7 +50,8 @@ public sealed class LocalPeerTests : IAsyncLifetime
 
         orchestrator = new Orchestrator(
             db, contextRepo, session, display.Object, eventBus, new NoopTurnHandler(),
-            wakeUpMonitor.Object, resources, config, proposalService, proposalRepo, scheduledEventRepo, sources);
+            wakeUpMonitor.Object, resources, config, proposalService, proposalRepo, scheduledEventRepo, sources,
+            new PeerSeeder(config, new TagRepository(config, session, entityTagRepo), session));
 
         await orchestrator.RunAsync(CancellationToken.None);
     }

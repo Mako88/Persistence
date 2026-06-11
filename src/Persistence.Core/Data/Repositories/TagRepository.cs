@@ -55,6 +55,52 @@ public class TagRepository : EntityRepository<TagEntity>, ITagRepository
         await QueryAsync($"SELECT * FROM Tags WHERE ParentTagId = {parentTagId}");
 
     /// <summary>
+    /// Resolves a <c>/</c>-delimited tag path to its leaf tag, creating any missing segments. Returns
+    /// the leaf (or null for an empty path) and whether anything was created.
+    /// </summary>
+    public async Task<(TagEntity? tag, bool created)> GetOrCreateByPathAsync(
+        string path, string? leafDescription = null, CancellationToken ct = default)
+    {
+        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        if (segments.Length == 0)
+        {
+            return (null, false);
+        }
+
+        TagEntity? parent = null;
+        var created = false;
+
+        foreach (var segment in segments)
+        {
+            var existing = await GetByNameAsync(segment, parent?.Id);
+
+            if (existing != null)
+            {
+                parent = existing;
+                continue;
+            }
+
+            var now = DateTimeOffset.UtcNow;
+
+            var tag = new TagEntity
+            {
+                Name = segment,
+                ParentTagId = parent?.Id,
+                Description = segment == segments[^1] ? leafDescription : null,
+                CreatedUtc = now,
+                LastModifiedUtc = now,
+            };
+
+            await SaveAsync(tag, ct: ct);
+            parent = tag;
+            created = true;
+        }
+
+        return (parent, created);
+    }
+
+    /// <summary>
     /// Deletes the given tag and all its descendants along with their fragment associations,
     /// leaving the fragments themselves untouched; returns the number of tags deleted
     /// </summary>

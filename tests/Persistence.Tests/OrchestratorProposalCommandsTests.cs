@@ -64,7 +64,8 @@ public sealed class OrchestratorProposalCommandsTests : IAsyncLifetime
 
         orchestrator = new Orchestrator(
             db, contextRepo, session, display.Object, eventBus, turnHandler.Object,
-            wakeUpMonitor.Object, resources, config, proposalService, proposalRepo, scheduledEventRepo, sources);
+            wakeUpMonitor.Object, resources, config, proposalService, proposalRepo, scheduledEventRepo, sources,
+            new PeerSeeder(config, new TagRepository(config, session, entityTagRepo), session));
 
         // RunAsync subscribes to input, initialises the DB, seeds a context, then awaits the
         // (immediately-completed) display — so it returns with the session ready for input.

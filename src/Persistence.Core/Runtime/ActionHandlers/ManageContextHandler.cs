@@ -217,7 +217,7 @@ public class ManageContextHandler : CommandHandler
                     return "Propose failed: an 'add' proposal needs 'content'";
                 }
 
-                var (proposedType, wasAuthorable) = ParseAuthorableFragmentType(command?["fragment_type"]?.GetValue<string>());
+                var (proposedType, wasAuthorable) = FragmentTypeRules.ParseAuthorable(command?["fragment_type"]?.GetValue<string>());
                 draft = new ProposalDraft(ProposalKind.AddFragment, rationale,
                     ProposedFragmentType: proposedType, ProposedContent: content, ProposedSummary: summary);
 
@@ -376,7 +376,7 @@ public class ManageContextHandler : CommandHandler
         }
 
         var fragmentTypeName = command?["fragment_type"]?.GetValue<string>();
-        var (fragmentType, wasAuthorable) = ParseAuthorableFragmentType(fragmentTypeName);
+        var (fragmentType, wasAuthorable) = FragmentTypeRules.ParseAuthorable(fragmentTypeName);
         var importance = command?["importance"]?.GetValue<float>() ?? 0.5f;
         var confidence = command?["confidence"]?.GetValue<float>() ?? 0.5f;
         var relevance = command?["relevance"]?.GetValue<float>() ?? 1.0f;
@@ -423,7 +423,7 @@ public class ManageContextHandler : CommandHandler
 
         if (!wasAuthorable)
         {
-            var authorable = string.Join(", ", AuthorableFragmentTypes);
+            var authorable = string.Join(", ", FragmentTypeRules.Authorable);
             result += $"\n  Note: '{fragmentTypeName}' isn't a type you can set — saved as Personal. "
                 + $"Types you can choose: {authorable}.";
         }
@@ -1632,46 +1632,8 @@ public class ManageContextHandler : CommandHandler
     /// callers can report new tags rather than creating them silently. Returns null for an empty path.
     /// </summary>
     private async Task<(TagEntity? tag, bool created)> GetOrCreateTagByPathAsync(
-        string path, string? leafDescription = null, CancellationToken ct = default)
-    {
-        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
-
-        if (segments.Length == 0)
-        {
-            return (null, false);
-        }
-
-        TagEntity? parent = null;
-        var created = false;
-
-        foreach (var segment in segments)
-        {
-            var existing = await tagRepo.GetByNameAsync(segment, parent?.Id);
-
-            if (existing != null)
-            {
-                parent = existing;
-                continue;
-            }
-
-            var now = DateTimeOffset.UtcNow;
-
-            var tag = new TagEntity
-            {
-                Name = segment,
-                ParentTagId = parent?.Id,
-                Description = segment == segments[^1] ? leafDescription : null,
-                CreatedUtc = now,
-                LastModifiedUtc = now,
-            };
-
-            await tagRepo.SaveAsync(tag, ct: ct);
-            parent = tag;
-            created = true;
-        }
-
-        return (parent, created);
-    }
+        string path, string? leafDescription = null, CancellationToken ct = default) =>
+        await tagRepo.GetOrCreateByPathAsync(path, leafDescription, ct);
 
     /// <summary>
     /// Resolves a <c>tags</c> array to entities, creating genuinely-new tags but holding back likely
@@ -1740,37 +1702,8 @@ public class ManageContextHandler : CommandHandler
         return (tags, created, suggestions);
     }
 
-    /// <summary>
-    /// The fragment types the remote peer may author via <c>add</c>. The rest
-    /// (System, ChatMessage, ScratchPad, ActionResponse, AuditLog, ActionLog) are
-    /// system-managed — some are transient and would be silently dropped on save.
-    /// </summary>
-    private static readonly ContextFragmentType[] AuthorableFragmentTypes =
-    [
-        ContextFragmentType.Identity,
-        ContextFragmentType.Relational,
-        ContextFragmentType.Personal,
-        ContextFragmentType.Summary,
-    ];
-
-    /// <summary>
-    /// Resolves a requested fragment-type name to an authorable type for <c>add</c>. A null
-    /// name defaults to <see cref="ContextFragmentType.Personal"/> (no complaint); an unknown
-    /// or non-authorable (system-managed) name falls back to Personal with <c>wasAuthorable</c>
-    /// false so the caller can tell the peer what happened.
-    /// </summary>
-    private static (ContextFragmentType type, bool wasAuthorable) ParseAuthorableFragmentType(string? typeName)
-    {
-        if (typeName == null)
-        {
-            return (ContextFragmentType.Personal, true);
-        }
-
-        return Enum.TryParse<ContextFragmentType>(typeName, ignoreCase: true, out var result)
-            && AuthorableFragmentTypes.Contains(result)
-            ? (result, true)
-            : (ContextFragmentType.Personal, false);
-    }
+    // The authorable-type set and the type-name parsing live in FragmentTypeRules (Data.Entities),
+    // shared with the peer-identity seeder so `add` and seeding apply the exact same rule.
 
     /// <summary>
     /// Resolves each id in <paramref name="ids"/> to a fragment in the current context and runs

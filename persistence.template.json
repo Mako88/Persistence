@@ -4,6 +4,9 @@
   "MaxActionIterations": 5,
   "DebugMode": false,
 
+  "_SeedsDirectory_comment": "Optional. Folder of per-database identity seed files; {dbName}.json seeds a brand-new {dbName}.db with authored identity fragments. Blank (default) = a 'seeds' folder beside the database directory.",
+  "SeedsDirectory": "",
+
   "SelectedLocalPeer": "Local Peer",
   "LocalPeers": [
     { "Name": "Local Peer", "Description": "the person at the keyboard" }

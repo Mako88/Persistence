@@ -28,6 +28,15 @@ public interface ITagRepository : IEntityRepository<TagEntity>
     Task<IEnumerable<TagEntity>> GetChildrenAsync(long parentTagId);
 
     /// <summary>
+    /// Resolves a <c>/</c>-delimited tag path (e.g. <c>identity/core</c>) to its leaf tag, creating any
+    /// missing segments along the way. Returns the leaf tag (or <c>null</c> for an empty path) and
+    /// whether any segment was newly created. <paramref name="leafDescription"/> is applied only to the
+    /// final segment when it is created.
+    /// </summary>
+    Task<(TagEntity? tag, bool created)> GetOrCreateByPathAsync(
+        string path, string? leafDescription = null, CancellationToken ct = default);
+
+    /// <summary>
     /// Hard-deletes a tag, its descendant tags, and all fragment associations to them. The
     /// fragments themselves are untouched — a tag is an organisational label, not curated memory,
     /// so removing it doesn't erase anything continuity-bearing. Returns the number of tags removed.

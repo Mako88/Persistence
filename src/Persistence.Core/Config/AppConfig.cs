@@ -27,6 +27,13 @@ public class AppConfig : IAppConfig
     /// </summary>
     public string DatabaseDirectory { get; set; } = ModelProfile.DefaultDatabaseDirectory;
 
+    /// <summary>
+    /// Folder of per-peer seed files (<c>{dbName}.json</c> → seeds a new <c>{dbName}.db</c>). Blank
+    /// resolves to a <c>seeds</c> folder alongside <see cref="DatabaseDirectory"/> (see
+    /// <c>PeerSeeder</c>). Overridable via <c>PERSISTENCE_SEEDSDIRECTORY</c>.
+    /// </summary>
+    public string SeedsDirectory { get; set; } = "";
+
     public string UiMode { get; set; } = "Tui";
     public string ProposalApproval { get; set; } = "Self";
 

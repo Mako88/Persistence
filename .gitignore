@@ -12,6 +12,11 @@ obj/
 *.db-shm
 *.db-wal
 
+## Peer identity seeds — personal per-peer identity (like the databases, kept local).
+## The mechanism + format are documented in the tracked seeds/README.md; force-add a
+## specific seed (git add -f seeds/<name>.json) to deliberately version it.
+seeds/*.json
+
 ## IDE
 .idea/
 .vscode/

@@ -90,6 +90,26 @@ public class AppConfigTests
     }
 
     [Fact]
+    public async Task SeedsDirectoryLoadsFromFileAndIsOverriddenByEnv()
+    {
+        await using var temp = new TempFile("""{ "SeedsDirectory": "from-file" }""");
+
+        var fromFile = await AppConfig.LoadAsync(temp.Path);
+        Assert.Equal("from-file", fromFile.SeedsDirectory);
+
+        Environment.SetEnvironmentVariable("PERSISTENCE_SEEDSDIRECTORY", "from-env");
+        try
+        {
+            var overridden = await AppConfig.LoadAsync(temp.Path);
+            Assert.Equal("from-env", overridden.SeedsDirectory); // env beats the file
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PERSISTENCE_SEEDSDIRECTORY", null);
+        }
+    }
+
+    [Fact]
     public async Task SelectsTheNamedModelProfileFromTheModelsArray()
     {
         var json = """

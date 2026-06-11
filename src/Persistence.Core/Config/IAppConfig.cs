@@ -22,6 +22,14 @@ public interface IAppConfig
     string DatabaseDirectory { get; set; }
 
     /// <summary>
+    /// Folder of per-peer seed files. Each file is named for the database it seeds
+    /// (<c>{name}.json</c> seeds <c>{DatabaseDirectory}/{name}.db</c>) and holds an array of identity
+    /// fragments authored into a brand-new store. Blank (the default) resolves to a <c>seeds</c> folder
+    /// alongside <see cref="DatabaseDirectory"/>. Overridable via <c>PERSISTENCE_SEEDSDIRECTORY</c>.
+    /// </summary>
+    string SeedsDirectory { get; set; }
+
+    /// <summary>
     /// Maximum tokens the model is allowed to generate per completion
     /// </summary>
     int MaxOutputTokens { get; set; }

@@ -35,6 +35,7 @@ public class Orchestrator : IOrchestrator
     private readonly IProposalRepository proposalRepo;
     private readonly IScheduledEventRepository scheduledEventRepo;
     private readonly ISourceRepository sourceRepository;
+    private readonly IPeerSeeder peerSeeder;
 
     private readonly SemaphoreSlim turnLock = new(1, 1);
     private readonly TaskCompletionSource initialized = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -55,7 +56,8 @@ public class Orchestrator : IOrchestrator
         IProposalService proposalService,
         IProposalRepository proposalRepo,
         IScheduledEventRepository scheduledEventRepo,
-        ISourceRepository sourceRepository)
+        ISourceRepository sourceRepository,
+        IPeerSeeder peerSeeder)
     {
         this.db = db;
         this.workingContextRepo = workingContextRepo;
@@ -70,6 +72,7 @@ public class Orchestrator : IOrchestrator
         this.proposalRepo = proposalRepo;
         this.scheduledEventRepo = scheduledEventRepo;
         this.sourceRepository = sourceRepository;
+        this.peerSeeder = peerSeeder;
     }
 
     /// <summary>
@@ -403,7 +406,19 @@ public class Orchestrator : IOrchestrator
             }
         }
 
-        await AddFirstWakeGuideAsync(context);
+        // If this database has a seed file (seeds/{dbName}.json), the peer arrives with an authored
+        // identity rather than a blank slate. In that case the generic "your context is empty, decide
+        // who you'd like to be" guide would contradict what it already sees, so we skip it.
+        var seededIdentity = await peerSeeder.SeedAsync(context);
+
+        if (seededIdentity > 0)
+        {
+            await workingContextRepo.SaveAsync(context);
+        }
+        else
+        {
+            await AddFirstWakeGuideAsync(context);
+        }
 
         return context;
     }
