@@ -8,6 +8,11 @@ using Persistence.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Serve the bundled web client (wwwroot) regardless of environment. Static web assets are auto-wired
+// only in Development; without this the published/run-from-bin app (which boots as Production, with the
+// content root at the launch directory) can't find wwwroot and returns 404 for the page.
+builder.WebHost.UseStaticWebAssets();
+
 var config = await AppConfig.LoadAsync();
 
 // Autofac owns the container so our attribute-registered services live alongside the
@@ -38,6 +43,11 @@ builder.Services.AddControllers();
 builder.Services.AddHostedService<OrchestratorHostedService>();
 
 var app = builder.Build();
+
+// Serve the shared web client (wwwroot/index.html) so John/Claude/Ember can watch and talk to the
+// peer through one backend — a thin API client, no direct DB access.
+app.UseDefaultFiles();
+app.UseStaticFiles();
 
 app.MapControllers();
 
