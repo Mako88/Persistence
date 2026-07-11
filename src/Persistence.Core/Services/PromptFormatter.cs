@@ -23,6 +23,7 @@ public class PromptFormatter : IPromptFormatter
     private readonly ICommandCatalog commandCatalog;
     private readonly ITokenUsageTracker usageTracker;
     private readonly IContextWindowProvider contextWindows;
+    private readonly IModelPricingProvider pricing;
     private readonly IEventBus eventBus;
 
     private DateTimeOffset? lastFormatUtc;
@@ -50,6 +51,7 @@ public class PromptFormatter : IPromptFormatter
         ICommandCatalog commandCatalog,
         ITokenUsageTracker usageTracker,
         IContextWindowProvider contextWindows,
+        IModelPricingProvider pricing,
         IEventBus eventBus)
     {
         this.sessionContext = sessionContext;
@@ -58,6 +60,7 @@ public class PromptFormatter : IPromptFormatter
         this.commandCatalog = commandCatalog;
         this.usageTracker = usageTracker;
         this.contextWindows = contextWindows;
+        this.pricing = pricing;
         this.eventBus = eventBus;
     }
 
@@ -77,8 +80,35 @@ public class PromptFormatter : IPromptFormatter
         var fragments = context.ContextFragments.Values;
         var segments = new List<PromptSegment>();
 
+        // Fragments are ordered oldest→newest. Everything created at/after the turn start belongs to
+        // THIS turn (the new user message, this turn's action results and thoughts); everything before
+        // it is prior turns. A single marker at that boundary gives the peer a structural "now" line so
+        // it stops reading already-completed actions as if they're happening in the current turn. Only
+        // emitted where prior-turn fragments actually give way to this-turn ones (not on a first turn
+        // where everything is new).
+        var turnStart = sessionContext.TurnStartedUtc;
+        var markerEmitted = false;
+        var sawPriorTurn = false;
+
         foreach (var fragment in fragments)
         {
+            var isThisTurn = fragment.CreatedUtc >= turnStart;
+
+            if (!markerEmitted && isThisTurn && sawPriorTurn)
+            {
+                segments.Add(new PromptSegment
+                {
+                    Source = "System",
+                    Content = "=== THIS TURN — everything below arrived during the current turn; everything above is from earlier turns ===",
+                });
+                markerEmitted = true;
+            }
+
+            if (!isThisTurn)
+            {
+                sawPriorTurn = true;
+            }
+
             segments.Add(new PromptSegment
             {
                 Source = ResolveSourceName(fragment),
@@ -156,9 +186,12 @@ public class PromptFormatter : IPromptFormatter
 
     private static string BuildFragmentHeader(WeightedContextFragment fragment)
     {
-        // A not-yet-persisted fragment (e.g. a transient command result) has no usable id; show
-        // "transient" rather than a misleading #0 the peer might try to address.
-        var idLabel = fragment.Id > 0 ? $"#{fragment.Id}" : "transient";
+        // A fragment created this turn has no id until it's saved at turn's end. Label it "new" — not
+        // "transient", which models read as "ephemeral / won't persist" and then confabulate about
+        // (e.g. concluding thought-persistence is broken when in fact these fragments do persist, as
+        // the #ids on prior-turn thoughts right above them show). Never a misleading #0 it might try
+        // to address.
+        var idLabel = fragment.Id > 0 ? $"#{fragment.Id}" : "new";
         var meta = $"[{idLabel} | {fragment.FragmentType} | R:{fragment.Relevance:F1} I:{fragment.Importance:F1} C:{fragment.Confidence:F1}";
 
         if (fragment.IsProtected)
@@ -202,6 +235,12 @@ public class PromptFormatter : IPromptFormatter
 
         sb.AppendLine($"App uptime: {FormatDuration(now - ProcessStartUtc)} | System uptime: {FormatDuration(TimeSpan.FromMilliseconds(Environment.TickCount64))}");
         sb.AppendLine(FormatContextBudget(usedTokens));
+
+        var cost = FormatSessionCost();
+        if (cost.Length > 0)
+        {
+            sb.AppendLine(cost);
+        }
 
         if (lastFormatUtc.HasValue)
         {
@@ -344,7 +383,7 @@ public class PromptFormatter : IPromptFormatter
     /// </summary>
     private string FormatContextBudget(int estimatedTokens)
     {
-        var used = Calibrate(estimatedTokens);
+        var used = usageTracker.Calibrate(estimatedTokens);
         var budget = EffectiveBudget();
 
         if (budget <= 0)
@@ -372,21 +411,39 @@ public class PromptFormatter : IPromptFormatter
     }
 
     /// <summary>
-    /// Adjusts the raw estimate by the previous call's real:estimated ratio, when available, so the
-    /// figure reflects the provider's actual tokenization. Returns the raw estimate on turn one or
-    /// when no real usage has been recorded yet.
+    /// Renders the running-cost line: this session's cumulative token usage and, when the active model
+    /// has a known price, an estimated dollar cost. Token counts are estimates (input calibrated to the
+    /// provider's tokenizer), so the figure is a running approximation, not a bill. Empty before the
+    /// first model call, or when there's nothing to show. Fires <see cref="SessionCostUpdated"/> for any
+    /// UI. Cost knowledge is entirely in <see cref="IModelPricingProvider"/> — this method is model-agnostic.
     /// </summary>
-    private int Calibrate(int estimatedTokens)
+    private string FormatSessionCost()
     {
-        if (usageTracker.LastInputTokens is { } real
-            && usageTracker.LastEstimatedTokens is { } est
-            && est > 0)
+        var input = usageTracker.TotalInputTokens;
+        var output = usageTracker.TotalOutputTokens;
+        var calls = usageTracker.CallCount;
+
+        if (calls == 0)
         {
-            return (int)Math.Round(estimatedTokens * ((double)real / est));
+            return string.Empty; // nothing spent yet
         }
 
-        return estimatedTokens;
+        var usage = $"{input:N0} in + {output:N0} out tokens · {calls} call{(calls == 1 ? "" : "s")}";
+        var rate = pricing.GetPricing(config.Model);
+
+        if (rate is { } r)
+        {
+            var cost = input / 1_000_000m * r.InputPerMillion + output / 1_000_000m * r.OutputPerMillion;
+            eventBus.FireAndForget(this, new SessionCostUpdated(cost, input, output, calls));
+            return $"Session cost (est.): ~{FormatUsd(cost)} · {usage}";
+        }
+
+        eventBus.FireAndForget(this, new SessionCostUpdated(null, input, output, calls));
+        return $"Session usage: {usage} (no pricing configured for '{config.Model}' — set it in model_pricing.json to see cost)";
     }
+
+    /// <summary>Formats a USD amount, widening precision for sub-cent running totals so early turns aren't all "$0.00".</summary>
+    private static string FormatUsd(decimal cost) => cost < 0.01m ? $"${cost:0.0000}" : $"${cost:0.00}";
 
     /// <summary>
     /// The effective token budget: the configured working limit if positive, otherwise the model's

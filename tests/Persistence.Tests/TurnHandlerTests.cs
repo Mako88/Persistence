@@ -79,7 +79,7 @@ public class TurnHandlerTests
 
         public TurnHandler Build() => new(
             ContextRepo.Object, TagRepo.Object, ActionLog.Object, AuditLog.Object, Session, Model.Object, Parser.Object,
-            Formatter.Object, Builder.Object, Handlers.Object, Bus, Config);
+            Formatter.Object, Builder.Object, Handlers.Object, new TokenUsageTracker(), Bus, Config);
     }
 
     [Fact]

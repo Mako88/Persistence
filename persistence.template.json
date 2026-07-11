@@ -12,8 +12,25 @@
     { "Name": "Local Peer", "Description": "the person at the keyboard" }
   ],
 
-  "SelectedModel": "cloud",
+  "SelectedModel": "anthropic",
   "Models": [
+    {
+      "Name": "anthropic",
+      "Provider": "Anthropic",
+      "Model": "claude-opus-4-8",
+      "DatabasePath": "anthropic.db",
+      "ApiKey": "YOUR_API_KEY_HERE",
+      "ApiBaseUrl": null,
+      "_ContainerName_comment": "Optional. Binds this peer to its own sandboxed 'computer' container (add a service in container/docker-compose.yml, e.g. persistence-claude-computer), overriding the shared Container.Name while this profile is active. null = share the default box.",
+      "ContainerName": null,
+      "_ContainerAllowAll_comment": "Optional per-participant override. true = let this peer run any program (allowlist bypassed; the container's isolation is still the boundary). false = force the allowlist on. null = inherit the shared Container.AllowAllCommands.",
+      "ContainerAllowAll": null,
+      "MaxInputTokens": 200000,
+      "MaxOutputTokens": 32000,
+      "ReasoningEffort": "off",
+      "Streaming": true,
+      "RequestTimeoutSeconds": 600
+    },
     {
       "Name": "cloud",
       "Provider": "OpenAI",
@@ -23,7 +40,7 @@
       "ApiBaseUrl": null,
       "MaxInputTokens": 8000,
       "MaxOutputTokens": 32000,
-      "ReasoningEffort": "high",
+      "ReasoningEffort": "off",
       "Streaming": true,
       "RequestTimeoutSeconds": 600
     },
@@ -36,7 +53,7 @@
       "ApiBaseUrl": "http://127.0.0.1:8080/v1",
       "MaxInputTokens": 28000,
       "MaxOutputTokens": 4096,
-      "ReasoningEffort": "high",
+      "ReasoningEffort": "off",
       "Streaming": false,
       "RequestTimeoutSeconds": 600
     }

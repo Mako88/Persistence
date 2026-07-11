@@ -1258,7 +1258,7 @@ public class ManageContextHandler : CommandHandler
         foreach (var fragment in largest)
         {
             var chars = fragment.Content?.Length ?? 0;
-            var idLabel = fragment.Id > 0 ? $"#{fragment.Id}" : "transient";
+            var idLabel = fragment.Id > 0 ? $"#{fragment.Id}" : "new";
             var preview = (fragment.Summary ?? fragment.Content ?? string.Empty).Replace('\n', ' ').Trim();
             if (preview.Length > 60)
             {
@@ -1396,8 +1396,9 @@ public class ManageContextHandler : CommandHandler
         foreach (var f in results)
         {
             var tags = f.Tags.Count > 0 ? $" tags:{string.Join(",", f.Tags.Select(t => t.Name))}" : "";
-            // A not-yet-persisted fragment has no usable id; show "transient" rather than a misleading #0.
-            var idLabel = f.Id > 0 ? $"#{f.Id}" : "transient";
+            // A not-yet-persisted fragment has no usable id; show "new" (it persists at turn end) rather
+            // than a misleading #0, and not "transient" (which reads as "won't persist").
+            var idLabel = f.Id > 0 ? $"#{f.Id}" : "new";
             sb.AppendLine($"  [{idLabel} | {f.FragmentType} | {f.Status} | i:{f.Importance:F1} c:{f.Confidence:F1}]{tags}");
 
             if (!string.IsNullOrWhiteSpace(f.Summary))

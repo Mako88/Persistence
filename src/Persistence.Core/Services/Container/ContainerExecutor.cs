@@ -1,6 +1,7 @@
 using Persistence.Config;
 using Persistence.DI;
 using Persistence.Runtime;
+using System.Text;
 
 namespace Persistence.Services.Container;
 
@@ -36,7 +37,7 @@ public class ContainerExecutor : IContainerExecutor
     {
         var settings = config.Container;
 
-        if (CheckAllowlist(commandLine, settings.Allowlist) is { } rejection)
+        if (CheckAllowlist(commandLine, settings.Allowlist, settings.AllowAllCommands) is { } rejection)
         {
             return new ContainerExecResult(Allowed: false, rejection, Output: string.Empty,
                 TimedOut: false, Truncated: false, ExitCode: 0);
@@ -73,6 +74,106 @@ public class ContainerExecutor : IContainerExecutor
             result.ExitCode);
     }
 
+    // A stderr sentinel the read script emits when the target path isn't a regular file, so we can
+    // tell "missing" apart from an empty file (both otherwise produce no stdout).
+    private const string NoFileMarker = "__PERSISTENCE_NOFILE__";
+
+    /// <inheritdoc />
+    public async Task<ContainerReadResult> ReadFileAsync(string path, int offset, int limit, CancellationToken ct)
+    {
+        var settings = config.Container;
+        var start = offset + 1;             // sed is 1-based; offset is a 0-based line index
+        var end = offset + limit;
+        var script =
+            CdPreamble(settings) +
+            $"if [ ! -f {Quote(path)} ]; then echo {NoFileMarker} 1>&2; exit 3; fi\n" +
+            $"awk 'END{{print NR}}' {Quote(path)} 1>&2\n" +      // total line count → stderr
+            $"sed -n '{start},{end}p' {Quote(path)}";            // the requested window → stdout
+
+        var result = await DockerExecAsync(script, settings, ct);
+
+        if (result.ExitCode == 3 || result.Stderr.Contains(NoFileMarker, StringComparison.Ordinal))
+        {
+            return new ContainerReadResult(
+                Found: false, Content: string.Empty, TotalLines: 0, FirstLine: 0, LastLine: 0,
+                Truncated: false, TimedOut: result.TimedOut, Error: $"no such file: {path}");
+        }
+
+        var total = ParseLeadingInt(result.Stderr);
+        var firstLine = total == 0 ? 0 : Math.Min(start, total);
+        var lastLine = Math.Min(end, total);
+
+        return new ContainerReadResult(
+            Found: true,
+            Content: result.Stdout.TrimEnd('\n'),
+            TotalLines: total,
+            FirstLine: firstLine,
+            LastLine: lastLine,
+            Truncated: result.Truncated,
+            TimedOut: result.TimedOut,
+            Error: null);
+    }
+
+    /// <inheritdoc />
+    public async Task<ContainerExecResult> WriteFileAsync(string path, string content, bool append, CancellationToken ct)
+    {
+        var settings = config.Container;
+        var b64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(content));
+        var redirect = append ? ">>" : ">";
+        var script =
+            CdPreamble(settings) +
+            $"mkdir -p \"$(dirname {Quote(path)})\" 2>/dev/null\n" +
+            // base64 carries the content verbatim — no quoting/escaping of arbitrary bytes needed.
+            $"printf %s '{b64}' | base64 -d {redirect} {Quote(path)}";
+
+        var result = await DockerExecAsync(script, settings, ct);
+
+        return new ContainerExecResult(
+            Allowed: true,
+            RejectionReason: null,
+            Output: Combine(string.Empty, result.Stderr),
+            result.TimedOut,
+            result.Truncated,
+            result.ExitCode);
+    }
+
+    /// <summary>Prefix that starts the script in the persisted cwd (falling back to the working dir).</summary>
+    private string CdPreamble(ContainerSettings settings)
+    {
+        var cwd = string.IsNullOrEmpty(session.ContainerCwd) ? settings.WorkingDir : session.ContainerCwd;
+        return $"cd {Quote(cwd)} 2>/dev/null || cd {Quote(settings.WorkingDir)}\n";
+    }
+
+    /// <summary>Runs a prepared script in the container via <c>docker exec … sh -lc</c>.</summary>
+    private Task<ProcessResult> DockerExecAsync(string script, ContainerSettings settings, CancellationToken ct)
+    {
+        var env = settings.DockerHost is { Length: > 0 } host
+            ? new Dictionary<string, string> { ["DOCKER_HOST"] = host }
+            : null;
+
+        return processRunner.RunAsync(
+            "docker",
+            ["exec", settings.Name, "sh", "-lc", script],
+            settings.TimeoutSeconds,
+            settings.MaxOutputBytes,
+            env,
+            ct);
+    }
+
+    /// <summary>Reads the first integer on the first non-blank line of <paramref name="text"/> (0 if none).</summary>
+    private static int ParseLeadingInt(string text)
+    {
+        foreach (var line in text.Split('\n'))
+        {
+            if (int.TryParse(line.Trim(), out var n))
+            {
+                return n;
+            }
+        }
+
+        return 0;
+    }
+
     /// <inheritdoc />
     public async Task<string> GetLogsAsync(string containerName, int lines, CancellationToken ct)
     {
@@ -102,18 +203,25 @@ public class ContainerExecutor : IContainerExecutor
     }
 
     /// <summary>
-    /// Returns null if every segment's program is allowlisted, otherwise a peer-facing rejection
-    /// message naming the offending program and the allowed set.
+    /// Returns null if the command may run, otherwise a peer-facing rejection message. When
+    /// <paramref name="allowAll"/> is set the per-program curation is skipped (only the empty-command
+    /// guard remains); otherwise every segment's program must be allowlisted.
     /// </summary>
-    private static string? CheckAllowlist(string commandLine, string[] allowlist)
+    private static string? CheckAllowlist(string commandLine, string[] allowlist, bool allowAll)
     {
-        var allowed = new HashSet<string>(allowlist, StringComparer.Ordinal);
         var programs = ShellCommandParser.ExtractProgramNames(commandLine);
 
         if (programs.Count == 0)
         {
             return "No command given.";
         }
+
+        if (allowAll)
+        {
+            return null; // container isolation is the boundary; curation is off for this peer
+        }
+
+        var allowed = new HashSet<string>(allowlist, StringComparer.Ordinal);
 
         foreach (var program in programs)
         {

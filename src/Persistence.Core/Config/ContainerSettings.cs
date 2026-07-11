@@ -26,15 +26,26 @@ public class ContainerSettings
     public string WorkingDir { get; set; } = "/work";
 
     /// <summary>
+    /// When true, the <see cref="Allowlist"/> curation is bypassed entirely — any program may run.
+    /// The container's own isolation (non-privileged, dropped capabilities, no host mounts,
+    /// egress-only) is still the real boundary, so this trades curation for reach without removing the
+    /// sandbox. Off by default; a profile can flip it per participant via
+    /// <see cref="ModelProfile.ContainerAllowAll"/>, or set <c>PERSISTENCE_CONTAINER_ALLOWALLCOMMANDS</c>.
+    /// </summary>
+    public bool AllowAllCommands { get; set; } = false;
+
+    /// <summary>
     /// Programs the peer may invoke (deny-by-default). v1 covers web tools, interpreters, and basic
-    /// file/navigation utilities — enough for a "lab" while keeping unknown programs rejected.
+    /// file/navigation utilities — enough for a "lab" while keeping unknown programs rejected. Ignored
+    /// when <see cref="AllowAllCommands"/> is true.
     /// </summary>
     public string[] Allowlist { get; set; } =
     [
         // Web
         "web_search", "fetch_url", "agent-browser", "curl",
-        // Scripting / interpreters
+        // Scripting / interpreters / dev toolchain
         "python", "python3", "pip", "pip3", "node", "npm", "sh", "bash",
+        "git", "dotnet", "sudo", "tar",
         // Navigation / files / text
         "cd", "ls", "pwd", "cat", "echo", "mkdir", "mv", "cp", "rm", "touch",
         "grep", "head", "tail", "wc", "find", "sed", "awk", "which", "env",

@@ -55,6 +55,13 @@ public class AppConfig : IAppConfig
     public int RawContextWindow { get; set; } = 30;
 
     /// <summary>
+    /// How many of the peer's most recent thoughts (<c>&lt;think&gt;</c> blocks) to keep in the active
+    /// context before archiving older ones (kept in the store, searchable/restorable). Gives the peer
+    /// episodic recall of its recent reasoning across turns. 0 keeps every thought (no thought archival).
+    /// </summary>
+    public int ThoughtContextWindow { get; set; } = 8;
+
+    /// <summary>
     /// The peer's sandboxed "computer" reached via the <c>shell</c> command. Off by default; see
     /// <see cref="ContainerSettings"/>. Nested values are overridable via <c>PERSISTENCE_CONTAINER_*</c>.
     /// </summary>
@@ -110,9 +117,23 @@ public class AppConfig : IAppConfig
     [JsonIgnore] public int RequestTimeoutSeconds { get => ActiveModel.RequestTimeoutSeconds; set => ActiveModel.RequestTimeoutSeconds = value; }
 
     /// <summary>
+    /// The shared <see cref="ContainerSettings.Name"/> as originally configured, captured before any
+    /// per-profile <see cref="ModelProfile.ContainerName"/> override is applied. Lets a profile
+    /// without an override fall back to this base rather than inheriting the previous profile's box
+    /// across a re-resolve (e.g. a <c>PERSISTENCE_SELECTEDMODEL</c> switch).
+    /// </summary>
+    private string? baseContainerName;
+
+    /// <summary>The shared <see cref="ContainerSettings.AllowAllCommands"/> as originally configured,
+    /// captured before any per-profile <see cref="ModelProfile.ContainerAllowAll"/> override — same
+    /// base-capture role as <see cref="baseContainerName"/>.</summary>
+    private bool? baseContainerAllowAll;
+
+    /// <summary>
     /// Resolves <see cref="ActiveModel"/> from <see cref="SelectedModel"/> (case-insensitive name
-    /// match), falling back to the first profile. Ensures at least one profile exists, and syncs
-    /// <see cref="SelectedModel"/> to the resolved profile's name. Idempotent.
+    /// match), falling back to the first profile. Ensures at least one profile exists, syncs
+    /// <see cref="SelectedModel"/> to the resolved profile's name, and points the shared container at
+    /// the active profile's <see cref="ModelProfile.ContainerName"/> when it sets one. Idempotent.
     /// </summary>
     public AppConfig ResolveActiveModel()
     {
@@ -125,6 +146,18 @@ public class AppConfig : IAppConfig
             string.Equals(m.Name, SelectedModel, StringComparison.OrdinalIgnoreCase)) ?? Models[0];
 
         SelectedModel = ActiveModel.Name;
+
+        // Bind the active peer to its own computer, if it names one. Capture the configured base once
+        // so a profile with no override resolves back to it (an explicit PERSISTENCE_CONTAINER_NAME
+        // still wins — it's applied later, in ApplyContainerEnvironmentOverrides).
+        baseContainerName ??= Container.Name;
+        Container.Name = string.IsNullOrWhiteSpace(ActiveModel.ContainerName)
+            ? baseContainerName
+            : ActiveModel.ContainerName.Trim();
+
+        baseContainerAllowAll ??= Container.AllowAllCommands;
+        Container.AllowAllCommands = ActiveModel.ContainerAllowAll ?? baseContainerAllowAll.Value;
+
         return this;
     }
 
@@ -244,6 +277,7 @@ public class AppConfig : IAppConfig
             Environment.GetEnvironmentVariable($"{EnvPrefix}CONTAINER_{suffix}");
 
         if (Env("ENABLED") is { } enabled && bool.TryParse(enabled, out var en)) config.Container.Enabled = en;
+        if (Env("ALLOWALLCOMMANDS") is { } all && bool.TryParse(all, out var aa)) config.Container.AllowAllCommands = aa;
         if (Env("NAME") is { Length: > 0 } name) config.Container.Name = name;
         if (Env("DOCKERHOST") is { Length: > 0 } host) config.Container.DockerHost = host;
         if (Env("WORKINGDIR") is { Length: > 0 } dir) config.Container.WorkingDir = dir;
@@ -302,6 +336,13 @@ public enum ModelProvider
     /// See <c>OpenAiChatModelClient</c>.
     /// </summary>
     OpenAiChat = 3,
+
+    /// <summary>
+    /// The Anthropic Claude Messages API (<c>/v1/messages</c>) — talks directly to
+    /// <c>api.anthropic.com</c> (or a compatible endpoint via <c>ApiBaseUrl</c>). See
+    /// <c>AnthropicModelClient</c>.
+    /// </summary>
+    Anthropic = 4,
 }
 
 /// <summary>

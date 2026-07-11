@@ -27,15 +27,17 @@ public class OpenAiModelClient : IModelClient, IDisposable
     private readonly string reasoningEffort;
     private readonly IAppConfig config;
     private readonly IDisplayProvider display;
-    private readonly ITokenUsageTracker usageTracker;
 
     private const string DefaultBaseUrl = "https://api.openai.com/v1";
+
+    /// <inheritdoc />
+    public ModelUsage? LastUsage { get; private set; }
 
     /// <summary>
     /// Constructor that builds the HTTP client from config
     /// </summary>
-    public OpenAiModelClient(IAppConfig config, IDisplayProvider display, ITokenUsageTracker usageTracker)
-        : this(config, display, usageTracker, CreateClient(config))
+    public OpenAiModelClient(IAppConfig config, IDisplayProvider display)
+        : this(config, display, CreateClient(config))
     {
     }
 
@@ -43,7 +45,7 @@ public class OpenAiModelClient : IModelClient, IDisposable
     /// Test seam: accepts a pre-configured <see cref="ISimpleClient"/> (e.g. a fake)
     /// instead of constructing one from config.
     /// </summary>
-    internal OpenAiModelClient(IAppConfig config, IDisplayProvider display, ITokenUsageTracker usageTracker, ISimpleClient client)
+    internal OpenAiModelClient(IAppConfig config, IDisplayProvider display, ISimpleClient client)
     {
         model = config.Model;
         maxCompletionTokens = config.MaxOutputTokens;
@@ -52,7 +54,6 @@ public class OpenAiModelClient : IModelClient, IDisposable
         this.client = client;
         this.config = config;
         this.display = display;
-        this.usageTracker = usageTracker;
     }
 
     /// <summary>
@@ -107,7 +108,7 @@ public class OpenAiModelClient : IModelClient, IDisposable
         using var doc = JsonDocument.Parse(response.StringBody);
         var responseMessage = ExtractOutputText(doc.RootElement);
 
-        RecordUsage(doc.RootElement, request);
+        LastUsage = ReadUsage(doc.RootElement);
 
         var reasoning = ExtractReasoningSummary(doc.RootElement);
         if (reasoning.Length > 0)
@@ -127,15 +128,21 @@ public class OpenAiModelClient : IModelClient, IDisposable
     /// Records the provider's real input-token count (Responses API: <c>usage.input_tokens</c>)
     /// alongside our estimate of the same prompt, so the budget readout can self-calibrate.
     /// </summary>
-    private void RecordUsage(JsonElement root, PromptRequest request)
+    /// <summary>
+    /// Reads a Responses API usage block from an element that contains <c>usage</c>
+    /// (<c>input_tokens</c> / <c>output_tokens</c>) — the response root for a non-streaming call, or
+    /// the <c>response</c> object inside the streamed <c>response.completed</c> event. Null if absent.
+    /// </summary>
+    private static ModelUsage? ReadUsage(JsonElement container)
     {
-        if (root.TryGetProperty("usage", out var usage)
-            && usage.TryGetProperty("input_tokens", out var input)
-            && input.TryGetInt32(out var realInput))
+        if (container.TryGetProperty("usage", out var usage)
+            && usage.TryGetProperty("input_tokens", out var input) && input.TryGetInt32(out var inTok))
         {
-            var estimated = TokenEstimator.Estimate(request.Messages.Select(m => m.Content));
-            usageTracker.Record(realInput, estimated);
+            var outTok = usage.TryGetProperty("output_tokens", out var o) && o.TryGetInt32(out var ot) ? ot : 0;
+            return new ModelUsage(inTok, outTok);
         }
+
+        return null;
     }
 
     /// <summary>
@@ -154,12 +161,15 @@ public class OpenAiModelClient : IModelClient, IDisposable
             throw new InvalidOperationException($"API call failed ({response.StatusCode}): {error}");
         }
 
+        // Reset so a mid-stream failure doesn't leave a prior call's usage looking current.
+        LastUsage = null;
+
         // Accumulate the streamed text so the response can be logged to the Debug pane on completion,
         // just like the non-streaming path does — otherwise streamed turns would log a request with no
         // matching response.
         var responseText = new StringBuilder();
 
-        await foreach (var evt in OpenAiResponseStreamParser.ParseAsync(EventData(response, ct), ct))
+        await foreach (var evt in OpenAiResponseStreamParser.ParseAsync(CaptureUsage(EventData(response, ct)), ct))
         {
             if (evt.Kind == ModelStreamEventKind.OutputTextDelta)
             {
@@ -188,6 +198,42 @@ public class OpenAiModelClient : IModelClient, IDisposable
         }
     }
 
+    /// <summary>
+    /// Passes each SSE data payload through unchanged, capturing token usage as a side effect: the
+    /// terminal <c>response.completed</c> event carries the full response (including <c>usage</c>), so
+    /// <see cref="LastUsage"/> ends the stream set to the real provider counts.
+    /// </summary>
+    private async IAsyncEnumerable<string> CaptureUsage(
+        IAsyncEnumerable<string> dataPayloads, [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        await foreach (var data in dataPayloads.WithCancellation(ct))
+        {
+            TryCaptureCompletedUsage(data);
+            yield return data;
+        }
+    }
+
+    /// <summary>Sets <see cref="LastUsage"/> from a <c>response.completed</c> payload's nested response object.</summary>
+    private void TryCaptureCompletedUsage(string data)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(data);
+            var root = doc.RootElement;
+
+            if (root.TryGetProperty("type", out var type) && type.GetString() == "response.completed"
+                && root.TryGetProperty("response", out var resp)
+                && ReadUsage(resp) is { } usage)
+            {
+                LastUsage = usage;
+            }
+        }
+        catch (JsonException)
+        {
+            // Not the completed event (or malformed) — nothing to capture.
+        }
+    }
+
     private static async Task<string> ReadBodyAsync(Stream stream, CancellationToken ct)
     {
         using var reader = new StreamReader(stream);
@@ -203,15 +249,21 @@ public class OpenAiModelClient : IModelClient, IDisposable
             .Select(m => new { role = m.Role, content = m.Content })
             .ToArray();
 
-        var body = new
+        var body = new Dictionary<string, object?>
         {
-            model,
-            input = messages,
-            max_output_tokens = maxCompletionTokens,
-            reasoning = new { effort = reasoningEffort, summary = "auto" },
-            store = false,
-            stream
+            ["model"] = model,
+            ["input"] = messages,
+            ["max_output_tokens"] = maxCompletionTokens,
+            ["store"] = false,
+            ["stream"] = stream,
         };
+
+        // Native reasoning off — the peer reasons in Persistence's <think> channel — so don't ask the
+        // provider to reason. Otherwise pass the configured effort.
+        if (!ReasoningEffortValue.IsOff(reasoningEffort))
+        {
+            body["reasoning"] = new { effort = reasoningEffort, summary = "auto" };
+        }
 
         if (config.DebugMode)
         {

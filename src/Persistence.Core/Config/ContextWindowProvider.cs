@@ -23,6 +23,9 @@ public class ContextWindowProvider : IContextWindowProvider
         ["gpt-4.1"] = 1047576,
         ["gpt-4o"] = 128000,
         ["o3"] = 200000,
+        ["claude-opus-4"] = 1000000,
+        ["claude-sonnet-4"] = 1000000,
+        ["claude-sonnet-5"] = 1000000,
         ["claude"] = 200000,
         ["local"] = 128000,
     };

@@ -97,6 +97,14 @@ public interface IAppConfig
     int RawContextWindow { get; set; }
 
     /// <summary>
+    /// How many of the peer's most recent thoughts (<c>&lt;think&gt;</c> blocks) to keep in the
+    /// active context before archiving older ones (kept in the store, searchable/restorable). Gives
+    /// the peer episodic recall of its recent reasoning across turns without the context ballooning.
+    /// 0 keeps every thought (no thought archival).
+    /// </summary>
+    int ThoughtContextWindow { get; set; }
+
+    /// <summary>
     /// Whether the compact command list is appended to the end of each turn by default. The peer can
     /// toggle it per session via <c>toggle_command_list</c>; full schemas remain available via <c>list()</c>.
     /// </summary>

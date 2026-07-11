@@ -68,6 +68,22 @@ public class ModelProfile
     public string? ApiBaseUrl { get; set; }
 
     /// <summary>
+    /// Optional per-participant "computer" container. When set, it overrides the shared
+    /// <see cref="ContainerSettings.Name"/> while this profile is active, so each peer gets its own
+    /// sandboxed box + workspace (e.g. <c>persistence-claude-computer</c>). Null/blank uses the shared
+    /// <c>Container.Name</c>. Applied by <see cref="AppConfig.ResolveActiveModel"/>.
+    /// </summary>
+    public string? ContainerName { get; set; }
+
+    /// <summary>
+    /// Optional per-participant override for <see cref="ContainerSettings.AllowAllCommands"/>: set
+    /// <c>true</c> to let this peer run any program (bypassing the allowlist), <c>false</c> to force
+    /// the allowlist on. Null inherits the shared <c>Container.AllowAllCommands</c>. Applied by
+    /// <see cref="AppConfig.ResolveActiveModel"/>.
+    /// </summary>
+    public bool? ContainerAllowAll { get; set; }
+
+    /// <summary>
     /// Maximum input tokens available for the prompt — the context budget surfaced to the peer.
     /// </summary>
     public int MaxInputTokens { get; set; } = 8000;
@@ -78,9 +94,14 @@ public class ModelProfile
     public int MaxOutputTokens { get; set; } = 32000;
 
     /// <summary>
-    /// Reasoning effort for reasoning-capable models ("minimal", "low", "medium", "high").
+    /// Native reasoning effort for reasoning-capable models. <c>"off"</c> (the default) or <c>"none"</c>
+    /// disables the model's native thinking entirely — the peer reasons in Persistence's own
+    /// <c>&lt;think&gt;</c> channel instead (persisted and inspectable), avoiding a redundant, ephemeral
+    /// second reasoning channel. Otherwise a provider effort level (<c>"low"</c>/<c>"medium"</c>/
+    /// <c>"high"</c>/…) turns native reasoning on at that depth. Ignored by providers with no reasoning
+    /// control (e.g. Chat Completions).
     /// </summary>
-    public string ReasoningEffort { get; set; } = "high";
+    public string ReasoningEffort { get; set; } = "off";
 
     /// <summary>
     /// When true, responses are streamed incrementally (live reasoning/output) rather than

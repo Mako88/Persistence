@@ -32,6 +32,7 @@ public class TurnHandler : ITurnHandler
     private readonly IPromptFormatter promptFormatter;
     private readonly IPromptBuilder promptBuilder;
     private readonly IIndex<ModelAction, IActionHandler> actionHandlers;
+    private readonly ITokenUsageTracker usageTracker;
     private readonly IEventBus eventBus;
     private readonly IAppConfig config;
 
@@ -55,6 +56,7 @@ public class TurnHandler : ITurnHandler
         IPromptFormatter promptFormatter,
         IPromptBuilder promptBuilder,
         IIndex<ModelAction, IActionHandler> actionHandlers,
+        ITokenUsageTracker usageTracker,
         IEventBus eventBus,
         IAppConfig config)
     {
@@ -68,6 +70,7 @@ public class TurnHandler : ITurnHandler
         this.promptFormatter = promptFormatter;
         this.promptBuilder = promptBuilder;
         this.actionHandlers = actionHandlers;
+        this.usageTracker = usageTracker;
         this.eventBus = eventBus;
         this.config = config;
     }
@@ -90,9 +93,19 @@ public class TurnHandler : ITurnHandler
             return;
         }
 
-        // Keep the context lean: archive raw fragments (old conversation + tool results) beyond the
-        // recent window. Done before this turn's input is added, so the new message is always kept.
-        var archiveNote = await ArchiveOldRawFragmentsAsync(context);
+        // Keep the context lean: archive raw fragments (old conversation + tool results) and older
+        // thoughts beyond their windows. Done before this turn's input/thought is added, so the newest
+        // are always kept. Both notes (if any) are surfaced together in the sensory block.
+        var archiveNotes = new List<string>();
+        if (await ArchiveOldRawFragmentsAsync(context) is { } rawNote)
+        {
+            archiveNotes.Add(rawNote);
+        }
+        if (await ArchiveOldThoughtsAsync(context) is { } thoughtNote)
+        {
+            archiveNotes.Add(thoughtNote);
+        }
+        var archiveNote = archiveNotes.Count > 0 ? string.Join("\n", archiveNotes) : null;
 
         while (pendingSystemNotes.TryDequeue(out var note))
         {
@@ -142,6 +155,17 @@ public class TurnHandler : ITurnHandler
             var rawOutput = config.Streaming
                 ? await StreamModelOutputAsync(request, ct)
                 : await modelClient.CompleteAsync(request, ct);
+
+            // Account for this call's real, provider-reported token usage in one place: it feeds the
+            // running cost readout (cumulative in/out) and the context-budget calibration (real input
+            // vs our estimate of the same prompt). Extraction is per-provider inside each client;
+            // clients that report no usage (local/out-of-band) simply don't contribute.
+            if (modelClient.LastUsage is { } usage)
+            {
+                usageTracker.Record(usage.InputTokens, TokenEstimator.Estimate(segments.Select(s => s.Content)));
+                usageTracker.AddUsage(usage.InputTokens, usage.OutputTokens);
+            }
+
             var turn = responseParser.Parse(rawOutput);
 
             if (!turn.ParsedSuccessfully)
@@ -251,24 +275,68 @@ public class TurnHandler : ITurnHandler
     }
 
     /// <summary>
+    /// Archives the peer's older thoughts (<c>&lt;think&gt;</c> blocks) beyond the most recent
+    /// <see cref="IAppConfig.ThoughtContextWindow"/>, so recent reasoning stays recallable without the
+    /// context growing without bound. Archival is reversible (detached from the context, kept in the
+    /// store). Returns a sensory note, or null if nothing was archived.
+    /// </summary>
+    private async Task<string?> ArchiveOldThoughtsAsync(WorkingContextEntity context)
+    {
+        var toArchive = SelectThoughtsToArchive(context, config.ThoughtContextWindow);
+
+        if (toArchive.Count == 0)
+        {
+            return null;
+        }
+
+        foreach (var fragment in toArchive)
+        {
+            await workingContextRepo.RemoveFragmentAsync(context.Id, fragment.Id);
+            context.ContextFragments.Remove(fragment.Order);
+        }
+
+        var ids = string.Join(", ", toArchive.Select(f => $"#{f.Id}"));
+        return $"Auto-archived {toArchive.Count} older thought(s) ({ids}), keeping your most recent "
+            + $"{config.ThoughtContextWindow} — not deleted: find them with "
+            + "list_fragments(relevant_to=…, in_current_context=false) and bring any back with load.";
+    }
+
+    /// <summary>
     /// The raw fragments (oldest first) to archive: everything of a raw type (conversation + tool
     /// results) beyond the most recent <paramref name="window"/>. Authored fragments are never
     /// selected; a window of 0 disables archival. Pure (no DB) for testability.
     /// </summary>
     internal static IReadOnlyList<WeightedContextFragment> SelectRawFragmentsToArchive(
-        WorkingContextEntity context, int window)
+        WorkingContextEntity context, int window) =>
+        SelectOldestBeyondWindow(context, window, IsRawType);
+
+    /// <summary>
+    /// The thoughts (oldest first) to archive: every persisted <see cref="ContextFragmentType.Thought"/>
+    /// beyond the most recent <paramref name="window"/>. A window of 0 keeps them all. Pure for testability.
+    /// </summary>
+    internal static IReadOnlyList<WeightedContextFragment> SelectThoughtsToArchive(
+        WorkingContextEntity context, int window) =>
+        SelectOldestBeyondWindow(context, window, t => t is ContextFragmentType.Thought);
+
+    /// <summary>
+    /// The oldest persisted fragments of a matching type beyond the most recent <paramref name="window"/>
+    /// (ordered by context position). Only already-persisted fragments (<c>Id &gt; 0</c>) are eligible,
+    /// so a fragment added this turn is never archived before it's saved. A window of 0 archives nothing.
+    /// </summary>
+    private static IReadOnlyList<WeightedContextFragment> SelectOldestBeyondWindow(
+        WorkingContextEntity context, int window, Func<ContextFragmentType, bool> matches)
     {
         if (window <= 0)
         {
             return [];
         }
 
-        var raw = context.ContextFragments.Values
-            .Where(f => IsRawType(f.FragmentType) && f.Id > 0)
+        var matching = context.ContextFragments.Values
+            .Where(f => matches(f.FragmentType) && f.Id > 0)
             .OrderBy(f => f.Order)
             .ToList();
 
-        return raw.Count <= window ? [] : raw.Take(raw.Count - window).ToList();
+        return matching.Count <= window ? [] : matching.Take(matching.Count - window).ToList();
     }
 
     /// <summary>Raw, auto-archivable fragment types — the transcript and tool output, not the peer's notes.</summary>

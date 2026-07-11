@@ -32,7 +32,7 @@ public class ThinkHandlerTests
     }
 
     [Fact]
-    public async Task AddsThoughtAsTransientScratchPadFragment()
+    public async Task AddsThoughtAsPersistedThoughtFragment()
     {
         var (handler, _, _) = Create();
         var context = NewContext();
@@ -40,7 +40,8 @@ public class ThinkHandlerTests
         await handler.HandleAsync(context, JsonValue.Create("I should check the logs first"));
 
         var fragment = Assert.Single(context.ContextFragments.Values);
-        Assert.Equal(ContextFragmentType.ScratchPad, fragment.FragmentType);
+        // Thought (not the never-saved ScratchPad) so recent reasoning survives across turns.
+        Assert.Equal(ContextFragmentType.Thought, fragment.FragmentType);
         Assert.Equal("I should check the logs first", fragment.Content);
     }
 

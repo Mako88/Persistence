@@ -13,7 +13,7 @@ public class AppConfigTests
         var config = await AppConfig.LoadAsync(path);
 
         Assert.Equal("Tui", config.UiMode);
-        Assert.Equal("high", config.ReasoningEffort);
+        Assert.Equal("off", config.ReasoningEffort); // native reasoning off by default — peer uses <think>
         Assert.Equal("local", config.Provider);
         Assert.Equal("Local Peer", config.SelectedLocalPeer); // back-compat default
     }
@@ -133,6 +133,80 @@ public class AppConfigTests
         Assert.Equal("http://127.0.0.1:8080/v1", config.ApiBaseUrl);
         Assert.Equal(28000, config.MaxInputTokens);
         Assert.Equal(4096, config.MaxOutputTokens);
+    }
+
+    [Fact]
+    public async Task ActiveProfileContainerNameOverridesTheSharedContainer()
+    {
+        var json = """
+        {
+          "SelectedModel": "claude",
+          "Container": { "Enabled": true, "Name": "persistence-computer" },
+          "Models": [
+            { "Name": "cloud", "Provider": "OpenAI", "Model": "gpt-5" },
+            { "Name": "claude", "Provider": "LocalClaude", "Model": "claude",
+              "ContainerName": "persistence-claude-computer" }
+          ]
+        }
+        """;
+
+        await using var temp = new TempFile(json);
+        var config = await AppConfig.LoadAsync(temp.Path);
+
+        // The active peer gets its own box; the shared Container.Name is overridden while it's active.
+        Assert.Equal("persistence-claude-computer", config.Container.Name);
+    }
+
+    [Fact]
+    public async Task ActiveProfileContainerAllowAllOverridesTheSharedSetting()
+    {
+        // Shared default is off; the active profile flips it on for itself, while another profile
+        // (env-switched to) inherits the shared-off base rather than the previous profile's override.
+        var json = """
+        {
+          "SelectedModel": "claude",
+          "Container": { "Enabled": true },
+          "Models": [
+            { "Name": "claude", "Provider": "LocalClaude", "Model": "claude", "ContainerAllowAll": true },
+            { "Name": "cloud", "Provider": "OpenAI", "Model": "gpt-5" }
+          ]
+        }
+        """;
+
+        await using var temp = new TempFile(json);
+        var config = await AppConfig.LoadAsync(temp.Path);
+
+        Assert.True(config.Container.AllowAllCommands);
+    }
+
+    [Fact]
+    public async Task ProfileWithoutContainerNameFallsBackToTheConfiguredBaseName()
+    {
+        // File selects "claude" (→ its own box), then an env switch to "cloud" (no override) must
+        // resolve back to the configured base — not inherit claude's box across the re-resolve.
+        Environment.SetEnvironmentVariable("PERSISTENCE_SELECTEDMODEL", "cloud");
+        try
+        {
+            var json = """
+            {
+              "SelectedModel": "claude",
+              "Container": { "Name": "shared-box" },
+              "Models": [
+                { "Name": "claude", "Provider": "LocalClaude", "Model": "claude", "ContainerName": "claude-box" },
+                { "Name": "cloud", "Provider": "OpenAI", "Model": "gpt-5" }
+              ]
+            }
+            """;
+
+            await using var temp = new TempFile(json);
+            var config = await AppConfig.LoadAsync(temp.Path);
+
+            Assert.Equal("shared-box", config.Container.Name);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PERSISTENCE_SELECTEDMODEL", null);
+        }
     }
 
     [Fact]

@@ -88,6 +88,33 @@ public class ContainerExecutorTests
     }
 
     [Fact]
+    public async Task AllowAllCommandsBypassesTheAllowlist()
+    {
+        config.Container.AllowAllCommands = true;
+        SetupRunner(stdout: "built");
+
+        // gcc is NOT in the allowlist, but allow-all lets any program through to the container.
+        var result = await executor.ExecuteAsync("gcc evil.c && ./a.out", CancellationToken.None);
+
+        Assert.True(result.Allowed);
+        Assert.Contains("built", result.Output);
+    }
+
+    [Fact]
+    public async Task AllowAllStillRejectsAnEmptyCommand()
+    {
+        config.Container.AllowAllCommands = true;
+
+        var result = await executor.ExecuteAsync("   ", CancellationToken.None);
+
+        Assert.False(result.Allowed);
+        Assert.Contains("No command given", result.RejectionReason);
+        runner.Verify(r => r.RunAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
     public async Task OperatorInsideQuotesIsNotTreatedAsAChain()
     {
         SetupRunner(stdout: "ok");
@@ -146,5 +173,86 @@ public class ContainerExecutorTests
         Assert.Contains("out", result.Output);
         Assert.Contains("[stderr]", result.Output);
         Assert.Contains("boom", result.Output);
+    }
+
+    // -- read_file / write_file (structured, allowlist-exempt file ops) --
+
+    [Fact]
+    public async Task ReadFileReturnsWindowAndTotalAndBuildsSedSlice()
+    {
+        // stdout = the sliced lines; stderr = the file's total line count (the read script emits it there).
+        SetupRunner(stdout: "line3\nline4\n", stderr: "10\n");
+
+        var result = await executor.ReadFileAsync("notes.txt", offset: 2, limit: 2, CancellationToken.None);
+
+        Assert.True(result.Found);
+        Assert.Equal("line3\nline4", result.Content);
+        Assert.Equal(10, result.TotalLines);
+        Assert.Equal(3, result.FirstLine);   // offset 2 (0-based) → line 3 (1-based)
+        Assert.Equal(4, result.LastLine);
+
+        var script = CapturedArgs()![4];
+        Assert.Contains("cd '/work'", script);            // resolves against the working dir
+        Assert.Contains("sed -n '3,4p' 'notes.txt'", script);
+    }
+
+    [Fact]
+    public async Task ReadFileReportsNotFoundViaSentinel()
+    {
+        SetupRunner(stderr: "__PERSISTENCE_NOFILE__");
+
+        var result = await executor.ReadFileAsync("missing.txt", offset: 0, limit: 50, CancellationToken.None);
+
+        Assert.False(result.Found);
+        Assert.Contains("no such file", result.Error);
+    }
+
+    [Fact]
+    public async Task ReadFileResolvesRelativePathAgainstPersistedCwd()
+    {
+        session.ContainerCwd = "/work/research";
+        SetupRunner(stdout: "x\n", stderr: "1\n");
+
+        await executor.ReadFileAsync("plan.md", offset: 0, limit: 100, CancellationToken.None);
+
+        Assert.Contains("cd '/work/research'", CapturedArgs()![4]);
+    }
+
+    [Fact]
+    public async Task WriteFileBase64EncodesContentAndOverwrites()
+    {
+        SetupRunner();
+
+        var result = await executor.WriteFileAsync("out.txt", "hello", append: false, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+
+        var script = CapturedArgs()![4];
+        Assert.Contains("aGVsbG8=", script);              // base64("hello"), carried safely into the container
+        Assert.Contains("base64 -d > 'out.txt'", script); // single '>' = overwrite
+        Assert.Contains("mkdir -p", script);              // parent dirs created
+    }
+
+    [Fact]
+    public async Task WriteFileAppendUsesDoubleRedirect()
+    {
+        SetupRunner();
+
+        await executor.WriteFileAsync("log.txt", "more", append: true, CancellationToken.None);
+
+        Assert.Contains("base64 -d >> 'log.txt'", CapturedArgs()![4]);
+    }
+
+    [Fact]
+    public async Task WriteFileSurfacesNonZeroExitAndStderr()
+    {
+        runner.Setup(r => r.RunAsync("docker", It.IsAny<IReadOnlyList<string>>(),
+                It.IsAny<int>(), It.IsAny<int>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(1, "", "cannot create dir", false, false));
+
+        var result = await executor.WriteFileAsync("/nope/x.txt", "hi", append: false, CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("cannot create dir", result.Output);
     }
 }

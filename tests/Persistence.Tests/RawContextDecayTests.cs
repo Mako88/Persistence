@@ -85,4 +85,50 @@ public class RawContextDecayTests
         Assert.Empty(TurnHandler.SelectRawFragmentsToArchive(context, window: 5)); // within window
         Assert.Empty(TurnHandler.SelectRawFragmentsToArchive(context, window: 0)); // disabled
     }
+
+    // -- Thought decay (the rolling window over the peer's <think> blocks) --
+
+    [Fact]
+    public void ArchivesOldestThoughtsBeyondTheWindow_LeavingOtherTypesAlone()
+    {
+        var context = ContextWith(
+            Frag(1, ContextFragmentType.Thought),
+            Frag(2, ContextFragmentType.ChatMessage),   // not a thought — never selected here
+            Frag(3, ContextFragmentType.Thought),
+            Frag(4, ContextFragmentType.Thought),
+            Frag(5, ContextFragmentType.Personal));     // authored — sacred
+
+        // Thoughts are #1, #3, #4; keeping the most recent 2 (#3, #4) archives only #1.
+        var archive = TurnHandler.SelectThoughtsToArchive(context, window: 2);
+
+        Assert.Equal(new long[] { 1 }, archive.Select(f => f.Id));
+        Assert.All(archive, f => Assert.Equal(ContextFragmentType.Thought, f.FragmentType));
+    }
+
+    [Fact]
+    public void KeepsEveryThoughtWhenWindowIsZeroOrWithin()
+    {
+        var context = ContextWith(
+            Frag(1, ContextFragmentType.Thought),
+            Frag(2, ContextFragmentType.Thought));
+
+        Assert.Empty(TurnHandler.SelectThoughtsToArchive(context, window: 5)); // within window
+        Assert.Empty(TurnHandler.SelectThoughtsToArchive(context, window: 0)); // keep them all
+    }
+
+    [Fact]
+    public void NeverArchivesAThoughtAddedThisTurn_BeforeItIsPersisted()
+    {
+        // A thought added this turn has Id 0 (not yet saved); it must never be archived out from
+        // under the peer in the same turn it was created.
+        var context = ContextWith(
+            Frag(1, ContextFragmentType.Thought),
+            Frag(2, ContextFragmentType.Thought),
+            Frag(0, ContextFragmentType.Thought)); // this turn's fresh thought (unsaved)
+
+        var archive = TurnHandler.SelectThoughtsToArchive(context, window: 1);
+
+        Assert.Equal(new long[] { 1 }, archive.Select(f => f.Id)); // only the saved ones are eligible
+        Assert.DoesNotContain(archive, f => f.Id == 0);
+    }
 }

@@ -313,7 +313,7 @@ public class Orchestrator : IOrchestrator
         // default endpoint (no ApiBaseUrl) with no key set. Local servers (ApiBaseUrl set) and the
         // local/LocalClaude providers don't authenticate, so an empty key is expected there.
         var isCloudProvider = !Enum.TryParse<ModelProvider>(config.Provider, ignoreCase: true, out var provider)
-            || provider is ModelProvider.OpenAI or ModelProvider.OpenAiChat;
+            || provider is ModelProvider.OpenAI or ModelProvider.OpenAiChat or ModelProvider.Anthropic;
 
         if (isCloudProvider
             && string.IsNullOrWhiteSpace(config.ApiBaseUrl)

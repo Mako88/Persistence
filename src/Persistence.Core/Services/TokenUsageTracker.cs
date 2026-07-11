@@ -27,4 +27,32 @@ public class TokenUsageTracker : ITokenUsageTracker
         LastInputTokens = realInputTokens;
         LastEstimatedTokens = estimatedInputTokens;
     }
+
+    /// <inheritdoc />
+    public int Calibrate(int estimatedTokens)
+    {
+        if (LastInputTokens is { } real && LastEstimatedTokens is { } est && est > 0)
+        {
+            return (int)Math.Round(estimatedTokens * ((double)real / est));
+        }
+
+        return estimatedTokens;
+    }
+
+    /// <inheritdoc />
+    public long TotalInputTokens { get; private set; }
+
+    /// <inheritdoc />
+    public long TotalOutputTokens { get; private set; }
+
+    /// <inheritdoc />
+    public int CallCount { get; private set; }
+
+    /// <inheritdoc />
+    public void AddUsage(int inputTokens, int outputTokens)
+    {
+        TotalInputTokens += Math.Max(0, inputTokens);
+        TotalOutputTokens += Math.Max(0, outputTokens);
+        CallCount++;
+    }
 }

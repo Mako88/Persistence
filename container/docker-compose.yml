@@ -19,10 +19,13 @@ services:
     restart: unless-stopped
     security_opt: [no-new-privileges:true]
 
+  # A "computer" is per participant: each peer (database) gets its own box + workspace volume so their
+  # files never mix. Every computer shares the one persistence-computer image and the lab network (so
+  # they all reach SearXNG). Add a service per participant and point that profile's ContainerName at it.
   computer:
     build: ./computer
     image: persistence-computer
-    container_name: persistence-computer   # must match ContainerSettings.Name
+    container_name: persistence-computer   # the default/shared box (ContainerSettings.Name)
     networks: [lab]
     working_dir: /work
     volumes:
@@ -37,9 +40,28 @@ services:
     mem_limit: 2g
     depends_on: [searxng]
 
+  claude-computer:
+    build: ./computer
+    image: persistence-computer            # same image as `computer` (built once, reused)
+    container_name: persistence-claude-computer   # the claude.db peer's box — set ContainerName to this
+    networks: [lab]
+    working_dir: /work
+    volumes:
+      - claude-work:/work                  # a separate workspace so claude's files stay its own
+    environment:
+      - SEARXNG_URL=http://searxng:8080
+    command: ["sleep", "infinity"]
+    restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    pids_limit: 512
+    mem_limit: 2g
+    depends_on: [searxng]
+
 networks:
   lab:
     driver: bridge
 
 volumes:
   work:
+  claude-work:

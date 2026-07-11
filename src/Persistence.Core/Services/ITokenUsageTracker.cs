@@ -22,4 +22,25 @@ public interface ITokenUsageTracker
 
     /// <summary>Records the real and estimated input-token counts for a completed call.</summary>
     void Record(int realInputTokens, int estimatedInputTokens);
+
+    /// <summary>
+    /// Adjusts a raw token estimate by the last call's real:estimated ratio (when known), so the
+    /// figure tracks the provider's actual tokenizer rather than the ~4-chars/token heuristic alone.
+    /// Returns the estimate unchanged before any real usage has been recorded.
+    /// </summary>
+    int Calibrate(int estimatedTokens);
+
+    // --- Cumulative session usage (for the running cost readout) ---
+
+    /// <summary>Estimated cumulative input tokens billed this session (each call's input, summed).</summary>
+    long TotalInputTokens { get; }
+
+    /// <summary>Estimated cumulative output tokens generated this session.</summary>
+    long TotalOutputTokens { get; }
+
+    /// <summary>How many model calls have been accounted for this session.</summary>
+    int CallCount { get; }
+
+    /// <summary>Adds one completed call's input/output token counts to the session totals.</summary>
+    void AddUsage(int inputTokens, int outputTokens);
 }

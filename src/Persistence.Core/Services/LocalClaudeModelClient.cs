@@ -26,6 +26,9 @@ public class LocalClaudeModelClient : IModelClient
         this.broker = broker;
     }
 
+    /// <summary>An out-of-band agent reports no token usage.</summary>
+    public ModelUsage? LastUsage => null;
+
     /// <summary>
     /// Parks the flattened prompt on the broker and returns the completion supplied out-of-band
     /// by the external agent

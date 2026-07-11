@@ -11,11 +11,14 @@ namespace Persistence.Services;
 /// into a single message.
 ///
 /// Also serves the <see cref="ModelProvider.LocalClaude"/> peer, which consumes the same
-/// role-labelled message structure.
+/// role-labelled message structure, and the <see cref="ModelProvider.Anthropic"/> client, which
+/// re-maps these roles to the Claude Messages API shape (system/developer segments become
+/// user-role messages, keeping the end-positioned format instructions where they belong).
 /// </summary>
 [Service(registerAsType: typeof(IPromptBuilder), key: ModelProvider.OpenAI)]
 [Service(registerAsType: typeof(IPromptBuilder), key: ModelProvider.LocalClaude)]
 [Service(registerAsType: typeof(IPromptBuilder), key: ModelProvider.OpenAiChat)]
+[Service(registerAsType: typeof(IPromptBuilder), key: ModelProvider.Anthropic)]
 public class OpenAiPromptBuilder : IPromptBuilder
 {
     /// <summary>

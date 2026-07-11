@@ -51,6 +51,7 @@ public enum ContextFragmentType
     ActionResponse = 8, // Command/tool results. Persisted (so research/tool output survives across turns); kept lean by the raw-context decay, which archives old ones.
     AuditLog = 9,
     ActionLog = 10,
+    Thought = 11, // The peer's open reasoning (a <think> block). Persisted so recent thinking survives across turns; kept to a rolling window by the thought decay, which archives older ones (detached, still searchable/restorable). System-managed, not peer-authorable.
 }
 
 public enum ContextFragmentStatus

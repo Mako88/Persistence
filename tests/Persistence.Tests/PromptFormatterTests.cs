@@ -14,7 +14,7 @@ public class PromptFormatterTests
 
     private static PromptFormatter CreateFormatter(
         int maxInputTokens = 8000, ITokenUsageTracker? tracker = null, string model = "local",
-        bool surfaceCommands = false)
+        bool surfaceCommands = false, IModelPricingProvider? pricing = null)
     {
         var session = new Mock<ISessionContext>();
         session.SetupGet(s => s.SessionId).Returns("test-session");
@@ -31,9 +31,12 @@ public class PromptFormatterTests
 
         var config = new AppConfig { MaxInputTokens = maxInputTokens, Model = model };
 
+        // Default: no pricing (cost line shows tokens only / is omitted before any call).
+        var pricingProvider = pricing ?? new Mock<IModelPricingProvider>().Object;
+
         return new PromptFormatter(
             session.Object, config, protocol.Object, catalog.Object, tracker ?? new TokenUsageTracker(),
-            windows.Object, new Mock<IEventBus>().Object);
+            windows.Object, pricingProvider, new Mock<IEventBus>().Object);
     }
 
     private static WorkingContextEntity ContextWithFragment(string content)
@@ -99,9 +102,70 @@ public class PromptFormatterTests
         windows.Setup(w => w.GetContextWindow(It.IsAny<string>())).Returns(200000);
 
         var formatter = new PromptFormatter(session, config, protocol.Object, catalog.Object,
-            new TokenUsageTracker(), windows.Object, new Mock<IEventBus>().Object);
+            new TokenUsageTracker(), windows.Object, new Mock<IModelPricingProvider>().Object,
+            new Mock<IEventBus>().Object);
         return (formatter, session);
     }
+
+    [Fact]
+    public void MarksTheBoundaryBetweenPriorTurnsAndThisTurn()
+    {
+        var (formatter, session) = CreateFormatterWithSession(new AppConfig());
+        var turnStart = DateTimeOffset.UtcNow;
+        session.TurnStartedUtc = turnStart;
+
+        var context = new WorkingContextEntity
+        {
+            Name = "c", Summary = "s", CreatedUtc = turnStart, LastModifiedUtc = turnStart,
+        };
+        // Two prior-turn fragments (before turn start), then two from this turn (at/after it).
+        AddFrag(context, "prior action A", turnStart.AddMinutes(-10));
+        AddFrag(context, "prior action B", turnStart.AddMinutes(-5));
+        AddFrag(context, "this-turn user message", turnStart);
+        AddFrag(context, "this-turn action result", turnStart.AddSeconds(2));
+
+        var segments = formatter.Format(context, []);
+        var contents = segments.Select(s => s.Content).ToList();
+
+        var markerIdx = contents.FindIndex(c => c.Contains("=== THIS TURN"));
+        var priorBIdx = contents.FindIndex(c => c.Contains("prior action B"));
+        var thisMsgIdx = contents.FindIndex(c => c.Contains("this-turn user message"));
+
+        Assert.True(markerIdx >= 0, "a THIS TURN marker should be inserted at the boundary");
+        // Exactly one marker, sitting between the last prior-turn fragment and the first this-turn one.
+        Assert.Single(contents, c => c.Contains("=== THIS TURN"));
+        Assert.True(priorBIdx < markerIdx && markerIdx < thisMsgIdx);
+    }
+
+    [Fact]
+    public void OmitsTheThisTurnMarkerWhenEverythingIsFromThisTurn()
+    {
+        // A first turn: no prior-turn fragments to delineate from, so no marker.
+        var (formatter, session) = CreateFormatterWithSession(new AppConfig());
+        var turnStart = DateTimeOffset.UtcNow;
+        session.TurnStartedUtc = turnStart;
+
+        var context = new WorkingContextEntity
+        {
+            Name = "c", Summary = "s", CreatedUtc = turnStart, LastModifiedUtc = turnStart,
+        };
+        AddFrag(context, "brand new message", turnStart);
+        AddFrag(context, "brand new result", turnStart.AddSeconds(1));
+
+        var segments = formatter.Format(context, []);
+
+        Assert.DoesNotContain(segments, s => s.Content.Contains("=== THIS TURN"));
+    }
+
+    private static void AddFrag(WorkingContextEntity context, string content, DateTimeOffset createdUtc) =>
+        context.AddFragment(new WeightedContextFragment
+        {
+            FragmentType = ContextFragmentType.ActionResponse,
+            Status = ContextFragmentStatus.Active,
+            Content = content,
+            Importance = 1.0f, Confidence = 1.0f, Relevance = 1.0f,
+            CreatedUtc = createdUtc, LastModifiedUtc = createdUtc,
+        });
 
     [Fact]
     public void SensoryAnnouncesTheActiveLocalPeerWithDescription()
@@ -157,6 +221,50 @@ public class PromptFormatterTests
     }
 
     [Fact]
+    public void SessionCostLineShowsDollarsWhenTheModelHasPricing()
+    {
+        var tracker = new TokenUsageTracker();
+        tracker.AddUsage(1_000_000, 200_000); // 1M in + 200k out
+
+        var pricing = new Mock<IModelPricingProvider>();
+        pricing.Setup(p => p.GetPricing(It.IsAny<string>())).Returns(new ModelPricing(5m, 25m));
+
+        var sensory = CreateFormatter(tracker: tracker, model: "claude-opus-4-8", pricing: pricing.Object)
+            .Format(ContextWithFragment("hi"), [])[^1].Content;
+
+        // 1M×$5/M + 0.2M×$25/M = $5 + $5 = $10.00.
+        Assert.Contains("Session cost (est.): ~$10.00", sensory);
+        Assert.Contains("1,000,000 in + 200,000 out tokens", sensory);
+    }
+
+    [Fact]
+    public void SessionCostLineShowsTokensOnlyWhenThereIsNoPricing()
+    {
+        var tracker = new TokenUsageTracker();
+        tracker.AddUsage(500, 100);
+
+        var pricing = new Mock<IModelPricingProvider>();
+        pricing.Setup(p => p.GetPricing(It.IsAny<string>())).Returns((ModelPricing?)null);
+
+        var sensory = CreateFormatter(tracker: tracker, model: "gemma", pricing: pricing.Object)
+            .Format(ContextWithFragment("hi"), [])[^1].Content;
+
+        Assert.Contains("Session usage: 500 in + 100 out tokens", sensory);
+        Assert.Contains("no pricing configured for 'gemma'", sensory);
+        Assert.DoesNotContain("$", sensory);
+    }
+
+    [Fact]
+    public void NoCostLineBeforeAnyModelCall()
+    {
+        // A fresh tracker (no calls) has nothing to report — the line is omitted, not "$0.00".
+        var sensory = CreateFormatter().Format(ContextWithFragment("hi"), [])[^1].Content;
+
+        Assert.DoesNotContain("Session cost", sensory);
+        Assert.DoesNotContain("Session usage", sensory);
+    }
+
+    [Fact]
     public void SensoryBlockReportsAppAndSystemUptime()
     {
         var sensory = CreateFormatter()
@@ -191,7 +299,7 @@ public class PromptFormatterTests
     }
 
     [Fact]
-    public void TransientFragmentShowsTransientLabelNotZeroId()
+    public void UnsavedFragmentShowsNewLabelNotZeroIdOrTransient()
     {
         var now = DateTimeOffset.UtcNow;
         var context = new WorkingContextEntity { Name = "c", Summary = "s", CreatedUtc = now, LastModifiedUtc = now };
@@ -212,7 +320,8 @@ public class PromptFormatterTests
         var joined = string.Join("\n", CreateFormatter().Format(context, []).Select(s => s.Content));
 
         Assert.Contains("#42", joined);          // persisted fragment keeps its id
-        Assert.Contains("transient", joined);    // id-0 fragment is labelled, not addressable
+        Assert.Contains("[new |", joined);       // id-0 fragment is labelled "new" (it persists at turn end)
+        Assert.DoesNotContain("[transient", joined); // never "transient" — models read that as "won't persist"
         Assert.DoesNotContain("#0", joined);     // never a misleading #0
     }
 

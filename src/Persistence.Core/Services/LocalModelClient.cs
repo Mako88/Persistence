@@ -20,6 +20,9 @@ public class LocalModelClient : IModelClient
         this.display = display;
     }
 
+    /// <summary>The console client has no token stream, so no usage to report.</summary>
+    public ModelUsage? LastUsage => null;
+
     /// <summary>
     /// Displays the prompt messages and returns the model response read from the console,
     /// or "{}" if no input is provided

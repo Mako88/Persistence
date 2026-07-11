@@ -111,6 +111,7 @@ public class TurnHandlerStreamingTests
             promptFormatter.Object,
             promptBuilder.Object,
             actionHandlers.Object,
+            new TokenUsageTracker(),
             eventBus,
             config);
 
@@ -226,6 +227,7 @@ public class TurnHandlerStreamingTests
             promptFormatter.Object,
             promptBuilder.Object,
             actionHandlers.Object,
+            new TokenUsageTracker(),
             new EventBus(),
             config);
 

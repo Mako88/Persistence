@@ -50,26 +50,37 @@ public class ExecuteActionsHandler : CommandHandler
 
     #region Commands
 
-    [Command("shell", "Run a command in your computer — a sandboxed container with web tools (web_search, fetch_url, agent-browser), scripting (python, bash, node), and file/navigation utilities. Your working directory persists between calls; files in your working area survive across sessions. Only allowlisted programs run; send shell(command=\"ls\") to look around.")]
+    [Command("exec", "Run a command in your computer — a sandboxed container with web tools (web_search, fetch_url, agent-browser), scripting (python, bash, node), and file/navigation utilities. Your working directory persists between calls; files in your working area survive across sessions. Only allowlisted programs run; send exec(command=\"ls\") to look around. (Same as shell.)")]
     [CommandField("command", "string", required: true, Description = "The command line to run, e.g. web_search \"rust async\", or cd notes && ls, or python script.py")]
-    private async Task<string> ExecuteShellAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
-    {
-        var commandLine = command?["command"]?.GetValue<string>();
+    private Task<string> ExecuteExecAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct) =>
+        RunInComputerAsync("exec", command?["command"]?.GetValue<string>(), ct);
 
+    [Command("shell", "Run a command in your computer — a sandboxed container with web tools (web_search, fetch_url, agent-browser), scripting (python, bash, node), and file/navigation utilities. Your working directory persists between calls; files in your working area survive across sessions. Only allowlisted programs run; send shell(command=\"ls\") to look around. (Same as exec.)")]
+    [CommandField("command", "string", required: true, Description = "The command line to run, e.g. web_search \"rust async\", or cd notes && ls, or python script.py")]
+    private Task<string> ExecuteShellAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct) =>
+        RunInComputerAsync("shell", command?["command"]?.GetValue<string>(), ct);
+
+    /// <summary>
+    /// Shared body for <c>exec</c>/<c>shell</c>: guards that the computer is enabled, runs the command
+    /// line through the allowlisted container executor, audits it, and formats the outcome so success
+    /// and every failure mode (rejected, non-zero exit, timeout, truncation) reads unambiguously.
+    /// </summary>
+    private async Task<string> RunInComputerAsync(string label, string? commandLine, CancellationToken ct)
+    {
         if (string.IsNullOrWhiteSpace(commandLine))
         {
-            return "Shell failed: 'command' is required";
+            return $"{label} failed: 'command' is required";
         }
 
         if (!config.Container.Enabled)
         {
-            return "Your computer isn't available yet (the container is disabled). Your peer needs to start it and enable it in config.";
+            return ComputerUnavailable;
         }
 
         var result = await containerExecutor.ExecuteAsync(commandLine, ct);
 
         // Audit every exec so it's queryable later via query_action_log, independent of context.
-        await actionLogRepo.LogAsync("shell", commandLine,
+        await actionLogRepo.LogAsync(label, commandLine,
             result.Allowed ? Summarize(result.Output) : $"rejected: {result.RejectionReason}");
 
         if (!result.Allowed)
@@ -111,6 +122,113 @@ public class ExecuteActionsHandler : CommandHandler
 
         return output;
     }
+
+    [Command("read_file", "Read a file from your computer, a window at a time so it never floods your context. Reads 'limit' lines starting at line 'offset' (0-based); relative paths resolve against your current working directory. The header tells you the range and total lines so you can page with a larger offset.")]
+    [CommandField("path", "string", required: true, Description = "File to read, e.g. notes/plan.md or /work/data.json")]
+    [CommandField("offset", "int", Description = "0-based line to start at", Default = "0")]
+    [CommandField("limit", "int", Description = "How many lines to read", Default = "200")]
+    private async Task<string> ExecuteReadFileAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
+    {
+        var path = command?["path"]?.GetValue<string>();
+
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return "read_file failed: 'path' is required";
+        }
+
+        if (!config.Container.Enabled)
+        {
+            return ComputerUnavailable;
+        }
+
+        var offset = Math.Max(0, command?["offset"]?.GetValue<int>() ?? 0);
+        var limit = command?["limit"]?.GetValue<int>() ?? 200;
+
+        if (limit <= 0)
+        {
+            return "read_file failed: 'limit' must be at least 1";
+        }
+
+        var result = await containerExecutor.ReadFileAsync(path, offset, limit, ct);
+
+        await actionLogRepo.LogAsync("read_file", $"{path} [offset {offset}, limit {limit}]",
+            result.Found ? $"{result.FirstLine}-{result.LastLine}/{result.TotalLines}" : result.Error);
+
+        if (result.TimedOut)
+        {
+            return $"read_file '{path}' timed out.";
+        }
+
+        if (!result.Found)
+        {
+            return $"read_file failed: {result.Error}";
+        }
+
+        if (offset >= result.TotalLines)
+        {
+            return $"[{path} — {result.TotalLines} lines total; offset {offset} is past the end]";
+        }
+
+        var more = result.LastLine < result.TotalLines
+            ? $"; more below — read with offset={result.LastLine}"
+            : "";
+        var header = $"[{path} — lines {result.FirstLine}-{result.LastLine} of {result.TotalLines}{more}]";
+        var body = result.Content.Length == 0 ? "(empty)" : result.Content;
+        var truncatedNote = result.Truncated ? "\n[output truncated — narrow the window with a smaller limit]" : "";
+
+        return $"{header}\n{body}{truncatedNote}";
+    }
+
+    [Command("write_file", "Write text to a file in your computer (creating parent folders). Overwrites by default, or set append=true to add to the end — handy for building a file up incrementally without resending it. Relative paths resolve against your current working directory.")]
+    [CommandField("path", "string", required: true, Description = "File to write, e.g. notes/plan.md or /work/out.txt")]
+    [CommandField("content", "string", required: true, Description = "The text to write")]
+    [CommandField("append", "bool", Description = "Append to the end instead of overwriting", Default = "false")]
+    private async Task<string> ExecuteWriteFileAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
+    {
+        var path = command?["path"]?.GetValue<string>();
+
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return "write_file failed: 'path' is required";
+        }
+
+        // Accept an empty string (e.g. to truncate/create a file) but require the field to be present.
+        if (command?["content"] is not JsonNode contentNode)
+        {
+            return "write_file failed: 'content' is required";
+        }
+
+        if (!config.Container.Enabled)
+        {
+            return ComputerUnavailable;
+        }
+
+        var content = contentNode.GetValue<string>();
+        var append = command?["append"]?.GetValue<bool>() ?? false;
+
+        var result = await containerExecutor.WriteFileAsync(path, content, append, ct);
+
+        var verb = append ? "Appended to" : "Wrote";
+        await actionLogRepo.LogAsync("write_file", $"{path} [{(append ? "append" : "overwrite")}]",
+            result.ExitCode == 0 && !result.TimedOut ? Summarize(result.Output) : "failed");
+
+        if (result.TimedOut)
+        {
+            return $"write_file '{path}' timed out.";
+        }
+
+        if (result.ExitCode != 0)
+        {
+            var detail = string.IsNullOrWhiteSpace(result.Output) ? "" : $"\n{result.Output}";
+            return $"write_file failed (exit code {result.ExitCode}).{detail}";
+        }
+
+        var bytes = System.Text.Encoding.UTF8.GetByteCount(content);
+        return $"{verb} {path} ({bytes} bytes).";
+    }
+
+    private const string ComputerUnavailable =
+        "Your computer isn't available yet (the container is disabled). Your peer needs to start it and enable it in config.";
 
     private static string Summarize(string output)
     {

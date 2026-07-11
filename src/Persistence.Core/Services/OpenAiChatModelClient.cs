@@ -25,16 +25,18 @@ public class OpenAiChatModelClient : IModelClient, IDisposable
     private readonly int maxTokens;
     private readonly IAppConfig config;
     private readonly IDisplayProvider display;
-    private readonly ITokenUsageTracker usageTracker;
 
     private const string DefaultBaseUrl = "https://api.openai.com/v1";
     private const string PlaceholderApiKey = "YOUR_API_KEY_HERE";
 
+    /// <inheritdoc />
+    public ModelUsage? LastUsage { get; private set; }
+
     /// <summary>
     /// Constructor that builds the HTTP client from config
     /// </summary>
-    public OpenAiChatModelClient(IAppConfig config, IDisplayProvider display, ITokenUsageTracker usageTracker)
-        : this(config, display, usageTracker, CreateClient(config))
+    public OpenAiChatModelClient(IAppConfig config, IDisplayProvider display)
+        : this(config, display, CreateClient(config))
     {
     }
 
@@ -42,7 +44,7 @@ public class OpenAiChatModelClient : IModelClient, IDisposable
     /// Test seam: accepts a pre-configured <see cref="ISimpleClient"/> (e.g. a fake) instead of
     /// constructing one from config.
     /// </summary>
-    internal OpenAiChatModelClient(IAppConfig config, IDisplayProvider display, ITokenUsageTracker usageTracker, ISimpleClient client)
+    internal OpenAiChatModelClient(IAppConfig config, IDisplayProvider display, ISimpleClient client)
     {
         model = config.Model;
         maxTokens = config.MaxOutputTokens;
@@ -50,7 +52,6 @@ public class OpenAiChatModelClient : IModelClient, IDisposable
         this.client = client;
         this.config = config;
         this.display = display;
-        this.usageTracker = usageTracker;
     }
 
     private static ISimpleClient CreateClient(IAppConfig config)
@@ -96,7 +97,7 @@ public class OpenAiChatModelClient : IModelClient, IDisposable
         using var doc = JsonDocument.Parse(response.StringBody);
         var responseMessage = ExtractContent(doc.RootElement);
 
-        RecordUsage(doc.RootElement, request);
+        LastUsage = ReadUsage(doc.RootElement);
 
         if (config.DebugMode)
         {
@@ -121,18 +122,19 @@ public class OpenAiChatModelClient : IModelClient, IDisposable
     }
 
     /// <summary>
-    /// Records the provider's real prompt-token count (Chat Completions: <c>usage.prompt_tokens</c>)
-    /// alongside our estimate of the same prompt, so the budget readout can self-calibrate.
+    /// Reads the Chat Completions usage block (<c>usage.prompt_tokens</c> / <c>completion_tokens</c>),
+    /// or null when the provider omitted it.
     /// </summary>
-    private void RecordUsage(JsonElement root, PromptRequest request)
+    private static ModelUsage? ReadUsage(JsonElement root)
     {
         if (root.TryGetProperty("usage", out var usage)
-            && usage.TryGetProperty("prompt_tokens", out var input)
-            && input.TryGetInt32(out var realInput))
+            && usage.TryGetProperty("prompt_tokens", out var input) && input.TryGetInt32(out var inTok))
         {
-            var estimated = TokenEstimator.Estimate(request.Messages.Select(m => m.Content));
-            usageTracker.Record(realInput, estimated);
+            var outTok = usage.TryGetProperty("completion_tokens", out var o) && o.TryGetInt32(out var ot) ? ot : 0;
+            return new ModelUsage(inTok, outTok);
         }
+
+        return null;
     }
 
     /// <summary>

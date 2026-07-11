@@ -13,23 +13,24 @@ using System.Text.Json;
 
 namespace Persistence.Tests;
 
-public class OpenAiModelClientTests
+public class AnthropicModelClientTests
 {
     private static readonly string SuccessBody = """
     {
-      "output": [
-        { "type": "reasoning", "summary": [ { "type": "summary_text", "text": "let me think" } ] },
-        { "type": "message", "content": [ { "type": "output_text", "text": "Hello there" } ] }
-      ]
+      "content": [
+        { "type": "thinking", "thinking": "let me think" },
+        { "type": "text", "text": "Hello there" }
+      ],
+      "usage": { "input_tokens": 42, "output_tokens": 3 }
     }
     """;
 
-    private static (OpenAiModelClient Client, Mock<ISimpleClient> Http, Mock<IDisplayProvider> Display)
+    private static (AnthropicModelClient Client, Mock<ISimpleClient> Http, Mock<IDisplayProvider> Display)
         CreateClient(string responseBody, HttpStatusCode status = HttpStatusCode.OK)
     {
         var config = new AppConfig
         {
-            Model = "gpt-5",
+            Model = "claude-opus-4-8",
             MaxOutputTokens = 1234,
             ReasoningEffort = "high",
         };
@@ -46,7 +47,7 @@ public class OpenAiModelClientTests
 
         var display = new Mock<IDisplayProvider>();
 
-        return (new OpenAiModelClient(config, display.Object, http.Object), http, display);
+        return (new AnthropicModelClient(config, display.Object, http.Object), http, display);
     }
 
     private static PromptRequest Request() => new()
@@ -73,10 +74,10 @@ public class OpenAiModelClientTests
     {
         // The real (production) constructor builds the HTTP client and so validates the key; this is
         // where a missing/placeholder key fails fast at startup, with an actionable message.
-        var config = new AppConfig { Provider = "OpenAI", Model = "gpt-5", ApiKey = apiKey };
+        var config = new AppConfig { Provider = "Anthropic", Model = "claude-opus-4-8", ApiKey = apiKey };
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
-            new OpenAiModelClient(config, new Mock<IDisplayProvider>().Object));
+            new AnthropicModelClient(config, new Mock<IDisplayProvider>().Object));
 
         Assert.Contains("persistence.json", ex.Message);
         Assert.Contains("PERSISTENCE_APIKEY", ex.Message);
@@ -85,50 +86,94 @@ public class OpenAiModelClientTests
     [Fact]
     public void Constructor_AllowsMissingKeyForCustomEndpoint()
     {
-        // A custom OpenAI-compatible endpoint (e.g. a local model) may legitimately need no key.
+        // A custom endpoint (e.g. a proxy) may authenticate differently or not at all.
         var config = new AppConfig
         {
-            Provider = "OpenAI",
-            Model = "custom",
-            ApiBaseUrl = "http://localhost:1234/v1",
+            Provider = "Anthropic",
+            Model = "claude-opus-4-8",
+            ApiBaseUrl = "http://localhost:1234",
             ApiKey = "",
         };
 
-        var client = new OpenAiModelClient(config, new Mock<IDisplayProvider>().Object);
+        var client = new AnthropicModelClient(config, new Mock<IDisplayProvider>().Object);
 
         Assert.NotNull(client);
     }
 
     [Fact]
-    public async Task PostsToResponsesEndpoint()
+    public async Task PostsToMessagesEndpoint()
     {
         var (client, http, _) = CreateClient(SuccessBody);
 
         await client.CompleteAsync(Request());
 
         var request = CapturedRequest(http);
-        Assert.Equal("/responses", request.Path);
+        Assert.Equal("/v1/messages", request.Path);
         Assert.Equal(HttpMethod.Post, request.Method);
     }
 
     [Fact]
-    public async Task SendsResponsesApiRequestShape()
+    public async Task SendsMessagesApiRequestShape()
     {
         var (client, http, _) = CreateClient(SuccessBody);
 
         await client.CompleteAsync(Request());
 
         var root = SerializedBody(http);
-        Assert.Equal("gpt-5", root.GetProperty("model").GetString());
-        Assert.Equal(1234, root.GetProperty("max_output_tokens").GetInt32());
-        Assert.False(root.GetProperty("store").GetBoolean());
-        Assert.Equal("high", root.GetProperty("reasoning").GetProperty("effort").GetString());
-        Assert.Equal("auto", root.GetProperty("reasoning").GetProperty("summary").GetString());
-        Assert.Equal("user", root.GetProperty("input")[0].GetProperty("role").GetString());
+        Assert.Equal("claude-opus-4-8", root.GetProperty("model").GetString());
+        Assert.Equal(1234, root.GetProperty("max_tokens").GetInt32());
+        Assert.Equal("adaptive", root.GetProperty("thinking").GetProperty("type").GetString());
+        Assert.Equal("summarized", root.GetProperty("thinking").GetProperty("display").GetString());
+        Assert.Equal("high", root.GetProperty("output_config").GetProperty("effort").GetString());
+        Assert.Equal("user", root.GetProperty("messages")[0].GetProperty("role").GetString());
     }
 
     [Fact]
-    public async Task ReturnsOutputText()
+    public async Task MapsRemotePeerRoleToAssistantAndSystemToUser()
+    {
+        var (client, http, _) = CreateClient(SuccessBody);
+
+        var request = new PromptRequest
+        {
+            Messages =
+            [
+                new PromptMessage("developer", "you are a persona"),
+                new PromptMessage("user", "hi"),
+                new PromptMessage("assistant", "hello"),
+                new PromptMessage("developer", "format instructions"),
+            ],
+        };
+
+        await client.CompleteAsync(request);
+
+        var messages = SerializedBody(http).GetProperty("messages");
+        // developer + user collapse into one leading user message; assistant stays; the trailing
+        // developer segment becomes its own user message (kept at the end).
+        Assert.Equal(3, messages.GetArrayLength());
+        Assert.Equal("user", messages[0].GetProperty("role").GetString());
+        Assert.Contains("you are a persona", messages[0].GetProperty("content").GetString());
+        Assert.Contains("hi", messages[0].GetProperty("content").GetString());
+        Assert.Equal("assistant", messages[1].GetProperty("role").GetString());
+        Assert.Equal("user", messages[2].GetProperty("role").GetString());
+        Assert.Contains("format instructions", messages[2].GetProperty("content").GetString());
+    }
+
+    [Fact]
+    public async Task OmitsEffortWhenNotAClaudeLevel()
+    {
+        var config = new AppConfig { Model = "claude-opus-4-8", MaxOutputTokens = 100, ReasoningEffort = "minimal" };
+        ISimpleResponse response = new SimpleResponse { StatusCode = HttpStatusCode.OK, IsSuccessful = true, StringBody = SuccessBody };
+        var http = new Mock<ISimpleClient>();
+        http.Setup(c => c.MakeRequest(It.IsAny<ISimpleRequest>())).ReturnsAsync(response);
+        var client = new AnthropicModelClient(config, new Mock<IDisplayProvider>().Object, http.Object);
+
+        await client.CompleteAsync(Request());
+
+        Assert.False(SerializedBody(http).TryGetProperty("output_config", out _));
+    }
+
+    [Fact]
+    public async Task ReturnsText()
     {
         var (client, _, _) = CreateClient(SuccessBody);
 
@@ -137,47 +182,57 @@ public class OpenAiModelClientTests
         Assert.Equal("Hello there", result);
     }
 
-    [Fact]
-    public async Task OmitsReasoningWhenEffortOff()
+    /// <summary>Builds a client whose config uses the given model + reasoning effort, capturing the request.</summary>
+    private static (AnthropicModelClient Client, Mock<ISimpleClient> Http) CreateClientWith(string model, string reasoningEffort)
     {
-        var config = new AppConfig { Model = "gpt-5", MaxOutputTokens = 1234, ReasoningEffort = "off" };
+        var config = new AppConfig { Model = model, MaxOutputTokens = 100, ReasoningEffort = reasoningEffort };
         ISimpleResponse response = new SimpleResponse { StatusCode = HttpStatusCode.OK, IsSuccessful = true, StringBody = SuccessBody };
         var http = new Mock<ISimpleClient>();
         http.Setup(c => c.MakeRequest(It.IsAny<ISimpleRequest>())).ReturnsAsync(response);
-        var client = new OpenAiModelClient(config, new Mock<IDisplayProvider>().Object, http.Object);
+        return (new AnthropicModelClient(config, new Mock<IDisplayProvider>().Object, http.Object), http);
+    }
+
+    [Fact]
+    public async Task DisablesNativeThinkingWhenReasoningEffortOff()
+    {
+        var (client, http) = CreateClientWith("claude-opus-4-8", "off");
 
         await client.CompleteAsync(Request());
 
-        // No native reasoning requested — the peer reasons in <think>.
-        Assert.False(SerializedBody(http).TryGetProperty("reasoning", out _));
+        var root = SerializedBody(http);
+        Assert.Equal("disabled", root.GetProperty("thinking").GetProperty("type").GetString());
+        Assert.False(root.TryGetProperty("output_config", out _)); // effort is moot with thinking off
+    }
+
+    [Fact]
+    public async Task OmitsThinkingParamForAlwaysOnModelsWhenOff()
+    {
+        // Fable/Mythos reject an explicit disable (400) — omit the param rather than crash.
+        var (client, http) = CreateClientWith("claude-fable-5", "off");
+
+        await client.CompleteAsync(Request());
+
+        Assert.False(SerializedBody(http).TryGetProperty("thinking", out _));
     }
 
     [Fact]
     public async Task ExposesRealUsageAfterCompletion()
     {
-        var body = """
-        {
-          "output": [ { "type": "message", "content": [ { "type": "output_text", "text": "hi" } ] } ],
-          "usage": { "input_tokens": 100, "output_tokens": 40 }
-        }
-        """;
-        var (client, _, _) = CreateClient(body);
+        var (client, _, _) = CreateClient(SuccessBody); // usage: 42 in / 3 out
 
         await client.CompleteAsync(Request());
 
-        Assert.Equal(new ModelUsage(100, 40), client.LastUsage);
+        Assert.Equal(new ModelUsage(42, 3), client.LastUsage);
     }
 
     [Fact]
-    public async Task ConcatenatesMultipleOutputTextParts()
+    public async Task ConcatenatesMultipleTextBlocks()
     {
         var body = """
         {
-          "output": [
-            { "type": "message", "content": [
-              { "type": "output_text", "text": "part one " },
-              { "type": "output_text", "text": "part two" }
-            ] }
+          "content": [
+            { "type": "text", "text": "part one " },
+            { "type": "text", "text": "part two" }
           ]
         }
         """;
@@ -187,7 +242,7 @@ public class OpenAiModelClientTests
     }
 
     [Fact]
-    public async Task RoutesReasoningSummaryToDisplay()
+    public async Task RoutesThinkingToDisplay()
     {
         var (client, _, display) = CreateClient(SuccessBody);
 
@@ -199,9 +254,7 @@ public class OpenAiModelClientTests
     [Fact]
     public async Task DoesNotShowReasoningWhenAbsent()
     {
-        var body = """
-        { "output": [ { "type": "message", "content": [ { "type": "output_text", "text": "hi" } ] } ] }
-        """;
+        var body = """{ "content": [ { "type": "text", "text": "hi" } ] }""";
         var (client, _, display) = CreateClient(body);
 
         await client.CompleteAsync(Request());
@@ -221,24 +274,23 @@ public class OpenAiModelClientTests
     }
 
     [Fact]
-    public async Task ThrowsWhenNoOutputText()
+    public async Task ThrowsWhenNoText()
     {
-        var (client, _, _) = CreateClient("""{ "output": [] }""");
+        var (client, _, _) = CreateClient("""{ "content": [] }""");
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => client.CompleteAsync(Request()));
     }
 
     #region Streaming
 
-    private static (OpenAiModelClient Client, Mock<ISimpleClient> Http) CreateStreamingClient(
+    private static (AnthropicModelClient Client, Mock<ISimpleClient> Http) CreateStreamingClient(
         string sse, HttpStatusCode status = HttpStatusCode.OK)
     {
-        var config = new AppConfig { Model = "gpt-5", MaxOutputTokens = 1234, ReasoningEffort = "high" };
+        var config = new AppConfig { Model = "claude-opus-4-8", MaxOutputTokens = 1234, ReasoningEffort = "high" };
 
         var streamResponse = new Mock<ISimpleStreamResponse>();
         streamResponse.SetupGet(r => r.IsSuccessful).Returns((int)status is >= 200 and < 300);
         streamResponse.SetupGet(r => r.StatusCode).Returns(status);
-        // Body is read on the error path; ReadServerSentEventsAsync yields parsed events on success.
         streamResponse.SetupGet(r => r.Body).Returns(() => new MemoryStream(Encoding.UTF8.GetBytes(sse)));
         streamResponse.Setup(r => r.ReadServerSentEventsAsync(It.IsAny<CancellationToken>())).Returns(() => DecodeSse(sse));
 
@@ -246,7 +298,7 @@ public class OpenAiModelClientTests
         http.Setup(c => c.MakeStreamRequest(It.IsAny<ISimpleRequest>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(streamResponse.Object);
 
-        return (new OpenAiModelClient(config, new Mock<IDisplayProvider>().Object, http.Object), http);
+        return (new AnthropicModelClient(config, new Mock<IDisplayProvider>().Object, http.Object), http);
     }
 
     /// <summary>
@@ -275,10 +327,10 @@ public class OpenAiModelClientTests
     public async Task StreamAsync_YieldsParsedEvents()
     {
         var sse =
-            "data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"hmm\"}\n\n" +
-            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hello, \"}\n\n" +
-            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"world\"}\n\n" +
-            "data: {\"type\":\"response.completed\"}\n\n";
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"hmm\"}}\n\n" +
+            "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello, \"}}\n\n" +
+            "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"world\"}}\n\n" +
+            "data: {\"type\":\"message_stop\"}\n\n";
         var (client, _) = CreateStreamingClient(sse);
 
         var events = new List<ModelStreamEvent>();
@@ -297,29 +349,32 @@ public class OpenAiModelClientTests
     }
 
     [Fact]
-    public async Task StreamAsync_CapturesUsageFromCompletedEvent()
+    public async Task StreamAsync_CapturesUsageFromMessageStartAndDelta()
     {
         var sse =
-            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hi\"}\n\n" +
-            "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":100,\"output_tokens\":40}}}\n\n";
+            "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":42,\"output_tokens\":1}}}\n\n" +
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n" +
+            "data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":25}}\n\n" +
+            "data: {\"type\":\"message_stop\"}\n\n";
         var (client, _) = CreateStreamingClient(sse);
 
         await foreach (var _ in client.StreamAsync(Request())) { }
 
-        Assert.Equal(new ModelUsage(100, 40), client.LastUsage);
+        // Input from message_start, final output from the last message_delta.
+        Assert.Equal(new ModelUsage(42, 25), client.LastUsage);
     }
 
     [Fact]
     public async Task StreamAsync_RequestsStreaming()
     {
-        var (client, http) = CreateStreamingClient("data: {\"type\":\"response.completed\"}\n\n");
+        var (client, http) = CreateStreamingClient("data: {\"type\":\"message_stop\"}\n\n");
 
         await foreach (var _ in client.StreamAsync(Request())) { }
 
         var request = (ISimpleRequest)http.Invocations.Single().Arguments[0];
         var body = JsonDocument.Parse(new SimpleHttpDefaultJsonSerializer().Serialize(request.Body!)).RootElement;
         Assert.True(body.GetProperty("stream").GetBoolean());
-        Assert.Equal("/responses", request.Path);
+        Assert.Equal("/v1/messages", request.Path);
     }
 
     [Fact]

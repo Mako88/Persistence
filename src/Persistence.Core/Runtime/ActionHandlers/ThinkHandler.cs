@@ -10,14 +10,15 @@ namespace Persistence.Runtime.ActionHandlers;
 
 /// <summary>
 /// Handles <see cref="ModelAction.Think"/> by recording the remote peer's thought as a
-/// transient <see cref="ContextFragmentType.ScratchPad"/> fragment in the working context.
+/// <see cref="ContextFragmentType.Thought"/> fragment in the working context.
 ///
 /// This is "reasoning in the open": unlike a model's built-in/private reasoning, the thought
-/// becomes visible context the remote peer can build on across iterations (and surface to the
-/// display), without being sent to the local peer. ScratchPad fragments are never persisted to
-/// the database — a thought lives only for the current session's working context. To keep a
-/// thought permanently, the remote peer can promote it via <c>manage_context</c> (e.g. add a
-/// Personal fragment).
+/// becomes visible context the remote peer can build on — within the turn and, because Thought
+/// fragments are persisted, across turns too. The system keeps only a rolling window of the most
+/// recent thoughts in the active context (see <c>TurnHandler</c>'s thought decay); older ones are
+/// archived (detached but searchable/restorable), so recent reasoning is recalled without the
+/// context ballooning. To keep a thought permanently, the peer can still promote it via
+/// <c>manage_context</c> (e.g. add a Personal fragment).
 /// </summary>
 [Service(registerAsType: typeof(IActionHandler), key: ModelAction.Think)]
 public class ThinkHandler : IActionHandler
@@ -35,8 +36,8 @@ public class ThinkHandler : IActionHandler
     }
 
     /// <summary>
-    /// Adds the thought to the working context as a transient ScratchPad fragment and
-    /// publishes it for display.
+    /// Adds the thought to the working context as a persisted Thought fragment (kept to a rolling
+    /// window by the thought decay) and publishes it for display.
     /// </summary>
     public async Task HandleAsync(WorkingContextEntity context, JsonNode? data, CancellationToken ct = default)
     {
@@ -47,7 +48,7 @@ public class ThinkHandler : IActionHandler
 
         context.AddFragment(new WeightedContextFragment
         {
-            FragmentType = ContextFragmentType.ScratchPad,
+            FragmentType = ContextFragmentType.Thought,
             Status = ContextFragmentStatus.Active,
             Content = thought,
             Importance = 0.5f,

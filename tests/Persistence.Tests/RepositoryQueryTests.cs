@@ -156,24 +156,28 @@ public sealed class RepositoryQueryTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task RecentSelfChangesExcludeChatMessagesAndAreNewestFirst()
+    public async Task RecentSelfChangesExcludeChatMessagesAndThoughtsAndAreNewestFirst()
     {
         var ctx = await contexts.GetByIdAsync(session.WorkingContextId);
 
-        // A self-fragment (Personal) and a conversational one (ChatMessage).
+        // A self-fragment (Personal), a conversational one (ChatMessage), and an auto-persisted Thought.
         ctx!.AddFragment(SelfNote("a value I hold", ContextFragmentType.Personal));
         ctx.AddFragment(SelfNote("hello there", ContextFragmentType.ChatMessage));
+        ctx.AddFragment(SelfNote("let me reason about this", ContextFragmentType.Thought));
         await contexts.SaveAsync(ctx);
 
         var recent = await auditLogs.GetRecentSelfChangesAsync(10);
 
-        // The Personal fragment's audit entry is present; the ChatMessage's is filtered out.
+        // The Personal fragment's audit entry is present; the ChatMessage's and Thought's are filtered
+        // out (conversation + auto-persisted reasoning aren't the peer curating itself).
         var fragmentTargets = recent.Where(e => e.TargetType == nameof(ContextFragmentEntity)).ToList();
         Assert.NotEmpty(fragmentTargets);
         var personalId = ctx.ContextFragments.Values.Single(f => f.Content == "a value I hold").Id;
         var chatId = ctx.ContextFragments.Values.Single(f => f.Content == "hello there").Id;
+        var thoughtId = ctx.ContextFragments.Values.Single(f => f.Content == "let me reason about this").Id;
         Assert.Contains(fragmentTargets, e => e.TargetId == personalId);
         Assert.DoesNotContain(fragmentTargets, e => e.TargetId == chatId);
+        Assert.DoesNotContain(fragmentTargets, e => e.TargetId == thoughtId);
 
         // Newest first.
         var times = recent.Select(e => e.CreatedUtc).ToList();

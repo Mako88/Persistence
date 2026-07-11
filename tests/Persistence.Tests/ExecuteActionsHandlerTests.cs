@@ -147,6 +147,154 @@ public class ExecuteActionsHandlerTests
     }
 
     [Fact]
+    public async Task ExecRunsThroughTheSamePathAsShell()
+    {
+        config.Container.Enabled = true;
+        containerExecutor
+            .Setup(e => e.ExecuteAsync("ls", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContainerExecResult(Allowed: true, RejectionReason: null,
+                Output: "notes.txt", TimedOut: false, Truncated: false, ExitCode: 0));
+
+        var result = await RunAsync("""{ "exec": { "command": "ls" } }""");
+
+        Assert.Contains("notes.txt", result);
+        actionLogRepo.Verify(r => r.LogAsync("exec", "ls", It.IsAny<string?>(), It.IsAny<IDbTransaction?>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ExecShortCircuitsWhenContainerDisabled()
+    {
+        config.Container.Enabled = false;
+
+        var result = await RunAsync("""{ "exec": { "command": "ls" } }""");
+
+        Assert.Contains("isn't available", result);
+        containerExecutor.Verify(e => e.ExecuteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ReadFileReturnsHeaderWithRangeAndBody()
+    {
+        config.Container.Enabled = true;
+        containerExecutor
+            .Setup(e => e.ReadFileAsync("notes.md", 0, 200, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContainerReadResult(Found: true, Content: "hello\nworld",
+                TotalLines: 500, FirstLine: 1, LastLine: 200, Truncated: false, TimedOut: false, Error: null));
+
+        var result = await RunAsync("""{ "read_file": { "path": "notes.md" } }""");
+
+        Assert.Contains("lines 1-200 of 500", result);
+        Assert.Contains("offset=200", result);   // tells the peer how to page for more
+        Assert.Contains("hello\nworld", result);
+    }
+
+    [Fact]
+    public async Task ReadFilePassesOffsetAndLimitThrough()
+    {
+        config.Container.Enabled = true;
+        containerExecutor
+            .Setup(e => e.ReadFileAsync("f.txt", 100, 50, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContainerReadResult(Found: true, Content: "x",
+                TotalLines: 120, FirstLine: 101, LastLine: 120, Truncated: false, TimedOut: false, Error: null));
+
+        var result = await RunAsync("""{ "read_file": { "path": "f.txt", "offset": 100, "limit": 50 } }""");
+
+        containerExecutor.Verify(e => e.ReadFileAsync("f.txt", 100, 50, It.IsAny<CancellationToken>()), Times.Once);
+        Assert.DoesNotContain("more below", result);  // reached the end
+    }
+
+    [Fact]
+    public async Task ReadFileReportsMissingFile()
+    {
+        config.Container.Enabled = true;
+        containerExecutor
+            .Setup(e => e.ReadFileAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContainerReadResult(Found: false, Content: "", TotalLines: 0,
+                FirstLine: 0, LastLine: 0, Truncated: false, TimedOut: false, Error: "no such file: gone.md"));
+
+        var result = await RunAsync("""{ "read_file": { "path": "gone.md" } }""");
+
+        Assert.Contains("no such file", result);
+    }
+
+    [Fact]
+    public async Task ReadFileRequiresPath()
+    {
+        config.Container.Enabled = true;
+        var result = await RunAsync("""{ "read_file": { } }""");
+        Assert.Contains("'path' is required", result);
+    }
+
+    [Fact]
+    public async Task WriteFileReportsBytesWrittenAndAudits()
+    {
+        config.Container.Enabled = true;
+        containerExecutor
+            .Setup(e => e.WriteFileAsync("out.txt", "hello", false, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContainerExecResult(Allowed: true, RejectionReason: null,
+                Output: "", TimedOut: false, Truncated: false, ExitCode: 0));
+
+        var result = await RunAsync("""{ "write_file": { "path": "out.txt", "content": "hello" } }""");
+
+        Assert.Contains("Wrote out.txt", result);
+        Assert.Contains("5 bytes", result);
+        actionLogRepo.Verify(r => r.LogAsync("write_file", It.Is<string?>(s => s != null && s.Contains("overwrite")),
+            It.IsAny<string?>(), It.IsAny<IDbTransaction?>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task WriteFileAppendPassesAppendFlag()
+    {
+        config.Container.Enabled = true;
+        containerExecutor
+            .Setup(e => e.WriteFileAsync("log.txt", "line", true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContainerExecResult(Allowed: true, RejectionReason: null,
+                Output: "", TimedOut: false, Truncated: false, ExitCode: 0));
+
+        var result = await RunAsync("""{ "write_file": { "path": "log.txt", "content": "line", "append": true } }""");
+
+        Assert.Contains("Appended to log.txt", result);
+        containerExecutor.Verify(e => e.WriteFileAsync("log.txt", "line", true, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task WriteFileRequiresContentField()
+    {
+        config.Container.Enabled = true;
+        var result = await RunAsync("""{ "write_file": { "path": "out.txt" } }""");
+        Assert.Contains("'content' is required", result);
+    }
+
+    [Fact]
+    public async Task WriteFileSurfacesFailure()
+    {
+        config.Container.Enabled = true;
+        containerExecutor
+            .Setup(e => e.WriteFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContainerExecResult(Allowed: true, RejectionReason: null,
+                Output: "[stderr]\nread-only fs", TimedOut: false, Truncated: false, ExitCode: 1));
+
+        var result = await RunAsync("""{ "write_file": { "path": "/x.txt", "content": "hi" } }""");
+
+        Assert.Contains("write_file failed", result);
+        Assert.Contains("read-only fs", result);
+    }
+
+    [Fact]
+    public async Task FileCommandsShortCircuitWhenContainerDisabled()
+    {
+        config.Container.Enabled = false;
+
+        var read = await RunAsync("""{ "read_file": { "path": "x" } }""");
+        var write = await RunAsync("""{ "write_file": { "path": "x", "content": "y" } }""");
+
+        Assert.Contains("isn't available", read);
+        Assert.Contains("isn't available", write);
+        containerExecutor.Verify(e => e.ReadFileAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+        containerExecutor.Verify(e => e.WriteFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task ContainerLogsReturnsLogsForKnownServiceAndAudits()
     {
         config.Container.Enabled = true;

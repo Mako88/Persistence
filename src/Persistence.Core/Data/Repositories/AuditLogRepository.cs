@@ -42,10 +42,12 @@ public class AuditLogRepository : EntityRepository<AuditLogEntity>, IAuditLogRep
             $"SELECT * FROM AuditLogs WHERE SessionId = {sessionId} ORDER BY CreatedUtc ASC");
 
     /// <summary>
-    /// Returns the most recent self-changes, newest first. Excludes ChatMessage and System fragment
-    /// changes (conversation/scaffolding, not the peer curating itself) by joining to the fragment
-    /// row for fragment-typed targets. Uses the projection overload so order is preserved and Source
-    /// isn't hydrated (the digest doesn't need it).
+    /// Returns the most recent self-changes, newest first. Excludes ChatMessage, System, and Thought
+    /// fragment changes — conversation/scaffolding and the peer's own auto-persisted reasoning, none of
+    /// which is the peer deliberately curating itself (thoughts are read directly as fragments, and a
+    /// verbose thinker would otherwise crowd the digest out every turn). Joins to the fragment row for
+    /// fragment-typed targets. Uses the projection overload so order is preserved and Source isn't
+    /// hydrated (the digest doesn't need it).
     /// </summary>
     public async Task<IReadOnlyList<AuditLogEntity>> GetRecentSelfChangesAsync(int limit, CancellationToken ct = default) =>
         // FragmentType is stored via the same interpolation path, so the excluded types must be
@@ -56,7 +58,7 @@ public class AuditLogRepository : EntityRepository<AuditLogEntity>, IAuditLogRep
             WHERE a.TargetType <> 'ContextFragmentEntity'
                OR a.TargetId IN (
                     SELECT cf.Id FROM ContextFragments cf
-                    WHERE cf.FragmentType NOT IN ({ContextFragmentType.ChatMessage}, {ContextFragmentType.System})
+                    WHERE cf.FragmentType NOT IN ({ContextFragmentType.ChatMessage}, {ContextFragmentType.System}, {ContextFragmentType.Thought})
                )
             ORDER BY a.CreatedUtc DESC
             LIMIT {limit}

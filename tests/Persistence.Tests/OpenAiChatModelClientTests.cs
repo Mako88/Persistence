@@ -38,7 +38,7 @@ public class OpenAiChatModelClientTests
         var http = new Mock<ISimpleClient>();
         http.Setup(c => c.MakeRequest(It.IsAny<ISimpleRequest>())).ReturnsAsync(response);
 
-        var client = new OpenAiChatModelClient(config, new Mock<IDisplayProvider>().Object, new TokenUsageTracker(), http.Object);
+        var client = new OpenAiChatModelClient(config, new Mock<IDisplayProvider>().Object, http.Object);
         return (client, http);
     }
 
@@ -139,7 +139,7 @@ public class OpenAiChatModelClientTests
         // A local OpenAI-compatible server (ApiBaseUrl set) needs no key.
         var config = new AppConfig { Model = "qwen", ApiBaseUrl = "http://localhost:8080/v1", ApiKey = "" };
 
-        var client = new OpenAiChatModelClient(config, new Mock<IDisplayProvider>().Object, new TokenUsageTracker());
+        var client = new OpenAiChatModelClient(config, new Mock<IDisplayProvider>().Object);
 
         Assert.NotNull(client);
     }
@@ -152,7 +152,7 @@ public class OpenAiChatModelClientTests
         var config = new AppConfig { Model = "gpt-4o", ApiKey = apiKey }; // no ApiBaseUrl → default endpoint
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
-            new OpenAiChatModelClient(config, new Mock<IDisplayProvider>().Object, new TokenUsageTracker()));
+            new OpenAiChatModelClient(config, new Mock<IDisplayProvider>().Object));
 
         Assert.Contains("persistence.json", ex.Message);
     }
