@@ -252,15 +252,16 @@ public class ApiDisplayProvider : IDisplayProvider
 
     /// <summary>
     /// The current standing state for a newly-connected client to draw before subscribing to the stream
-    /// at <see cref="ConversationSnapshot.LatestSeq"/> (so no event is missed or replayed). Chat history
-    /// is supplied by the caller, queried fresh from the store.
+    /// at <paramref name="latestSeq"/> (so no event is missed or replayed). Both the stream cut
+    /// (<paramref name="latestSeq"/>) and the <paramref name="chatHistory"/> are supplied by the caller so
+    /// it controls their ordering relative to the store read (see the snapshot endpoint).
     /// </summary>
-    public ConversationSnapshot Snapshot(IReadOnlyList<ChatHistoryItem> chatHistory)
+    public ConversationSnapshot Snapshot(long latestSeq, IReadOnlyList<ChatHistoryItem> chatHistory)
     {
         lock (sync)
         {
             return new ConversationSnapshot(
-                seq, openProposalCount, scheduledEvents, chatHistory,
+                latestSeq, openProposalCount, scheduledEvents, chatHistory,
                 config.Provider, config.Model, sessionContext.SessionId);
         }
     }
