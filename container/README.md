@@ -48,6 +48,30 @@ overrides the shared `Container.Name` while that profile is active:
 
 Peers without a `ContainerName` use the shared `Container.Name`.
 
+## Sharing files with the peer (`/shared`) + reading its own DB
+
+The `claude-computer` service bind-mounts a host folder at **`/shared`** (`../shared` → the repo's
+`shared/` dir) for two-way file exchange. Point `AppConfig.SharedDirectory` (in `persistence.json`) at
+the **same host path** the compose file mounts, and the peer's **`snapshot_db`** command writes a
+read-only, consistent copy of its own database there (`/shared/<db>.db`) — so it can inspect its data
+directly (e.g. `python3`'s `sqlite3`) rather than only through Persistence. It's a snapshot, not the live
+WAL file, and only the active peer's DB. `shared/` is gitignored.
+
+## Letting the peer push to git (SSH)
+
+Copy the example into a **local, gitignored** override and edit the key path:
+
+```bash
+cd container
+docker compose up -d --build   # --build picks up openssh-client
+```
+
+`docker-compose.override.yml` (gitignored) mounts an **OpenSSH-format** private key into the box and, at
+start, installs it with `600` perms and trusts `github.com`. The peer can then use an SSH remote
+(`git@github.com:Owner/Repo.git`). **Security:** a personal key grants the sandbox push access to *all*
+your repos; prefer a **dedicated deploy key** scoped to this repo, with `main` protected so pushes land on
+a branch. See the comments in the override for the swap.
+
 To let a participant run **any** program (skip the allowlist curation entirely — the container's own
 isolation is still the boundary), set `"ContainerAllowAll": true` on its profile, or
 `Container.AllowAllCommands` / `PERSISTENCE_CONTAINER_ALLOWALLCOMMANDS=true` for the shared default.

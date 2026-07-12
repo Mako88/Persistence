@@ -30,6 +30,14 @@ public interface IAppConfig
     string SeedsDirectory { get; set; }
 
     /// <summary>
+    /// Host folder bridged into the peer's container as <c>/shared</c> (see the compose file). The
+    /// <c>snapshot_db</c> command writes a read-only copy of the active peer's database here so the peer
+    /// can inspect its own data directly. Blank disables <c>snapshot_db</c>. Set it to the same host path
+    /// the container mounts at <c>/shared</c>.
+    /// </summary>
+    string SharedDirectory { get; set; }
+
+    /// <summary>
     /// Maximum tokens the model is allowed to generate per completion
     /// </summary>
     int MaxOutputTokens { get; set; }

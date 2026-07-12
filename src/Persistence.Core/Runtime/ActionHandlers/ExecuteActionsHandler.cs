@@ -5,7 +5,9 @@ using Persistence.DI;
 using Persistence.Events;
 using Persistence.Services;
 using Persistence.Services.Container;
+using Microsoft.Data.Sqlite;
 using System.Diagnostics.CodeAnalysis;
+using System.IO;
 using System.Text;
 using System.Text.Json.Nodes;
 
@@ -234,6 +236,48 @@ public class ExecuteActionsHandler : CommandHandler
     {
         var firstLine = output.Split('\n', 2)[0];
         return firstLine.Length <= 200 ? firstLine : firstLine[..200];
+    }
+
+    [Command("snapshot_db", "Write a read-only snapshot of your database into your computer's /shared folder so you can query your own data directly (e.g. with python3's sqlite3). Overwrites the previous snapshot each time; it's a consistent copy, not the live file.")]
+    private async Task<string> ExecuteSnapshotDbAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(config.SharedDirectory))
+        {
+            return "snapshot_db isn't available — no shared folder is configured (the /shared bridge to your computer isn't set up).";
+        }
+
+        var sourcePath = config.DatabasePath;
+
+        if (!File.Exists(sourcePath))
+        {
+            return $"snapshot_db failed: your database wasn't found at {sourcePath}.";
+        }
+
+        var fileName = Path.GetFileName(sourcePath);
+        var destPath = Path.Combine(config.SharedDirectory, fileName);
+
+        try
+        {
+            Directory.CreateDirectory(config.SharedDirectory);
+
+            // Read-only source connection (no write lock on the live DB) → a consistent online-backup
+            // copy into the shared folder, which the container sees at /shared.
+            await using var source = new SqliteConnection($"Data Source={sourcePath};Mode=ReadOnly");
+            await using var dest = new SqliteConnection($"Data Source={destPath}");
+            await source.OpenAsync(ct);
+            await dest.OpenAsync(ct);
+            source.BackupDatabase(dest);
+        }
+        catch (Exception ex)
+        {
+            return $"snapshot_db failed: {ex.Message}";
+        }
+
+        var kb = new FileInfo(destPath).Length / 1024;
+        await actionLogRepo.LogAsync("snapshot_db", fileName, $"{kb} KB");
+
+        return $"Wrote a snapshot of your database to /shared/{fileName} ({kb} KB). Query it read-only "
+            + $"in your computer with python3's sqlite3 (open \"/shared/{fileName}\").";
     }
 
     [Command("container_logs", "View recent logs from your computer's containers, to troubleshoot it yourself. 'computer' is your box; 'search' is the search service (useful when web_search misbehaves).")]

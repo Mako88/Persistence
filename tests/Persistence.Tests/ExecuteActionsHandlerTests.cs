@@ -7,7 +7,9 @@ using Persistence.Notifications;
 using Persistence.Runtime;
 using Persistence.Runtime.ActionHandlers;
 using Persistence.Services.Container;
+using Microsoft.Data.Sqlite;
 using System.Data;
+using System.IO;
 using System.Text.Json.Nodes;
 
 namespace Persistence.Tests;
@@ -292,6 +294,57 @@ public class ExecuteActionsHandlerTests
         Assert.Contains("isn't available", write);
         containerExecutor.Verify(e => e.ReadFileAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
         containerExecutor.Verify(e => e.WriteFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task SnapshotDbIsUnavailableWithoutASharedDirectory()
+    {
+        config.SharedDirectory = "";
+
+        var result = await RunAsync("""{ "snapshot_db": { } }""");
+
+        Assert.Contains("isn't available", result);
+    }
+
+    [Fact]
+    public async Task SnapshotDbWritesAQueryableCopyToTheSharedFolder()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"persist-snap-{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(tempDir, "peer.db");
+        var sharedDir = Path.Combine(tempDir, "shared");
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            using (var seed = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                seed.Open();
+                using var cmd = seed.CreateCommand();
+                cmd.CommandText = "CREATE TABLE ContextFragments(Id); INSERT INTO ContextFragments VALUES (1),(2),(3);";
+                cmd.ExecuteNonQuery();
+            }
+
+            config.DatabasePath = dbPath;
+            config.SharedDirectory = sharedDir;
+
+            var result = await RunAsync("""{ "snapshot_db": { } }""");
+
+            Assert.Contains("/shared/peer.db", result);
+            var snapshot = Path.Combine(sharedDir, "peer.db");
+            Assert.True(File.Exists(snapshot), "snapshot file should exist in the shared folder");
+
+            // The copy is a real, queryable database with the same data.
+            using var check = new SqliteConnection($"Data Source={snapshot};Mode=ReadOnly");
+            check.Open();
+            using var q = check.CreateCommand();
+            q.CommandText = "SELECT COUNT(*) FROM ContextFragments";
+            Assert.Equal(3L, (long)q.ExecuteScalar()!);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools(); // release handles so the temp files can be removed
+            try { Directory.Delete(tempDir, recursive: true); } catch { /* best-effort cleanup */ }
+        }
     }
 
     [Fact]

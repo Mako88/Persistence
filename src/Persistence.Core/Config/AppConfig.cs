@@ -34,6 +34,14 @@ public class AppConfig : IAppConfig
     /// </summary>
     public string SeedsDirectory { get; set; } = "";
 
+    /// <summary>
+    /// Host folder bridged into the peer's container as <c>/shared</c>. <c>snapshot_db</c> writes a
+    /// read-only copy of the active peer's database here for direct inspection; blank disables it.
+    /// Must match the host path the container mounts at <c>/shared</c>. Overridable via
+    /// <c>PERSISTENCE_SHAREDDIRECTORY</c>.
+    /// </summary>
+    public string SharedDirectory { get; set; } = "";
+
     public string UiMode { get; set; } = "Tui";
     public string ProposalApproval { get; set; } = "Self";
 

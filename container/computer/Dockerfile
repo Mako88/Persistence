@@ -18,7 +18,7 @@ ENV DOTNET_ROOT=/usr/share/dotnet
 # System deps: python (scripting + trafilatura), curl/jq (web_search), sudo (so the peer can install
 # libraries), and the shared libraries a headless Chrome needs (for agent-browser's general/JS browsing).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      python3 python3-pip curl jq ca-certificates git poppler-utils sudo \
+      python3 python3-pip curl jq ca-certificates git openssh-client poppler-utils sudo \
       fonts-liberation libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
       libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 \
       libasound2 libpangocairo-1.0-0 libpango-1.0-0 libcairo2 libatspi2.0-0 \

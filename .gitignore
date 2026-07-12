@@ -39,3 +39,8 @@ TestResults/
 ## TUI preview scratch — screenshots + capture script for visual review,
 ## pushed to a throwaway branch when needed, never to main.
 tui-preview/
+
+## Host <-> peer-container file exchange (DB snapshots + shared files). Never commit.
+/shared/
+## Local, host-specific compose overrides (e.g. mounting an SSH key into the peer's container).
+container/docker-compose.override.yml
