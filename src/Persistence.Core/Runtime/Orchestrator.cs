@@ -100,25 +100,6 @@ public class Orchestrator : IOrchestrator
         await display.Start(ct);
     }
 
-    /// <summary>
-    /// Headless one-shot wake-runner: subscribe, initialize, then fire all currently-due events as
-    /// autonomous turns and return. Reuses the exact same wake→turn path as the interactive app
-    /// (<see cref="OnScheduledEventTriggered"/> via the event bus), so there's nothing turn-related to
-    /// reimplement — it just skips the display loop and the 30s poll timer.
-    /// </summary>
-    public async Task RunWakeCycleAsync(CancellationToken ct = default)
-    {
-        eventBus.Subscribe<DisplayInputReceived>(OnDisplayInputReceived);
-        eventBus.Subscribe<ScheduledEventTriggered>(OnScheduledEventTriggered);
-
-        await InitializeAsync();
-        initialized.TrySetResult(); // unblock OnScheduledEventTriggered's initialization gate
-
-        // One sweep. CheckAndFireAsync awaits each ScheduledEventTriggered subscriber, and
-        // PublishAsync awaits the handler, so every due wake runs to completion before this returns.
-        await wakeUpMonitor.CheckAndFireAsync(ct);
-    }
-
     // -- Event Handlers --
 
     /// <summary>
