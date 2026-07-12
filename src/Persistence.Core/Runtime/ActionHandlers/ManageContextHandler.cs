@@ -590,6 +590,113 @@ public class ManageContextHandler : CommandHandler
         return $"Took fragment #{id} out of context (kept — bring it back anytime with load)";
     }
 
+    [Command("forget", "Soft-delete a fragment: it stops surfacing in your context, recall, and searches — but is NOT erased. Recoverable anytime with unforget(id); browse forgotten ones with list_forgotten. Use this (not remove) when something is wrong, outdated, or no longer yours to hold — remove only takes a fragment out of the current view while it stays fully active elsewhere.")]
+    [CommandField("id", "long", required: true, Description = "ID of the fragment to forget")]
+    private async Task<string> ExecuteForgetAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
+    {
+        var id = ParseId(command?["id"]);
+
+        if (id == null)
+        {
+            return "Forget failed: 'id' is required";
+        }
+
+        // Prefer the in-context copy; otherwise fetch it, so you can forget something not currently loaded.
+        var fragment = context.ContextFragments.Values.FirstOrDefault(f => f.Id == id.Value)
+            ?? await fragmentRepo.GetByIdAsync(id.Value, ct);
+
+        if (fragment == null)
+        {
+            return $"Forget failed: fragment #{id} not found";
+        }
+
+        if (fragment.IsProtected)
+        {
+            return $"Forget failed: fragment #{id} is protected — retire it via a proposal you accept in a later turn (propose kind=remove, target_id={id}).";
+        }
+
+        if (fragment.IsDeleted)
+        {
+            return $"Fragment #{id} is already forgotten — unforget({id}) brings it back.";
+        }
+
+        await fragmentRepo.SetDeletedAsync(id.Value, deleted: true, ct);
+
+        // If it's loaded in the current context, detach it so it leaves view this turn too.
+        var entry = context.ContextFragments.FirstOrDefault(kvp => kvp.Value.Id == id.Value);
+        if (entry.Value != null)
+        {
+            await workingContextRepo.RemoveFragmentAsync(context.Id, id.Value);
+            context.ContextFragments.Remove(entry.Key);
+        }
+
+        return $"Forgot fragment #{id} — hidden from context, recall, and search, but not erased. Recover it with unforget({id}); see everything forgotten with list_forgotten.";
+    }
+
+    [Command("unforget", "Restore a fragment you previously forgot (see list_forgotten) — clears its forgotten state and loads it back into your context.")]
+    [CommandField("id", "long", required: true, Description = "ID of the forgotten fragment to restore")]
+    private async Task<string> ExecuteUnforgetAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
+    {
+        var id = ParseId(command?["id"]);
+
+        if (id == null)
+        {
+            return "Unforget failed: 'id' is required";
+        }
+
+        var fragment = await fragmentRepo.GetByIdAsync(id.Value, ct);
+
+        if (fragment == null)
+        {
+            return $"Unforget failed: fragment #{id} not found";
+        }
+
+        if (!fragment.IsDeleted)
+        {
+            return $"Fragment #{id} isn't forgotten — nothing to restore.";
+        }
+
+        await fragmentRepo.SetDeletedAsync(id.Value, deleted: false, ct);
+
+        if (context.ContextFragments.Values.All(f => f.Id != id.Value))
+        {
+            fragment.IsDeleted = false;
+            context.AddFragment(fragment, 1.0f);
+        }
+
+        return $"Restored fragment #{id} — no longer forgotten, and loaded back into your context.";
+    }
+
+    [Command("list_forgotten", "List fragments you've forgotten (soft-deleted) so you can review or restore them with unforget. Read-only.")]
+    [CommandField("limit", "int", Description = "How many to show", Default = "20")]
+    private async Task<string> ExecuteListForgottenAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
+    {
+        var limit = Math.Max(1, command?["limit"]?.GetValue<int>() ?? 20);
+
+        var forgotten = await fragmentRepo.GetDeletedAsync(limit, ct);
+
+        if (forgotten.Count == 0)
+        {
+            return "Nothing forgotten — no soft-deleted fragments to restore.";
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"Forgotten fragments (most recent first; unforget(id) to restore):");
+
+        foreach (var fragment in forgotten)
+        {
+            var preview = (fragment.Summary ?? fragment.Content ?? string.Empty).Replace('\n', ' ').Trim();
+            if (preview.Length > 60)
+            {
+                preview = preview[..60] + "…";
+            }
+
+            sb.AppendLine($"  #{fragment.Id} | {fragment.FragmentType} | forgotten {fragment.LastModifiedUtc:yyyy-MM-dd} | {preview}");
+        }
+
+        return sb.ToString().TrimEnd();
+    }
+
     [Command("set_summary", "Attach or replace a short summary on one or more fragments (so they can be shown collapsed)")]
     [CommandField("ids", "array", required: true, Description = "Fragment IDs to summarise, e.g. [3, 5]")]
     [CommandField("summary", "string", required: true, Description = "The short summary text to attach to each")]

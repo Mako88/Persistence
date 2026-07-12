@@ -164,6 +164,20 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
             nameof(ContextFragmentEntity), entity.Id, entity.Tags.Select(t => t.Id).ToList(), transaction);
     }
 
+    /// <inheritdoc />
+    public async Task SetDeletedAsync(long id, bool deleted, CancellationToken ct = default) =>
+        await ExecuteAsync(
+            $"UPDATE ContextFragments SET IsDeleted = {deleted}, LastModifiedUtc = {DateTimeOffset.UtcNow} WHERE Id = {id}",
+            ct: ct);
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<ContextFragmentEntity>> GetDeletedAsync(int limit = 20, CancellationToken ct = default) =>
+        // Flat query (not the hydrating QueryAsync): the entity reload filters/joins aren't needed for a
+        // recovery listing, and going flat avoids re-touching LastAccessed on fragments merely being reviewed.
+        (await QueryAsync<ContextFragmentEntity>(
+            $"SELECT * FROM ContextFragments WHERE IsDeleted = 1 ORDER BY LastModifiedUtc DESC LIMIT {limit}",
+            ct)).ToList();
+
     /// <summary>
     /// Returns the INSERT statement for a context fragment
     /// </summary>

@@ -22,4 +22,16 @@ public interface IContextFragmentRepository : IEntityRepository<ContextFragmentE
     /// Returns up to <paramref name="limit"/> results ordered best-match first.
     /// </summary>
     Task<IEnumerable<ContextFragmentEntity>> SearchRelevantAsync(string query, int limit = 20, CancellationToken ct = default);
+
+    /// <summary>
+    /// Soft-deletes (<c>forget</c>) or restores (<c>unforget</c>) a fragment by flipping its
+    /// <see cref="ContextFragmentEntity.IsDeleted"/> flag only — content, tags, and status untouched.
+    /// </summary>
+    Task SetDeletedAsync(long id, bool deleted, CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns soft-deleted (forgotten) fragments, most-recently-forgotten first — the recovery
+    /// surface for <c>unforget</c>. Flat rows (no tag hydration); intended for a compact listing.
+    /// </summary>
+    Task<IReadOnlyList<ContextFragmentEntity>> GetDeletedAsync(int limit = 20, CancellationToken ct = default);
 }
