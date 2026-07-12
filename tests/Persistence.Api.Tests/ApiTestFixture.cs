@@ -1,3 +1,4 @@
+using Persistence.Contracts;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Hosting;
 using System.Net.Http.Json;

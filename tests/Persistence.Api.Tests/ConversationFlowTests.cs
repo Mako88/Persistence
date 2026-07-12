@@ -1,3 +1,4 @@
+using Persistence.Contracts;
 using System.Net;
 using System.Net.Http.Json;
 

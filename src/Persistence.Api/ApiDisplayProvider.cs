@@ -3,33 +3,12 @@ using Persistence.Data.Entities;
 using Persistence.DI;
 using Persistence.Events;
 using Persistence.Notifications;
+using Persistence.Contracts;
 using Persistence.Runtime;
 using System.Text.Json;
 using System.Threading.Channels;
 
 namespace Persistence.Api;
-
-/// <summary>
-/// One thing the system emitted during the conversation, in order.
-/// </summary>
-public record ConversationEvent(long Seq, string Kind, string Text, string? Detail = null);
-
-/// <summary>A pending scheduled event, slimmed for the client's Schedule pane.</summary>
-public record ScheduledEventView(long Id, string Name, DateTimeOffset ScheduledForUtc, string? WakePrompt, string Status);
-
-/// <summary>One prior conversation message, for a freshly-connected client to draw before live events.</summary>
-public record ChatHistoryItem(string Role, string Content, DateTimeOffset Timestamp);
-
-/// <summary>
-/// The state a newly-connected client needs to draw before subscribing to the live stream: the standing
-/// snapshots (pending scheduled events, open-proposal count, recent chat) plus <see cref="LatestSeq"/>,
-/// which the client passes to <c>?since=</c> so the stream resumes with no gap and no duplicate.
-/// </summary>
-public record ConversationSnapshot(
-    long LatestSeq,
-    int OpenProposalCount,
-    IReadOnlyList<ScheduledEventView> ScheduledEvents,
-    IReadOnlyList<ChatHistoryItem> ChatHistory);
 
 /// <summary>
 /// <see cref="IDisplayProvider"/> for the API front-end. Instead of rendering, it appends every
