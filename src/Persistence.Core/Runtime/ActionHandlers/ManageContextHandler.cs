@@ -1374,6 +1374,60 @@ public class ManageContextHandler : CommandHandler
         return Task.FromResult(sb.ToString().TrimEnd());
     }
 
+    [Command("prune_candidates", "Surface the fragments in your context that look least worth their space — low importance/confidence and not touched in a while — so you can decide what to summarize, remove, or keep. Read-only: it changes nothing. Complements list_largest, which ranks by size instead of value.")]
+    [CommandField("limit", "int", Description = "How many candidates to show", Default = "10")]
+    private Task<string> ExecutePruneCandidatesAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
+    {
+        var limit = Math.Max(1, command?["limit"]?.GetValue<int>() ?? 10);
+        var now = DateTimeOffset.UtcNow;
+
+        // Only fragments you authored and can act on: protected anchors (e.g. core identity) are left
+        // out, and system-managed chat/thought fragments already decay on their own via the rolling
+        // windows — suggesting you prune those would be noise.
+        var candidates = context.ContextFragments.Values
+            .Where(f => FragmentTypeRules.Authorable.Contains(f.FragmentType) && !f.IsProtected)
+            .Select(f => (Fragment: f, Score: PruneScore(f, now)))
+            .OrderByDescending(x => x.Score)
+            .Take(limit)
+            .ToList();
+
+        if (candidates.Count == 0)
+        {
+            return Task.FromResult("Nothing stands out to prune — no low-value fragments you authored are currently in your context.");
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"Prune candidates (least worth their space first; nothing changed). Act with summarize_fragments or remove — or just leave them:");
+
+        foreach (var (fragment, _) in candidates)
+        {
+            var idLabel = fragment.Id > 0 ? $"#{fragment.Id}" : "new";
+            var idleDays = Math.Max(0, (now - fragment.LastModifiedUtc).TotalDays);
+            var preview = (fragment.Summary ?? fragment.Content ?? string.Empty).Replace('\n', ' ').Trim();
+            if (preview.Length > 60)
+            {
+                preview = preview[..60] + "…";
+            }
+
+            sb.AppendLine($"  {idLabel} | {fragment.FragmentType} | imp {fragment.Importance:0.0} · conf {fragment.Confidence:0.0} · idle {idleDays:0}d | {preview}");
+        }
+
+        return Task.FromResult(sb.ToString().TrimEnd());
+    }
+
+    /// <summary>
+    /// Ranking heuristic for <c>prune_candidates</c>: higher = more prunable. Low importance and low
+    /// confidence dominate; long idleness nudges it up but is capped so a merely-old yet valued fragment
+    /// doesn't float to the top. Pure ordering — it archives nothing.
+    /// </summary>
+    private static double PruneScore(ContextFragmentEntity fragment, DateTimeOffset now)
+    {
+        var lowValue = (1 - Math.Clamp(fragment.Importance, 0, 1)) + (1 - Math.Clamp(fragment.Confidence, 0, 1));
+        var idleDays = Math.Max(0, (now - fragment.LastModifiedUtc).TotalDays);
+        var staleness = Math.Min(1.0, idleDays / 30.0);
+        return lowValue + staleness;
+    }
+
     [Command("list_fragments", "List fragments with optional filtering")]
     [CommandField("type", "string", Description = "Filter by fragment type (Identity, Relational, Personal, etc.)")]
     [CommandField("tag", "string", Description = "Filter by tag path")]
