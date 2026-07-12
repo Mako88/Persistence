@@ -314,6 +314,50 @@ public class AppConfigTests
     }
 
     [Fact]
+    public async Task TrySwitchModelReResolvesTheActiveProfileByName()
+    {
+        var json = """
+        {
+          "SelectedModel": "cloud",
+          "Models": [
+            { "Name": "cloud", "Provider": "OpenAI", "Model": "gpt-5" },
+            { "Name": "local", "Provider": "OpenAiChat", "Model": "gemma", "MaxInputTokens": 28000 }
+          ]
+        }
+        """;
+        await using var temp = new TempFile(json);
+        var config = await AppConfig.LoadAsync(temp.Path);
+        Assert.Equal("OpenAI", config.Provider); // starts on "cloud"
+
+        var switched = config.TrySwitchModel("LOCAL"); // case-insensitive
+
+        Assert.True(switched);
+        Assert.Equal("local", config.ActiveModelName);
+        Assert.Equal("OpenAiChat", config.Provider); // flat props now read from the new profile
+        Assert.Equal("gemma", config.Model);
+        Assert.Equal(28000, config.MaxInputTokens);
+    }
+
+    [Fact]
+    public async Task TrySwitchModelLeavesActiveProfileUnchangedWhenNameIsUnknown()
+    {
+        var json = """
+        {
+          "SelectedModel": "cloud",
+          "Models": [ { "Name": "cloud", "Provider": "OpenAI", "Model": "gpt-5" } ]
+        }
+        """;
+        await using var temp = new TempFile(json);
+        var config = await AppConfig.LoadAsync(temp.Path);
+
+        var switched = config.TrySwitchModel("nope");
+
+        Assert.False(switched);
+        Assert.Equal("cloud", config.ActiveModelName); // unchanged
+        Assert.Equal("gpt-5", config.Model);
+    }
+
+    [Fact]
     public async Task FallsBackToDefaultsOnMalformedJson()
     {
         await using var temp = new TempFile("{ this is not valid json");

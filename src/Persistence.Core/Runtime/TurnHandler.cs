@@ -27,7 +27,7 @@ public class TurnHandler : ITurnHandler
     private readonly IActionLogRepository actionLogRepo;
     private readonly IAuditLogRepository auditLogRepo;
     private readonly ISessionContext sessionContext;
-    private readonly IModelClient modelClient;
+    private readonly IModelClientResolver modelClientResolver;
     private readonly IModelResponseParser responseParser;
     private readonly IPromptFormatter promptFormatter;
     private readonly IPromptBuilder promptBuilder;
@@ -52,7 +52,7 @@ public class TurnHandler : ITurnHandler
         IActionLogRepository actionLogRepo,
         IAuditLogRepository auditLogRepo,
         ISessionContext sessionContext,
-        IModelClient modelClient,
+        IModelClientResolver modelClientResolver,
         IModelResponseParser responseParser,
         IPromptFormatter promptFormatter,
         IPromptBuilder promptBuilder,
@@ -67,7 +67,7 @@ public class TurnHandler : ITurnHandler
         this.actionLogRepo = actionLogRepo;
         this.auditLogRepo = auditLogRepo;
         this.sessionContext = sessionContext;
-        this.modelClient = modelClient;
+        this.modelClientResolver = modelClientResolver;
         this.responseParser = responseParser;
         this.promptFormatter = promptFormatter;
         this.promptBuilder = promptBuilder;
@@ -160,8 +160,11 @@ public class TurnHandler : ITurnHandler
 
             var segments = promptFormatter.Format(context, availableTags, iteration, config.MaxActionIterations, recentChanges, recentActions, archiveNote, surfaced);
             var request = promptBuilder.Build(segments);
+            // Resolve the client for the active profile each turn so a mid-session set_model switch
+            // takes effect here rather than on restart.
+            var modelClient = modelClientResolver.Resolve();
             var rawOutput = config.Streaming
-                ? await StreamModelOutputAsync(request, ct)
+                ? await StreamModelOutputAsync(modelClient, request, ct)
                 : await modelClient.CompleteAsync(request, ct);
 
             // Account for this call's real, provider-reported token usage in one place: it feeds the
@@ -418,7 +421,7 @@ public class TurnHandler : ITurnHandler
     /// Streams the model response, publishing reasoning-summary deltas for live display
     /// and accumulating output-text deltas into the raw output the parser consumes.
     /// </summary>
-    private async Task<string> StreamModelOutputAsync(PromptRequest request, CancellationToken ct)
+    private async Task<string> StreamModelOutputAsync(IModelClient modelClient, PromptRequest request, CancellationToken ct)
     {
         var output = new StringBuilder();
 

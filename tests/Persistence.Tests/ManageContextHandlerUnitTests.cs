@@ -260,6 +260,58 @@ public class ManageContextHandlerUnitTests
     }
 
     [Fact]
+    public async Task AcceptProposalReportsAnUnknownId()
+    {
+        // Default approval is Self (not Participant), so we get past the mode gate; the repo has no
+        // such proposal, which must read as a clear "no proposal" rather than a null-ref.
+        var result = await RunAsync(Context(), """{ "accept_proposal": { "id": 404 } }""");
+
+        Assert.Contains("no proposal #404", result);
+    }
+
+    [Fact]
+    public async Task RejectProposalReportsAnUnknownId()
+    {
+        var result = await RunAsync(Context(), """{ "reject_proposal": { "id": 404 } }""");
+
+        Assert.Contains("no proposal #404", result);
+    }
+
+    [Fact]
+    public async Task ProposeRequiresARationale()
+    {
+        // Rationale is the whole point of proposing (deliberation) — it's rejected before anything
+        // is created.
+        var result = await RunAsync(Context(), """{ "propose": { "kind": "add", "content": "x" } }""");
+
+        Assert.Contains("'rationale' is required", result);
+    }
+
+    [Fact]
+    public async Task ProposeRejectsAnUnknownKind()
+    {
+        var result = await RunAsync(Context(), """{ "propose": { "kind": "frobnicate", "rationale": "because" } }""");
+
+        Assert.Contains("'kind' must be", result);
+    }
+
+    [Fact]
+    public async Task ProposeAddRequiresContent()
+    {
+        var result = await RunAsync(Context(), """{ "propose": { "kind": "add", "rationale": "because" } }""");
+
+        Assert.Contains("an 'add' proposal needs 'content'", result);
+    }
+
+    [Fact]
+    public async Task ProposeModifyRequiresATargetId()
+    {
+        var result = await RunAsync(Context(), """{ "propose": { "kind": "modify", "rationale": "because", "content": "x" } }""");
+
+        Assert.Contains("a 'modify' proposal needs 'target_id'", result);
+    }
+
+    [Fact]
     public async Task SummarizeFailsWhenNothingIsEligible()
     {
         var context = Context();

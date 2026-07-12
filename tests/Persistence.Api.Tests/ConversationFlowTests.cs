@@ -663,11 +663,6 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
         return long.Parse(match.Groups[1].Value);
     }
 
-    private static List<long> ExtractFragmentIds(string prompt, string fragmentType) =>
-        System.Text.RegularExpressions.Regex.Matches(prompt, $@"#(\d+) \| {fragmentType} ")
-            .Select(m => long.Parse(m.Groups[1].Value))
-            .ToList();
-
     /// <summary>
     /// IDs of fragments whose content (the line after the header) contains <paramref name="needle"/>.
     /// A fragment renders as a `[#ID | ...]` header line followed by its content.

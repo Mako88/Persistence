@@ -146,4 +146,20 @@ public interface IAppConfig
     /// Optional descriptions for known local peers, surfaced to the remote peer.
     /// </summary>
     List<LocalPeerProfile> LocalPeers { get; set; }
+
+    /// <summary>
+    /// The configured model profiles that can be switched between at runtime (see
+    /// <see cref="TrySwitchModel"/>). The active one is named by <see cref="ActiveModelName"/>.
+    /// </summary>
+    IReadOnlyList<ModelProfile> ModelProfiles { get; }
+
+    /// <summary>Name of the currently-active model profile.</summary>
+    string ActiveModelName { get; }
+
+    /// <summary>
+    /// Switch the active model profile by name (case-insensitive), re-resolving the flat model
+    /// settings (<see cref="Provider"/>, <see cref="Model"/>, key, limits, container). Returns
+    /// <c>false</c> and leaves the active profile unchanged if no profile has that name.
+    /// </summary>
+    bool TrySwitchModel(string name);
 }

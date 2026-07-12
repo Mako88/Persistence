@@ -647,6 +647,47 @@ public class ManageContextHandler : CommandHandler
             : $"Associative recall will surface up to {count} relevant memory/memories each turn (this session).");
     }
 
+    [Command("list_models", "List the model profiles you can switch between (each is a provider + model), and which one is currently answering. Switch with set_model.")]
+    private Task<string> ExecuteListModelsAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
+    {
+        if (config.ModelProfiles.Count == 0)
+        {
+            return Task.FromResult("No model profiles are configured.");
+        }
+
+        var lines = config.ModelProfiles.Select(m =>
+        {
+            var marker = string.Equals(m.Name, config.ActiveModelName, StringComparison.OrdinalIgnoreCase) ? "* " : "  ";
+            return $"{marker}{m.Name} — {m.Provider} / {m.Model}";
+        });
+
+        return Task.FromResult("Model profiles (* = active):\n" + string.Join("\n", lines));
+    }
+
+    [Command("set_model", "Switch which model profile answers going forward (see list_models). Takes effect on your next turn; your memory, context, and identity are unaffected — only the underlying model changes. Applies for this session.")]
+    [CommandField("name", "string", required: true, Description = "Name of the profile to switch to (from list_models)")]
+    private Task<string> ExecuteSetModelAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
+    {
+        var name = command?["name"]?.GetValue<string>()?.Trim();
+
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return Task.FromResult("set_model failed: 'name' is required (see list_models for options)");
+        }
+
+        var previous = config.ActiveModelName;
+
+        if (!config.TrySwitchModel(name))
+        {
+            var available = string.Join(", ", config.ModelProfiles.Select(m => m.Name));
+            return Task.FromResult($"set_model failed: no profile named '{name}'. Available: {available}");
+        }
+
+        return Task.FromResult(string.Equals(previous, config.ActiveModelName, StringComparison.OrdinalIgnoreCase)
+            ? $"Already on '{config.ActiveModelName}' ({config.Provider} / {config.Model})."
+            : $"Switched from '{previous}' to '{config.ActiveModelName}' — now {config.Provider} / {config.Model}. Takes effect on your next turn.");
+    }
+
     [Command("toggle_summary_display", "Collapse or expand fragments in context — collapsed ones show only their summary, saving space")]
     [CommandField("ids", "array", required: true, Description = "Fragment IDs to collapse/expand, e.g. [3, 5]")]
     [CommandField("collapsed", "bool", Description = "true to show only the summary, false to show full content", Default = "true")]

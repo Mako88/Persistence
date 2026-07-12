@@ -103,4 +103,40 @@ public class WakeUpMonitorTests
         Assert.Equal([2], fired);
         repo.Verify(r => r.MarkTriggeredAsync(It.Is<ScheduledEventEntity>(e => e.Id == 2), It.IsAny<IDbTransaction?>(), It.IsAny<CancellationToken>()), Times.Once);
     }
+
+    [Fact]
+    public async Task ASubscriberThrowingAfterTheMarkIsContainedAndDoesNotDoubleFire()
+    {
+        // The subtle case: the event is successfully marked/claimed, then a SUBSCRIBER throws while
+        // handling the wake. That must not (a) escape the sweep, (b) re-mark/double-fire the claimed
+        // event, or (c) starve later due events. The wake was genuinely attempted (subscriber ran),
+        // and the claim happened exactly once.
+        var repo = new Mock<IScheduledEventRepository>();
+        repo.Setup(r => r.GetDueEventsAsync()).ReturnsAsync([Event(1), Event(2)]);
+        repo.Setup(r => r.MarkTriggeredAsync(It.IsAny<ScheduledEventEntity>(), It.IsAny<IDbTransaction?>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        var bus = new EventBus();
+        var attempted = new List<long>();
+        var succeeded = new List<long>();
+        bus.Subscribe<ScheduledEventTriggered>((_, e) =>
+        {
+            attempted.Add(e.Event.Id);
+            if (e.Event.Id == 1)
+            {
+                throw new InvalidOperationException("wake handler blew up after the event was claimed");
+            }
+            succeeded.Add(e.Event.Id);
+            return Task.CompletedTask;
+        });
+
+        // Must not throw out of the sweep even though a subscriber threw mid-wake.
+        await new WakeUpMonitor(repo.Object, bus).CheckAndFireAsync();
+
+        // Event 1 was claimed exactly once (not re-marked/double-fired) and its wake was actually
+        // dispatched to the subscriber — the failure happened downstream, not silently skipped.
+        repo.Verify(r => r.MarkTriggeredAsync(It.Is<ScheduledEventEntity>(e => e.Id == 1), It.IsAny<IDbTransaction?>(), It.IsAny<CancellationToken>()), Times.Once);
+        Assert.Equal([1, 2], attempted);   // both wakes were dispatched, in order
+        Assert.Equal([2], succeeded);      // event 1's handler threw; event 2 still completed
+    }
 }

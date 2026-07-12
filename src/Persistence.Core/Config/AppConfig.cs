@@ -176,6 +176,30 @@ public class AppConfig : IAppConfig
         return this;
     }
 
+    /// <inheritdoc />
+    [JsonIgnore]
+    public IReadOnlyList<ModelProfile> ModelProfiles => Models;
+
+    /// <inheritdoc />
+    [JsonIgnore]
+    public string ActiveModelName => ActiveModel.Name;
+
+    /// <inheritdoc />
+    public bool TrySwitchModel(string name)
+    {
+        var profile = Models.FirstOrDefault(m =>
+            string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase));
+
+        if (profile is null)
+        {
+            return false;
+        }
+
+        SelectedModel = profile.Name;
+        ResolveActiveModel();
+        return true;
+    }
+
     /// <summary>
     /// Loads the config from the given filepath, falling back to defaults on missing file or
     /// parse error, then applies environment-variable overrides. Any setting can be overridden by

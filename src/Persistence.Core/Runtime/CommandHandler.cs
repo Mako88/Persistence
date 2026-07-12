@@ -153,9 +153,13 @@ public abstract class CommandHandler : IActionHandler
     /// </summary>
     private static string Humanize(string message)
     {
-        // Matches the System.Text.Json message: "... type 'System.String' ... to a 'System.Int64'."
+        // Matches the System.Text.Json mismatch message. Note the two type names are spelled
+        // asymmetrically at runtime: the source is the short CLR name ("String") while the target is
+        // namespace-qualified ("System.Int32") — e.g. "An element of type 'String' cannot be
+        // converted to a 'System.Int32'." Accept an optional "System." on either so the friendly
+        // translation actually fires (a stricter "System.\w+" for the source silently never matched).
         var match = System.Text.RegularExpressions.Regex.Match(
-            message, @"type '(?<from>System\.\w+)'.*to a '(?<to>System\.\w+)'");
+            message, @"type '(?<from>(?:System\.)?\w+)'.*to a '(?<to>(?:System\.)?\w+)'");
 
         if (match.Success)
         {
@@ -166,14 +170,17 @@ public abstract class CommandHandler : IActionHandler
         return message;
     }
 
-    private static string FriendlyType(string clrType) => clrType switch
-    {
-        "System.Int64" or "System.Int32" => "a whole number",
-        "System.Double" or "System.Single" => "a number",
-        "System.Boolean" => "true/false",
-        "System.String" => "text",
-        _ => clrType,
-    };
+    private static string FriendlyType(string clrType) =>
+        // The runtime names types inconsistently (short "String" vs qualified "System.Int32"), so
+        // normalise off any "System." prefix before mapping.
+        (clrType.StartsWith("System.", StringComparison.Ordinal) ? clrType["System.".Length..] : clrType) switch
+        {
+            "Int64" or "Int32" => "a whole number",
+            "Double" or "Single" => "a number",
+            "Boolean" => "true/false",
+            "String" => "text",
+            _ => clrType,
+        };
 
     /// <summary>
     /// Formats the feedback for a call the parser couldn't read, surfacing the plain-language

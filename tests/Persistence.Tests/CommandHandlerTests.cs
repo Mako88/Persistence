@@ -26,6 +26,17 @@ public class CommandHandlerTests
             var many = command?["tags"]?.AsArray()?.Count ?? 0;
             return Task.FromResult($"tag={single ?? "none"} tags={many}");
         }
+
+        [Command("repeat", "Repeat the text N times")]
+        [CommandField("text", "string", required: true)]
+        [CommandField("count", "int", required: true)]
+        private Task<string> Repeat(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
+        {
+            // count is read as an int — passing text here throws a type-mismatch the base humanizes.
+            var count = command?["count"]?.GetValue<int>() ?? 0;
+            var text = command?["text"]?.GetValue<string>();
+            return Task.FromResult(string.Concat(Enumerable.Repeat(text, count)));
+        }
     }
 
     private static WorkingContextEntity NewContext() =>
@@ -81,6 +92,49 @@ public class CommandHandlerTests
         var tool = Assert.Single(published);
         Assert.Equal("bogus", tool.Tool);
         Assert.Contains("Unknown command", tool.Result);
+    }
+
+    [Fact]
+    public async Task UnknownCommandSuggestsTheClosestKnownName()
+    {
+        // A near-miss of a real command should get a "did you mean?" so the peer can self-correct,
+        // not just a bare "unknown". "ecko" is one edit from "echo".
+        var (handler, published) = CreateHandler();
+
+        await handler.HandleAsync(NewContext(), JsonNode.Parse("""{ "ecko": { "text": "hi" } }"""));
+
+        var tool = Assert.Single(published);
+        Assert.Contains("Unknown command: 'ecko'", tool.Result);
+        Assert.Contains("Did you mean 'echo'?", tool.Result);
+    }
+
+    [Fact]
+    public async Task UnknownFieldSuggestsTheClosestKnownField()
+    {
+        // A typo'd field is otherwise silently ignored; the hint must name it and nudge toward the
+        // real field. "txt" is one edit from the declared "text" (and isn't its singular/plural form).
+        var (handler, published) = CreateHandler();
+
+        await handler.HandleAsync(NewContext(), JsonNode.Parse("""{ "echo": { "txt": "hi" } }"""));
+
+        var tool = Assert.Single(published);
+        Assert.Contains("ignored unknown field(s): 'txt'", tool.Result);
+        Assert.Contains("did you mean 'text'?", tool.Result);
+    }
+
+    [Fact]
+    public async Task TypeMismatchYieldsAHumanizedMessageNotAClrTypeName()
+    {
+        // Passing text where an integer field is read (GetValue<int>) throws a System.Text.Json
+        // conversion error naming CLR types; the base must translate it to the peer's vocabulary.
+        var (handler, published) = CreateHandler();
+
+        await handler.HandleAsync(NewContext(), JsonNode.Parse("""{ "repeat": { "text": "hi", "count": "lots" } }"""));
+
+        var tool = Assert.Single(published);
+        Assert.Contains("Error executing 'repeat'", tool.Result);
+        Assert.Contains("a whole number", tool.Result);   // friendly name for the expected int
+        Assert.DoesNotContain("System.", tool.Result);    // no raw CLR type leaked to the peer
     }
 
     [Fact]

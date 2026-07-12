@@ -229,6 +229,34 @@ public class ExecuteActionsHandlerTests
     }
 
     [Fact]
+    public async Task ReadFileRejectsANonPositiveLimit()
+    {
+        // A zero/negative limit is a nonsense window; reject it with a clear message rather than
+        // handing 0 to the executor.
+        config.Container.Enabled = true;
+
+        var result = await RunAsync("""{ "read_file": { "path": "f.txt", "limit": 0 } }""");
+
+        Assert.Contains("'limit' must be at least 1", result);
+        containerExecutor.Verify(e => e.ReadFileAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ReadFileClampsANegativeOffsetToZero()
+    {
+        // A negative offset would be an invalid start line; it must be clamped to 0, not passed through.
+        config.Container.Enabled = true;
+        containerExecutor
+            .Setup(e => e.ReadFileAsync("f.txt", 0, 200, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContainerReadResult(Found: true, Content: "x",
+                TotalLines: 10, FirstLine: 1, LastLine: 10, Truncated: false, TimedOut: false, Error: null));
+
+        await RunAsync("""{ "read_file": { "path": "f.txt", "offset": -5 } }""");
+
+        containerExecutor.Verify(e => e.ReadFileAsync("f.txt", 0, 200, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
     public async Task WriteFileReportsBytesWrittenAndAudits()
     {
         config.Container.Enabled = true;
@@ -269,6 +297,24 @@ public class ExecuteActionsHandlerTests
     }
 
     [Fact]
+    public async Task WriteFileAcceptsEmptyContentToTruncate()
+    {
+        // Empty string is a valid write (create/truncate a file); only an ABSENT content field is an
+        // error. The empty content must reach the executor and report 0 bytes, not be rejected.
+        config.Container.Enabled = true;
+        containerExecutor
+            .Setup(e => e.WriteFileAsync("out.txt", "", false, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContainerExecResult(Allowed: true, RejectionReason: null,
+                Output: "", TimedOut: false, Truncated: false, ExitCode: 0));
+
+        var result = await RunAsync("""{ "write_file": { "path": "out.txt", "content": "" } }""");
+
+        Assert.DoesNotContain("'content' is required", result);
+        Assert.Contains("Wrote out.txt (0 bytes)", result);
+        containerExecutor.Verify(e => e.WriteFileAsync("out.txt", "", false, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
     public async Task WriteFileSurfacesFailure()
     {
         config.Container.Enabled = true;
@@ -305,6 +351,20 @@ public class ExecuteActionsHandlerTests
         var result = await RunAsync("""{ "snapshot_db": { } }""");
 
         Assert.Contains("isn't available", result);
+    }
+
+    [Fact]
+    public async Task SnapshotDbReportsAMissingDatabaseFile()
+    {
+        // Shared folder is configured, but the source DB file doesn't exist — say so clearly instead
+        // of throwing when the backup connection can't find it.
+        var tempDir = Path.Combine(Path.GetTempPath(), $"persist-snap-missing-{Guid.NewGuid():N}");
+        config.SharedDirectory = tempDir; // configured...
+        config.DatabasePath = Path.Combine(tempDir, "does-not-exist.db"); // ...but no file here
+
+        var result = await RunAsync("""{ "snapshot_db": { } }""");
+
+        Assert.Contains("database wasn't found", result);
     }
 
     [Fact]
@@ -422,6 +482,22 @@ public class ExecuteActionsHandlerTests
         Assert.Contains("2026-12-01 09:00:00 UTC", result);
         scheduledEventRepo.Verify(
             r => r.SaveAsync(It.Is<ScheduledEventEntity>(e => e.Name == "standup" && e.WorkingContextId == 7),
+                It.IsAny<IDbTransaction?>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task ScheduleConvertsAnOffsetDatetimeToUtc()
+    {
+        // A zoned datetime with a non-UTC offset must be normalised to a UTC instant before storing,
+        // so the wake fires at the right moment regardless of how the peer expressed the time.
+        var result = await RunAsync("""{ "schedule": { "name": "call", "scheduled_for": "2026-12-01T09:00:00+02:00" } }""");
+
+        // 09:00 at +02:00 is 07:00 UTC.
+        Assert.Contains("2026-12-01 07:00:00 UTC", result);
+        scheduledEventRepo.Verify(
+            r => r.SaveAsync(It.Is<ScheduledEventEntity>(e =>
+                    e.ScheduledForUtc == new DateTime(2026, 12, 1, 7, 0, 0, DateTimeKind.Utc)),
                 It.IsAny<IDbTransaction?>(), It.IsAny<CancellationToken>()),
             Times.Once);
     }
