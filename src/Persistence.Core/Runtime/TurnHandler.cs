@@ -525,7 +525,7 @@ public class TurnHandler : ITurnHandler
                 Sources = [new SourceEntity
                 {
                     Id = sessionContext.LocalPeerSourceId,
-                    SourceType = SourceType.LocalPeer,
+                    SourceType = SourceType.HumanPeer,
                     CreatedUtc = now,
                     LastModifiedUtc = now,
                 }],
@@ -588,7 +588,7 @@ public class TurnHandler : ITurnHandler
             Sources = [new SourceEntity
             {
                 Id = sessionContext.LocalPeerSourceId,
-                SourceType = SourceType.LocalPeer,
+                SourceType = SourceType.HumanPeer,
                 CreatedUtc = now,
                 LastModifiedUtc = now,
             }],

@@ -143,7 +143,7 @@ public sealed class PeerSeedingIntegrationTests : IAsyncLifetime
         Assert.Equal(0.9f, identity.Importance);
         Assert.Equal(0.7f, identity.Relevance);
         Assert.False(identity.IsProtected); // the peer owns it — curatable from turn one
-        Assert.Contains(identity.Sources, s => s.SourceType == SourceType.RemotePeer);
+        Assert.Contains(identity.Sources, s => s.SourceType == SourceType.DigitalPeer);
         Assert.Contains(identity.Tags, t => t.Name == "core"); // leaf of identity/core
 
         // A non-authorable requested type falls back to Personal rather than being dropped.

@@ -59,7 +59,7 @@ public class RespondToUserHandler : IActionHandler
             Sources = [new SourceEntity
             {
                 Id = sessionContext.RemotePeerSourceId,
-                SourceType = SourceType.RemotePeer,
+                SourceType = SourceType.DigitalPeer,
                 CreatedUtc = now,
                 LastModifiedUtc = now,
             }],

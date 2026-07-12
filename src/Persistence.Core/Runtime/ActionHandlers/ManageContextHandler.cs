@@ -399,7 +399,7 @@ public class ManageContextHandler : CommandHandler
             Sources = [new SourceEntity
             {
                 Id = sessionContext.RemotePeerSourceId,
-                SourceType = SourceType.RemotePeer,
+                SourceType = SourceType.DigitalPeer,
                 CreatedUtc = now,
                 LastModifiedUtc = now,
             }],
@@ -469,7 +469,7 @@ public class ManageContextHandler : CommandHandler
             Sources = [new SourceEntity
             {
                 Id = sessionContext.RemotePeerSourceId,
-                SourceType = SourceType.RemotePeer,
+                SourceType = SourceType.DigitalPeer,
                 CreatedUtc = now,
                 LastModifiedUtc = now,
             }],
@@ -894,7 +894,7 @@ public class ManageContextHandler : CommandHandler
             Sources = [new SourceEntity
             {
                 Id = sessionContext.RemotePeerSourceId,
-                SourceType = SourceType.RemotePeer,
+                SourceType = SourceType.DigitalPeer,
                 CreatedUtc = now,
                 LastModifiedUtc = now,
             }],
@@ -1333,7 +1333,7 @@ public class ManageContextHandler : CommandHandler
         var sourceTypeName = command?["source_type"]?.GetValue<string>();
         var sourceType = Enum.TryParse<SourceType>(sourceTypeName, ignoreCase: true, out var parsed)
             ? parsed
-            : SourceType.RemotePeer;
+            : SourceType.DigitalPeer;
 
         var now = DateTimeOffset.UtcNow;
 

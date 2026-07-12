@@ -54,7 +54,7 @@ public class ThinkHandlerTests
         await handler.HandleAsync(context, JsonValue.Create("hmm"));
 
         var source = Assert.Single(context.ContextFragments.Values.Single().Sources);
-        Assert.Equal(SourceType.RemotePeer, source.SourceType);
+        Assert.Equal(SourceType.DigitalPeer, source.SourceType);
         Assert.Equal(42, source.Id);
     }
 

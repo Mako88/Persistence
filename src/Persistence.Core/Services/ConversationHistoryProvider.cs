@@ -37,7 +37,7 @@ public class ConversationHistoryProvider(IWorkingContextRepository contexts, ISe
             .TakeLast(limit)
             .Select(f => new ChatHistoryItem(
                 // ChatMessage fragments carry their author as a Source (RemotePeer = the model/assistant).
-                f.Sources.Any(s => s.SourceType == SourceType.RemotePeer) ? "assistant" : "user",
+                f.Sources.Any(s => s.SourceType == SourceType.DigitalPeer) ? "assistant" : "user",
                 f.Content,
                 f.CreatedUtc))
             .ToList();

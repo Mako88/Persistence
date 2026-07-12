@@ -72,7 +72,7 @@ public sealed class LocalPeerTests : IAsyncLifetime
 
         var john = await sources.GetByNameAsync("John");
         Assert.NotNull(john);
-        Assert.Equal(SourceType.LocalPeer, john!.SourceType);
+        Assert.Equal(SourceType.HumanPeer, john!.SourceType);
         Assert.Equal(john.Id, session.LocalPeerSourceId); // messages attribute to John by default
     }
 
@@ -85,7 +85,7 @@ public sealed class LocalPeerTests : IAsyncLifetime
 
         var claude = await sources.GetByNameAsync("Claude");
         Assert.NotNull(claude);
-        Assert.Equal(SourceType.LocalPeer, claude!.SourceType);
+        Assert.Equal(SourceType.HumanPeer, claude!.SourceType);
         Assert.Equal(claude.Id, session.LocalPeerSourceId); // attribution now points at Claude
 
         var john = await sources.GetByNameAsync("John");

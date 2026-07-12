@@ -23,7 +23,7 @@ public class ConversationHistoryProviderTests
         Content = content,
         Order = order,
         Sources = fromPeer
-            ? [new SourceEntity { SourceType = SourceType.RemotePeer, CreatedUtc = DateTimeOffset.UtcNow, LastModifiedUtc = DateTimeOffset.UtcNow }]
+            ? [new SourceEntity { SourceType = SourceType.DigitalPeer, CreatedUtc = DateTimeOffset.UtcNow, LastModifiedUtc = DateTimeOffset.UtcNow }]
             : [],
         CreatedUtc = DateTimeOffset.UtcNow,
         LastModifiedUtc = DateTimeOffset.UtcNow,

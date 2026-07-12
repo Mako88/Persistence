@@ -46,7 +46,7 @@ public class RespondToUserHandlerTests
         var fragment = Assert.Single(context.ContextFragments.Values);
         Assert.Equal(ContextFragmentType.ChatMessage, fragment.FragmentType);
         Assert.Equal("hi there", fragment.Content);
-        Assert.Equal(SourceType.RemotePeer, fragment.Sources.Single().SourceType);
+        Assert.Equal(SourceType.DigitalPeer, fragment.Sources.Single().SourceType);
         Assert.Equal(7, fragment.Sources.Single().Id);
         Assert.Equal(["hi there"], replies);
     }

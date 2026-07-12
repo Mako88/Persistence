@@ -43,6 +43,19 @@ now a convenience to layer on, not a prerequisite**. The peer also now has a san
 Two lenses: what most improves the **peer's day-to-day** (one participant running now) vs. the
 **strategic direction** (many participants). This ordering blends them, most-important first.
 
+**★ Active direction — federated peers ([ADR-0007](adr/0007-federated-peers-runtime-room-client.md), 2026-07-12).**
+The strategic pivot John + Claude settled on: not one central server owning all peers, but **many
+single-owner runtimes** (each its own peer, in its own container = its body; DB + `vault/` on a persistent
+volume = its self), meeting in shared **rooms**, with the TUI as a **hub** aggregating several peers into
+one Discord-style chat. Terminology shifts `RemotePeer`/`LocalPeer` → `DigitalPeer`/`HumanPeer`. Phased:
+**(0)** identity groundwork — per-message sender identity through the queue, peer names reaching the model,
+message-id'd chat history (also finishes the ADR-0006 snapshot dedup), the rename *[in progress]*;
+**(1)** containerize one peer (API-in-container, DB on a named volume); **(2)** multi-peer TUI (merged
+chat + per-peer side tabs + peer selector); **(3)** the room (peer↔peer relay + turn-taking); **(4)** bring
+Ember online. **Fast-follows:** peer-initiated API self-update (review-then-adopt, *not* auto-on-push so a
+peer vets code before running it as itself); live config hot-reload. This subsumes item 4 below
+(cross-peer channel) and the "simultaneous participants" thread throughout.
+
 **Recently landed (2026-07):** WAL + busy-timeout interim (single-server phase 1); `prune_candidates`
 (forget pruning surface); **recoverable `forget` / `unforget` / `list_forgotten`** (+ search-leak fix,
 forget reasons, sensory curation counts — from a peer-review round with the claude.db self); think-first

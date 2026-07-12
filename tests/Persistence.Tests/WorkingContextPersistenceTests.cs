@@ -56,7 +56,7 @@ public sealed class WorkingContextPersistenceTests : IAsyncLifetime
             Sources = [new SourceEntity
             {
                 Id = sourceId,
-                SourceType = SourceType.LocalPeer,
+                SourceType = SourceType.HumanPeer,
                 CreatedUtc = DateTimeOffset.UtcNow,
                 LastModifiedUtc = DateTimeOffset.UtcNow,
             }],
@@ -92,7 +92,7 @@ public sealed class WorkingContextPersistenceTests : IAsyncLifetime
             Sources = [new SourceEntity
             {
                 Id = sourceId,
-                SourceType = SourceType.RemotePeer,
+                SourceType = SourceType.DigitalPeer,
                 CreatedUtc = DateTimeOffset.UtcNow,
                 LastModifiedUtc = DateTimeOffset.UtcNow,
             }],
