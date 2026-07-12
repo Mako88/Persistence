@@ -1,0 +1,41 @@
+# Keep secrets, memory, and build cruft OUT of the Docker build context / image.
+# The peer image publishes the API from source (src/) — everything excluded here is either sensitive,
+# huge, or not needed to build.
+
+# SECRETS — never copy the real API key into an image layer. (The template is fine but unnecessary.)
+persistence.json
+persistence*.json
+**/persistence.json
+.env
+**/*.env
+container/**/docker-compose.override.yml
+
+# Peer memory / databases — the self lives on volumes, not in images.
+dbs/
+**/*.db
+**/*.db-wal
+**/*.db-shm
+container/**/shared/
+
+# Build outputs
+**/bin/
+**/obj/
+**/out/
+artifacts/
+
+# VCS + agent/tooling dirs (large; browser profiles, worktrees, sessions)
+.git/
+.gitignore
+.github/
+.vs/
+.vscode/
+.idea/
+.codex/
+.claude/
+**/node_modules/
+
+# Docs / scratch not needed to build the app
+*.md
+docs/
+scripts/
+tests/
