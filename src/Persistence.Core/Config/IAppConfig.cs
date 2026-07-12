@@ -105,6 +105,14 @@ public interface IAppConfig
     int RawContextWindow { get; set; }
 
     /// <summary>
+    /// How many of the peer's authored memories to auto-surface each turn — relevant to the current
+    /// conversation (full-text/BM25) but not already in the active context, ranked by a blend of
+    /// relevance × importance × confidence. Associative recall: relevant notes appear without the peer
+    /// having to search for them. 0 disables it.
+    /// </summary>
+    int SurfacedMemoryCount { get; set; }
+
+    /// <summary>
     /// How many of the peer's most recent thoughts (<c>&lt;think&gt;</c> blocks) to keep in the
     /// active context before archiving older ones (kept in the store, searchable/restorable). Gives
     /// the peer episodic recall of its recent reasoning across turns without the context ballooning.

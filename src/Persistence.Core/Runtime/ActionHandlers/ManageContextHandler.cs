@@ -629,6 +629,24 @@ public class ManageContextHandler : CommandHandler
         return Task.FromResult(result);
     }
 
+    [Command("set_recall", "Tune associative recall — how many of your relevant memories auto-surface each turn (the '[Associative recall]' block). 0 turns it off; higher surfaces more (at some token cost). Applies for this session.")]
+    [CommandField("count", "int", required: true, Description = "How many memories to surface each turn (0 disables recall)")]
+    private Task<string> ExecuteSetRecallAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
+    {
+        var count = command?["count"]?.GetValue<int>();
+
+        if (count is null or < 0)
+        {
+            return Task.FromResult("set_recall failed: 'count' must be 0 or greater (0 turns recall off)");
+        }
+
+        sessionContext.SurfacedMemoryCount = count;
+
+        return Task.FromResult(count == 0
+            ? "Associative recall is off for this session. Send set_recall(count=N) to turn it back on."
+            : $"Associative recall will surface up to {count} relevant memory/memories each turn (this session).");
+    }
+
     [Command("toggle_summary_display", "Collapse or expand fragments in context — collapsed ones show only their summary, saving space")]
     [CommandField("ids", "array", required: true, Description = "Fragment IDs to collapse/expand, e.g. [3, 5]")]
     [CommandField("collapsed", "bool", Description = "true to show only the summary, false to show full content", Default = "true")]

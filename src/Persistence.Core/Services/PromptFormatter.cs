@@ -76,7 +76,8 @@ public class PromptFormatter : IPromptFormatter
         int maxIterations = 0,
         IReadOnlyList<AuditLogEntity>? recentChanges = null,
         IReadOnlyList<string>? recentActions = null,
-        string? archiveNote = null)
+        string? archiveNote = null,
+        IReadOnlyList<ContextFragmentEntity>? surfacedMemories = null)
     {
         var fragments = context.ContextFragments.Values;
         var segments = new List<PromptSegment>();
@@ -115,6 +116,15 @@ public class PromptFormatter : IPromptFormatter
                 Source = ResolveSourceName(fragment),
                 Content = FormatFragment(fragment),
             });
+        }
+
+        // Associative recall: the peer's own notes that match the current conversation but aren't
+        // loaded, placed after the active context (near the generation point) but clearly marked as
+        // not-in-context so it reads as "you also know this" rather than as loaded memory.
+        var surfaced = FormatSurfacedMemories(surfacedMemories);
+        if (surfaced.Length > 0)
+        {
+            segments.Add(new PromptSegment { Source = "System", Content = surfaced });
         }
 
         // Response-format instructions and the sensory block are injected at the END, not the
@@ -208,6 +218,29 @@ public class PromptFormatter : IPromptFormatter
         meta += "]";
 
         return meta;
+    }
+
+    /// <summary>
+    /// Renders the associative-recall block — relevant authored memories not in the active context —
+    /// as id + type + weights + a snippet, so the peer can <c>load</c> the full fragment if it helps.
+    /// Empty when nothing surfaced.
+    /// </summary>
+    private static string FormatSurfacedMemories(IReadOnlyList<ContextFragmentEntity>? memories)
+    {
+        if (memories is not { Count: > 0 })
+        {
+            return string.Empty;
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine("[Associative recall] Your own notes that look relevant to this conversation but aren't in your active context. If one would help, bring the full fragment in with load(id=…):");
+
+        foreach (var m in memories)
+        {
+            sb.AppendLine($"  [#{m.Id} | {m.FragmentType} | I:{m.Importance:F1} C:{m.Confidence:F1}] {Clip(m.Content, 180)}");
+        }
+
+        return sb.ToString().TrimEnd();
     }
 
     private string FormatSensory(

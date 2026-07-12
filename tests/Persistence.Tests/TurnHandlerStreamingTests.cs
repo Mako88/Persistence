@@ -112,6 +112,7 @@ public class TurnHandlerStreamingTests
             promptBuilder.Object,
             actionHandlers.Object,
             new TokenUsageTracker(),
+            new Mock<IMemorySurfacer>().Object,
             eventBus,
             config);
 
@@ -228,6 +229,7 @@ public class TurnHandlerStreamingTests
             promptBuilder.Object,
             actionHandlers.Object,
             new TokenUsageTracker(),
+            new Mock<IMemorySurfacer>().Object,
             new EventBus(),
             config);
 

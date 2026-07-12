@@ -33,6 +33,7 @@ public class TurnHandler : ITurnHandler
     private readonly IPromptBuilder promptBuilder;
     private readonly IIndex<ModelAction, IActionHandler> actionHandlers;
     private readonly ITokenUsageTracker usageTracker;
+    private readonly IMemorySurfacer memorySurfacer;
     private readonly IEventBus eventBus;
     private readonly IAppConfig config;
 
@@ -57,6 +58,7 @@ public class TurnHandler : ITurnHandler
         IPromptBuilder promptBuilder,
         IIndex<ModelAction, IActionHandler> actionHandlers,
         ITokenUsageTracker usageTracker,
+        IMemorySurfacer memorySurfacer,
         IEventBus eventBus,
         IAppConfig config)
     {
@@ -71,6 +73,7 @@ public class TurnHandler : ITurnHandler
         this.promptBuilder = promptBuilder;
         this.actionHandlers = actionHandlers;
         this.usageTracker = usageTracker;
+        this.memorySurfacer = memorySurfacer;
         this.eventBus = eventBus;
         this.config = config;
     }
@@ -129,6 +132,11 @@ public class TurnHandler : ITurnHandler
         // re-orient across sessions. Fetched once: new changes land in the audit log only on the
         // end-of-turn save, so they'd show up next turn anyway.
         var recentChanges = await auditLogRepo.GetRecentSelfChangesAsync(5, ct);
+
+        // Associative recall: authored memories relevant to the recent conversation that aren't already
+        // loaded. Computed once per turn (like recentChanges) and passed to each iteration's prompt.
+        var surfaced = await SurfaceRelevantMemoriesAsync(context, ct);
+
         var iteration = 0;
         var hasResponded = false;
 
@@ -150,7 +158,7 @@ public class TurnHandler : ITurnHandler
                 DrainPendingInput(context);
             }
 
-            var segments = promptFormatter.Format(context, availableTags, iteration, config.MaxActionIterations, recentChanges, recentActions, archiveNote);
+            var segments = promptFormatter.Format(context, availableTags, iteration, config.MaxActionIterations, recentChanges, recentActions, archiveNote, surfaced);
             var request = promptBuilder.Build(segments);
             var rawOutput = config.Streaming
                 ? await StreamModelOutputAsync(request, ct)
@@ -337,6 +345,29 @@ public class TurnHandler : ITurnHandler
             .ToList();
 
         return matching.Count <= window ? [] : matching.Take(matching.Count - window).ToList();
+    }
+
+    /// <summary>
+    /// Surfaces authored memories relevant to the recent conversation (the last few messages and
+    /// thoughts) that aren't already loaded, so associative recall runs off what the peer is currently
+    /// engaged with.
+    /// </summary>
+    private async Task<IReadOnlyList<ContextFragmentEntity>> SurfaceRelevantMemoriesAsync(
+        WorkingContextEntity context, CancellationToken ct)
+    {
+        var recentText = string.Join("\n", context.ContextFragments.Values
+            .Where(f => f.FragmentType is ContextFragmentType.ChatMessage or ContextFragmentType.Thought)
+            .OrderByDescending(f => f.Order)
+            .Take(4)
+            .Select(f => f.Content));
+
+        var activeIds = context.ContextFragments.Values
+            .Where(f => f.Id > 0)
+            .Select(f => f.Id)
+            .ToList();
+
+        var count = sessionContext.SurfacedMemoryCount ?? config.SurfacedMemoryCount;
+        return await memorySurfacer.SurfaceAsync(activeIds, recentText, count, ct);
     }
 
     /// <summary>Raw, auto-archivable fragment types — the transcript and tool output, not the peer's notes.</summary>

@@ -10,6 +10,9 @@
   "_SharedDirectory_comment": "Optional host folder bridged into the peer's container as /shared (see container/docker-compose.yml — its mount must point at this same host path). The snapshot_db command writes a read-only DB copy here. Blank disables snapshot_db.",
   "SharedDirectory": "",
 
+  "_SurfacedMemoryCount_comment": "Associative recall: how many of the peer's authored memories (relevant to the current conversation, not already loaded) to auto-surface each turn, ranked by relevance × importance × confidence. 0 disables it. The peer can override per-session with set_recall(count=N).",
+  "SurfacedMemoryCount": 5,
+
   "SelectedLocalPeer": "Local Peer",
   "LocalPeers": [
     { "Name": "Local Peer", "Description": "the person at the keyboard" }

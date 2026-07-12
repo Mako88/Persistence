@@ -45,6 +45,13 @@ public interface ISessionContext
     bool SurfaceCommandsEnabled { get; set; }
 
     /// <summary>
+    /// Per-session override for how many memories associative recall surfaces each turn. Null uses the
+    /// configured <see cref="Config.IAppConfig.SurfacedMemoryCount"/>; the peer sets it via
+    /// <c>set_recall</c> (0 turns recall off). Session-scoped — resets each run.
+    /// </summary>
+    int? SurfacedMemoryCount { get; set; }
+
+    /// <summary>
     /// The peer's current working directory inside its container "computer", persisted across the
     /// otherwise-stateless <c>shell</c> invocations so it keeps a sense of place. Blank means
     /// "not yet set" — the executor seeds it from the configured working dir.

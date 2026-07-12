@@ -70,6 +70,13 @@ public class AppConfig : IAppConfig
     public int ThoughtContextWindow { get; set; } = 8;
 
     /// <summary>
+    /// How many of the peer's authored memories to auto-surface each turn (associative recall):
+    /// relevant to the current conversation but not already in context, ranked by relevance ×
+    /// importance × confidence. 0 disables it.
+    /// </summary>
+    public int SurfacedMemoryCount { get; set; } = 5;
+
+    /// <summary>
     /// The peer's sandboxed "computer" reached via the <c>shell</c> command. Off by default; see
     /// <see cref="ContainerSettings"/>. Nested values are overridable via <c>PERSISTENCE_CONTAINER_*</c>.
     /// </summary>

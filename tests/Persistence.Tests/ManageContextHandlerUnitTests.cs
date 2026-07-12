@@ -121,6 +121,20 @@ public class ManageContextHandlerUnitTests
     }
 
     [Fact]
+    public async Task SetRecallOverridesTheSessionSurfacedCount()
+    {
+        Assert.Null(session.SurfacedMemoryCount); // default: fall back to config
+
+        var on = await RunAsync(Context(), """{ "set_recall": { "count": 3 } }""");
+        Assert.Equal(3, session.SurfacedMemoryCount);
+        Assert.Contains("up to 3", on);
+
+        var off = await RunAsync(Context(), """{ "set_recall": { "count": 0 } }""");
+        Assert.Equal(0, session.SurfacedMemoryCount);
+        Assert.Contains("off", off);
+    }
+
+    [Fact]
     public async Task RemoveTakesFragmentOutOfContext()
     {
         var context = Context();

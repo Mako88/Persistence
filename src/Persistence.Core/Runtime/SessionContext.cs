@@ -46,6 +46,9 @@ public class SessionContext : ISessionContext
     /// </summary>
     public bool SurfaceCommandsEnabled { get; set; } = true;
 
+    /// <inheritdoc />
+    public int? SurfacedMemoryCount { get; set; }
+
     /// <summary>
     /// The peer's current working directory inside its container; persisted across <c>shell</c> calls.
     /// </summary>
