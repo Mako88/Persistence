@@ -32,6 +32,7 @@ public class TurnHandlerTests
         public readonly Mock<IPromptFormatter> Formatter = new();
         public readonly Mock<IPromptBuilder> Builder = new();
         public readonly Mock<IIndex<ModelAction, IActionHandler>> Handlers = new();
+        public readonly Mock<ISourceRepository> Sources = new();
         public readonly EventBus Bus = new();
         public readonly AppConfig Config = new() { Streaming = false, MaxActionIterations = 5 };
         public readonly WorkingContextEntity Context;
@@ -50,6 +51,8 @@ public class TurnHandlerTests
             Model.Setup(m => m.CompleteAsync(It.IsAny<PromptRequest>(), It.IsAny<CancellationToken>())).ReturnsAsync("raw");
             Formatter.Setup(f => f.Format(It.IsAny<WorkingContextEntity>(), It.IsAny<IEnumerable<TagEntity>>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<IReadOnlyList<AuditLogEntity>>())).Returns([]);
             Builder.Setup(b => b.Build(It.IsAny<List<PromptSegment>>())).Returns(new PromptRequest { Messages = [] });
+            // Resolve any human-peer name to a source id; tests that care about *which* name assert via Verify.
+            Sources.Setup(s => s.EnsureLocalPeerSourceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(9);
             Bus.Subscribe<RemotePeerReplied>((_, e) => { Replies.Add(e.Reply); return Task.CompletedTask; });
         }
 
@@ -80,7 +83,7 @@ public class TurnHandlerTests
         public TurnHandler Build() => new(
             ContextRepo.Object, TagRepo.Object, ActionLog.Object, AuditLog.Object, new Mock<IContextFragmentRepository>().Object, Session, TestResolvers.For(Model.Object), Parser.Object,
             Formatter.Object, Builder.Object, Handlers.Object, new TokenUsageTracker(),
-            new Mock<IMemorySurfacer>().Object, Bus, Config);
+            new Mock<IMemorySurfacer>().Object, Bus, Config, Sources.Object);
     }
 
     [Fact]
@@ -185,6 +188,58 @@ public class TurnHandlerTests
 
         Assert.Contains(h.Context.ContextFragments.Values,
             f => f.FragmentType == ContextFragmentType.ChatMessage && f.Content == "hello there");
+    }
+
+    [Fact]
+    public async Task InitialMessageIsAttributedToTheNamedHumanPeer()
+    {
+        var h = new Harness();
+        h.RegisterHandler(ModelAction.RespondToUser);
+        h.ParseReturns(Harness.Turn(ModelAction.RespondToUser));
+
+        await h.Build().ExecuteTurnAsync("hi", peerName: "Claude");
+
+        var msg = Assert.Single(h.Context.ContextFragments.Values, f => f.FragmentType == ContextFragmentType.ChatMessage);
+        var source = Assert.Single(msg.Sources);
+        Assert.Equal(SourceType.HumanPeer, source.SourceType);
+        Assert.Equal("Claude", source.Name); // the fresh fragment already carries the name (before any reload)
+        h.Sources.Verify(s => s.EnsureLocalPeerSourceAsync("Claude", It.IsAny<CancellationToken>()), Times.Once);
+        Assert.Equal("Claude", h.Session.ActiveLocalPeerName); // and it's the active speaker for the sensory block
+    }
+
+    [Fact]
+    public async Task ANullPeerNameFallsBackToTheConfiguredDefault()
+    {
+        var h = new Harness();
+        h.Config.SelectedLocalPeer = "John";
+        h.RegisterHandler(ModelAction.RespondToUser);
+        h.ParseReturns(Harness.Turn(ModelAction.RespondToUser));
+
+        await h.Build().ExecuteTurnAsync("hi"); // no name supplied
+
+        var msg = Assert.Single(h.Context.ContextFragments.Values, f => f.FragmentType == ContextFragmentType.ChatMessage);
+        Assert.Equal("John", Assert.Single(msg.Sources).Name);
+    }
+
+    [Fact]
+    public async Task QueuedMessagesKeepTheirOwnSenderNotTheLatestSpeaker()
+    {
+        // The concurrency-safety fix (ADR-0007): two people queue messages while a turn holds the lock;
+        // each must be attributed to its own sender, not to whoever most recently touched the session.
+        var h = new Harness();
+        h.RegisterHandler(ModelAction.RespondToUser);
+        h.ParseReturns(Harness.Turn(ModelAction.RespondToUser));
+        var handler = h.Build();
+
+        handler.EnqueueInput("from claude", "Claude");
+        handler.EnqueueInput("from john", "John");
+
+        await handler.ExecuteTurnAsync(); // no initial input — drains the queue
+
+        var claudeMsg = Assert.Single(h.Context.ContextFragments.Values, f => f.Content == "from claude");
+        var johnMsg = Assert.Single(h.Context.ContextFragments.Values, f => f.Content == "from john");
+        Assert.Equal("Claude", Assert.Single(claudeMsg.Sources).Name);
+        Assert.Equal("John", Assert.Single(johnMsg.Sources).Name);
     }
 
     [Fact]

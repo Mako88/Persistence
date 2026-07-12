@@ -115,6 +115,7 @@ public class PromptFormatter : IPromptFormatter
             segments.Add(new PromptSegment
             {
                 Source = ResolveSourceName(fragment),
+                AuthorType = fragment.Sources.Count > 0 ? fragment.Sources[0].SourceType : null,
                 Content = FormatFragment(fragment),
             });
         }
@@ -192,6 +193,18 @@ public class PromptFormatter : IPromptFormatter
         var body = fragment.Collapsed && !string.IsNullOrWhiteSpace(fragment.Summary)
             ? $"(collapsed) {fragment.Summary}"
             : fragment.Content;
+
+        // Attribute a human peer's chat message inline ("John: …") so the model can tell speakers apart
+        // when several people share the conversation. The builders map source→role but drop the name, so
+        // without this every human reads as an anonymous "user". Only human messages are prefixed: the
+        // peer's own replies are the assistant voice, and system/authored fragments carry their own headers.
+        if (fragment.FragmentType == ContextFragmentType.ChatMessage
+            && fragment.Sources.Count > 0
+            && fragment.Sources[0].SourceType == SourceType.HumanPeer
+            && !string.IsNullOrWhiteSpace(fragment.Sources[0].Name))
+        {
+            body = $"{fragment.Sources[0].Name}: {body}";
+        }
 
         return $"{header}\n{body}";
     }

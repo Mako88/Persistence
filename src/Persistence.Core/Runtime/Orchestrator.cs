@@ -119,9 +119,10 @@ public class Orchestrator : IOrchestrator
         // context / working context must be set before a turn can run).
         await initialized.Task;
 
-        // Set who's speaking (header-supplied name, else the configured default) so the turn attributes
-        // this message to the right local peer and the sensory block announces them.
-        await SetActiveLocalPeerAsync(e.LocalPeerName);
+        // Who's speaking travels *with* the message (header-supplied name, else the configured default),
+        // not via shared session state set here — several peers can have input in flight at once, and the
+        // turn attributes each message to its own sender when it processes it, under the lock.
+        var peerName = e.LocalPeerName;
 
         if (input.StartsWith('/'))
         {
@@ -131,7 +132,7 @@ public class Orchestrator : IOrchestrator
 
         if (!turnLock.Wait(0))
         {
-            turnHandler.EnqueueInput(input);
+            turnHandler.EnqueueInput(input, peerName);
             display.ShowMessageQueued(input);
 
             // The turn holding the lock may already be past its drain loop (mid-refresh, about to
@@ -145,7 +146,7 @@ public class Orchestrator : IOrchestrator
         try
         {
             display.ShowThinking();
-            await turnHandler.ExecuteTurnAsync(input);
+            await turnHandler.ExecuteTurnAsync(input, peerName);
             await DrainPendingTurnsThenRefreshAsync();
         }
         finally

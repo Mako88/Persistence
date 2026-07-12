@@ -172,7 +172,7 @@ public sealed class OrchestratorInputQueueTests : IAsyncLifetime
         /// <summary>Optional per-turn hook (receives the processed message); its task gates completion.</summary>
         public Func<string, Task>? OnExecute { get; set; }
 
-        public async Task ExecuteTurnAsync(string? input = null, string? wakeNote = null, CancellationToken ct = default)
+        public async Task ExecuteTurnAsync(string? input = null, string? peerName = null, string? wakeNote = null, CancellationToken ct = default)
         {
             var message = input;
 
@@ -197,7 +197,7 @@ public sealed class OrchestratorInputQueueTests : IAsyncLifetime
             }
         }
 
-        public void EnqueueInput(string input) => pending.Enqueue(input);
+        public void EnqueueInput(string input, string? peerName = null) => pending.Enqueue(input);
 
         public void EnqueueSystemNote(string note) { }
 
