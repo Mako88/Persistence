@@ -316,6 +316,7 @@ public class AppConfig : IAppConfig
             Environment.GetEnvironmentVariable($"{EnvPrefix}CONTAINER_{suffix}");
 
         if (Env("ENABLED") is { } enabled && bool.TryParse(enabled, out var en)) config.Container.Enabled = en;
+        if (Env("LOCAL") is { } local && bool.TryParse(local, out var lo)) config.Container.Local = lo;
         if (Env("ALLOWALLCOMMANDS") is { } all && bool.TryParse(all, out var aa)) config.Container.AllowAllCommands = aa;
         if (Env("NAME") is { Length: > 0 } name) config.Container.Name = name;
         if (Env("DOCKERHOST") is { Length: > 0 } host) config.Container.DockerHost = host;
