@@ -35,6 +35,7 @@ public static class ConversationEventRenderer
             case "wakeup": display.ShowSystemMessage($"⏰ Woke: {e.Text}"); break;
             case "scheduled": RenderScheduled(display, e); break;
             case "proposals" when int.TryParse(e.Text, out var count): display.ShowOpenProposalCount(count); break;
+            case "budget": RenderBudget(display, e); break;
             case "thinking": display.ShowThinking(e.Text); break;
             case "system": display.ShowSystemMessage(e.Text); break;
             case "error": display.ShowError(e.Text); break;
@@ -50,6 +51,19 @@ public static class ConversationEventRenderer
         var sep = detail.IndexOf(" → ", StringComparison.Ordinal);
         var (request, result) = sep >= 0 ? (detail[..sep], detail[(sep + 3)..]) : ("", detail);
         display.ShowToolUse(e.Text, request, result);
+    }
+
+    private static void RenderBudget(IDisplayProvider display, ConversationEvent e)
+    {
+        // Encoded by the server as used/budget/percent.
+        var parts = e.Text.Split('/');
+        if (parts.Length == 3
+            && int.TryParse(parts[0], out var used)
+            && int.TryParse(parts[1], out var budget)
+            && int.TryParse(parts[2], out var percent))
+        {
+            display.UpdateBudget(used, budget, percent);
+        }
     }
 
     private static void RenderScheduled(IDisplayProvider display, ConversationEvent e)

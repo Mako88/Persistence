@@ -1,5 +1,6 @@
 using Persistence.Client;
 using Persistence.Config;
+using Persistence.Contracts;
 using Persistence.Events;
 using Persistence.Runtime;
 
@@ -16,42 +17,80 @@ public static class ClientConsoleHost
     public static async Task RunAsync(string baseUrl, string? localPeer, CancellationToken ct)
     {
         var config = await AppConfig.LoadAsync();
+        var session = new SessionContext();
+        var client = new PersistenceHttpClient(baseUrl, localPeer);
+
+        // Fetch the connect snapshot BEFORE building the UI so the status-bar labels (read at layout time)
+        // show the server's model/provider/session rather than this client's local config.
+        ConversationSnapshot? initial = null;
+        try
+        {
+            initial = await client.GetSnapshotAsync(ct);
+            config.Provider = initial.Provider;
+            config.Model = initial.Model;
+            session.SessionId = initial.SessionId;
+        }
+        catch
+        {
+            // Server not reachable yet — bring the UI up anyway; the pump retries and reports.
+        }
 
         // A throwaway bus: in client mode nothing publishes domain events locally (we don't call
         // SubscribeToInProcessEvents), so it stays inert — the stream drives the panes instead.
-        var display = new TerminalGuiDisplayProvider(new EventBus(), new SessionContext(), config);
-        var client = new PersistenceHttpClient(baseUrl, localPeer);
-
+        var display = new TerminalGuiDisplayProvider(new EventBus(), session, config);
         display.OnInput = text => client.SendAsync(text, ct);
 
-        // Feed the panes from the server: draw the connect snapshot, then stream live. Runs alongside the
-        // UI loop; the provider buffers any push that lands before the loop is ready.
-        var pump = Task.Run(() => PumpAsync(client, display, ct), ct);
+        if (initial is not null)
+        {
+            ConversationEventRenderer.DrawSnapshot(display, initial);
+        }
+
+        // The provider buffers pushes that land before the UI loop is ready, so the pump can run alongside.
+        var pump = Task.Run(() => PumpAsync(client, display, initial?.LatestSeq ?? 0, ct), ct);
 
         await display.LaunchUi(ct);
         await pump;
     }
 
-    private static async Task PumpAsync(IPersistenceClient client, IDisplayProvider display, CancellationToken ct)
+    /// <summary>
+    /// Streams events into the panes, resuming after a drop. Reconnects from the last seq seen, so a
+    /// transient disconnect replays only what was missed (no gap, no duplicate). A full server restart —
+    /// which resets the in-memory event log — is not auto-recovered; restart the client.
+    /// </summary>
+    private static async Task PumpAsync(IPersistenceClient client, IDisplayProvider display, long since, CancellationToken ct)
     {
-        try
+        while (!ct.IsCancellationRequested)
         {
-            var snapshot = await client.GetSnapshotAsync(ct);
-            ConversationEventRenderer.DrawSnapshot(display, snapshot);
-
-            // Resume exactly at the snapshot's sequence — no gap, no duplicate.
-            await foreach (var evt in client.StreamAsync(snapshot.LatestSeq, ct))
+            try
             {
-                ConversationEventRenderer.Render(display, evt);
+                await foreach (var evt in client.StreamAsync(since, ct))
+                {
+                    ConversationEventRenderer.Render(display, evt);
+                    since = evt.Seq;
+                }
             }
-        }
-        catch (OperationCanceledException)
-        {
-            // Shutting down.
-        }
-        catch (Exception ex)
-        {
-            display.ShowError($"Client connection error: {ex.Message}");
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                display.ShowError($"Disconnected: {ex.Message}. Reconnecting in 2s…");
+            }
+
+            if (ct.IsCancellationRequested)
+            {
+                break;
+            }
+
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(2), ct);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
         }
     }
 }

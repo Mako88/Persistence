@@ -66,6 +66,12 @@ public interface IDisplayProvider
     void ShowOpenProposalCount(int count);
 
     /// <summary>
+    /// Updates the context-window budget gauge (used/total tokens and percent full), pushed whenever a
+    /// turn recomputes it.
+    /// </summary>
+    void UpdateBudget(int usedTokens, int budgetTokens, int percentFull);
+
+    /// <summary>
     /// Shows an error message.
     /// </summary>
     void ShowError(string message);

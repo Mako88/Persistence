@@ -62,6 +62,14 @@ public class ConversationEventRendererTests
     }
 
     [Fact]
+    public void ParsesTheBudgetGaugeFromItsUsedBudgetPercentText()
+    {
+        Render("budget", "1200/8000/15");
+
+        display.Verify(d => d.UpdateBudget(1200, 8000, 15), Times.Once);
+    }
+
+    [Fact]
     public void RebuildsTheSchedulePaneFromTheEventJson()
     {
         const string json = """[{"id":5,"name":"standup","scheduledForUtc":"2026-07-12T09:00:00Z","wakePrompt":"go","status":"Pending"}]""";
@@ -80,7 +88,10 @@ public class ConversationEventRendererTests
             LatestSeq: 9,
             OpenProposalCount: 2,
             ScheduledEvents: [new ScheduledEventView(1, "review", DateTimeOffset.UtcNow, null, "Pending")],
-            ChatHistory: [new ChatHistoryItem("user", "hello", DateTimeOffset.UtcNow)]);
+            ChatHistory: [new ChatHistoryItem("user", "hello", DateTimeOffset.UtcNow)],
+            Provider: "Anthropic",
+            Model: "claude-opus-4-8",
+            SessionId: "abc123");
 
         ConversationEventRenderer.DrawSnapshot(display.Object, snapshot);
 

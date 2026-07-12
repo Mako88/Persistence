@@ -1031,7 +1031,7 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
     private static Color StateColor(string state) => state.Contains('…') ? TuiColors.Processing : TuiColors.Muted;
 
     /// <summary>Updates the context-budget gauge from a recalculated budget (marshalled to the UI thread).</summary>
-    private void UpdateBudget(int used, int budget, int percent)
+    public void UpdateBudget(int used, int budget, int percent)
     {
         lastBudget = (used, budget, percent);
         UpdateStatusSegment(

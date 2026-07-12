@@ -42,12 +42,17 @@ public class ApiDisplayProvider : IDisplayProvider
     /// </summary>
     public event Action<ConversationEvent>? EventAppended;
 
+    private readonly IAppConfig config;
+    private readonly ISessionContext sessionContext;
+
     /// <summary>
     /// Constructor
     /// </summary>
-    public ApiDisplayProvider(IEventBus eventBus)
+    public ApiDisplayProvider(IEventBus eventBus, IAppConfig config, ISessionContext sessionContext)
     {
         this.eventBus = eventBus;
+        this.config = config;
+        this.sessionContext = sessionContext;
     }
 
     #region Lifecycle
@@ -63,6 +68,7 @@ public class ApiDisplayProvider : IDisplayProvider
         eventBus.Subscribe<ToolInvoked>((_, e) => { ShowToolUse(e.Tool, e.Request, e.Result); return Task.CompletedTask; });
         eventBus.Subscribe<ModelReasoningDelta>((_, e) => { ShowReasoningDelta(e.Delta); return Task.CompletedTask; });
         eventBus.Subscribe<ScheduledEventTriggered>((_, e) => { ShowWakeUpEvent(e.Event); return Task.CompletedTask; });
+        eventBus.Subscribe<ContextBudgetUpdated>((_, e) => { UpdateBudget(e.UsedTokens, e.BudgetTokens, e.PercentFull); return Task.CompletedTask; });
 
         ct.Register(() => stopped.TrySetResult());
         return stopped.Task;
@@ -261,9 +267,18 @@ public class ApiDisplayProvider : IDisplayProvider
     {
         lock (sync)
         {
-            return new ConversationSnapshot(seq, openProposalCount, scheduledEvents, chatHistory);
+            return new ConversationSnapshot(
+                seq, openProposalCount, scheduledEvents, chatHistory,
+                config.Provider, config.Model, sessionContext.SessionId);
         }
     }
+
+    /// <summary>
+    /// Emits a "budget" event carrying the context-window usage, so a streaming client keeps its budget
+    /// gauge live. Encoded as used/budget/percent for the client to parse.
+    /// </summary>
+    public void UpdateBudget(int usedTokens, int budgetTokens, int percentFull) =>
+        Append("budget", $"{usedTokens}/{budgetTokens}/{percentFull}");
 
     #endregion
 

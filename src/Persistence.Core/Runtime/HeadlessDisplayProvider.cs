@@ -28,6 +28,7 @@ public class HeadlessDisplayProvider : IDisplayProvider
     public void ShowWakeUpEvent(ScheduledEventEntity evt) { }
     public void ShowScheduledEvents(IReadOnlyList<ScheduledEventEntity> events) { }
     public void ShowOpenProposalCount(int count) { }
+    public void UpdateBudget(int usedTokens, int budgetTokens, int percentFull) { }
     public void ShowError(string message) { }
     public void ShowDebugInfo(string info) { }
     public void ShowChatHistory(IReadOnlyList<(string Role, string Content, DateTimeOffset Timestamp)> messages) { }

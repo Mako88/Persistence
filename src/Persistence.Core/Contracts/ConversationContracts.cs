@@ -25,4 +25,7 @@ public record ConversationSnapshot(
     long LatestSeq,
     int OpenProposalCount,
     IReadOnlyList<ScheduledEventView> ScheduledEvents,
-    IReadOnlyList<ChatHistoryItem> ChatHistory);
+    IReadOnlyList<ChatHistoryItem> ChatHistory,
+    string Provider,
+    string Model,
+    string SessionId);

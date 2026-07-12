@@ -1,5 +1,7 @@
 using Persistence.Data.Entities;
+using Persistence.Config;
 using Persistence.Events;
+using Persistence.Runtime;
 
 namespace Persistence.Api.Tests;
 
@@ -25,7 +27,7 @@ public class ApiDisplayProviderTests
     [Fact]
     public void ScheduledEventsPopulateTheSnapshotAndEmitALiveEvent()
     {
-        var display = new ApiDisplayProvider(new EventBus());
+        var display = new ApiDisplayProvider(new EventBus(), new AppConfig(), new SessionContext());
 
         display.ShowScheduledEvents([Event(1, "standup"), Event(2, "review")]);
 
@@ -39,7 +41,7 @@ public class ApiDisplayProviderTests
     [Fact]
     public void OpenProposalCountPopulatesTheSnapshotAndEmitsALiveEvent()
     {
-        var display = new ApiDisplayProvider(new EventBus());
+        var display = new ApiDisplayProvider(new EventBus(), new AppConfig(), new SessionContext());
 
         display.ShowOpenProposalCount(3);
 
@@ -50,7 +52,7 @@ public class ApiDisplayProviderTests
     [Fact]
     public void ChatHistoryIsSnapshotOnlyNotAddedToTheLiveLog()
     {
-        var display = new ApiDisplayProvider(new EventBus());
+        var display = new ApiDisplayProvider(new EventBus(), new AppConfig(), new SessionContext());
 
         display.ShowChatHistory([("user", "hi", DateTimeOffset.UtcNow), ("assistant", "hello", DateTimeOffset.UtcNow)]);
 
@@ -61,7 +63,7 @@ public class ApiDisplayProviderTests
     [Fact]
     public void SnapshotLatestSeqLetsAClientResumeTheStreamWithoutAGap()
     {
-        var display = new ApiDisplayProvider(new EventBus());
+        var display = new ApiDisplayProvider(new EventBus(), new AppConfig(), new SessionContext());
         display.ShowReply("first");
         display.ShowReply("second");
 
@@ -69,5 +71,29 @@ public class ApiDisplayProviderTests
 
         Assert.Equal(2, snap.LatestSeq);
         Assert.Empty(display.EventsSince(snap.LatestSeq)); // subscribing at LatestSeq misses nothing and repeats nothing
+    }
+
+    [Fact]
+    public void BudgetUpdatesEmitALiveEventForTheClientGauge()
+    {
+        var display = new ApiDisplayProvider(new EventBus(), new AppConfig(), new SessionContext());
+
+        display.UpdateBudget(1000, 4000, 25);
+
+        Assert.Contains(display.EventsSince(0), e => e.Kind == "budget" && e.Text == "1000/4000/25");
+    }
+
+    [Fact]
+    public void SnapshotCarriesTheServerModelProviderAndSession()
+    {
+        var config = new AppConfig { Provider = "Anthropic", Model = "claude-opus-4-8" };
+        var session = new SessionContext();
+        var display = new ApiDisplayProvider(new EventBus(), config, session);
+
+        var snap = display.Snapshot();
+
+        Assert.Equal("Anthropic", snap.Provider);
+        Assert.Equal("claude-opus-4-8", snap.Model);
+        Assert.Equal(session.SessionId, snap.SessionId); // so a client shows the server's session, not its own
     }
 }
