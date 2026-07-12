@@ -143,6 +143,19 @@ the voluntary continue-loop. Revisit only if we see the peer reliably acting bef
   through the peer (JS-heavy pages); egress / secret hygiene as capabilities widen; consider a `WebTool`
   source type for provenance of web-derived fragments.
 
+- **Containerized-peer gaps (found by the claude peer during Phase 1 validation, 2026-07-12).** When the
+  peer ran in its own container (API-in-container, ADR-0007 Phase 1), it surfaced two real frictions:
+  - **`snapshot_db` / `/shared` assume the sidecar layout.** `snapshot_db` writes to `/shared` (the host
+    volume mounted into the old computer container); in the peer's own container `/shared` isn't mounted,
+    so the snapshot is unreachable from its shell. In `Local` mode the peer can just read its live DB
+    directly read-only (`file:///data/db/<name>.db?mode=ro`) — cleaner. Fix: make `snapshot_db`
+    local-mode-aware (snapshot into the volume, e.g. `/data/vault`, or point at the read-only live DB),
+    and reconcile the `SharedDirectory` concept for the in-container model.
+  - **Multi-line `write_file` content trips the tagged command parser.** Writing a multi-line python
+    script (with embedded quotes/newlines/SQL) via `write_file(...)` caused the parser to mis-read lines
+    of the *content* as commands ("FROM ContextFragments", "ORDER BY …"). Needs a robust way to pass
+    multi-line literal payloads through the tagged format (heredoc/base64 content, or a raw-content mode).
+
 - **Peer extensibility — self-authored tooling & shareable capability packs.** (NEW, 2026-07 — John,
   in the [ADR-0007](adr/0007-federated-peers-runtime-room-client.md) container discussion. All future;
   fits the "container = a body the peer can reshape" model.)
