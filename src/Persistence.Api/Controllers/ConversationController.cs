@@ -56,6 +56,14 @@ public class ConversationController : ControllerBase
     }
 
     /// <summary>
+    /// Returns the standing state a freshly-connected client draws before subscribing: pending scheduled
+    /// events, open-proposal count, recent chat, and the latest sequence. The client then streams from
+    /// <c>?since=LatestSeq</c> so nothing is missed or duplicated.
+    /// </summary>
+    [HttpGet("snapshot")]
+    public IActionResult Snapshot() => Ok(display.Snapshot());
+
+    /// <summary>
     /// Returns conversation events with sequence greater than <paramref name="since"/>.
     /// Clients track the highest seq they've seen and pass it back to get only new events.
     /// </summary>

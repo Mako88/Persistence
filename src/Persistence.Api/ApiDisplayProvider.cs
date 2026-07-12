@@ -4,6 +4,7 @@ using Persistence.DI;
 using Persistence.Events;
 using Persistence.Notifications;
 using Persistence.Runtime;
+using System.Text.Json;
 using System.Threading.Channels;
 
 namespace Persistence.Api;
@@ -12,6 +13,23 @@ namespace Persistence.Api;
 /// One thing the system emitted during the conversation, in order.
 /// </summary>
 public record ConversationEvent(long Seq, string Kind, string Text, string? Detail = null);
+
+/// <summary>A pending scheduled event, slimmed for the client's Schedule pane.</summary>
+public record ScheduledEventView(long Id, string Name, DateTimeOffset ScheduledForUtc, string? WakePrompt, string Status);
+
+/// <summary>One prior conversation message, for a freshly-connected client to draw before live events.</summary>
+public record ChatHistoryItem(string Role, string Content, DateTimeOffset Timestamp);
+
+/// <summary>
+/// The state a newly-connected client needs to draw before subscribing to the live stream: the standing
+/// snapshots (pending scheduled events, open-proposal count, recent chat) plus <see cref="LatestSeq"/>,
+/// which the client passes to <c>?since=</c> so the stream resumes with no gap and no duplicate.
+/// </summary>
+public record ConversationSnapshot(
+    long LatestSeq,
+    int OpenProposalCount,
+    IReadOnlyList<ScheduledEventView> ScheduledEvents,
+    IReadOnlyList<ChatHistoryItem> ChatHistory);
 
 /// <summary>
 /// <see cref="IDisplayProvider"/> for the API front-end. Instead of rendering, it appends every
@@ -31,6 +49,12 @@ public class ApiDisplayProvider : IDisplayProvider
     private readonly List<ConversationEvent> log = [];
 
     private long seq;
+
+    // Latest standing snapshots pushed by the orchestrator (guarded by `sync`). The event log carries
+    // incremental output; these carry current whole-state that a fresh client needs on connect.
+    private IReadOnlyList<ScheduledEventView> scheduledEvents = [];
+    private int openProposalCount;
+    private IReadOnlyList<ChatHistoryItem> chatHistory = [];
 
     /// <summary>
     /// Raised after a new event is appended, so the SSE endpoint can push it live. Handlers run
@@ -176,17 +200,37 @@ public class ApiDisplayProvider : IDisplayProvider
     public void ShowWakeUpEvent(ScheduledEventEntity evt) => Append("wakeup", evt.Name);
 
     /// <summary>
-    /// No-op for the API surface. The pending-events snapshot is pushed on every change, which would
-    /// spam the append-only event log; API consumers see events when they fire (a "wakeup" event). A
-    /// dedicated pending-events endpoint can surface the snapshot if needed later.
+    /// Captures the pending-events snapshot (for <see cref="Snapshot"/>) and emits a "scheduled" event
+    /// carrying it, so streaming clients keep their Schedule pane live. Pushed only on change, so it
+    /// doesn't spam the log.
     /// </summary>
-    public void ShowScheduledEvents(IReadOnlyList<ScheduledEventEntity> events) { }
+    public void ShowScheduledEvents(IReadOnlyList<ScheduledEventEntity> events)
+    {
+        var views = events
+            .Select(e => new ScheduledEventView(e.Id, e.Name, e.ScheduledForUtc, e.WakePrompt, e.Status.ToString()))
+            .ToList();
+
+        lock (sync)
+        {
+            scheduledEvents = views;
+        }
+
+        Append("scheduled", views.Count.ToString(), JsonSerializer.Serialize(views));
+    }
 
     /// <summary>
-    /// No-op for the API surface — the open-proposal count is a status-bar affordance for the TUI;
-    /// API consumers query proposals directly.
+    /// Captures the open-proposal count (for <see cref="Snapshot"/>) and emits a "proposals" event so
+    /// streaming clients keep their status affordance live.
     /// </summary>
-    public void ShowOpenProposalCount(int count) { }
+    public void ShowOpenProposalCount(int count)
+    {
+        lock (sync)
+        {
+            openProposalCount = count;
+        }
+
+        Append("proposals", count.ToString());
+    }
 
     /// <summary>
     /// Appends a system/local message (e.g. a slash-command result) to the log as a "system" event
@@ -204,9 +248,10 @@ public class ApiDisplayProvider : IDisplayProvider
     public void ShowMessageQueued(string input) => Append("queued", input);
 
     /// <summary>
-    /// No-op; the thinking indicator is not surfaced to API callers
+    /// Emits a transient "thinking" status event (e.g. "waking", "processing queued messages"). Clients
+    /// treat it as an ephemeral indicator — the next real event supersedes it.
     /// </summary>
-    public void ShowThinking(string? label = null) { }
+    public void ShowThinking(string? label = null) => Append("thinking", label ?? "thinking");
 
     /// <summary>
     /// Appends debug info (e.g. the assembled request and raw model output) to the log as a
@@ -215,9 +260,31 @@ public class ApiDisplayProvider : IDisplayProvider
     public void ShowDebugInfo(string info) => Append("debug", info);
 
     /// <summary>
-    /// No-op; chat history is not surfaced to API callers
+    /// Captures the startup chat-history replay (for <see cref="Snapshot"/>) so a freshly-connected
+    /// client can draw prior conversation before live events arrive. Not appended to the live log —
+    /// it's a one-time backfill served by the snapshot, not incremental output.
     /// </summary>
-    public void ShowChatHistory(IReadOnlyList<(string Role, string Content, DateTimeOffset Timestamp)> messages) { }
+    public void ShowChatHistory(IReadOnlyList<(string Role, string Content, DateTimeOffset Timestamp)> messages)
+    {
+        var items = messages.Select(m => new ChatHistoryItem(m.Role, m.Content, m.Timestamp)).ToList();
+
+        lock (sync)
+        {
+            chatHistory = items;
+        }
+    }
+
+    /// <summary>
+    /// The current standing state for a newly-connected client to draw before subscribing to the stream
+    /// at <see cref="ConversationSnapshot.LatestSeq"/> (so no event is missed or replayed).
+    /// </summary>
+    public ConversationSnapshot Snapshot()
+    {
+        lock (sync)
+        {
+            return new ConversationSnapshot(seq, openProposalCount, scheduledEvents, chatHistory);
+        }
+    }
 
     #endregion
 
