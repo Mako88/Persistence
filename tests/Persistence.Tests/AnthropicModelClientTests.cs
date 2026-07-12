@@ -411,6 +411,20 @@ public class AnthropicModelClientTests
     }
 
     [Fact]
+    public async Task StreamAsync_CapturesPromptCacheTokensFromMessageStart()
+    {
+        var sse =
+            "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10,\"output_tokens\":1,\"cache_read_input_tokens\":500,\"cache_creation_input_tokens\":100}}}\n\n" +
+            "data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":20}}\n\n" +
+            "data: {\"type\":\"message_stop\"}\n\n";
+        var (client, _) = CreateStreamingClient(sse);
+
+        await foreach (var _ in client.StreamAsync(Request())) { }
+
+        Assert.Equal(new ModelUsage(10, 20, CacheReadTokens: 500, CacheCreationTokens: 100), client.LastUsage);
+    }
+
+    [Fact]
     public async Task StreamAsync_RequestsStreaming()
     {
         var (client, http) = CreateStreamingClient("data: {\"type\":\"message_stop\"}\n\n");

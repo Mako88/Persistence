@@ -14,11 +14,18 @@ public class ContextWindowProviderTests
     }
 
     [Fact]
-    public void LongestPrefixWins()
+    public void PrefixMatchBeatsFallingThroughToDefault()
     {
-        // "gpt-5.5-preview" should match "gpt-5" prefix in the built-in map (no gpt-5.5 there),
-        // i.e. a prefix match rather than falling through to default.
+        // "gpt-5.5-preview" matches the "gpt-5" prefix (no gpt-5.5 in the map) rather than the default.
         Assert.Equal(400000, Provider.GetContextWindow("gpt-5.5-preview"));
+    }
+
+    [Fact]
+    public void LongestPrefixWinsWhenSeveralMatch()
+    {
+        // "claude-opus-4-8" prefixes BOTH "claude-opus-4" (1,000,000) and "claude" (200,000);
+        // the longer key must win — this is what actually exercises the OrderByDescending(length) tie-break.
+        Assert.Equal(1_000_000, Provider.GetContextWindow("claude-opus-4-8"));
     }
 
     [Fact]

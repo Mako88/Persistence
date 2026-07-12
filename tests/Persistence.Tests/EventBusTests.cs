@@ -22,6 +22,17 @@ public class EventBusTests
     }
 
     [Fact]
+    public async Task PublishAsyncPropagatesASubscriberException()
+    {
+        var bus = new EventBus();
+        bus.Subscribe<Ping>((_, _) => throw new InvalidOperationException("boom"));
+
+        // Unlike FireAndForget (which routes errors to a callback), the awaited publish surfaces the
+        // failure to the caller — so a broken handler on a synchronous path isn't silently swallowed.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => bus.PublishAsync(this, new Ping("x")));
+    }
+
+    [Fact]
     public async Task DeliversToAllSubscribers()
     {
         var bus = new EventBus();

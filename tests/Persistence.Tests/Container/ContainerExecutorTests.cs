@@ -219,6 +219,18 @@ public class ContainerExecutorTests
     }
 
     [Fact]
+    public async Task WriteFileEscapesSingleQuotesInThePathAgainstInjection()
+    {
+        SetupRunner();
+
+        await executor.WriteFileAsync("a'b.txt", "x", append: false, CancellationToken.None);
+
+        // Single-quotes in the path are '\''-escaped so a crafted filename can't break out of the
+        // single-quoted shell string (the read/write/exec injection-safety seam).
+        Assert.Contains(@"'a'\''b.txt'", CapturedArgs()![4]);
+    }
+
+    [Fact]
     public async Task WriteFileBase64EncodesContentAndOverwrites()
     {
         SetupRunner();

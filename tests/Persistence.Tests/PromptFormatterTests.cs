@@ -364,6 +364,64 @@ public class PromptFormatterTests
     }
 
     [Fact]
+    public void RecentChangesShowBoolFlagAndContentDiffs()
+    {
+        var changes = new List<AuditLogEntity>
+        {
+            new()
+            {
+                SessionId = "s", EventType = AuditEventType.Modified, TargetType = nameof(ContextFragmentEntity),
+                TargetId = 9, SourceId = 1, CreatedUtc = DateTimeOffset.UtcNow, LastModifiedUtc = DateTimeOffset.UtcNow,
+                OldData = """{"IsProtected":false,"Content":"old"}""",
+                NewData = """{"IsProtected":true,"Content":"new text here"}""",
+            },
+        };
+
+        var sensory = CreateFormatter().Format(ContextWithFragment("hi"), [], recentChanges: changes)[^1].Content;
+
+        Assert.Contains("protected", sensory);           // bool flip rendered
+        Assert.Contains("content → \"new text here\"", sensory); // content change snippet
+    }
+
+    [Fact]
+    public void SurfacedMemoriesRenderAsALoadableRecallBlock()
+    {
+        var mem = new List<ContextFragmentEntity>
+        {
+            new()
+            {
+                Id = 77, FragmentType = ContextFragmentType.Personal, Status = ContextFragmentStatus.Active,
+                Content = "a relevant note about honesty", Importance = 0.8f, Confidence = 0.7f,
+                CreatedUtc = DateTimeOffset.UtcNow, LastModifiedUtc = DateTimeOffset.UtcNow,
+            },
+        };
+
+        var joined = string.Join("\n",
+            CreateFormatter().Format(ContextWithFragment("hi"), [], surfacedMemories: mem).Select(s => s.Content));
+
+        Assert.Contains("[Associative recall]", joined);
+        Assert.Contains("#77", joined);
+        Assert.Contains("load(id", joined);                       // tells the peer how to adopt it
+        Assert.Contains("a relevant note about honesty", joined); // the snippet
+    }
+
+    [Fact]
+    public void SessionCostReflectsCacheCreationWritePremium()
+    {
+        var tracker = new TokenUsageTracker();
+        tracker.AddUsage(new ModelUsage(0, 0, CacheCreationTokens: 1_000_000)); // 1M cache-write tokens
+
+        var pricing = new Mock<IModelPricingProvider>();
+        pricing.Setup(p => p.GetPricing(It.IsAny<string>())).Returns(new ModelPricing(5m, 25m));
+
+        var sensory = CreateFormatter(tracker: tracker, model: "claude-opus-4-8", pricing: pricing.Object)
+            .Format(ContextWithFragment("hi"), [])[^1].Content;
+
+        // 1M × $5/M × 1.25 (write premium) = $6.25.
+        Assert.Contains("Session cost (est.): ~$6.25", sensory);
+    }
+
+    [Fact]
     public void NoRecentChangesSectionWhenThereAreNone()
     {
         var sensory = CreateFormatter().Format(ContextWithFragment("hi"), [])[^1].Content;

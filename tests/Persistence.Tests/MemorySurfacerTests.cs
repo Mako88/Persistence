@@ -89,6 +89,34 @@ public class MemorySurfacerTests
     }
 
     [Fact]
+    public async Task SurfaceAsync_DropsDeletedAndArchivedFragments()
+    {
+        var deleted = Frag(1, ContextFragmentType.Personal, 0.9f, 0.9f);
+        deleted.IsDeleted = true;
+        var archived = Frag(2, ContextFragmentType.Personal, 0.9f, 0.9f);
+        archived.Status = ContextFragmentStatus.Archived;
+        var keep = Frag(3, ContextFragmentType.Personal, 0.5f, 0.5f);
+
+        var surfaced = await WithResults(deleted, archived, keep)
+            .SurfaceAsync(Array.Empty<long>(), "honesty", count: 10, CancellationToken.None);
+
+        Assert.Equal(new long[] { 3 }, surfaced.Select(f => f.Id)); // only the live one
+    }
+
+    [Fact]
+    public async Task SurfaceAsync_SwallowsSearchErrorsInsteadOfBreakingTheTurn()
+    {
+        var repo = new Mock<IContextFragmentRepository>();
+        repo.Setup(r => r.SearchRelevantAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("malformed FTS"));
+
+        var surfaced = await new MemorySurfacer(repo.Object)
+            .SurfaceAsync(Array.Empty<long>(), "honesty", count: 5, CancellationToken.None);
+
+        Assert.Empty(surfaced); // a bad FTS expression must never crash the turn
+    }
+
+    [Fact]
     public async Task SurfaceAsync_ReturnsEmptyWhenDisabledOrNoTerms()
     {
         var surfacer = WithResults(Frag(1, ContextFragmentType.Personal, 0.9f, 0.9f));

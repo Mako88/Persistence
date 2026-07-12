@@ -96,8 +96,9 @@ public class ExecuteActionsHandlerTests
         var result = await RunAsync("""{ "shell": { "command": "ls" } }""");
 
         Assert.Contains("notes.txt", result);
-        // Exec is audited to the action log (queryable later, independent of context).
-        actionLogRepo.Verify(r => r.LogAsync("shell", "ls", It.IsAny<string?>(), It.IsAny<IDbTransaction?>()), Times.Once);
+        // Exec is audited to the action log with the (summarized) output — not just "that a call happened".
+        actionLogRepo.Verify(r => r.LogAsync("shell", "ls",
+            It.Is<string?>(s => s != null && s.Contains("notes.txt")), It.IsAny<IDbTransaction?>()), Times.Once);
     }
 
     [Fact]

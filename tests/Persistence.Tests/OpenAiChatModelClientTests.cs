@@ -96,6 +96,16 @@ public class OpenAiChatModelClientTests
     }
 
     [Fact]
+    public async Task ExposesRealUsageAfterCompletion()
+    {
+        var (client, _) = CreateClient(SuccessBody); // usage: 12 prompt / 3 completion
+
+        await client.CompleteAsync(Request());
+
+        Assert.Equal(new ModelUsage(12, 3), client.LastUsage);
+    }
+
+    [Fact]
     public async Task ThrowsWithStatusAndBodyOnFailure()
     {
         var (client, _) = CreateClient("""{ "error": "bad" }""", HttpStatusCode.InternalServerError);

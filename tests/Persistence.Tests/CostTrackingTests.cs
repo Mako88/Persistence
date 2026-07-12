@@ -75,4 +75,14 @@ public class CostTrackingTests
 
         Assert.Equal(120, tracker.Calibrate(100)); // subsequent estimates scaled by 1.2
     }
+
+    [Fact]
+    public void CalibrateReturnsEstimateUnchangedWhenRecordedEstimateIsZero()
+    {
+        var tracker = new TokenUsageTracker();
+
+        tracker.Record(realInputTokens: 120, estimatedInputTokens: 0); // guards against divide-by-zero
+
+        Assert.Equal(100, tracker.Calibrate(100));
+    }
 }

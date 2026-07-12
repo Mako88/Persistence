@@ -267,7 +267,9 @@ public class OpenAiModelClient : IModelClient, IDisposable
 
         if (config.DebugMode)
         {
-            var debugContent = $"{messages[^2]?.content}\n\n{messages[^1]?.content}";
+            // Show the tail of the prompt (last two segments). TakeLast is safe for 0/1/2+ messages —
+            // messages[^2] would index out of range on a single-message prompt.
+            var debugContent = string.Join("\n\n", messages.TakeLast(2).Select(m => m.content));
             display.ShowDebugInfo($"Request ({request.Messages.Count} messages):\n{debugContent}\n");
         }
 

@@ -87,11 +87,14 @@ public class TurnHandlerTests
     public async Task NonStreamingPathDispatchesActionAndSavesContext()
     {
         var h = new Harness();
-        h.RegisterHandler(ModelAction.RespondToUser);
+        var dispatched = false;
+        h.RegisterHandler(ModelAction.RespondToUser, onHandle: () => dispatched = true);
         h.ParseReturns(Harness.Turn(ModelAction.RespondToUser));
 
         await h.Build().ExecuteTurnAsync();
 
+        Assert.True(dispatched, "the registered handler's HandleAsync should have run");
+        h.ActionLog.Verify(a => a.LogAsync("RespondToUser", It.IsAny<string?>(), "success", It.IsAny<IDbTransaction?>()), Times.Once);
         h.Model.Verify(m => m.CompleteAsync(It.IsAny<PromptRequest>(), It.IsAny<CancellationToken>()), Times.Once);
         h.Model.Verify(m => m.StreamAsync(It.IsAny<PromptRequest>(), It.IsAny<CancellationToken>()), Times.Never);
         h.ContextRepo.Verify(r => r.SaveAsync(h.Context, It.IsAny<IDbTransaction?>(), It.IsAny<CancellationToken>()), Times.Once);

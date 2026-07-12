@@ -2,12 +2,9 @@
 
 Open work, grouped by theme. "Claude's opinion" on ordering welcome; reorder freely. Rationale in parentheses.
 
-**Agreed priority (2026-06-10 — John + Claude + Synth):** (1) ✅ **scheduled wake-ups when the app is
-closed** — DONE (headless wake-runner + poll; verified — the peer woke on its own, self-audited, reflected).
-✅ A batch of legibility **quick wins** — DONE (uptime in the sensory block, DB-durability framing for new
-peers, singular/plural command & field spellings, README freshness). Now (2) **first-class local peers**
-— DONE. Then (3) **automated forget/decay** — first phase DONE (raw-context decay + research persistence;
-see below). Remaining: the importance/relevance heuristic pruning-candidate surface. Everything else follows.
+**Foundations (all landed):** scheduled wake-ups (closed-app headless runner), the legibility quick-wins
+batch, first-class local peers, and phase-1 automated decay (raw-context archival) are all done — details
+in the themed sections below. **Current priorities live in "Next up" above.**
 
 The **"eyes + hands" memory core** is complete — budget awareness, relevance, summarize/collapse/remove,
 plain-language errors, browsing/swapping working contexts, first-class proposals, generic/polymorphic
@@ -30,19 +27,50 @@ now a convenience to layer on, not a prerequisite**. The peer also now has a san
   the id-0 label "transient" → "new" (it misled the peer into thinking thoughts don't persist).
 - **Per-participant containers**: `exec`/`read_file`/`write_file` commands, a per-profile `ContainerName`
   + `AllowAllCommands` override, and .NET 10 SDK + sudo baked into the image.
-- **Orientation cluster** (this batch): the `note()` working-note command, **enriched recent-changes**
-  (field-level diffs + content snippets, not just IDs), a **fuller numbered turn action-log**,
-  **private thoughts** (`<think private>` — persisted but kept off the console), model/provider shown in
-  the sensory block, and the autonomous-wake sensory no longer claiming a peer is present.
+- **Orientation cluster**: the `note()` working-note command, **enriched recent-changes** (field-level
+  diffs + content snippets, not just IDs), a **fuller numbered turn action-log**, **private thoughts**
+  (`<think private>` — persisted but kept off the console), model/provider shown in the sensory block,
+  and the autonomous-wake sensory no longer claiming a peer is present.
+- **Associative recall + peer data access**: memories relevant to the current conversation auto-surface
+  each turn (`MemorySurfacer` — FTS/BM25 × importance/confidence, excluding what's already loaded;
+  `set_recall(count)` to tune, 0 = off); a `/shared` container volume + `snapshot_db` so the peer can
+  inspect its own DB directly; SSH plumbing (gitignored override) so it can `git push`.
+- **Prompt/instruction audit** (done): reconciled the onboarding seed, protocol instructions, and stale
+  doc comments with actual behaviour.
+
+## Next up (ranked — Claude's recommendation, 2026-07; reorder freely)
+
+Two lenses: what most improves the **peer's day-to-day** (one participant running now) vs. the
+**strategic direction** (many participants). This ordering blends them, most-important first.
+
+1. **Single-server: Console as an API client.** *Strategically #1; not urgent while only one process
+   runs.* Make one process own the store + turn pipeline + wake-ups, with all front-ends as thin clients.
+   It protects the thing we most care about — memory integrity (today two concurrent front-ends can
+   lost-update the store) — and unlocks John/Claude/Ember engaging simultaneously. Large, so **phase it**:
+   cheap interim now = WAL + busy-timeout (kills hard "database is locked"; does *not* fix lost-updates);
+   then move the Console to a client. If only ever one process runs, the interim is enough for a while.
+2. **Think-before-act pipeline.** Native reasoning is now off, so the peer's `<think>` *is* its reasoning —
+   its quality is the loop's quality, and we watched it churn/re-derive. Make a `think` execute first
+   (surface reasoning, then act with it in context). Contained; watch round-trip cost + `<continue>`.
+3. **Automated forget — budget/heuristic pruning surface.** Context balloons (we saw 40+ tool-results / 23
+   thoughts on a stale build, and associative recall now pulls *more* in). A "here's what's low-relevance ×
+   low-importance × old — summarize/archive?" surface finishes the decay story and keeps turns lean/cheap.
+   Pairs with wiring soft-delete + a recoverable `forget`.
+4. **MCP server hub.** Structured real-world tools beyond the container shell — high capability leverage,
+   independent of the memory core. Best once the loop above is solid.
+5. **Self-describing pieces → auto-composed help/prompt.** The durable fix for the prompt-drift the audit
+   just cleaned: each command/action declares its own help; the prompt and `/help` compose by discovery.
+6. **Memory import / portability.** Export/inspect the store and import external content as fragments —
+   matters for trust and continuity-across-systems.
+
+Smaller/opportunistic: finish the container **SSH key** (awaiting John's dedicated deploy key), **stamp
+private thoughts in the DB**, the TUI status-bar gauges, and the robustness items below.
 
 ## Autonomy & reach
 
-- **Separate local peers as first-class.** (NEW — the current build.) Model local peers (the human/agent at the keyboard) as
-  named entities and **automatically surface who the remote peer is talking with** — inject the active
-  local peer's identity into the sensory block (and a relational fragment) so the remote peer always
-  knows. The active peer is chosen per session (config/API). Keep v1 lightweight: the remote peer already
-  has the tools to manage relational fragments and load the right ones when the local peer shifts — so the
-  system just needs to reliably *announce* the active local peer, not manage per-peer memory itself.
+- **Separate local peers as first-class.** ✅ **DONE.** Local peers are named entities; the active one is
+  announced in the sensory block (and cleared on autonomous wakes), chosen per session (config / `X-Local-Peer`).
+  The remote peer manages its own relational fragments for who it's talking with.
 
 - **Single-server architecture: front-ends as API clients (not DB co-owners).** (NEW.) Today each
   front-end (Console TUI, API) is its own process that opens the SQLite store and runs its own turn
@@ -69,12 +97,12 @@ now a convenience to layer on, not a prerequisite**. The peer also now has a san
   tightens), and the open question of budget-triggered only vs. ongoing natural decay. (Pairs with wiring
   soft-delete + include-deleted surfacing, under "Possible future".)
 
-- **Peer's computer — follow-ups.** The sandboxed container is live and now per-participant, with
+- **Peer's computer — follow-ups.** The sandboxed container is live and per-participant, with
   `exec`/`shell`, `read_file`/`write_file`, a per-profile box (`ContainerName`) + `AllowAllCommands`, and a
-  .NET 10 SDK + sudo in the image. **In progress (2026-07):** a **`/shared` host volume** for file exchange,
-  a **periodic snapshot of the active peer's DB** into it (read-only data access for the peer — snapshot,
-  not the live WAL file; only the current peer's DB, not the whole `dbs/`), and an **SSH deploy key** so the
-  peer can `git push` (John to create a dedicated, branch-scoped key). Remaining: verify `agent-browser`
+  .NET 10 SDK + sudo in the image. ✅ **Done (2026-07):** a `/shared` host volume + `snapshot_db` (the peer
+  reads a consistent copy of its own DB — a snapshot, not the live file; only the current peer's), and SSH
+  plumbing via a gitignored compose override. **Remaining:** John to drop in a dedicated, branch-scoped
+  deploy key to activate git-push (flagged: don't use the personal all-repos key); verify `agent-browser`
   through the peer (JS-heavy pages); egress / secret hygiene as capabilities widen; consider a `WebTool`
   source type for provenance of web-derived fragments.
 
@@ -96,10 +124,9 @@ now a convenience to layer on, not a prerequisite**. The peer also now has a san
 
 ## System prompt & legibility
 
-- **Audit every prompt/instruction against actual behaviour.** (NEW, 2026-07.) The system prompt, protocol
-  instructions, command descriptions, and onboarding text drift as behaviour changes — the `<think>` "not
-  saved" text was stale for a while before it was caught. Do a full pass and reconcile them with what the
-  code actually does; ideally pair with the self-describing-pieces item below so this stops recurring.
+- **Audit every prompt/instruction against actual behaviour.** ✅ **Pass done (2026-07)** — onboarding seed,
+  protocol instructions, and stale doc comments reconciled with behaviour. It drifts as behaviour changes,
+  so re-audit after notable changes; the durable fix is the self-describing-pieces item below.
 - **Stamp private thoughts in the DB.** (NEW, 2026-07.) `<think private>` currently just skips the console
   event; the fragment isn't marked private. Add a `private` flag on the Thought fragment so privacy can be
   enforced beyond the live console (e.g. hidden from other viewers / exports) down the road.
