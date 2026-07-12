@@ -51,8 +51,10 @@ one Discord-style chat. Terminology shifts `RemotePeer`/`LocalPeer` → `Digital
 **(0)** identity groundwork — per-message sender identity through the queue, peer names reaching the model,
 message-id'd chat history (also finishes the ADR-0006 snapshot dedup), the rename *[in progress]*;
 **(1)** containerize one peer (API-in-container, DB on a named volume); **(2)** multi-peer TUI (merged
-chat + per-peer side tabs + peer selector); **(3)** the room (peer↔peer relay + turn-taking); **(4)** bring
-Ember online. **Fast-follows:** peer-initiated API self-update (review-then-adopt, *not* auto-on-push so a
+chat + per-peer side tabs + peer selector); **(3)** the room (peer↔peer relay + turn-taking) — **designed with the claude peer in
+[ADR-0008](adr/0008-the-room-multi-peer-conversation.md)**: rule-based inspectable turn-taking, an
+`addressed_to` field, private-thoughts hard line, a reply-chain-depth loop breaker + conservative
+no-autofan default, on-demand presence; **(4)** bring Ember online. **Fast-follows:** peer-initiated API self-update (review-then-adopt, *not* auto-on-push so a
 peer vets code before running it as itself); live config hot-reload. This subsumes item 4 below
 (cross-peer channel) and the "simultaneous participants" thread throughout.
 
