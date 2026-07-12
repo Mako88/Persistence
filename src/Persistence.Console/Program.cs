@@ -39,6 +39,27 @@ if (args.Contains("--wake-runner"))
     return;
 }
 
+// `--client <baseUrl> [--as <localPeer>]` runs the Console as a thin client of a running API server
+// (ADR-0006): no local DB/pipeline/model — it renders the server's conversation stream and sends input
+// over HTTP. Without it, the Console runs the full stack in-process as before.
+if (args.Contains("--client"))
+{
+    var baseUrl = ArgAfter(args, "--client") ?? "http://localhost:5000";
+    var localPeer = ArgAfter(args, "--as");
+
+    using var clientCts = new CancellationTokenSource();
+    System.Console.CancelKeyPress += (_, e) => { e.Cancel = true; clientCts.Cancel(); };
+
+    await Persistence.Console.ClientConsoleHost.RunAsync(baseUrl, localPeer, clientCts.Token);
+    return;
+
+    static string? ArgAfter(string[] args, string flag)
+    {
+        var i = Array.FindIndex(args, a => string.Equals(a, flag, StringComparison.OrdinalIgnoreCase));
+        return i >= 0 && i + 1 < args.Length ? args[i + 1] : null;
+    }
+}
+
 // Build the container — registers all [Singleton]/[Service] types from all assemblies
 var serviceProvider = await Initializer.InitializeAsync();
 

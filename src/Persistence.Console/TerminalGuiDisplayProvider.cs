@@ -75,6 +75,13 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
     private int lastProposalCount;
     private (int Used, int Budget, int Percent)? lastBudget;
 
+    /// <summary>
+    /// Where submitted local-peer input goes. Defaults to publishing on the in-process event bus (the
+    /// turn pipeline picks it up); client mode overrides it to send over HTTP. Kept as a delegate so the
+    /// renderer itself is transport-agnostic. Set it before <see cref="LaunchUi"/>.
+    /// </summary>
+    public Func<string, Task> OnInput { get; set; }
+
     public TerminalGuiDisplayProvider(IEventBus eventBus, ISessionContext sessionContext, IAppConfig config)
     {
         this.eventBus = eventBus;
@@ -84,6 +91,12 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
         // The TUI has a dedicated Debug pane, so request/response logging is always on here — there's
         // a place to show it and no console to clutter. (The API surface still honours config.DebugMode.)
         config.DebugMode = true;
+
+        OnInput = text =>
+        {
+            eventBus.FireAndForget(this, new DisplayInputReceived(text), ex => ShowError(ex.Message));
+            return Task.CompletedTask;
+        };
     }
 
     /// <summary>
@@ -92,13 +105,30 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
     /// </summary>
     public Task Start(CancellationToken ct)
     {
+        SubscribeToInProcessEvents();
+        return LaunchUi(ct);
+    }
+
+    /// <summary>
+    /// Wires the in-process event bus to the panes. In-process mode calls this via <see cref="Start"/>;
+    /// client mode skips it and drives the panes from the API conversation stream instead.
+    /// </summary>
+    private void SubscribeToInProcessEvents()
+    {
         eventBus.Subscribe<RemotePeerReplied>((_, e) => { ShowReply(e.Reply); return Task.CompletedTask; });
         eventBus.Subscribe<ScheduledEventTriggered>((_, e) => { ShowWakeUpEvent(e.Event); return Task.CompletedTask; });
         eventBus.Subscribe<ToolInvoked>((_, e) => { ShowToolUse(e.Tool, e.Request, e.Result); return Task.CompletedTask; });
         eventBus.Subscribe<ModelReasoningDelta>((_, e) => { ShowReasoningDelta(e.Delta); return Task.CompletedTask; });
         eventBus.Subscribe<ModelThought>((_, e) => { ShowThought(e.Thought); return Task.CompletedTask; });
         eventBus.Subscribe<ContextBudgetUpdated>((_, e) => { UpdateBudget(e.UsedTokens, e.BudgetTokens, e.PercentFull); return Task.CompletedTask; });
+    }
 
+    /// <summary>
+    /// Launches the Terminal.Gui loop on its own thread and returns a task that completes when it exits.
+    /// Transport-agnostic: the caller wires input (<see cref="OnInput"/>) and rendering (bus or stream).
+    /// </summary>
+    public Task LaunchUi(CancellationToken ct)
+    {
         uiThread = new Thread(RunUi) { IsBackground = true, Name = "tui" };
         uiThread.Start();
 
@@ -821,14 +851,28 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
         var echo = text.StartsWith('/') ? $"Executed {text}" : $"You: {text}";
         Append(outputBuffer, () => output, $"{Stamp()}{echo}\n\n");
 
-        // Repaint now so the input box visibly clears on keypress, then dispatch the turn
-        // off the UI thread — the subscriber chain runs synchronously up to its first
-        // await (DB access, model call), which would otherwise block repainting.
+        // Repaint now so the input box visibly clears on keypress, then dispatch off the UI thread — the
+        // sink runs synchronously up to its first await (DB access / HTTP), which would block repainting.
         input.SetNeedsDisplay();
 
-        eventBus.FireAndForget(this, new DisplayInputReceived(text),
-            ex => ShowError(ex.Message));
+        SubmitInput(text);
     }
+
+    /// <summary>
+    /// Hands submitted input to <see cref="OnInput"/> off the UI thread, surfacing any failure to the
+    /// error pane rather than losing it (the in-process sink can't throw; the HTTP sink can).
+    /// </summary>
+    private void SubmitInput(string text) => _ = Task.Run(async () =>
+    {
+        try
+        {
+            await OnInput(text);
+        }
+        catch (Exception ex)
+        {
+            ShowError(ex.Message);
+        }
+    });
 
     /// <summary>Selects the tab <paramref name="direction"/> steps from the current one, wrapping.</summary>
     private void CycleTab(int direction)
