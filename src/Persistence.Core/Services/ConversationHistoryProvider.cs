@@ -36,10 +36,28 @@ public class ConversationHistoryProvider(IWorkingContextRepository contexts, ISe
             .OrderBy(f => f.Order)
             .TakeLast(limit)
             .Select(f => new ChatHistoryItem(
-                // ChatMessage fragments carry their author as a Source (RemotePeer = the model/assistant).
+                f.Id,
+                // ChatMessage fragments carry their author as a Source (DigitalPeer = the model/assistant).
                 f.Sources.Any(s => s.SourceType == SourceType.DigitalPeer) ? "assistant" : "user",
+                ResolveAuthor(f),
                 f.Content,
                 f.CreatedUtc))
             .ToList();
+    }
+
+    /// <summary>
+    /// The display name of who authored a message: the source's name (the peer's name, or "Remote Peer"
+    /// for the digital peer), falling back to a coarse label if a legacy fragment has an unnamed source.
+    /// </summary>
+    private static string ResolveAuthor(WeightedContextFragment fragment)
+    {
+        var source = fragment.Sources.Count > 0 ? fragment.Sources[0] : null;
+
+        if (source is { Name: { Length: > 0 } name })
+        {
+            return name;
+        }
+
+        return source?.SourceType == SourceType.DigitalPeer ? "Remote Peer" : "Local Peer";
     }
 }

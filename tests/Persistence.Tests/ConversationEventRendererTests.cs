@@ -88,7 +88,7 @@ public class ConversationEventRendererTests
             LatestSeq: 9,
             OpenProposalCount: 2,
             ScheduledEvents: [new ScheduledEventView(1, "review", DateTimeOffset.UtcNow, null, "Pending")],
-            ChatHistory: [new ChatHistoryItem("user", "hello", DateTimeOffset.UtcNow)],
+            ChatHistory: [new ChatHistoryItem(1, "user", "John", "hello", DateTimeOffset.UtcNow)],
             Provider: "Anthropic",
             Model: "claude-opus-4-8",
             SessionId: "abc123");

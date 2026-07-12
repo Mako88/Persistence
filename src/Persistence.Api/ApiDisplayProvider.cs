@@ -63,7 +63,9 @@ public class ApiDisplayProvider : IDisplayProvider
     /// </summary>
     public Task Start(CancellationToken ct)
     {
-        eventBus.Subscribe<RemotePeerReplied>((_, e) => { ShowReply(e.Reply); return Task.CompletedTask; });
+        // Carry the persisted message id (when present) as the event's detail, so a streaming client can
+        // reconcile this reply against the same message in its connect-time snapshot and not draw it twice.
+        eventBus.Subscribe<RemotePeerReplied>((_, e) => { Append("reply", e.Reply, e.MessageId?.ToString()); return Task.CompletedTask; });
         eventBus.Subscribe<ModelThought>((_, e) => { ShowThought(e.Thought); return Task.CompletedTask; });
         eventBus.Subscribe<ToolInvoked>((_, e) => { ShowToolUse(e.Tool, e.Request, e.Result); return Task.CompletedTask; });
         eventBus.Subscribe<ModelReasoningDelta>((_, e) => { ShowReasoningDelta(e.Delta); return Task.CompletedTask; });

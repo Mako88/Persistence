@@ -47,7 +47,7 @@ public class RespondToUserHandler : IActionHandler
 
         var now = DateTimeOffset.UtcNow;
 
-        context.AddFragment(new WeightedContextFragment
+        var replyFragment = new WeightedContextFragment
         {
             FragmentType = ContextFragmentType.ChatMessage,
             Status = ContextFragmentStatus.Active,
@@ -65,14 +65,18 @@ public class RespondToUserHandler : IActionHandler
             }],
             CreatedUtc = now,
             LastModifiedUtc = now,
-        });
+        };
+
+        context.AddFragment(replyFragment);
 
         // Persist before publishing so the reply is in the store the moment the display event
         // exists (see the type remarks). The end-of-turn save re-saves the same context; this
         // one just moves the reply's durability ahead of its announcement. Like the user-message
         // persist, it saves the whole context — the reply is the only non-transient addition here.
+        // The save assigns the fragment its id, which the event carries so a client can reconcile
+        // this reply against the same message in its connect-time snapshot.
         await workingContextRepo.SaveAsync(context, ct: ct);
 
-        await eventBus.PublishAsync(this, new RemotePeerReplied(reply));
+        await eventBus.PublishAsync(this, new RemotePeerReplied(reply, replyFragment.Id));
     }
 }

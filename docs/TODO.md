@@ -176,6 +176,12 @@ the voluntary continue-loop. Revisit only if we see the peer reliably acting bef
 
 ## Robustness & smaller items
 
+- **Verify OpenAI prompt caching is wired correctly.** (NEW, 2026-07 — John.) Anthropic caching landed
+  (a `cache_control` breakpoint on the stable prefix, cache-token-aware cost). Confirm the OpenAI client
+  gets the equivalent benefit: OpenAI auto-caches long shared prefixes, so check we keep the stable prefix
+  actually stable/contiguous (system + protocol + command catalog ahead of the volatile sensory/tail),
+  that `prompt_tokens_details.cached_tokens` is read into `LastUsage`, and that the cost readout credits
+  cached input. Cross-check against the Anthropic path so both providers report cache usage consistently.
 - **Graceful state flush on close.** (Scratch — "save session information on close.") Ensure in-flight
   context/state is reliably persisted on shutdown so nothing is lost.
 - **Right-click dialog position (TUI).** (Scratch.) The right-click context menu displays in the wrong
