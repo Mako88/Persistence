@@ -1,78 +1,43 @@
-using Microsoft.Extensions.DependencyInjection;
-using Persistence;
-using Persistence.Data;
-using Persistence.Data.Repositories;
-using Persistence.Runtime;
+// The Console is a thin client of the Persistence API server (ADR-0006, single-owner model): it holds no
+// database, turn pipeline, or model. One process — the API server — owns the store, the pipeline, and
+// scheduled wakes; every front-end (this Console, the web client) talks to it over HTTP. This is
+// single-owner "by construction": there is no code path here that opens the database.
 
-// `--preview` launches the TUI with sample content in every pane (no DB/model) for reviewing
-// the layout and colours. Useful for visual/colour work; not part of a normal run.
+// `--preview` launches the TUI with sample content in every pane (no DB/model/server) for reviewing the
+// layout and colours. Not part of a normal run.
 if (args.Contains("--preview"))
 {
-    // An optional variant after --preview (e.g. "--preview A") selects a role-colour combo to compare.
     var variant = args.SkipWhile(a => !string.Equals(a, "--preview", StringComparison.OrdinalIgnoreCase))
         .Skip(1).FirstOrDefault();
     await Persistence.Console.TuiPreview.RunAsync(variant);
     return;
 }
 
-// `--check-due` is a fast, model-free probe for the wake launcher: exit 0 if any scheduled event is
-// due now, 100 if none. Lets an OS poll gate the expensive model startup on there being real work.
-// (Standalone-deployment path — under the single-owner model the always-on API server owns wakes.)
-if (args.Contains("--check-due"))
+// Scheduled wakes are owned by the always-on API server now (its hosted orchestrator fires due events for
+// its lifetime). The old OS-triggered, DB-opening wake paths were removed in the single-owner migration;
+// exit with guidance rather than silently falling through to client mode.
+if (args.Contains("--wake-runner") || args.Contains("--check-due"))
 {
-    Environment.SetEnvironmentVariable("PERSISTENCE_UIMODE", "Headless");
-    var provider = await Initializer.InitializeAsync();
-    await provider.GetRequiredService<IDatabaseManager>().InitializeAsync();
-    var due = await provider.GetRequiredService<IScheduledEventRepository>().GetDueEventsAsync();
-    Environment.ExitCode = due.Any() ? 0 : 100;
+    System.Console.Error.WriteLine(
+        "Scheduled wakes are now owned by the always-on API server — run it and it fires due events for "
+        + "its lifetime. The Console's --wake-runner/--check-due paths were removed in the single-owner "
+        + "migration (ADR-0006); update any OS task to keep the API server running instead.");
+    Environment.ExitCode = 2;
     return;
 }
 
-// `--wake-runner` is the headless one-shot: fire all due scheduled events as autonomous turns, then
-// exit. An OS trigger launches it when the interactive app isn't running. (Standalone-deployment path.)
-if (args.Contains("--wake-runner"))
-{
-    Environment.SetEnvironmentVariable("PERSISTENCE_UIMODE", "Headless");
-    var provider = await Initializer.InitializeAsync();
-    using var wakeCts = new CancellationTokenSource();
-    Console.CancelKeyPress += (_, e) => { e.Cancel = true; wakeCts.Cancel(); };
-    await provider.GetRequiredService<IOrchestrator>().RunWakeCycleAsync(wakeCts.Token);
-    return;
-}
+// Default: connect to the API server and render its conversation stream, sending input over HTTP.
+// `--client <baseUrl>` (or PERSISTENCE_SERVER) overrides the address; `--as <localPeer>` identifies who's
+// speaking (falls back to the server's configured default local peer).
+var baseUrl = ArgAfter(args, "--client")
+    ?? Environment.GetEnvironmentVariable("PERSISTENCE_SERVER")
+    ?? "http://localhost:5000";
+var localPeer = ArgAfter(args, "--as");
 
-// `--standalone` runs the full stack in-process (the pre-single-owner behaviour): this process owns the
-// database, turn pipeline, wakes, and the TUI. Kept as an escape hatch (offline/dev); running it
-// alongside the API server risks the lost-update problem the single-owner model exists to prevent.
-if (args.Contains("--standalone"))
-{
-    var serviceProvider = await Initializer.InitializeAsync();
-    var orchestrator = serviceProvider.GetRequiredService<IOrchestrator>();
+using var cts = new CancellationTokenSource();
+System.Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
-    using var cts = new CancellationTokenSource();
-    Console.CancelKeyPress += (_, e) =>
-    {
-        e.Cancel = true;
-        cts.Cancel();
-    };
-
-    await orchestrator.RunAsync(cts.Token);
-    return;
-}
-
-// DEFAULT (single-owner model, ADR-0006): run as a thin client of a running API server — no local
-// database, pipeline, or model. It renders the server's conversation stream and sends input over HTTP.
-// `--client <baseUrl>` overrides the server address; `--as <localPeer>` identifies who's speaking.
-{
-    var baseUrl = ArgAfter(args, "--client")
-        ?? Environment.GetEnvironmentVariable("PERSISTENCE_SERVER")
-        ?? "http://localhost:5000";
-    var localPeer = ArgAfter(args, "--as");
-
-    using var clientCts = new CancellationTokenSource();
-    System.Console.CancelKeyPress += (_, e) => { e.Cancel = true; clientCts.Cancel(); };
-
-    await Persistence.Console.ClientConsoleHost.RunAsync(baseUrl, localPeer, clientCts.Token);
-}
+await Persistence.Console.ClientConsoleHost.RunAsync(baseUrl, localPeer, cts.Token);
 
 static string? ArgAfter(string[] args, string flag)
 {

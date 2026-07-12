@@ -1,6 +1,13 @@
 # ADR-0006: Console as an API client (single-owner backend)
 
-**Status:** Proposed · **Date:** 2026-07-12
+**Status:** Accepted — implemented (stages 1–5 landed 2026-07-12) · **Date:** 2026-07-12
+
+> **Implemented.** All five stages shipped. The Console now defaults to client mode (in-process removed;
+> `--standalone` is gone; the OS-triggered `--check-due`/`--wake-runner` were retired — the always-on API
+> server owns wakes). One refinement to the plan: connect-time chat history is **pulled fresh** by the
+> client on connect (the snapshot queries the store via `IConversationHistoryProvider`) rather than
+> pushed-and-maintained server-side, so a client connecting mid-session sees the current conversation and
+> the server never keeps a client's chat view in sync. Everything after connect is pure stream.
 
 ## Context
 

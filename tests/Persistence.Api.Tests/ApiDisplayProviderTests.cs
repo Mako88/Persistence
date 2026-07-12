@@ -1,5 +1,6 @@
 using Persistence.Data.Entities;
 using Persistence.Config;
+using Persistence.Contracts;
 using Persistence.Events;
 using Persistence.Runtime;
 
@@ -31,7 +32,7 @@ public class ApiDisplayProviderTests
 
         display.ShowScheduledEvents([Event(1, "standup"), Event(2, "review")]);
 
-        var snap = display.Snapshot();
+        var snap = display.Snapshot([]);
         Assert.Equal(2, snap.ScheduledEvents.Count);
         Assert.Contains(snap.ScheduledEvents, e => e.Name == "standup");
         // ...and a live "scheduled" event so a subscribed client's Schedule pane updates without re-fetching.
@@ -45,19 +46,23 @@ public class ApiDisplayProviderTests
 
         display.ShowOpenProposalCount(3);
 
-        Assert.Equal(3, display.Snapshot().OpenProposalCount);
+        Assert.Equal(3, display.Snapshot([]).OpenProposalCount);
         Assert.Contains(display.EventsSince(0), e => e.Kind == "proposals" && e.Text == "3");
     }
 
     [Fact]
-    public void ChatHistoryIsSnapshotOnlyNotAddedToTheLiveLog()
+    public void SnapshotReturnsTheChatHistoryItIsGivenAndDoesNotCaptureShowChatHistory()
     {
         var display = new ApiDisplayProvider(new EventBus(), new AppConfig(), new SessionContext());
 
-        display.ShowChatHistory([("user", "hi", DateTimeOffset.UtcNow), ("assistant", "hello", DateTimeOffset.UtcNow)]);
+        // ShowChatHistory is a no-op here now — history is queried fresh at snapshot time, not captured.
+        display.ShowChatHistory([("user", "ignored", DateTimeOffset.UtcNow)]);
+        IReadOnlyList<ChatHistoryItem> chat = [new ChatHistoryItem("user", "hi", DateTimeOffset.UtcNow)];
 
-        Assert.Equal(2, display.Snapshot().ChatHistory.Count);
-        Assert.Empty(display.EventsSince(0)); // a one-time backfill, not incremental output
+        var snap = display.Snapshot(chat);
+
+        Assert.Equal("hi", Assert.Single(snap.ChatHistory).Content); // the passed-in history, not the pushed one
+        Assert.Empty(display.EventsSince(0)); // and nothing hit the live log
     }
 
     [Fact]
@@ -67,7 +72,7 @@ public class ApiDisplayProviderTests
         display.ShowReply("first");
         display.ShowReply("second");
 
-        var snap = display.Snapshot();
+        var snap = display.Snapshot([]);
 
         Assert.Equal(2, snap.LatestSeq);
         Assert.Empty(display.EventsSince(snap.LatestSeq)); // subscribing at LatestSeq misses nothing and repeats nothing
@@ -90,7 +95,7 @@ public class ApiDisplayProviderTests
         var session = new SessionContext();
         var display = new ApiDisplayProvider(new EventBus(), config, session);
 
-        var snap = display.Snapshot();
+        var snap = display.Snapshot([]);
 
         Assert.Equal("Anthropic", snap.Provider);
         Assert.Equal("claude-opus-4-8", snap.Model);

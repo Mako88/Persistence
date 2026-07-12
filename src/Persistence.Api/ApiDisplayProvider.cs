@@ -30,10 +30,10 @@ public class ApiDisplayProvider : IDisplayProvider
     private long seq;
 
     // Latest standing snapshots pushed by the orchestrator (guarded by `sync`). The event log carries
-    // incremental output; these carry current whole-state that a fresh client needs on connect.
+    // incremental output; these carry current whole-state that a fresh client needs on connect. Chat
+    // history is NOT held here — it's queried fresh on connect (see IConversationHistoryProvider).
     private IReadOnlyList<ScheduledEventView> scheduledEvents = [];
     private int openProposalCount;
-    private IReadOnlyList<ChatHistoryItem> chatHistory = [];
 
     /// <summary>
     /// Raised after a new event is appended, so the SSE endpoint can push it live. Handlers run
@@ -245,25 +245,17 @@ public class ApiDisplayProvider : IDisplayProvider
     public void ShowDebugInfo(string info) => Append("debug", info);
 
     /// <summary>
-    /// Captures the startup chat-history replay (for <see cref="Snapshot"/>) so a freshly-connected
-    /// client can draw prior conversation before live events arrive. Not appended to the live log —
-    /// it's a one-time backfill served by the snapshot, not incremental output.
+    /// No-op on the API surface: chat history isn't maintained here, it's queried fresh when a client
+    /// connects (<see cref="IConversationHistoryProvider"/>). Clients render it via this same method.
     /// </summary>
-    public void ShowChatHistory(IReadOnlyList<(string Role, string Content, DateTimeOffset Timestamp)> messages)
-    {
-        var items = messages.Select(m => new ChatHistoryItem(m.Role, m.Content, m.Timestamp)).ToList();
-
-        lock (sync)
-        {
-            chatHistory = items;
-        }
-    }
+    public void ShowChatHistory(IReadOnlyList<(string Role, string Content, DateTimeOffset Timestamp)> messages) { }
 
     /// <summary>
     /// The current standing state for a newly-connected client to draw before subscribing to the stream
-    /// at <see cref="ConversationSnapshot.LatestSeq"/> (so no event is missed or replayed).
+    /// at <see cref="ConversationSnapshot.LatestSeq"/> (so no event is missed or replayed). Chat history
+    /// is supplied by the caller, queried fresh from the store.
     /// </summary>
-    public ConversationSnapshot Snapshot()
+    public ConversationSnapshot Snapshot(IReadOnlyList<ChatHistoryItem> chatHistory)
     {
         lock (sync)
         {

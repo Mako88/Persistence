@@ -49,15 +49,16 @@ forget reasons, sensory curation counts — from a peer-review round with the cl
 dispatch ordering + a decision *against* a forced second model round (see below); runtime model switching
 (`list_models` / `set_model`).
 
-1. **Single-server: Console as an API client** *(phase 2 — in progress, see [ADR-0006](adr/0006-console-as-api-client.md)).*
-   ✅ **Stages 1–3 landed (2026-07):** WAL interim; the API snapshot/event surface completed (`GET /snapshot`
-   + scheduled/proposals/thinking events); wire contracts in Core; `IPersistenceClient` transport (SimpleClient +
-   SSE); a transport-agnostic `TerminalGuiDisplayProvider` (pluggable `OnInput` + `LaunchUi`); a tested
-   `ConversationEventRenderer`; and `--client <baseUrl>` client mode. **Remaining — stages 4–5:** manually verify
-   the client-mode TUI renders (headless can't); then flip the Console default to client mode (reconcile the
-   `--check-due`/`--wake-runner` headless paths — server owns wakes) and finally drop the in-process
-   engine from the Console so single-owner is enforced by construction. Rough edges noted in the stage-3
-   commit: client status labels read local config, no stream auto-reconnect yet, no live budget event.
+1. ✅ **Single-server: Console as an API client — DONE (2026-07-12), all 5 stages** (see
+   [ADR-0006](adr/0006-console-as-api-client.md)). WAL interim; the API snapshot/event surface; wire
+   contracts in Core; `IPersistenceClient` transport (SimpleClient + SSE); a transport-agnostic
+   `TerminalGuiDisplayProvider`; a tested `ConversationEventRenderer`; `--client` mode → now the **default**,
+   with the in-process engine, `--standalone`, and the `--check-due`/`--wake-runner` DB-opening paths
+   **removed** (the always-on API server owns wakes) — single-owner by construction. Client status labels,
+   live budget gauge, and stream reconnect are all server-sourced/live; connect-time chat history is pulled
+   fresh (`IConversationHistoryProvider`). Verified live via the client TUI + tests. **Next up here:**
+   deploy the API server as an always-on service (systemd/Windows service) so wakes fire without a
+   front-end; then bring the web client onto the same snapshot+stream contract.
 2. **MCP server hub.** Structured real-world tools beyond the container shell — high capability leverage,
    independent of the memory core. Best once the single-owner loop is solid.
 3. **Self-describing pieces → auto-composed help/prompt.** The durable fix for the prompt-drift the audit

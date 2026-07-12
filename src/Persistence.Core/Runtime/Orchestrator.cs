@@ -340,20 +340,6 @@ public class Orchestrator : IOrchestrator
         }
 
         sessionContext.WorkingContextId = context.Id;
-
-        var recentMessages = context.ContextFragments.Values
-            .Where(f => f.FragmentType == ContextFragmentType.ChatMessage)
-            .OrderBy(f => f.Order)
-            .TakeLast(10)
-            .Select(f => (
-                // ChatMessage fragments carry their author as a Source (RemotePeer = the
-                // model/assistant), not a Notes role. Notes is always null here.
-                Role: f.Sources.Any(s => s.SourceType == Persistence.Data.Entities.SourceType.RemotePeer) ? "assistant" : "user",
-                Content: f.Content,
-                Timestamp: f.CreatedUtc))
-            .ToList();
-
-        display.ShowChatHistory(recentMessages);
     }
 
     /// <summary>

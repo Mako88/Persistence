@@ -24,14 +24,16 @@ public class ConversationController : ControllerBase
 
     private readonly IEventBus eventBus;
     private readonly ApiDisplayProvider display;
+    private readonly Persistence.Services.IConversationHistoryProvider history;
 
     /// <summary>
     /// Constructor
     /// </summary>
-    public ConversationController(IEventBus eventBus, ApiDisplayProvider display)
+    public ConversationController(IEventBus eventBus, ApiDisplayProvider display, Persistence.Services.IConversationHistoryProvider history)
     {
         this.eventBus = eventBus;
         this.display = display;
+        this.history = history;
     }
 
     /// <summary>
@@ -61,7 +63,8 @@ public class ConversationController : ControllerBase
     /// <c>?since=LatestSeq</c> so nothing is missed or duplicated.
     /// </summary>
     [HttpGet("snapshot")]
-    public IActionResult Snapshot() => Ok(display.Snapshot());
+    public async Task<IActionResult> Snapshot(CancellationToken ct) =>
+        Ok(display.Snapshot(await history.GetRecentAsync(ct: ct)));
 
     /// <summary>
     /// Returns conversation events with sequence greater than <paramref name="since"/>.
