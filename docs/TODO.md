@@ -43,28 +43,34 @@ now a convenience to layer on, not a prerequisite**. The peer also now has a san
 Two lenses: what most improves the **peer's day-to-day** (one participant running now) vs. the
 **strategic direction** (many participants). This ordering blends them, most-important first.
 
-1. **Single-server: Console as an API client.** *Strategically #1; not urgent while only one process
-   runs.* Make one process own the store + turn pipeline + wake-ups, with all front-ends as thin clients.
-   It protects the thing we most care about — memory integrity (today two concurrent front-ends can
-   lost-update the store) — and unlocks John/Claude/Ember engaging simultaneously. Large, so **phase it**:
-   cheap interim now = WAL + busy-timeout (kills hard "database is locked"; does *not* fix lost-updates);
-   then move the Console to a client. If only ever one process runs, the interim is enough for a while.
-2. **Think-before-act pipeline.** Native reasoning is now off, so the peer's `<think>` *is* its reasoning —
-   its quality is the loop's quality, and we watched it churn/re-derive. Make a `think` execute first
-   (surface reasoning, then act with it in context). Contained; watch round-trip cost + `<continue>`.
-3. **Automated forget — budget/heuristic pruning surface.** Context balloons (we saw 40+ tool-results / 23
-   thoughts on a stale build, and associative recall now pulls *more* in). A "here's what's low-relevance ×
-   low-importance × old — summarize/archive?" surface finishes the decay story and keeps turns lean/cheap.
-   Pairs with wiring soft-delete + a recoverable `forget`.
-4. **MCP server hub.** Structured real-world tools beyond the container shell — high capability leverage,
-   independent of the memory core. Best once the loop above is solid.
-5. **Self-describing pieces → auto-composed help/prompt.** The durable fix for the prompt-drift the audit
-   just cleaned: each command/action declares its own help; the prompt and `/help` compose by discovery.
-6. **Memory import / portability.** Export/inspect the store and import external content as fragments —
+**Recently landed (2026-07):** WAL + busy-timeout interim (single-server phase 1); `prune_candidates`
+(forget pruning surface); think-first dispatch ordering + a decision *against* a forced second model
+round (see below); runtime model switching (`list_models` / `set_model`).
+
+1. **Single-server: Console as an API client** *(phase 2 — the interim shipped).* *Strategically #1; not
+   urgent while only one process runs.* Make one process own the store + turn pipeline + wake-ups, with
+   all front-ends as thin clients. Protects memory integrity (two concurrent front-ends can still
+   lost-update — WAL only fixes the *hard lock*, not lost updates) and unlocks John/Claude/Ember engaging
+   simultaneously. Large; the WAL interim buys time while only one process runs.
+2. **MCP server hub.** Structured real-world tools beyond the container shell — high capability leverage,
+   independent of the memory core. Best once the single-owner loop is solid.
+3. **Self-describing pieces → auto-composed help/prompt.** The durable fix for the prompt-drift the audit
+   cleaned: each command/action declares its own help; the prompt and `/help` compose by discovery.
+4. **Recoverable `forget` + soft-delete wiring.** `prune_candidates` now *surfaces* what to trim; the
+   remaining half is a first-class, recoverable `forget` (archive-over-erase) so acting on it is one step
+   and always reversible.
+5. **Memory import / portability.** Export/inspect the store and import external content as fragments —
    matters for trust and continuity-across-systems.
 
 Smaller/opportunistic: finish the container **SSH key** (awaiting John's dedicated deploy key), **stamp
 private thoughts in the DB**, the TUI status-bar gauges, and the robustness items below.
+
+**Decided (not building):** *forced think-before-act second round.* Native reasoning is off, so `<think>`
+is the peer's reasoning — but within one response the think tokens already precede (and so inform) the
+actions, and the `think` + `<continue>true` pattern already lets the peer think in one round and act the
+next with the thought persisted in context. A mandatory second model call every turn would ~double
+cost/latency for marginal gain. Instead we enforce think-*first dispatch ordering* (zero cost) and keep
+the voluntary continue-loop. Revisit only if we see the peer reliably acting before reasoning.
 
 ## Autonomy & reach
 
@@ -81,8 +87,11 @@ private thoughts in the DB**, the TUI status-bar gauges, and the robustness item
   process (the API/server, eventually hosted) owns the store + turn pipeline + wake-ups, and all
   front-ends are thin clients. This enables multiple participants (John, Claude, Ember) engaging
   **simultaneously** through one coherent backend, and pairs naturally with first-class local peers
-  (each client identifies its local peer). Cheap interim hardening if multi-process lingers: WAL +
-  busy-timeout (stops hard lock failures; does NOT fix lost-updates — that needs the single-owner model).
+  (each client identifies its local peer). ✅ **Interim hardening DONE (2026-07):** every connection now
+  opens in **WAL + busy-timeout=5000** (`SqliteConnectionString.OpenAsync`), so a second process rides
+  out a lock instead of hard-failing. This does NOT fix lost-updates — that still needs the single-owner
+  model. Also landed: **runtime model switching** (`list_models` / `set_model` switch the active profile
+  mid-session via `IModelClientResolver`, no restart).
 
 - **Automated forget / memory decay.** ✅ **First phase DONE (2026-06-10).** *Raw-context decay + research
   persistence:* raw material — conversation (`ChatMessage`) and tool/command results (`ActionResponse`) —
@@ -92,10 +101,11 @@ private thoughts in the DB**, the TUI status-bar gauges, and the robustness item
   → `load`). `ActionResponse` is now **persisted** (was transient), so research/tool output survives across
   turns; `list_largest` lets the peer see what's taking space; onboarding teaches "capture what matters into
   your own fragment — the raw version scrolls out." Deterministic and peer-legible (not an LLM compressing
-  memory). **Remaining:** the *budget/heuristic* layer — a low-relevance × low-importance × age
-  pruning-candidate surface (a shortcut command that proposes what to summarize/archive when the budget
-  tightens), and the open question of budget-triggered only vs. ongoing natural decay. (Pairs with wiring
-  soft-delete + include-deleted surfacing, under "Possible future".)
+  memory). ✅ **Pruning surface DONE (2026-07):** `prune_candidates` ranks the least-valuable authorable
+  fragments in context (low importance × low confidence × idle age), excluding protected anchors and
+  system-managed chat/thought fragments; read-only, complements `list_largest`. **Remaining:** the open
+  question of budget-triggered vs. ongoing natural decay, and wiring a first-class recoverable `forget`
+  (soft-delete + include-deleted surfacing) so acting on a candidate is one reversible step.
 
 - **Peer's computer — follow-ups.** The sandboxed container is live and per-participant, with
   `exec`/`shell`, `read_file`/`write_file`, a per-profile box (`ContainerName`) + `AllowAllCommands`, and a
@@ -115,12 +125,14 @@ private thoughts in the DB**, the TUI status-bar gauges, and the robustness item
 
 ## Turn pipeline
 
-- **Think-before-act: `think` executes *before* the rest of the turn.** (Sharpened from the scratch note
-  "force proper think usage.") Models currently emit `<think>` in the same response as their actions and
-  reply, so the thinking is surfaced *alongside* — not before — the commands it should inform. Make a
-  `think` execute and return first (a pass that surfaces reasoning), then run the actions/reply with that
-  reasoning in context. Care needed: extra model round-trips, and how it interacts with `<continue>` and
-  the iteration budget. Investigate before committing to an approach.
+- **Think-before-act.** ✅ **Investigated + decided (2026-07).** Within one response the `<think>` tokens
+  already precede — and so autoregressively inform — the actions/reply, and `think` + `<continue>true`
+  already lets the peer think in one round and act the next with the thought persisted in context. A
+  *forced* second model round every turn would ~double cost/latency for marginal gain, so we're **not**
+  building it. What we did ship: **think-first dispatch ordering** — `think` actions are dispatched before
+  any side-effecting action or reply within an iteration (stable sort), so reasoning is always recorded
+  first even when the model emits it out of order (zero extra round-trips). Revisit the forced round only
+  if we observe the peer reliably acting before reasoning.
 
 ## System prompt & legibility
 

@@ -96,7 +96,7 @@ public class ManageContextHandlerUnitTests
         var result = await RunAsync(context, """{ "note": { "text": "exploring DI wiring; next: find command registration" } }""");
 
         Assert.Contains("Set your working note", result);
-        var note = Assert.Single(context.ContextFragments.Values.Where(f => f.FragmentType == ContextFragmentType.WorkingNote));
+        var note = Assert.Single(context.ContextFragments.Values, f => f.FragmentType == ContextFragmentType.WorkingNote);
         Assert.Equal("exploring DI wiring; next: find command registration", note.Content);
     }
 
@@ -109,7 +109,7 @@ public class ManageContextHandlerUnitTests
         var result = await RunAsync(context, """{ "note": { "text": "second" } }""");
 
         Assert.Contains("Updated your working note", result);
-        var note = Assert.Single(context.ContextFragments.Values.Where(f => f.FragmentType == ContextFragmentType.WorkingNote));
+        var note = Assert.Single(context.ContextFragments.Values, f => f.FragmentType == ContextFragmentType.WorkingNote);
         Assert.Equal("second", note.Content); // replaced in place, not a second note
     }
 

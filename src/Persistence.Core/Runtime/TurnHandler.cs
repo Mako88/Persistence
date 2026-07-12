@@ -198,9 +198,13 @@ public class TurnHandler : ITurnHandler
                 break;
             }
 
-            // A turn may carry several actions (e.g. think + manage context + respond);
-            // dispatch them in order.
-            foreach (var action in turn.Actions)
+            // A turn may carry several actions (e.g. think + manage context + respond). Record any
+            // thinking first — so the reasoning is persisted (and in-context for a continue) before any
+            // side-effecting action or reply, even if the model emitted think last. This is
+            // think-before-act enforced by ordering, without paying for a second model round. OrderBy is
+            // stable, so the non-think actions keep their emitted order (which can matter, e.g. create a
+            // tag before using it).
+            foreach (var action in turn.Actions.OrderBy(a => a.Action == ModelAction.Think ? 0 : 1))
             {
                 await DispatchActionAsync(context, action, ct);
 

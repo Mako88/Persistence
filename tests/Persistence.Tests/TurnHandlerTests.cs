@@ -101,6 +101,31 @@ public class TurnHandlerTests
     }
 
     [Fact]
+    public async Task DispatchesThinkBeforeSideEffectingActionsEvenWhenEmittedLast()
+    {
+        var h = new Harness();
+        var order = new List<ModelAction>();
+        h.RegisterHandler(ModelAction.RespondToUser, onHandle: () => order.Add(ModelAction.RespondToUser));
+        h.RegisterHandler(ModelAction.Think, onHandle: () => order.Add(ModelAction.Think));
+
+        // The model emitted respond first, think second; the turn must still record the thought first.
+        h.ParseReturns(new ModelTurn
+        {
+            Actions =
+            [
+                new ModelResponse { Action = ModelAction.RespondToUser },
+                new ModelResponse { Action = ModelAction.Think },
+            ],
+            Continue = false,
+            ParsedSuccessfully = true,
+        });
+
+        await h.Build().ExecuteTurnAsync();
+
+        Assert.Equal([ModelAction.Think, ModelAction.RespondToUser], order);
+    }
+
+    [Fact]
     public async Task UnparseableResponseIsRetriedWithFeedback()
     {
         var h = new Harness();
