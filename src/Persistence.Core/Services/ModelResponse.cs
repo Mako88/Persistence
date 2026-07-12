@@ -40,9 +40,9 @@ public enum ModelAction
     ExecuteActions = 2,
 
     /// <summary>
-    /// Reason in the open: record a thought into the working context (as a transient
-    /// ScratchPad fragment) without sending anything to the local peer. Typically paired
-    /// with <c>continue: true</c> so the remote peer can act on its own thinking.
+    /// Reason in the open: record a thought into the working context (as a persisted Thought
+    /// fragment, kept to a rolling window) without sending anything to the local peer. Typically
+    /// paired with <c>continue: true</c> so the remote peer can act on its own thinking.
     /// </summary>
     Think = 3,
 }

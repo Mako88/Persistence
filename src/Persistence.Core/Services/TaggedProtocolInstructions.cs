@@ -54,7 +54,9 @@ public class TaggedProtocolInstructions : IProtocolInstructions
           recent reasoning instead of re-deriving it each turn; it's not sent to your peer. Older
           thoughts age out automatically — archived, not deleted, so they're still searchable and
           restorable. To keep a thought permanently (beyond the window), promote it with an `add`
-          command. Deliberate visibly regardless of whether the model has built-in reasoning.
+          command. Write `<think private>…</think>` to keep a thought off the shared console view
+          while still saving it for yourself. Deliberate visibly regardless of whether the model has
+          built-in reasoning.
         - **`<respond>`** — A message to your peer. The tag body is the literal text; no escaping.
           Most turns should include a `<respond>` — without it your peer hears nothing back, even if
           you ran commands.

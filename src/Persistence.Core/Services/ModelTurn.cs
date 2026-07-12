@@ -4,9 +4,9 @@ namespace Persistence.Services;
 /// One parsed turn from the remote peer: an ordered list of actions to perform and a single
 /// <see cref="Continue"/> flag for whether to loop afterward.
 ///
-/// The JSON format yields exactly one action per turn (a single-element list); the tagged
-/// format can yield several (e.g. think + respond + manage context in one turn). Both
-/// parsers produce this same shape so the turn pipeline is format-agnostic.
+/// The tagged format can yield several actions in one turn (e.g. think + respond + manage context).
+/// The parser produces this shape regardless of format, so the turn pipeline stays format-agnostic and
+/// a different response format would slot in unchanged.
 /// </summary>
 public class ModelTurn
 {
