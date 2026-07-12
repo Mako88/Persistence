@@ -421,13 +421,13 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
         UpdateStatusSegment(() => proposalsLabel, ProposalsText(count), ProposalsColor(count));
     }
 
-    public void ShowChatHistory(IReadOnlyList<(string Role, string Content, DateTimeOffset Timestamp)> messages)
+    public void ShowChatHistory(IReadOnlyList<Persistence.Contracts.ChatHistoryItem> messages)
     {
-        // History now lives in the main conversation pane, shown on startup with timestamps.
-        foreach (var (role, content, ts) in messages)
+        // History lives in the main conversation pane, shown on startup with timestamps, attributed to
+        // each message's author (a peer's name) so multiple participants read as a conversation.
+        foreach (var m in messages)
         {
-            var who = role == "user" ? "You" : "Remote Peer";
-            Append(outputBuffer, () => output, $"[{ts.LocalDateTime.ToString(TimeFormat)}] {who}: {content}\n\n");
+            Append(outputBuffer, () => output, $"[{m.Timestamp.LocalDateTime.ToString(TimeFormat)}] {m.Author}: {m.Content}\n\n");
         }
     }
 

@@ -250,7 +250,7 @@ public class ApiDisplayProvider : IDisplayProvider
     /// No-op on the API surface: chat history isn't maintained here, it's queried fresh when a client
     /// connects (<see cref="IConversationHistoryProvider"/>). Clients render it via this same method.
     /// </summary>
-    public void ShowChatHistory(IReadOnlyList<(string Role, string Content, DateTimeOffset Timestamp)> messages) { }
+    public void ShowChatHistory(IReadOnlyList<ChatHistoryItem> messages) { }
 
     /// <summary>
     /// The current standing state for a newly-connected client to draw before subscribing to the stream

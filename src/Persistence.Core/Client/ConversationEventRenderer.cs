@@ -9,26 +9,47 @@ namespace Persistence.Client;
 /// Maps the API conversation snapshot + event stream onto an <see cref="IDisplayProvider"/>, so a thin
 /// client renders exactly what the in-process app renders from its own display calls. Transport-agnostic
 /// — give it any display; the mapping is what the client-mode Console (and a future web UI) drive rendering
-/// through.
+/// through. One instance per peer connection: it remembers which message ids it has already drawn, so a
+/// reply that appears in both the connect-time snapshot and the live stream (the benign overlap left by the
+/// persist-before-publish fix) is rendered once, not twice.
 /// </summary>
-public static class ConversationEventRenderer
+public sealed class ConversationEventRenderer
 {
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
 
+    private readonly IDisplayProvider display;
+    private readonly HashSet<long> renderedMessageIds = [];
+
+    /// <summary>Constructor</summary>
+    public ConversationEventRenderer(IDisplayProvider display) => this.display = display;
+
     /// <summary>Draws the connect-time snapshot: prior chat, the schedule, and the open-proposal count.</summary>
-    public static void DrawSnapshot(IDisplayProvider display, ConversationSnapshot snapshot)
+    public void DrawSnapshot(ConversationSnapshot snapshot)
     {
-        display.ShowChatHistory(snapshot.ChatHistory.Select(m => (m.Role, m.Content, m.Timestamp)).ToList());
+        // Remember the ids we draw from history so the live stream doesn't redraw the same messages.
+        foreach (var m in snapshot.ChatHistory)
+        {
+            renderedMessageIds.Add(m.Id);
+        }
+
+        display.ShowChatHistory(snapshot.ChatHistory);
         display.ShowScheduledEvents(ToEntities(snapshot.ScheduledEvents));
         display.ShowOpenProposalCount(snapshot.OpenProposalCount);
     }
 
     /// <summary>Applies one streamed <see cref="ConversationEvent"/> to the matching pane.</summary>
-    public static void Render(IDisplayProvider display, ConversationEvent e)
+    public void Render(ConversationEvent e)
     {
         switch (e.Kind)
         {
-            case "reply": display.ShowReply(e.Text); break;
+            // A reply carries its persisted message id in Detail; skip it if the snapshot already drew it.
+            case "reply":
+                if (long.TryParse(e.Detail, out var id) && !renderedMessageIds.Add(id))
+                {
+                    break;
+                }
+                display.ShowReply(e.Text);
+                break;
             case "thought": display.ShowThought(e.Text); break;
             case "reasoning": display.ShowReasoning(e.Text); break;
             case "tool": RenderTool(display, e); break;

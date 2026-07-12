@@ -56,7 +56,7 @@ public class ApiDisplayProviderTests
         var display = new ApiDisplayProvider(new EventBus(), new AppConfig(), new SessionContext());
 
         // ShowChatHistory is a no-op here now — history is queried fresh at snapshot time, not captured.
-        display.ShowChatHistory([("user", "ignored", DateTimeOffset.UtcNow)]);
+        display.ShowChatHistory([new ChatHistoryItem(9, "user", "John", "ignored", DateTimeOffset.UtcNow)]);
         IReadOnlyList<ChatHistoryItem> chat = [new ChatHistoryItem(1, "user", "John", "hi", DateTimeOffset.UtcNow)];
 
         var snap = display.Snapshot(display.LatestSeq, chat);

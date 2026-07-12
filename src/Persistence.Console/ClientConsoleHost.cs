@@ -40,13 +40,17 @@ public static class ClientConsoleHost
         var display = new TerminalGuiDisplayProvider(new EventBus(), session, config);
         display.OnInput = text => client.SendAsync(text, ct);
 
+        // One renderer per connection — it remembers drawn message ids so the stream doesn't redraw what
+        // the snapshot already showed.
+        var renderer = new ConversationEventRenderer(display);
+
         if (initial is not null)
         {
-            ConversationEventRenderer.DrawSnapshot(display, initial);
+            renderer.DrawSnapshot(initial);
         }
 
         // The provider buffers pushes that land before the UI loop is ready, so the pump can run alongside.
-        var pump = Task.Run(() => PumpAsync(client, display, initial?.LatestSeq ?? 0, ct), ct);
+        var pump = Task.Run(() => PumpAsync(client, renderer, display, initial?.LatestSeq ?? 0, ct), ct);
 
         await display.LaunchUi(ct);
         await pump;
@@ -57,7 +61,7 @@ public static class ClientConsoleHost
     /// transient disconnect replays only what was missed (no gap, no duplicate). A full server restart —
     /// which resets the in-memory event log — is not auto-recovered; restart the client.
     /// </summary>
-    private static async Task PumpAsync(IPersistenceClient client, IDisplayProvider display, long since, CancellationToken ct)
+    private static async Task PumpAsync(IPersistenceClient client, ConversationEventRenderer renderer, IDisplayProvider display, long since, CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
@@ -65,7 +69,7 @@ public static class ClientConsoleHost
             {
                 await foreach (var evt in client.StreamAsync(since, ct))
                 {
-                    ConversationEventRenderer.Render(display, evt);
+                    renderer.Render(evt);
                     since = evt.Seq;
                 }
             }

@@ -1,3 +1,4 @@
+using Persistence.Contracts;
 using Persistence.Data.Entities;
 
 namespace Persistence.Runtime;
@@ -88,9 +89,10 @@ public interface IDisplayProvider
     void Stop();
 
     /// <summary>
-    /// Shows recent chat history on startup.
+    /// Shows recent chat history on startup — each message attributed to its author (a peer's name),
+    /// carrying the fragment id so a client can reconcile it against the live stream.
     /// </summary>
-    void ShowChatHistory(IReadOnlyList<(string Role, string Content, DateTimeOffset Timestamp)> messages);
+    void ShowChatHistory(IReadOnlyList<ChatHistoryItem> messages);
 
     /// <summary>
     /// Shows a system/local message to the local peer — e.g. the result of a local slash command

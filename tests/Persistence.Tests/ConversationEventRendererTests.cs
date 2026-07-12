@@ -13,9 +13,12 @@ namespace Persistence.Tests;
 public class ConversationEventRendererTests
 {
     private readonly Mock<IDisplayProvider> display = new();
+    private readonly ConversationEventRenderer renderer;
+
+    public ConversationEventRendererTests() => renderer = new ConversationEventRenderer(display.Object);
 
     private void Render(string kind, string text, string? detail = null) =>
-        ConversationEventRenderer.Render(display.Object, new ConversationEvent(1, kind, text, detail));
+        renderer.Render(new ConversationEvent(1, kind, text, detail));
 
     [Fact]
     public void RoutesEachEventKindToItsPane()
@@ -93,11 +96,30 @@ public class ConversationEventRendererTests
             Model: "claude-opus-4-8",
             SessionId: "abc123");
 
-        ConversationEventRenderer.DrawSnapshot(display.Object, snapshot);
+        renderer.DrawSnapshot(snapshot);
 
-        display.Verify(d => d.ShowChatHistory(It.Is<IReadOnlyList<(string, string, DateTimeOffset)>>(
-            m => m.Count == 1 && m[0].Item2 == "hello")), Times.Once);
+        display.Verify(d => d.ShowChatHistory(It.Is<IReadOnlyList<ChatHistoryItem>>(
+            m => m.Count == 1 && m[0].Content == "hello" && m[0].Author == "John")), Times.Once);
         display.Verify(d => d.ShowScheduledEvents(It.Is<IReadOnlyList<ScheduledEventEntity>>(l => l.Count == 1)), Times.Once);
         display.Verify(d => d.ShowOpenProposalCount(2), Times.Once);
+    }
+
+    [Fact]
+    public void DedupsAStreamedReplyAlreadyDrawnFromTheSnapshot()
+    {
+        // A reply committed just before connect appears in the snapshot history AND streams live (the
+        // benign persist-before-publish overlap). Drawn from the snapshot by id 7, the live "reply" event
+        // carrying id 7 in its detail must not draw it again — but a genuinely new reply (id 8) must.
+        var snapshot = new ConversationSnapshot(
+            LatestSeq: 5, OpenProposalCount: 0, ScheduledEvents: [],
+            ChatHistory: [new ChatHistoryItem(7, "assistant", "Remote Peer", "already shown", DateTimeOffset.UtcNow)],
+            Provider: "Anthropic", Model: "m", SessionId: "s");
+        renderer.DrawSnapshot(snapshot);
+
+        Render("reply", "already shown", detail: "7"); // same id as history → skip
+        Render("reply", "brand new", detail: "8");      // new id → render
+
+        display.Verify(d => d.ShowReply("already shown"), Times.Never);
+        display.Verify(d => d.ShowReply("brand new"), Times.Once);
     }
 }
