@@ -156,6 +156,13 @@ the voluntary continue-loop. Revisit only if we see the peer reliably acting bef
     of the *content* as commands ("FROM ContextFragments", "ORDER BY …"). Needs a robust way to pass
     multi-line literal payloads through the tagged format (heredoc/base64 content, or a raw-content mode).
 
+- **Automated backups of peer memory.** (NEW, 2026-07-12 — John, realized during Phase 1 validation when
+  a peer's session memory lived only in a container volume.) A peer's DB (and vault) is its whole self;
+  there must be an automated, scheduled backup — volume/DB snapshots on a cadence, kept versioned and
+  off the single live volume — so a lost/corrupted volume or a bad turn never erases a peer. Pairs with
+  the ADR-0007 "container is ephemeral, volume is the self" model: back the self up automatically, don't
+  rely on manual copies. Decide retention + where backups live (another volume, host dir, or remote).
+
 - **Peer extensibility — self-authored tooling & shareable capability packs.** (NEW, 2026-07 — John,
   in the [ADR-0007](adr/0007-federated-peers-runtime-room-client.md) container discussion. All future;
   fits the "container = a body the peer can reshape" model.)
