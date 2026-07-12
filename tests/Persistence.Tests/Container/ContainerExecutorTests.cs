@@ -54,6 +54,30 @@ public class ContainerExecutorTests
     }
 
     [Fact]
+    public async Task LocalModeRunsTheShellDirectlyNotViaDockerExec()
+    {
+        // The peer's runtime is inside its own container (ADR-0007), so shell runs as a local `sh -lc`
+        // process here — no `docker exec` into a sidecar.
+        config.Container.Local = true;
+        runner.Setup(r => r.RunAsync("sh", It.IsAny<IReadOnlyList<string>>(),
+                It.IsAny<int>(), It.IsAny<int>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "notes.txt\n", "", false, false));
+
+        var result = await executor.ExecuteAsync("ls", CancellationToken.None);
+
+        Assert.True(result.Allowed);
+        Assert.Contains("notes.txt", result.Output);
+
+        var args = CapturedArgs()!;
+        Assert.Equal(["-lc"], args.Take(1)); // sh -lc <script> — no docker/exec/name prefix
+        Assert.Contains("ls", args[1]);
+
+        runner.Verify(r => r.RunAsync("docker", It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
     public async Task DisallowedProgramIsRejectedAndNeverRunsTheProcess()
     {
         var result = await executor.ExecuteAsync("gcc evil.c", CancellationToken.None);

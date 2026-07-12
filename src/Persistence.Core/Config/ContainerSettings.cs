@@ -13,7 +13,16 @@ public class ContainerSettings
     /// <summary>Whether the <c>shell</c> command is available. Off until the container is running.</summary>
     public bool Enabled { get; set; } = false;
 
-    /// <summary>Name (or id) of the running container to <c>docker exec</c> into.</summary>
+    /// <summary>
+    /// When true, the peer's runtime is itself running <em>inside</em> its container (the ADR-0007
+    /// body/mind model), so <c>shell</c> commands run as local processes (<c>sh -lc</c>) in this same
+    /// container rather than via <c>docker exec</c> into a separate one. The peer inhabits its computer
+    /// instead of reaching into a sidecar. Off by default (the legacy host→sidecar model), enabled in the
+    /// peer container image via <c>PERSISTENCE_CONTAINER_LOCAL=true</c>.
+    /// </summary>
+    public bool Local { get; set; } = false;
+
+    /// <summary>Name (or id) of the sidecar container to <c>docker exec</c> into (legacy, non-<see cref="Local"/> mode).</summary>
     public string Name { get; set; } = "persistence-computer";
 
     /// <summary>Name of the search (SearXNG) container, so the peer can read its logs to troubleshoot search.</summary>

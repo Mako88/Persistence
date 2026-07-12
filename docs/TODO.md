@@ -143,6 +143,22 @@ the voluntary continue-loop. Revisit only if we see the peer reliably acting bef
   through the peer (JS-heavy pages); egress / secret hygiene as capabilities widen; consider a `WebTool`
   source type for provenance of web-derived fragments.
 
+- **Peer extensibility — self-authored tooling & shareable capability packs.** (NEW, 2026-07 — John,
+  in the [ADR-0007](adr/0007-federated-peers-runtime-room-client.md) container discussion. All future;
+  fits the "container = a body the peer can reshape" model.)
+  - **A curated default toolset baked into the peer image**, beyond git/curl: general programming tools
+    (so it can actually write and run code), usability tools (a headless browser / web scraper — evaluate
+    an open-source "AI web crawler"), and later integrations with other services. Decide the default list.
+  - **Encourage aliases & scripts.** Beyond Claude-style *skills* (right for tasks needing a dynamic hand),
+    a peer on its own machine benefits from building durable aliases/scripts for common tasks — and
+    onboarding/guidance should nudge toward that. Cheaper and more legible than re-reasoning each time.
+  - **Per-peer custom commands.** Let a peer add its own commands to the system, available to itself —
+    a dynamic, per-peer command surface layered on the built-in ModelActions (pairs with the
+    self-describing-pieces work). "I don't like the built-in command, I'll write my own."
+  - **Installable capability packs.** A whole install-script/bundle a peer can pull into its container that
+    sets up dependencies + scripts + aliases + custom commands for a given task, ready to go — shareable
+    between peers ("pull this pack and you can do X"). The container-native analogue of skills.
+
 - **MCP server hub**, with a "catalog" MCP server exposed to start. Structured real-world tools for the
   peer — distinct from the container's shell access; high value, independent of the memory core.
 
