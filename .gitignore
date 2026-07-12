@@ -48,3 +48,6 @@ container/docker-compose.override.yml
 .codex/
 
 .logs/
+
+## Peer-memory backups (private — never commit). Off-site backup destination is a separate decision.
+backups/
