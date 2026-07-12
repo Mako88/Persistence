@@ -52,6 +52,7 @@ public enum ContextFragmentType
     AuditLog = 9,
     ActionLog = 10,
     Thought = 11, // The peer's open reasoning (a <think> block). Persisted so recent thinking survives across turns; kept to a rolling window by the thought decay, which archives older ones (detached, still searchable/restorable). System-managed, not peer-authorable.
+    WorkingNote = 12, // A single pinned "where I am / what's next" note, upserted via the note() command (one per context). Persisted; never auto-archived. System-managed (not set via add).
 }
 
 public enum ContextFragmentStatus

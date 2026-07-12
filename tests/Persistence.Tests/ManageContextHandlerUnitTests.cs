@@ -89,6 +89,38 @@ public class ManageContextHandlerUnitTests
     }
 
     [Fact]
+    public async Task NoteCreatesASingleWorkingNoteFragment()
+    {
+        var context = Context();
+
+        var result = await RunAsync(context, """{ "note": { "text": "exploring DI wiring; next: find command registration" } }""");
+
+        Assert.Contains("Set your working note", result);
+        var note = Assert.Single(context.ContextFragments.Values.Where(f => f.FragmentType == ContextFragmentType.WorkingNote));
+        Assert.Equal("exploring DI wiring; next: find command registration", note.Content);
+    }
+
+    [Fact]
+    public async Task NoteUpdatesTheExistingNoteInsteadOfAddingAnother()
+    {
+        var context = Context();
+
+        await RunAsync(context, """{ "note": { "text": "first" } }""");
+        var result = await RunAsync(context, """{ "note": { "text": "second" } }""");
+
+        Assert.Contains("Updated your working note", result);
+        var note = Assert.Single(context.ContextFragments.Values.Where(f => f.FragmentType == ContextFragmentType.WorkingNote));
+        Assert.Equal("second", note.Content); // replaced in place, not a second note
+    }
+
+    [Fact]
+    public async Task NoteRequiresText()
+    {
+        var result = await RunAsync(Context(), """{ "note": { } }""");
+        Assert.Contains("'text' is required", result);
+    }
+
+    [Fact]
     public async Task RemoveTakesFragmentOutOfContext()
     {
         var context = Context();

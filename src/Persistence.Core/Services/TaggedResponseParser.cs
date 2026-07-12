@@ -55,7 +55,8 @@ public partial class TaggedResponseParser : IModelResponseParser
             {
                 case "think":
                     sawKnownTag = true;
-                    actions.Add(TextAction(ModelAction.Think, body.Trim()));
+                    var isPrivate = PrivateAttr().IsMatch(m.Groups["attr"].Value);
+                    actions.Add(ThinkAction(body.Trim(), isPrivate));
                     break;
 
                 case "respond":
@@ -105,6 +106,18 @@ public partial class TaggedResponseParser : IModelResponseParser
         new() { Action = action, Data = System.Text.Json.Nodes.JsonValue.Create(text) };
 
     /// <summary>
+    /// Builds a Think response. A plain think carries its text directly; a <c>private</c> think carries
+    /// <c>{ text, private: true }</c> so the handler can persist it but keep it off the console.
+    /// </summary>
+    private static ModelResponse ThinkAction(string text, bool isPrivate) => new()
+    {
+        Action = ModelAction.Think,
+        Data = isPrivate
+            ? new System.Text.Json.Nodes.JsonObject { ["text"] = text, ["private"] = true }
+            : System.Text.Json.Nodes.JsonValue.Create(text),
+    };
+
+    /// <summary>
     /// Builds a model response whose data is the JSON command array parsed from the tag body
     /// </summary>
     private static ModelResponse CommandAction(ModelAction action, string body) =>
@@ -113,8 +126,13 @@ public partial class TaggedResponseParser : IModelResponseParser
     /// <summary>
     /// Returns the compiled regex that matches each top-level tag and its body
     /// </summary>
-    // Matches <tag>...</tag> for any tag name; DOTALL so bodies span newlines. Non-greedy
-    // body so adjacent tags don't merge.
-    [GeneratedRegex(@"<(?<tag>\w+)\s*>(?<body>.*?)</\k<tag>\s*>", RegexOptions.Singleline)]
+    // Matches <tag ...>...</tag> for any tag name, capturing an optional attribute run (e.g. the
+    // "private" on <think private>); DOTALL so bodies span newlines. Non-greedy body so adjacent
+    // tags don't merge.
+    [GeneratedRegex(@"<(?<tag>\w+)(?<attr>[^>]*)>(?<body>.*?)</\k<tag>\s*>", RegexOptions.Singleline)]
     private static partial Regex TagRegex();
+
+    // A whole-word "private" anywhere in a tag's attribute run.
+    [GeneratedRegex(@"\bprivate\b", RegexOptions.IgnoreCase)]
+    private static partial Regex PrivateAttr();
 }

@@ -33,6 +33,25 @@ public class TaggedResponseParserTests
     }
 
     [Fact]
+    public void PlainThinkCarriesItsTextDirectly()
+    {
+        var think = Assert.Single(Parser.Parse("<think>open reasoning</think>").Actions);
+
+        Assert.Equal(ModelAction.Think, think.Action);
+        Assert.Equal("open reasoning", think.Data?.GetValue<string>()); // a bare string, no private flag
+    }
+
+    [Fact]
+    public void PrivateThinkIsFlaggedAndKeepsItsText()
+    {
+        var think = Assert.Single(Parser.Parse("<think private>hidden reasoning</think>").Actions);
+
+        Assert.Equal(ModelAction.Think, think.Action);
+        Assert.Equal("hidden reasoning", think.Data?["text"]?.GetValue<string>());
+        Assert.True(think.Data?["private"]?.GetValue<bool>());
+    }
+
+    [Fact]
     public void RespondPreservesMarkdownAndQuotesUnescaped()
     {
         var body = "# Heading\n\nText with \"quotes\" and a `code` span.";

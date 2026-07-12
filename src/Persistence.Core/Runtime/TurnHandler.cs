@@ -163,7 +163,7 @@ public class TurnHandler : ITurnHandler
             if (modelClient.LastUsage is { } usage)
             {
                 usageTracker.Record(usage.InputTokens, TokenEstimator.Estimate(segments.Select(s => s.Content)));
-                usageTracker.AddUsage(usage.InputTokens, usage.OutputTokens);
+                usageTracker.AddUsage(usage);
             }
 
             var turn = responseParser.Parse(rawOutput);
@@ -349,13 +349,20 @@ public class TurnHandler : ITurnHandler
     /// </summary>
     private static string SummarizeAction(ToolInvoked e)
     {
-        static string Clip(string? s, int max) =>
-            string.IsNullOrEmpty(s) ? "" : (s.Length <= max ? s : s[..max] + "…");
+        static string Clip(string? s, int max)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            var flat = s.Replace('\n', ' ').Replace('\r', ' ').Trim();
+            return flat.Length <= max ? flat : flat[..max] + "…";
+        }
 
-        var request = Clip(e.Request?.Replace('\n', ' ').Trim(), 70);
-        var resultLine = e.Result?.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+        var request = Clip(e.Request, 80);
+        // Give the outcome real room (flattened): the peer shouldn't have to scroll up to the full
+        // ActionResponse fragment to remember what a command produced — that's what drove re-narrating
+        // in <think>. The full result is still above; this is the legible gist.
+        var result = Clip(e.Result, 240);
 
-        return $"{e.Tool}({request}) → {Clip(resultLine, 120)}";
+        return $"{e.Tool}({request}) → {result}";
     }
 
     /// <summary>

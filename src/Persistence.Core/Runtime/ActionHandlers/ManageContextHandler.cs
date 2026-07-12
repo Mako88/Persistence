@@ -436,6 +436,50 @@ public class ManageContextHandler : CommandHandler
         return result;
     }
 
+    [Command("note", "Set your working note — a single pinned \"where I am / what's next\" reminder that stays in your context and replaces itself each time you call this. Track your intent across turns without hand-managing a fragment. (To clear it, remove the WorkingNote fragment.)")]
+    [CommandField("text", "string", required: true, Description = "Your current orientation — what you're doing, where you are in it, what's next")]
+    private Task<string> ExecuteNoteAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
+    {
+        var text = command?["text"]?.GetValue<string>();
+
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return Task.FromResult("Note failed: 'text' is required");
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var existing = context.ContextFragments.Values
+            .FirstOrDefault(f => f.FragmentType == ContextFragmentType.WorkingNote);
+
+        if (existing is not null)
+        {
+            existing.Content = text;
+            existing.LastModifiedUtc = now;
+            return Task.FromResult($"Updated your working note (#{(existing.Id > 0 ? existing.Id.ToString() : "new")}).");
+        }
+
+        context.AddFragment(new WeightedContextFragment
+        {
+            FragmentType = ContextFragmentType.WorkingNote,
+            Status = ContextFragmentStatus.Active,
+            Content = text,
+            Importance = 0.7f,
+            Confidence = 1.0f,
+            Relevance = 1.0f,
+            Sources = [new SourceEntity
+            {
+                Id = sessionContext.RemotePeerSourceId,
+                SourceType = SourceType.RemotePeer,
+                CreatedUtc = now,
+                LastModifiedUtc = now,
+            }],
+            CreatedUtc = now,
+            LastModifiedUtc = now,
+        });
+
+        return Task.FromResult("Set your working note.");
+    }
+
     [Command("update", "Modify an existing fragment in the working context")]
     [CommandField("id", "long", required: true, Description = "Fragment ID")]
     [CommandField("content", "string", Description = "New content")]

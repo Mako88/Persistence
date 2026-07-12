@@ -42,11 +42,13 @@ public class CostTrackingTests
     {
         var tracker = new TokenUsageTracker();
 
-        tracker.AddUsage(100, 50);
-        tracker.AddUsage(200, 30);
+        tracker.AddUsage(new ModelUsage(100, 50, CacheReadTokens: 40, CacheCreationTokens: 10));
+        tracker.AddUsage(new ModelUsage(200, 30, CacheReadTokens: 60));
 
         Assert.Equal(300, tracker.TotalInputTokens);
         Assert.Equal(80, tracker.TotalOutputTokens);
+        Assert.Equal(100, tracker.TotalCacheReadTokens);
+        Assert.Equal(10, tracker.TotalCacheCreationTokens);
         Assert.Equal(2, tracker.CallCount);
     }
 
@@ -55,7 +57,7 @@ public class CostTrackingTests
     {
         var tracker = new TokenUsageTracker();
 
-        tracker.AddUsage(-5, -1); // a malformed/negative report must not corrupt the totals
+        tracker.AddUsage(new ModelUsage(-5, -1)); // a malformed/negative report must not corrupt the totals
 
         Assert.Equal(0, tracker.TotalInputTokens);
         Assert.Equal(0, tracker.TotalOutputTokens);

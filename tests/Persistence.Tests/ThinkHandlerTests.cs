@@ -69,6 +69,22 @@ public class ThinkHandlerTests
     }
 
     [Fact]
+    public async Task PrivateThoughtIsPersistedButNotPublishedToTheConsole()
+    {
+        var (handler, _, thoughts) = Create();
+        var context = NewContext();
+
+        await handler.HandleAsync(context, JsonNode.Parse("""{ "text": "a private worry", "private": true }"""));
+
+        // Still saved as a Thought fragment (it's the peer's own reasoning)…
+        var fragment = Assert.Single(context.ContextFragments.Values);
+        Assert.Equal(ContextFragmentType.Thought, fragment.FragmentType);
+        Assert.Equal("a private worry", fragment.Content);
+        // …but never published to the console Thoughts tab.
+        Assert.Empty(thoughts);
+    }
+
+    [Fact]
     public async Task AcceptsObjectWithTextProperty()
     {
         var (handler, _, _) = Create();

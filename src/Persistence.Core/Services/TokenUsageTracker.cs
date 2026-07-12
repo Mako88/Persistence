@@ -46,13 +46,21 @@ public class TokenUsageTracker : ITokenUsageTracker
     public long TotalOutputTokens { get; private set; }
 
     /// <inheritdoc />
+    public long TotalCacheReadTokens { get; private set; }
+
+    /// <inheritdoc />
+    public long TotalCacheCreationTokens { get; private set; }
+
+    /// <inheritdoc />
     public int CallCount { get; private set; }
 
     /// <inheritdoc />
-    public void AddUsage(int inputTokens, int outputTokens)
+    public void AddUsage(ModelUsage usage)
     {
-        TotalInputTokens += Math.Max(0, inputTokens);
-        TotalOutputTokens += Math.Max(0, outputTokens);
+        TotalInputTokens += Math.Max(0, usage.InputTokens);
+        TotalOutputTokens += Math.Max(0, usage.OutputTokens);
+        TotalCacheReadTokens += Math.Max(0, usage.CacheReadTokens);
+        TotalCacheCreationTokens += Math.Max(0, usage.CacheCreationTokens);
         CallCount++;
     }
 }

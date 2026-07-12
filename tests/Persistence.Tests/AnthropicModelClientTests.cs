@@ -226,6 +226,52 @@ public class AnthropicModelClientTests
     }
 
     [Fact]
+    public async Task ExtractsPromptCacheTokensFromUsage()
+    {
+        var body = """
+        {
+          "content": [ { "type": "text", "text": "hi" } ],
+          "usage": { "input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 1000, "cache_creation_input_tokens": 200 }
+        }
+        """;
+        var (client, _, _) = CreateClient(body);
+
+        await client.CompleteAsync(Request());
+
+        Assert.Equal(new ModelUsage(10, 5, CacheReadTokens: 1000, CacheCreationTokens: 200), client.LastUsage);
+    }
+
+    [Fact]
+    public async Task PlacesOnePromptCacheBreakpointOnTheSecondToLastMessage()
+    {
+        var (client, http, _) = CreateClient(SuccessBody);
+        // Folds to 3 messages: user(identity+hi), assistant(earlier), user(sensory).
+        var request = new PromptRequest
+        {
+            Messages =
+            [
+                new PromptMessage("developer", "identity"),
+                new PromptMessage("user", "hi"),
+                new PromptMessage("assistant", "earlier reply"),
+                new PromptMessage("developer", "sensory block"),
+            ],
+        };
+
+        await client.CompleteAsync(request);
+
+        var messages = SerializedBody(http).GetProperty("messages");
+        var count = messages.GetArrayLength();
+
+        // Second-to-last message carries the cache breakpoint (content is a block array with cache_control).
+        var cachedContent = messages[count - 2].GetProperty("content");
+        Assert.Equal(JsonValueKind.Array, cachedContent.ValueKind);
+        Assert.Equal("ephemeral", cachedContent[0].GetProperty("cache_control").GetProperty("type").GetString());
+
+        // The final (volatile sensory) message stays a plain string — uncached, re-sent each turn.
+        Assert.Equal(JsonValueKind.String, messages[count - 1].GetProperty("content").ValueKind);
+    }
+
+    [Fact]
     public async Task ConcatenatesMultipleTextBlocks()
     {
         var body = """

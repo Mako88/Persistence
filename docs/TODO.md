@@ -16,6 +16,25 @@ per-turn command catalog. Silent truncation is no longer the failure mode, so **
 now a convenience to layer on, not a prerequisite**. The peer also now has a sandboxed container
 "computer" (`shell`: web search/fetch + scripting), verified end-to-end.
 
+**Recent work (2026-07 — John + Claude via Claude Code):** landed since the above —
+- **Native Anthropic client** (`ModelProvider.Anthropic`, Messages API, streaming + non-streaming) as a
+  first-class provider; the OpenAI Responses/Chat clients refactored to expose real provider usage
+  (`IModelClient.LastUsage`), consumed in one place in the turn handler.
+- **Running cost + real usage readout** in the sensory block (data-driven `ModelPricingProvider` +
+  `model_pricing.json`), and **Anthropic prompt caching** (a `cache_control` breakpoint on the stable
+  prefix, with cache-token-aware cost).
+- **Native reasoning off by default** (`ReasoningEffort: "off"`) — the peer reasons in the persisted
+  `<think>` channel instead of a redundant, ephemeral one.
+- **Thought persistence**: `<think>` is saved as a `Thought` fragment on a rolling window
+  (`ThoughtContextWindow`, default 8, archived-not-deleted); **`=== THIS TURN ===`** delineation marker;
+  the id-0 label "transient" → "new" (it misled the peer into thinking thoughts don't persist).
+- **Per-participant containers**: `exec`/`read_file`/`write_file` commands, a per-profile `ContainerName`
+  + `AllowAllCommands` override, and .NET 10 SDK + sudo baked into the image.
+- **Orientation cluster** (this batch): the `note()` working-note command, **enriched recent-changes**
+  (field-level diffs + content snippets, not just IDs), a **fuller numbered turn action-log**,
+  **private thoughts** (`<think private>` — persisted but kept off the console), model/provider shown in
+  the sensory block, and the autonomous-wake sensory no longer claiming a peer is present.
+
 ## Autonomy & reach
 
 - **Separate local peers as first-class.** (NEW — the current build.) Model local peers (the human/agent at the keyboard) as
@@ -50,17 +69,17 @@ now a convenience to layer on, not a prerequisite**. The peer also now has a san
   tightens), and the open question of budget-triggered only vs. ongoing natural decay. (Pairs with wiring
   soft-delete + include-deleted surfacing, under "Possible future".)
 
-- **Peer's computer — follow-ups.** (NEW, from this session's container work.) The sandboxed container +
-  `shell` is live (web_search / fetch_url / scripting verified end-to-end with the peer). Follow-ups:
-  verify `agent-browser` through the peer (JS-heavy pages); widen the allowlist as the peer's needs grow;
-  egress / secret hygiene as capabilities expand; consider a `WebTool` source type for provenance of
-  web-derived fragments.
+- **Peer's computer — follow-ups.** The sandboxed container is live and now per-participant, with
+  `exec`/`shell`, `read_file`/`write_file`, a per-profile box (`ContainerName`) + `AllowAllCommands`, and a
+  .NET 10 SDK + sudo in the image. **In progress (2026-07):** a **`/shared` host volume** for file exchange,
+  a **periodic snapshot of the active peer's DB** into it (read-only data access for the peer — snapshot,
+  not the live WAL file; only the current peer's DB, not the whole `dbs/`), and an **SSH deploy key** so the
+  peer can `git push` (John to create a dedicated, branch-scoped key). Remaining: verify `agent-browser`
+  through the peer (JS-heavy pages); egress / secret hygiene as capabilities widen; consider a `WebTool`
+  source type for provenance of web-derived fragments.
 
 - **MCP server hub**, with a "catalog" MCP server exposed to start. Structured real-world tools for the
   peer — distinct from the container's shell access; high value, independent of the memory core.
-
-- **AnthropicModelClient.** Real Anthropic provider alongside OpenAI / OpenAiChat / LocalClaude — enables
-  the Claude-as-remote-peer direction natively.
 
 - **Memory import / portability.** Import external content as fragments (e.g. seed a peer from an exported
   conversation) and export/inspect the whole store outside the app. Matters for trust,
@@ -77,6 +96,13 @@ now a convenience to layer on, not a prerequisite**. The peer also now has a san
 
 ## System prompt & legibility
 
+- **Audit every prompt/instruction against actual behaviour.** (NEW, 2026-07.) The system prompt, protocol
+  instructions, command descriptions, and onboarding text drift as behaviour changes — the `<think>` "not
+  saved" text was stale for a while before it was caught. Do a full pass and reconcile them with what the
+  code actually does; ideally pair with the self-describing-pieces item below so this stops recurring.
+- **Stamp private thoughts in the DB.** (NEW, 2026-07.) `<think private>` currently just skips the console
+  event; the fragment isn't marked private. Add a `private` flag on the Thought fragment so privacy can be
+  enforced beyond the live console (e.g. hidden from other viewers / exports) down the road.
 - **Self-describing pieces → auto-composed info/help text.** Let each action/command/handler declare its
   own help text and compose the prompt / local `/help` by discovery, so adding a piece never means editing
   a central string. (Partly advanced: the per-turn command catalog now auto-composes the command list;

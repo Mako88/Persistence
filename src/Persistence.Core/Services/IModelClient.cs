@@ -5,8 +5,12 @@ namespace Persistence.Services;
 /// <summary>
 /// The real token usage a provider reported for a completed call. Provider-specific extraction lives
 /// in each <see cref="IModelClient"/>; consumers read it uniformly via <see cref="IModelClient.LastUsage"/>.
+/// <see cref="InputTokens"/> is the uncached (full-price) input; the cache fields are the prompt-cache
+/// portions (read = billed cheap, creation = billed at a write premium) and are 0 for providers without
+/// caching.
 /// </summary>
-public readonly record struct ModelUsage(int InputTokens, int OutputTokens);
+public readonly record struct ModelUsage(
+    int InputTokens, int OutputTokens, int CacheReadTokens = 0, int CacheCreationTokens = 0);
 
 /// <summary>
 /// Sends a structured prompt to the model provider and returns the raw completion text

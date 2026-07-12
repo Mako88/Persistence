@@ -224,7 +224,7 @@ public class PromptFormatterTests
     public void SessionCostLineShowsDollarsWhenTheModelHasPricing()
     {
         var tracker = new TokenUsageTracker();
-        tracker.AddUsage(1_000_000, 200_000); // 1M in + 200k out
+        tracker.AddUsage(new ModelUsage(1_000_000, 200_000)); // 1M in + 200k out
 
         var pricing = new Mock<IModelPricingProvider>();
         pricing.Setup(p => p.GetPricing(It.IsAny<string>())).Returns(new ModelPricing(5m, 25m));
@@ -238,10 +238,28 @@ public class PromptFormatterTests
     }
 
     [Fact]
+    public void SessionCostReflectsPromptCacheReadDiscount()
+    {
+        var tracker = new TokenUsageTracker();
+        // 1M cache-read tokens (billed at 10%) + 100k output; no uncached input.
+        tracker.AddUsage(new ModelUsage(0, 100_000, CacheReadTokens: 1_000_000));
+
+        var pricing = new Mock<IModelPricingProvider>();
+        pricing.Setup(p => p.GetPricing(It.IsAny<string>())).Returns(new ModelPricing(5m, 25m));
+
+        var sensory = CreateFormatter(tracker: tracker, model: "claude-opus-4-8", pricing: pricing.Object)
+            .Format(ContextWithFragment("hi"), [])[^1].Content;
+
+        // 1M×$5/M×0.1 (cache read) + 100k×$25/M (output) = $0.50 + $2.50 = $3.00.
+        Assert.Contains("Session cost (est.): ~$3.00", sensory);
+        Assert.Contains("(1,000,000 cached)", sensory); // caching is visible
+    }
+
+    [Fact]
     public void SessionCostLineShowsTokensOnlyWhenThereIsNoPricing()
     {
         var tracker = new TokenUsageTracker();
-        tracker.AddUsage(500, 100);
+        tracker.AddUsage(new ModelUsage(500, 100));
 
         var pricing = new Mock<IModelPricingProvider>();
         pricing.Setup(p => p.GetPricing(It.IsAny<string>())).Returns((ModelPricing?)null);
@@ -287,8 +305,62 @@ public class PromptFormatterTests
             .Format(ContextWithFragment("hi"), [], recentChanges: changes)[^1].Content;
 
         Assert.Contains("Recent changes to your memory:", sensory);
-        Assert.Contains("fragment #42 modified", sensory);
-        Assert.Contains("proposal #7 created", sensory);
+        Assert.Contains("modified fragment #42", sensory); // verb-first, so a "what changed" suffix reads naturally
+        Assert.Contains("created proposal #7", sensory);
+    }
+
+    [Fact]
+    public void RecentChangesShowTheTypeForACreation()
+    {
+        var changes = new List<AuditLogEntity>
+        {
+            new()
+            {
+                SessionId = "s", EventType = AuditEventType.Created, TargetType = nameof(ContextFragmentEntity),
+                TargetId = 50, SourceId = 1, CreatedUtc = DateTimeOffset.UtcNow, LastModifiedUtc = DateTimeOffset.UtcNow,
+                NewData = """{"FragmentType":7,"Content":"a value I hold about honesty","Importance":0.5}""",
+            },
+        };
+
+        var sensory = CreateFormatter().Format(ContextWithFragment("hi"), [], recentChanges: changes)[^1].Content;
+
+        Assert.Contains("created fragment #50", sensory);
+        Assert.Contains("(Personal)", sensory); // FragmentType 7 humanized — the type, not the content
+        // The created fragment's content isn't echoed here (it's already visible in context, and would
+        // otherwise linger in the digest after the fragment is archived).
+        Assert.DoesNotContain("a value I hold about honesty", sensory);
+    }
+
+    [Fact]
+    public void RecentChangesShowFieldDiffsForAModification()
+    {
+        var changes = new List<AuditLogEntity>
+        {
+            new()
+            {
+                SessionId = "s", EventType = AuditEventType.Modified, TargetType = nameof(ContextFragmentEntity),
+                TargetId = 42, SourceId = 1, CreatedUtc = DateTimeOffset.UtcNow, LastModifiedUtc = DateTimeOffset.UtcNow,
+                OldData = """{"Importance":0.5,"Confidence":0.5,"Content":"same"}""",
+                NewData = """{"Importance":0.9,"Confidence":0.5,"Content":"same"}""",
+            },
+        };
+
+        var sensory = CreateFormatter().Format(ContextWithFragment("hi"), [], recentChanges: changes)[^1].Content;
+
+        Assert.Contains("modified fragment #42", sensory);
+        Assert.Contains("importance 0.5→0.9", sensory); // shows what changed, old→new
+    }
+
+    [Fact]
+    public void ActionsTakenThisTurnAreNumberedInOrder()
+    {
+        var actions = new[] { "exec(ls) → notes.txt research/", "read_file(plan.md) → # Plan…" };
+
+        var sensory = CreateFormatter()
+            .Format(ContextWithFragment("hi"), [], recentActions: actions)[^1].Content;
+
+        Assert.Contains("1. exec(ls)", sensory);
+        Assert.Contains("2. read_file(plan.md)", sensory);
     }
 
     [Fact]

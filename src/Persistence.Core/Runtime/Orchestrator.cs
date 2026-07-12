@@ -193,6 +193,10 @@ public class Orchestrator : IOrchestrator
         try
         {
             display.ShowThinking("waking");
+            // Autonomous wake — no local peer is present. Clear the active peer so the sensory block
+            // doesn't keep claiming "you are speaking with <last peer>" (the wake note frames it as a
+            // self-initiated waking). Interactive input re-sets the peer on the next message.
+            sessionContext.ActiveLocalPeerName = "";
             await turnHandler.ExecuteTurnAsync(wakeNote: BuildWakeNote(e.Event));
             await DrainPendingTurnsThenRefreshAsync();
         }

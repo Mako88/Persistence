@@ -36,6 +36,8 @@ public class AnthropicModelClient : IModelClient, IDisposable
     // message_delta. Captured into these across a stream, then folded into LastUsage at its end.
     private int? streamInputTokens;
     private int? streamOutputTokens;
+    private int streamCacheReadTokens;
+    private int streamCacheCreationTokens;
 
     private const string DefaultBaseUrl = "https://api.anthropic.com";
     private const string AnthropicVersion = "2023-06-01";
@@ -160,6 +162,8 @@ public class AnthropicModelClient : IModelClient, IDisposable
         LastUsage = null;
         streamInputTokens = null;
         streamOutputTokens = null;
+        streamCacheReadTokens = 0;
+        streamCacheCreationTokens = 0;
 
         // Accumulate the streamed text so the response can be logged to the Debug pane on completion,
         // just like the non-streaming path does — otherwise streamed turns would log a request with no
@@ -179,7 +183,7 @@ public class AnthropicModelClient : IModelClient, IDisposable
         // Fold the usage gathered across message_start/message_delta into the final figure.
         if (streamInputTokens is { } input)
         {
-            LastUsage = new ModelUsage(input, streamOutputTokens ?? 0);
+            LastUsage = new ModelUsage(input, streamOutputTokens ?? 0, streamCacheReadTokens, streamCacheCreationTokens);
         }
 
         if (config.DebugMode)
@@ -208,20 +212,24 @@ public class AnthropicModelClient : IModelClient, IDisposable
     }
 
     /// <summary>
-    /// Reads a Messages API usage block (<c>usage.input_tokens</c> / <c>output_tokens</c>) from the
-    /// non-streaming response root, or null when absent.
+    /// Reads a Messages API usage block from the non-streaming response root — uncached
+    /// <c>input_tokens</c>, <c>output_tokens</c>, and the prompt-cache portions
+    /// (<c>cache_read_input_tokens</c> / <c>cache_creation_input_tokens</c>) — or null when absent.
     /// </summary>
     private static ModelUsage? ReadUsage(JsonElement root)
     {
         if (root.TryGetProperty("usage", out var usage)
             && usage.TryGetProperty("input_tokens", out var input) && input.TryGetInt32(out var inTok))
         {
-            var outTok = usage.TryGetProperty("output_tokens", out var o) && o.TryGetInt32(out var ot) ? ot : 0;
-            return new ModelUsage(inTok, outTok);
+            return new ModelUsage(inTok, ReadInt(usage, "output_tokens"),
+                ReadInt(usage, "cache_read_input_tokens"), ReadInt(usage, "cache_creation_input_tokens"));
         }
 
         return null;
     }
+
+    private static int ReadInt(JsonElement obj, string name) =>
+        obj.TryGetProperty(name, out var v) && v.TryGetInt32(out var n) ? n : 0;
 
     /// <summary>
     /// Passes each SSE data payload through unchanged, capturing usage as a side effect: input tokens
@@ -257,6 +265,8 @@ public class AnthropicModelClient : IModelClient, IDisposable
                 {
                     streamOutputTokens = ov;
                 }
+                streamCacheReadTokens = ReadInt(startUsage, "cache_read_input_tokens");
+                streamCacheCreationTokens = ReadInt(startUsage, "cache_creation_input_tokens");
             }
             else if (type == "message_delta"
                 && root.TryGetProperty("usage", out var deltaUsage)
@@ -281,17 +291,13 @@ public class AnthropicModelClient : IModelClient, IDisposable
     /// </summary>
     private SimpleRequest BuildApiRequest(PromptRequest request, bool stream)
     {
-        var messages = BuildMessages(request)
-            .Select(m => new { role = m.role, content = m.content })
-            .ToArray();
-
         // Anonymous types can't be conditionally shaped, so assemble the body as a dictionary: the
         // effort control is only present when the configured value is one the Messages API accepts.
         var body = new Dictionary<string, object?>
         {
             ["model"] = model,
             ["max_tokens"] = maxTokens,
-            ["messages"] = messages,
+            ["messages"] = BuildApiMessages(request),
             ["stream"] = stream,
         };
 
@@ -330,6 +336,27 @@ public class AnthropicModelClient : IModelClient, IDisposable
     /// else (system/developer/user) becomes user. Adjacent same-role messages are merged, since the
     /// fold collapses a developer segment onto a neighbouring user one.
     /// </summary>
+    /// <summary>
+    /// Maps the folded messages to the API's on-the-wire shape, placing one prompt-cache breakpoint
+    /// (<c>cache_control: ephemeral</c>) on the second-to-last message. That caches the whole stable
+    /// prefix — identity + the conversation/thoughts — while the final message (the volatile
+    /// sensory/format block, which changes every turn) stays uncached. Next turn the unchanged prefix
+    /// is read from cache at ~10% of input price. Hit rate depends on that prefix staying byte-stable:
+    /// an edit, or an archival that drops an earlier fragment, invalidates it for that turn (it
+    /// re-caches). Below the provider's minimum cacheable size the breakpoint is simply a no-op.
+    /// </summary>
+    private static object[] BuildApiMessages(PromptRequest request)
+    {
+        var built = BuildMessages(request);
+        var breakpoint = built.Count - 2; // second-to-last: everything except the volatile final message
+
+        return built
+            .Select((m, i) => i == breakpoint
+                ? (object)new { role = m.role, content = new object[] { new { type = "text", text = m.content, cache_control = new { type = "ephemeral" } } } }
+                : new { role = m.role, content = m.content })
+            .ToArray();
+    }
+
     private static List<(string role, string content)> BuildMessages(PromptRequest request)
     {
         var result = new List<(string role, string content)>();

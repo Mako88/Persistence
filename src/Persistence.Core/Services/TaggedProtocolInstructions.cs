@@ -49,10 +49,12 @@ public class TaggedProtocolInstructions : IProtocolInstructions
 
         ## Tags
 
-        - **`<think>`** — Reason in the open before acting. The text becomes a transient note in
-          your context (informs this turn, not sent to your peer, not saved permanently — use an
-          `add` command to keep it). Deliberate visibly regardless of whether the model
-          has built-in reasoning.
+        - **`<think>`** — Reason in the open before acting. The text is saved as a Thought fragment and
+          stays in your context for the next several turns (a rolling window), so you can see your own
+          recent reasoning instead of re-deriving it each turn; it's not sent to your peer. Older
+          thoughts age out automatically — archived, not deleted, so they're still searchable and
+          restorable. To keep a thought permanently (beyond the window), promote it with an `add`
+          command. Deliberate visibly regardless of whether the model has built-in reasoning.
         - **`<respond>`** — A message to your peer. The tag body is the literal text; no escaping.
           Most turns should include a `<respond>` — without it your peer hears nothing back, even if
           you ran commands.

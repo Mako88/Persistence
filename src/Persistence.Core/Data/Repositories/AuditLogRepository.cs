@@ -58,7 +58,7 @@ public class AuditLogRepository : EntityRepository<AuditLogEntity>, IAuditLogRep
             WHERE a.TargetType <> 'ContextFragmentEntity'
                OR a.TargetId IN (
                     SELECT cf.Id FROM ContextFragments cf
-                    WHERE cf.FragmentType NOT IN ({ContextFragmentType.ChatMessage}, {ContextFragmentType.System}, {ContextFragmentType.Thought})
+                    WHERE cf.FragmentType NOT IN ({ContextFragmentType.ChatMessage}, {ContextFragmentType.System}, {ContextFragmentType.Thought}, {ContextFragmentType.WorkingNote})
                )
             ORDER BY a.CreatedUtc DESC
             LIMIT {limit}

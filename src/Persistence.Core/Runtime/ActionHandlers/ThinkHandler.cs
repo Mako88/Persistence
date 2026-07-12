@@ -44,6 +44,11 @@ public class ThinkHandler : IActionHandler
         var thought = TextPayload.Extract(data)
             ?? throw new InvalidOperationException("Think action requires a text payload");
 
+        // A `<think private>` is still persisted (it's the peer's own reasoning), but is kept off the
+        // console Thoughts tab — so it's not published for display.
+        var isPrivate = data is JsonObject obj
+            && obj.TryGetPropertyValue("private", out var p) && p?.GetValue<bool>() == true;
+
         var now = DateTimeOffset.UtcNow;
 
         context.AddFragment(new WeightedContextFragment
@@ -65,6 +70,9 @@ public class ThinkHandler : IActionHandler
             LastModifiedUtc = now,
         });
 
-        await eventBus.PublishAsync(this, new ModelThought(thought));
+        if (!isPrivate)
+        {
+            await eventBus.PublishAsync(this, new ModelThought(thought));
+        }
     }
 }

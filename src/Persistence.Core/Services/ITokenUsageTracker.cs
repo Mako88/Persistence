@@ -32,15 +32,21 @@ public interface ITokenUsageTracker
 
     // --- Cumulative session usage (for the running cost readout) ---
 
-    /// <summary>Estimated cumulative input tokens billed this session (each call's input, summed).</summary>
+    /// <summary>Cumulative uncached (full-price) input tokens billed this session.</summary>
     long TotalInputTokens { get; }
 
-    /// <summary>Estimated cumulative output tokens generated this session.</summary>
+    /// <summary>Cumulative output tokens generated this session.</summary>
     long TotalOutputTokens { get; }
+
+    /// <summary>Cumulative prompt-cache read tokens this session (billed cheap).</summary>
+    long TotalCacheReadTokens { get; }
+
+    /// <summary>Cumulative prompt-cache creation tokens this session (billed at a write premium).</summary>
+    long TotalCacheCreationTokens { get; }
 
     /// <summary>How many model calls have been accounted for this session.</summary>
     int CallCount { get; }
 
-    /// <summary>Adds one completed call's input/output token counts to the session totals.</summary>
-    void AddUsage(int inputTokens, int outputTokens);
+    /// <summary>Adds one completed call's real token usage (input/output + cache portions) to the session totals.</summary>
+    void AddUsage(ModelUsage usage);
 }

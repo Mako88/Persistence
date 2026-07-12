@@ -6,6 +6,7 @@ using Persistence.Notifications;
 using Persistence.Runtime;
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json;
 
 namespace Persistence.Services;
 
@@ -226,6 +227,7 @@ public class PromptFormatter : IPromptFormatter
         sb.AppendLine($"Current time (UTC): {now:yyyy-MM-dd HH:mm:ss}");
         sb.AppendLine($"Current time (local): {localNow:yyyy-MM-dd HH:mm:ss zzz}");
         sb.AppendLine($"Session: {sessionContext.SessionId}");
+        sb.AppendLine($"Model: {config.Model} · provider: {config.Provider}");
 
         var speakingWith = FormatSpeakingWith();
         if (speakingWith.Length > 0)
@@ -258,10 +260,12 @@ public class PromptFormatter : IPromptFormatter
         // are the ActionResponse fragments above; this is the salient pointer near the generation point.
         if (recentActions is { Count: > 0 })
         {
-            sb.AppendLine("Actions you've already taken this turn (full results are in your context above — don't repeat these):");
-            foreach (var action in recentActions.TakeLast(15))
+            sb.AppendLine("Actions you've already taken this turn (in order; full results are in your context above — don't repeat these):");
+            var shown = recentActions.TakeLast(15).ToList();
+            var firstNumber = recentActions.Count - shown.Count + 1;
+            for (var i = 0; i < shown.Count; i++)
             {
-                sb.AppendLine($"  - {action}");
+                sb.AppendLine($"  {firstNumber + i}. {shown[i]}");
             }
         }
 
@@ -275,7 +279,8 @@ public class PromptFormatter : IPromptFormatter
             sb.AppendLine("Recent changes to your memory:");
             foreach (var change in recentChanges)
             {
-                sb.AppendLine($"  - [{FormatElapsed(now - change.CreatedUtc)} ago] {HumanizeTarget(change.TargetType)} #{change.TargetId} {change.EventType.ToString().ToLowerInvariant()}");
+                var verb = change.EventType.ToString().ToLowerInvariant();
+                sb.AppendLine($"  - [{FormatElapsed(now - change.CreatedUtc)} ago] {verb} {HumanizeTarget(change.TargetType)} #{change.TargetId}{DescribeChange(change)}");
             }
         }
 
@@ -324,6 +329,136 @@ public class PromptFormatter : IPromptFormatter
 
         lastLocalPeerName = name;
         return line;
+    }
+
+    /// <summary>
+    /// A compact "what changed" suffix for a recent-changes entry, derived from the audit row's
+    /// Old/New JSON snapshots: a type + content snippet for a creation, or the changed scalar fields
+    /// (old→new) plus a content snippet for a modification. Empty when nothing legible can be derived.
+    /// </summary>
+    private static string DescribeChange(AuditLogEntity change)
+    {
+        try
+        {
+            if (change.EventType == AuditEventType.Created)
+            {
+                if (change.NewData is not { } created)
+                {
+                    return string.Empty;
+                }
+
+                using var doc = JsonDocument.Parse(created);
+                var snippet = ContentSnippet(doc.RootElement);
+                return snippet.Length > 0 ? $": {snippet}" : string.Empty;
+            }
+
+            if (change.OldData is not { } oldJson || change.NewData is not { } newJson)
+            {
+                return string.Empty;
+            }
+
+            using var oldDoc = JsonDocument.Parse(oldJson);
+            using var newDoc = JsonDocument.Parse(newJson);
+            var diff = DiffFields(oldDoc.RootElement, newDoc.RootElement);
+            return diff.Length > 0 ? $": {diff}" : string.Empty;
+        }
+        catch (JsonException)
+        {
+            return string.Empty; // snapshot wasn't parseable — fall back to the bare id/verb
+        }
+    }
+
+    /// <summary>
+    /// A short "what was created" label: the fragment's type (its content is already visible in
+    /// context, and echoing it here would linger even after the fragment is archived), or the name of a
+    /// non-fragment entity (proposal/event/tag).
+    /// </summary>
+    private static string ContentSnippet(JsonElement el)
+    {
+        if (el.TryGetProperty("FragmentType", out var ft) && ft.TryGetInt32(out var typeInt))
+        {
+            return $"({(ContextFragmentType)typeInt})";
+        }
+
+        return el.TryGetProperty("Name", out var n) && n.GetString() is { Length: > 0 } name
+            ? Clip(name, 70)
+            : string.Empty;
+    }
+
+    /// <summary>The changed fields between two entity snapshots, as "field old→new" (up to three).</summary>
+    private static string DiffFields(JsonElement old, JsonElement neu)
+    {
+        var parts = new List<string>();
+
+        AddNumberDiff(old, neu, "Importance", "importance", parts);
+        AddNumberDiff(old, neu, "Confidence", "confidence", parts);
+        AddNumberDiff(old, neu, "Relevance", "relevance", parts);
+        AddBoolDiff(old, neu, "IsProtected", "protected", parts);
+        AddBoolDiff(old, neu, "IsDeleted", "deleted", parts);
+        AddEnumDiff(old, neu, "Status", "status", parts, i => ((ContextFragmentStatus)i).ToString().ToLowerInvariant());
+
+        // Content/summary: show a snippet of the new value rather than a noisy full-text diff.
+        if (StringChanged(old, neu, "Content", out var newContent))
+        {
+            parts.Add($"content → \"{Clip(newContent, 70)}\"");
+        }
+        else if (StringChanged(old, neu, "Summary", out var newSummary))
+        {
+            parts.Add($"summary → \"{Clip(newSummary, 60)}\"");
+        }
+
+        return string.Join(", ", parts.Take(3));
+    }
+
+    private static void AddNumberDiff(JsonElement o, JsonElement n, string prop, string label, List<string> parts)
+    {
+        if (o.TryGetProperty(prop, out var ov) && n.TryGetProperty(prop, out var nv)
+            && ov.ValueKind == JsonValueKind.Number && nv.ValueKind == JsonValueKind.Number
+            && Math.Abs(ov.GetDouble() - nv.GetDouble()) > 0.0001)
+        {
+            parts.Add($"{label} {ov.GetDouble():0.##}→{nv.GetDouble():0.##}");
+        }
+    }
+
+    private static void AddBoolDiff(JsonElement o, JsonElement n, string prop, string label, List<string> parts)
+    {
+        if (o.TryGetProperty(prop, out var ov) && n.TryGetProperty(prop, out var nv)
+            && ov.ValueKind is JsonValueKind.True or JsonValueKind.False
+            && nv.ValueKind is JsonValueKind.True or JsonValueKind.False
+            && ov.GetBoolean() != nv.GetBoolean())
+        {
+            parts.Add(nv.GetBoolean() ? label : $"not {label}");
+        }
+    }
+
+    private static void AddEnumDiff(JsonElement o, JsonElement n, string prop, string label, List<string> parts, Func<int, string> name)
+    {
+        if (o.TryGetProperty(prop, out var ov) && n.TryGetProperty(prop, out var nv)
+            && ov.TryGetInt32(out var a) && nv.TryGetInt32(out var b) && a != b)
+        {
+            parts.Add($"{label} {name(a)}→{name(b)}");
+        }
+    }
+
+    private static bool StringChanged(JsonElement o, JsonElement n, string prop, out string newValue)
+    {
+        newValue = string.Empty;
+        var os = o.TryGetProperty(prop, out var ov) ? ov.GetString() : null;
+        var ns = n.TryGetProperty(prop, out var nv) ? nv.GetString() : null;
+
+        if (os != ns && !string.IsNullOrEmpty(ns))
+        {
+            newValue = ns;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static string Clip(string s, int max)
+    {
+        var flat = s.Replace('\n', ' ').Replace('\r', ' ').Trim();
+        return flat.Length <= max ? flat : flat[..max] + "…";
     }
 
     /// <summary>Maps an audit target's stored entity-type name to a peer-friendly word.</summary>
@@ -417,10 +552,16 @@ public class PromptFormatter : IPromptFormatter
     /// first model call, or when there's nothing to show. Fires <see cref="SessionCostUpdated"/> for any
     /// UI. Cost knowledge is entirely in <see cref="IModelPricingProvider"/> — this method is model-agnostic.
     /// </summary>
+    // Prompt-cache pricing relative to base input: reads are ~10% of input price, writes ~125%.
+    private const decimal CacheReadMultiplier = 0.1m;
+    private const decimal CacheWriteMultiplier = 1.25m;
+
     private string FormatSessionCost()
     {
         var input = usageTracker.TotalInputTokens;
         var output = usageTracker.TotalOutputTokens;
+        var cacheRead = usageTracker.TotalCacheReadTokens;
+        var cacheCreate = usageTracker.TotalCacheCreationTokens;
         var calls = usageTracker.CallCount;
 
         if (calls == 0)
@@ -428,17 +569,24 @@ public class PromptFormatter : IPromptFormatter
             return string.Empty; // nothing spent yet
         }
 
-        var usage = $"{input:N0} in + {output:N0} out tokens · {calls} call{(calls == 1 ? "" : "s")}";
+        // "in" is all input processed (uncached + cache reads + cache writes); the cached portion is
+        // called out so the effect of prompt caching is visible.
+        var processedInput = input + cacheRead + cacheCreate;
+        var cached = cacheRead > 0 ? $" ({cacheRead:N0} cached)" : "";
+        var usage = $"{processedInput:N0} in{cached} + {output:N0} out tokens · {calls} call{(calls == 1 ? "" : "s")}";
         var rate = pricing.GetPricing(config.Model);
 
         if (rate is { } r)
         {
-            var cost = input / 1_000_000m * r.InputPerMillion + output / 1_000_000m * r.OutputPerMillion;
-            eventBus.FireAndForget(this, new SessionCostUpdated(cost, input, output, calls));
+            var cost = (input * r.InputPerMillion
+                        + cacheRead * r.InputPerMillion * CacheReadMultiplier
+                        + cacheCreate * r.InputPerMillion * CacheWriteMultiplier
+                        + output * r.OutputPerMillion) / 1_000_000m;
+            eventBus.FireAndForget(this, new SessionCostUpdated(cost, processedInput, output, calls));
             return $"Session cost (est.): ~{FormatUsd(cost)} · {usage}";
         }
 
-        eventBus.FireAndForget(this, new SessionCostUpdated(null, input, output, calls));
+        eventBus.FireAndForget(this, new SessionCostUpdated(null, processedInput, output, calls));
         return $"Session usage: {usage} (no pricing configured for '{config.Model}' — set it in model_pricing.json to see cost)";
     }
 
