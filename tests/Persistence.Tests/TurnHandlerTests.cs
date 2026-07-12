@@ -26,7 +26,7 @@ public class TurnHandlerTests
         public readonly Mock<ITagRepository> TagRepo = new();
         public readonly Mock<IActionLogRepository> ActionLog = new();
         public readonly Mock<IAuditLogRepository> AuditLog = new();
-        public readonly SessionContext Session = new() { WorkingContextId = 1, LocalPeerSourceId = 5, RemotePeerSourceId = 6 };
+        public readonly SessionContext Session = new() { WorkingContextId = 1, RemotePeerSourceId = 6 };
         public readonly Mock<IModelClient> Model = new();
         public readonly Mock<IModelResponseParser> Parser = new();
         public readonly Mock<IPromptFormatter> Formatter = new();

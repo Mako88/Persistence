@@ -18,6 +18,7 @@ public sealed class WorkingContextPersistenceTests : IAsyncLifetime
     private SessionContext session = null!;
     private WorkingContextRepository contextRepo = null!;
     private ContextFragmentRepository fragmentRepo = null!;
+    private long humanSourceId;
 
     public async Task InitializeAsync()
     {
@@ -31,7 +32,10 @@ public sealed class WorkingContextPersistenceTests : IAsyncLifetime
         var resources = new EmbeddedResourceManager();
         var sources = new SourceRepository(config, session);
         var db = new DatabaseManager(config, session, resources, sources);
-        await db.InitializeAsync(); // migrate + create system/local/remote sources
+        await db.InitializeAsync(); // migrate + create the system and digital-peer sources
+
+        // Human peers are resolved by name per message now; resolve one for these attribution round-trips.
+        humanSourceId = await sources.EnsureLocalPeerSourceAsync("Local Peer");
 
         var entityTagRepo = new EntityTagRepository(config);
         fragmentRepo = new ContextFragmentRepository(config, session, entityTagRepo);
@@ -70,7 +74,7 @@ public sealed class WorkingContextPersistenceTests : IAsyncLifetime
         var context = await contextRepo.CreateAsync("test");
         session.WorkingContextId = context.Id;
 
-        context.AddFragment(ChatFragment("hello", session.LocalPeerSourceId));
+        context.AddFragment(ChatFragment("hello", humanSourceId));
 
         // Mirrors a turn: user message persisted, then the end-of-turn save.
         await contextRepo.SaveAsync(context);
@@ -186,12 +190,12 @@ public sealed class WorkingContextPersistenceTests : IAsyncLifetime
     {
         var context = await contextRepo.CreateAsync("test");
         session.WorkingContextId = context.Id;
-        context.AddFragment(ChatFragment("first", session.LocalPeerSourceId));
+        context.AddFragment(ChatFragment("first", humanSourceId));
         await contextRepo.SaveAsync(context);
 
         // Simulate the next turn: load fresh, add one new fragment, save.
         var loaded = await contextRepo.GetByIdAsync(context.Id);
-        loaded!.AddFragment(ChatFragment("second", session.LocalPeerSourceId));
+        loaded!.AddFragment(ChatFragment("second", humanSourceId));
         await contextRepo.SaveAsync(loaded);
 
         var reloaded = await contextRepo.GetByIdAsync(context.Id);

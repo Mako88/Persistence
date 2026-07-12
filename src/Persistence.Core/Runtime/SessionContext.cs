@@ -25,12 +25,8 @@ public class SessionContext : ISessionContext
     public long SystemSourceId { get; set; }
 
     /// <summary>
-    /// The ID for the 'LocalPeer' source type.
-    /// </summary>
-    public long LocalPeerSourceId { get; set; }
-
-    /// <summary>
-    /// The ID for the 'RemotePeer' source type.
+    /// The ID for the digital-peer source (the runtime's own voice). Human peers are attributed per
+    /// message by name, so there is no single shared human-peer source id.
     /// </summary>
     public long RemotePeerSourceId { get; set; }
 

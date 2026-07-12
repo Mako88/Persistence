@@ -29,13 +29,9 @@ public class SourceRepository : EntityRepository<SourceEntity>, ISourceRepositor
         EnsureSourceAsync(SourceType.System, "System", id => sessionContext.SystemSourceId = id);
 
     /// <summary>
-    /// Creates a LocalPeer source if none exists and stores its ID in the session context
-    /// </summary>
-    public Task CreateLocalPeerSourceIfNotExists() =>
-        EnsureSourceAsync(SourceType.HumanPeer, "Local Peer", id => sessionContext.LocalPeerSourceId = id);
-
-    /// <summary>
-    /// Creates a RemotePeer source if none exists and stores its ID in the session context
+    /// Creates the digital-peer source (the runtime's own voice) if none exists and stores its ID on the
+    /// session. Human peers no longer have a single shared source — each is resolved by name per message
+    /// (<see cref="EnsureLocalPeerSourceAsync"/>) — so only System and the digital peer are seeded here.
     /// </summary>
     public Task CreateRemotePeerSourceIfNotExists() =>
         EnsureSourceAsync(SourceType.DigitalPeer, "Remote Peer", id => sessionContext.RemotePeerSourceId = id);

@@ -13,12 +13,7 @@ public interface ISourceRepository : IEntityRepository<SourceEntity>
     Task CreateSystemSourceIfNotExists();
 
     /// <summary>
-    /// Create a source with the LocalPeer type if none exist
-    /// </summary>
-    Task CreateLocalPeerSourceIfNotExists();
-
-    /// <summary>
-    /// Create a source with the RemotePeer type if none exist
+    /// Create the digital-peer source (the runtime's own voice) if none exists
     /// </summary>
     Task CreateRemotePeerSourceIfNotExists();
 

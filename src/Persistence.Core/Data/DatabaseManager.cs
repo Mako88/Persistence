@@ -50,7 +50,6 @@ public class DatabaseManager : IDatabaseManager
     {
         await MigrateAsync();
         await sourceRepository.CreateSystemSourceIfNotExists();
-        await sourceRepository.CreateLocalPeerSourceIfNotExists();
         await sourceRepository.CreateRemotePeerSourceIfNotExists();
     }
 

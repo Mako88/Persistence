@@ -34,7 +34,6 @@ public class Orchestrator : IOrchestrator
     private readonly IProposalService proposalService;
     private readonly IProposalRepository proposalRepo;
     private readonly IScheduledEventRepository scheduledEventRepo;
-    private readonly ISourceRepository sourceRepository;
     private readonly IPeerSeeder peerSeeder;
 
     private readonly SemaphoreSlim turnLock = new(1, 1);
@@ -56,7 +55,6 @@ public class Orchestrator : IOrchestrator
         IProposalService proposalService,
         IProposalRepository proposalRepo,
         IScheduledEventRepository scheduledEventRepo,
-        ISourceRepository sourceRepository,
         IPeerSeeder peerSeeder)
     {
         this.db = db;
@@ -71,7 +69,6 @@ public class Orchestrator : IOrchestrator
         this.proposalService = proposalService;
         this.proposalRepo = proposalRepo;
         this.scheduledEventRepo = scheduledEventRepo;
-        this.sourceRepository = sourceRepository;
         this.peerSeeder = peerSeeder;
     }
 
@@ -312,7 +309,6 @@ public class Orchestrator : IOrchestrator
 
         sessionContext.SessionId = Guid.NewGuid().ToString("N");
         sessionContext.SurfaceCommandsEnabled = config.SurfaceCommands;
-        await SetActiveLocalPeerAsync(null); // seed the active local peer from the configured default
 
         var context = await workingContextRepo.GetMostRecentAsync();
 
@@ -322,24 +318,6 @@ public class Orchestrator : IOrchestrator
         }
 
         sessionContext.WorkingContextId = context.Id;
-    }
-
-    /// <summary>
-    /// Resolves who the remote peer is talking with — the given name, or the configured default —
-    /// recording it on the session and pointing <see cref="ISessionContext.LocalPeerSourceId"/> at that
-    /// peer's source (created on demand) so their messages are attributed to them.
-    /// </summary>
-    private async Task SetActiveLocalPeerAsync(string? name)
-    {
-        var resolved = string.IsNullOrWhiteSpace(name) ? config.SelectedLocalPeer : name.Trim();
-
-        if (string.IsNullOrWhiteSpace(resolved))
-        {
-            resolved = "Local Peer";
-        }
-
-        sessionContext.ActiveLocalPeerName = resolved;
-        sessionContext.LocalPeerSourceId = await sourceRepository.EnsureLocalPeerSourceAsync(resolved);
     }
 
     /// <summary>

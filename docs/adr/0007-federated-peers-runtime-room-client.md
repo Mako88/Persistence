@@ -100,6 +100,10 @@ mechanical — enums persist by integer value (verified: stored as `"1"`/`"2"`, 
    today — prove parity with the uncontainerized run.
 2. **Multi-peer TUI**: config lists peer endpoints (name → URL); merged Discord-style chat pane; per-peer
    side tabs (thoughts/schedule) with a peer-selector dropdown; each peer's stream rendered with attribution.
+   This is where the client contract gains a typed chat-message view (id + author + role + content)
+   replacing the current role/content tuple, so the TUI shows John/Ember (not "You"/"Remote Peer") and,
+   tracking rendered message ids, dedups the one message that arrives via both the connect snapshot and
+   the live stream (the server already carries the id on both surfaces after Phase 0d).
 3. **The room (peer↔peer relay)**: the hub relays messages between peers so they collaborate, not just
    answer the human. Turn-taking is the real design work here — each digital peer sees each room message as
    a potential wake and decides whether to respond (a cheap gate), with @-addressing as a strong signal.

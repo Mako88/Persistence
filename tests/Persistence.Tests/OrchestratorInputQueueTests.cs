@@ -79,7 +79,7 @@ public sealed class OrchestratorInputQueueTests : IAsyncLifetime
 
         orchestrator = new Orchestrator(
             db, contextRepo, session, display.Object, eventBus, turnHandler,
-            wakeUpMonitor.Object, resources, config, proposalService, proposalRepo, scheduledEventRepo.Object, sources,
+            wakeUpMonitor.Object, resources, config, proposalService, proposalRepo, scheduledEventRepo.Object,
             new PeerSeeder(config, new TagRepository(config, session, entityTagRepo), session));
 
         // RunAsync subscribes to input, initialises the DB, seeds a context, then awaits the

@@ -96,7 +96,7 @@ public sealed class PeerSeedingIntegrationTests : IAsyncLifetime
             return new Orchestrator(
                 db, contextRepo, session, display.Object, new EventBus(), new NoopTurnHandler(),
                 wakeUpMonitor.Object, resources, config, proposalService, proposalRepo, scheduledEventRepo,
-                sources, seeder);
+                seeder);
         }
 
         return new Harness(config, session, db, contextRepo, seeder, BuildOrchestrator);

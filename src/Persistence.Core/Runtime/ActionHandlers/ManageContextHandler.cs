@@ -1313,7 +1313,7 @@ public class ManageContextHandler : CommandHandler
 
     [Command("create_source", "Create a new source")]
     [CommandField("name", "string", required: true, Description = "Source name")]
-    [CommandField("source_type", "string", Description = "Source type (RemotePeer, LocalPeer, System, DerivedFromFragments)", Default = "RemotePeer")]
+    [CommandField("source_type", "string", Description = "Source type (DigitalPeer, HumanPeer, System, DerivedFromFragments)", Default = "DigitalPeer")]
     private async Task<string> ExecuteCreateSourceAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
     {
         var name = command?["name"]?.GetValue<string>();
@@ -1330,10 +1330,7 @@ public class ManageContextHandler : CommandHandler
             return $"Source '{name}' already exists (#{existing.Id})";
         }
 
-        var sourceTypeName = command?["source_type"]?.GetValue<string>();
-        var sourceType = Enum.TryParse<SourceType>(sourceTypeName, ignoreCase: true, out var parsed)
-            ? parsed
-            : SourceType.DigitalPeer;
+        var sourceType = ParseSourceType(command?["source_type"]?.GetValue<string>());
 
         var now = DateTimeOffset.UtcNow;
 
@@ -1349,6 +1346,18 @@ public class ManageContextHandler : CommandHandler
 
         return $"Created source '{name}' (#{source.Id}, type: {sourceType})";
     }
+
+    /// <summary>
+    /// Parses a source-type name to <see cref="SourceType"/>, accepting the pre-ADR-0007 names
+    /// ("RemotePeer"/"LocalPeer") as aliases so older muscle-memory and any external callers still
+    /// resolve to the right type rather than silently falling back. Defaults to DigitalPeer.
+    /// </summary>
+    private static SourceType ParseSourceType(string? name) => name?.Trim().ToLowerInvariant() switch
+    {
+        "remotepeer" or "remote peer" => SourceType.DigitalPeer,
+        "localpeer" or "local peer" => SourceType.HumanPeer,
+        _ => Enum.TryParse<SourceType>(name, ignoreCase: true, out var parsed) ? parsed : SourceType.DigitalPeer,
+    };
 
     [Command("add_source", "Add a source to a fragment")]
     [CommandField("id", "long", required: true, Description = "Fragment ID")]

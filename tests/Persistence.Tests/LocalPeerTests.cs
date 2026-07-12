@@ -51,7 +51,7 @@ public sealed class LocalPeerTests : IAsyncLifetime
         turnHandler = new RecordingTurnHandler();
         orchestrator = new Orchestrator(
             db, contextRepo, session, display.Object, eventBus, turnHandler,
-            wakeUpMonitor.Object, resources, config, proposalService, proposalRepo, scheduledEventRepo, sources,
+            wakeUpMonitor.Object, resources, config, proposalService, proposalRepo, scheduledEventRepo,
             new PeerSeeder(config, new TagRepository(config, session, entityTagRepo), session));
 
         await orchestrator.RunAsync(CancellationToken.None);
