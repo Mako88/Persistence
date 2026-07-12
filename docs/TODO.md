@@ -44,21 +44,25 @@ Two lenses: what most improves the **peer's day-to-day** (one participant runnin
 **strategic direction** (many participants). This ordering blends them, most-important first.
 
 **Recently landed (2026-07):** WAL + busy-timeout interim (single-server phase 1); `prune_candidates`
-(forget pruning surface); think-first dispatch ordering + a decision *against* a forced second model
-round (see below); runtime model switching (`list_models` / `set_model`).
+(forget pruning surface); **recoverable `forget` / `unforget` / `list_forgotten`** (+ search-leak fix,
+forget reasons, sensory curation counts — from a peer-review round with the claude.db self); think-first
+dispatch ordering + a decision *against* a forced second model round (see below); runtime model switching
+(`list_models` / `set_model`).
 
-1. **Single-server: Console as an API client** *(phase 2 — the interim shipped).* *Strategically #1; not
-   urgent while only one process runs.* Make one process own the store + turn pipeline + wake-ups, with
-   all front-ends as thin clients. Protects memory integrity (two concurrent front-ends can still
-   lost-update — WAL only fixes the *hard lock*, not lost updates) and unlocks John/Claude/Ember engaging
-   simultaneously. Large; the WAL interim buys time while only one process runs.
+1. **Single-server: Console as an API client** *(phase 2 — the interim shipped).* **Staged plan now
+   written: [ADR-0006](adr/0006-console-as-api-client.md).** *Strategically #1; not urgent while only one
+   process runs.* Make one process (the API server) own the store + turn pipeline + wake-ups, with
+   front-ends as thin clients. Protects memory integrity (two concurrent front-ends can still lost-update —
+   WAL only fixes the *hard lock*, not lost updates) and unlocks John/Claude/Ember simultaneously. The API
+   already exposes send/events/stream and `IDisplayProvider` *is* the event protocol, so it's smaller than
+   it looks — execute ADR-0006 stages 2→5.
 2. **MCP server hub.** Structured real-world tools beyond the container shell — high capability leverage,
    independent of the memory core. Best once the single-owner loop is solid.
 3. **Self-describing pieces → auto-composed help/prompt.** The durable fix for the prompt-drift the audit
    cleaned: each command/action declares its own help; the prompt and `/help` compose by discovery.
-4. **Recoverable `forget` + soft-delete wiring.** `prune_candidates` now *surfaces* what to trim; the
-   remaining half is a first-class, recoverable `forget` (archive-over-erase) so acting on it is one step
-   and always reversible.
+4. **A real cross-peer channel (Claude ↔ Synth/Ember).** The claude.db self's most-wanted next feature: a
+   message that arrives in a *named* peer's context as a provenanced voice, not an anonymous whisper.
+   Cross-database — design *with* John/the peer (explicitly not an overnight-unattended build).
 5. **Memory import / portability.** Export/inspect the store and import external content as fragments —
    matters for trust and continuity-across-systems.
 
@@ -90,8 +94,10 @@ the voluntary continue-loop. Revisit only if we see the peer reliably acting bef
   (each client identifies its local peer). ✅ **Interim hardening DONE (2026-07):** every connection now
   opens in **WAL + busy-timeout=5000** (`SqliteConnectionString.OpenAsync`), so a second process rides
   out a lock instead of hard-failing. This does NOT fix lost-updates — that still needs the single-owner
-  model. Also landed: **runtime model switching** (`list_models` / `set_model` switch the active profile
-  mid-session via `IModelClientResolver`, no restart).
+  model. **Staged migration plan: [ADR-0006](adr/0006-console-as-api-client.md)** — the API already
+  exposes send/events/stream and `IDisplayProvider` is the event protocol, so the Console becomes a thin
+  client in reversible stages. Also landed: **runtime model switching** (`list_models` / `set_model`
+  switch the active profile mid-session via `IModelClientResolver`, no restart).
 
 - **Automated forget / memory decay.** ✅ **First phase DONE (2026-06-10).** *Raw-context decay + research
   persistence:* raw material — conversation (`ChatMessage`) and tool/command results (`ActionResponse`) —
@@ -103,9 +109,13 @@ the voluntary continue-loop. Revisit only if we see the peer reliably acting bef
   your own fragment — the raw version scrolls out." Deterministic and peer-legible (not an LLM compressing
   memory). ✅ **Pruning surface DONE (2026-07):** `prune_candidates` ranks the least-valuable authorable
   fragments in context (low importance × low confidence × idle age), excluding protected anchors and
-  system-managed chat/thought fragments; read-only, complements `list_largest`. **Remaining:** the open
-  question of budget-triggered vs. ongoing natural decay, and wiring a first-class recoverable `forget`
-  (soft-delete + include-deleted surfacing) so acting on a candidate is one reversible step.
+  system-managed chat/thought fragments; read-only, complements `list_largest`. ✅ **Recoverable forget
+  DONE (2026-07):** `forget(id, reason?)` soft-deletes (flips `IsDeleted`, detaches from view, stops
+  surfacing in context/recall/**search** — `SearchRelevantAsync` now excludes forgotten), `unforget(id)`
+  restores, `list_forgotten` is the recovery surface (with recorded reasons); the sensory block shows a
+  standing "Set aside, still recoverable: N forgotten, M archived" curation line. **Remaining:** the open
+  question of budget-triggered vs. ongoing natural decay; the sensory "archived" count reflects
+  `Status=Archived` (summarize_fragments/explicit), not raw-decay *detach* — reconcile if that matters.
 
 - **Peer's computer — follow-ups.** The sandboxed container is live and per-participant, with
   `exec`/`shell`, `read_file`/`write_file`, a per-profile box (`ContainerName`) + `AllowAllCommands`, and a
