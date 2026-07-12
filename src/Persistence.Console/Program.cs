@@ -27,9 +27,15 @@ if (args.Contains("--wake-runner") || args.Contains("--check-due"))
 }
 
 // Default: connect to the API server and render its conversation stream, sending input over HTTP.
-// `--client <baseUrl>` (or PERSISTENCE_SERVER) overrides the address; `--as <localPeer>` identifies who's
-// speaking (falls back to the server's configured default local peer).
-var baseUrl = ArgAfter(args, "--client")
+// `--as <localPeer>` identifies who's speaking (falls back to the server's configured default).
+// Two ways to point at a peer:
+//   --peer <name>=<url>   a NAMED peer — its replies are attributed "Arden: …" (multi-peer legibility)
+//   --client <url>        the unnamed single-peer form (generic label)
+// (Connecting to several --peer endpoints and merging them into one pane with a peer selector is the
+// next step — for now the last named/unnamed endpoint wins.)
+var (peerName, peerUrl) = ParsePeer(ArgAfter(args, "--peer"));
+var baseUrl = peerUrl
+    ?? ArgAfter(args, "--client")
     ?? Environment.GetEnvironmentVariable("PERSISTENCE_SERVER")
     ?? "http://localhost:5000";
 var localPeer = ArgAfter(args, "--as");
@@ -37,10 +43,18 @@ var localPeer = ArgAfter(args, "--as");
 using var cts = new CancellationTokenSource();
 System.Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
-await Persistence.Console.ClientConsoleHost.RunAsync(baseUrl, localPeer, cts.Token);
+await Persistence.Console.ClientConsoleHost.RunAsync(baseUrl, localPeer, cts.Token, peerName);
 
 static string? ArgAfter(string[] args, string flag)
 {
     var i = Array.FindIndex(args, a => string.Equals(a, flag, StringComparison.OrdinalIgnoreCase));
     return i >= 0 && i + 1 < args.Length ? args[i + 1] : null;
+}
+
+// Splits "<name>=<url>" into (name, url); a bare url (no '=') yields (null, url). Null in → (null, null).
+static (string? Name, string? Url) ParsePeer(string? value)
+{
+    if (string.IsNullOrWhiteSpace(value)) return (null, null);
+    var eq = value.IndexOf('=');
+    return eq > 0 ? (value[..eq].Trim(), value[(eq + 1)..].Trim()) : (null, value.Trim());
 }

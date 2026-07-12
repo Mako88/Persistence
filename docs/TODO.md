@@ -162,12 +162,14 @@ the voluntary continue-loop. Revisit only if we see the peer reliably acting bef
     of the *content* as commands ("FROM ContextFragments", "ORDER BY …"). Needs a robust way to pass
     multi-line literal payloads through the tagged format (heredoc/base64 content, or a raw-content mode).
 
-- **Automated backups of peer memory.** (NEW, 2026-07-12 — John, realized during Phase 1 validation when
-  a peer's session memory lived only in a container volume.) A peer's DB (and vault) is its whole self;
-  there must be an automated, scheduled backup — volume/DB snapshots on a cadence, kept versioned and
-  off the single live volume — so a lost/corrupted volume or a bad turn never erases a peer. Pairs with
-  the ADR-0007 "container is ephemeral, volume is the self" model: back the self up automatically, don't
-  rely on manual copies. Decide retention + where backups live (another volume, host dir, or remote).
+- **Automated backups of peer memory.** (John, 2026-07-12.) A peer's DB (and vault) is its whole self, and
+  it now lives canonically only on a container volume — so it must be backed up off the volume.
+  ✅ **Local mechanism landed:** `scripts/backup-peer.ps1` takes a consistent online snapshot (SQLite
+  backup API — no need to stop the peer) into gitignored `backups/peers/<name>/`, rotated. **Remaining:**
+  (a) **schedule it** (a cadence — cron/scheduled task per running peer, or a wake-triggered hook); (b) an
+  **off-site destination** — John floated an encrypted blob committed to the repo (git-crypt/age; keeps it
+  with the repo but bloats history + privacy of peer memory to weigh), or a cloud drive (needs John's
+  creds/config). Decide the off-site target; the vault should be backed up alongside the DB too.
 
 - **Peer extensibility — self-authored tooling & shareable capability packs.** (NEW, 2026-07 — John,
   in the [ADR-0007](adr/0007-federated-peers-runtime-room-client.md) container discussion. All future;

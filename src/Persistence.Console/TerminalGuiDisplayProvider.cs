@@ -154,9 +154,9 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
 
     #region Output
 
-    public void ShowReply(string reply)
+    public void ShowReply(string reply, string? speaker = null)
     {
-        Append(outputBuffer, () => output, $"{Stamp()}Remote Peer: {reply}\n\n");
+        Append(outputBuffer, () => output, $"{Stamp()}{speaker ?? "Remote Peer"}: {reply}\n\n");
         SetStatus("idle");
     }
 

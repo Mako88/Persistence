@@ -14,7 +14,7 @@ namespace Persistence.Console;
 /// </summary>
 public static class ClientConsoleHost
 {
-    public static async Task RunAsync(string baseUrl, string? localPeer, CancellationToken ct)
+    public static async Task RunAsync(string baseUrl, string? localPeer, CancellationToken ct, string? peerName = null)
     {
         var config = await AppConfig.LoadAsync();
         var session = new SessionContext();
@@ -41,8 +41,8 @@ public static class ClientConsoleHost
         display.OnInput = text => client.SendAsync(text, ct);
 
         // One renderer per connection — it remembers drawn message ids so the stream doesn't redraw what
-        // the snapshot already showed.
-        var renderer = new ConversationEventRenderer(display);
+        // the snapshot already showed, and attributes this peer's replies by name when one is given.
+        var renderer = new ConversationEventRenderer(display, peerName);
 
         if (initial is not null)
         {

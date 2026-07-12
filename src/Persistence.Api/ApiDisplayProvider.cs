@@ -154,7 +154,7 @@ public class ApiDisplayProvider : IDisplayProvider
     /// <summary>
     /// Appends the remote peer's reply text to the log as a "reply" event
     /// </summary>
-    public void ShowReply(string reply) => Append("reply", reply);
+    public void ShowReply(string reply, string? speaker = null) => Append("reply", reply);
 
     /// <summary>
     /// Appends an open thought to the log as a "thought" event

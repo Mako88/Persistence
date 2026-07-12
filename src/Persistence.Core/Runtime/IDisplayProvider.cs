@@ -24,9 +24,11 @@ public interface IDisplayProvider
     void ShowThinking(string? label = null);
 
     /// <summary>
-    /// Shows the remote peer's reply text.
+    /// Shows a peer's reply text, attributed to <paramref name="speaker"/> (the peer's name). Null uses
+    /// the generic label — for a single-peer client where the one digital peer needs no disambiguation;
+    /// a multi-peer client passes each connection's peer name so replies read as "Arden: …" / "Ember: …".
     /// </summary>
-    void ShowReply(string reply);
+    void ShowReply(string reply, string? speaker = null);
 
     /// <summary>
     /// Shows the model's reasoning summary (when the provider returns one).

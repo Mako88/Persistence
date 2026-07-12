@@ -18,10 +18,18 @@ public sealed class ConversationEventRenderer
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
 
     private readonly IDisplayProvider display;
+    private readonly string? peerName;
     private readonly HashSet<long> renderedMessageIds = [];
 
-    /// <summary>Constructor</summary>
-    public ConversationEventRenderer(IDisplayProvider display) => this.display = display;
+    /// <summary>
+    /// Constructor. <paramref name="peerName"/> names the peer this connection renders (multi-peer clients
+    /// pass it so replies are attributed "Arden: …"); null for a single-peer client (generic label).
+    /// </summary>
+    public ConversationEventRenderer(IDisplayProvider display, string? peerName = null)
+    {
+        this.display = display;
+        this.peerName = peerName;
+    }
 
     /// <summary>Draws the connect-time snapshot: prior chat, the schedule, and the open-proposal count.</summary>
     public void DrawSnapshot(ConversationSnapshot snapshot)
@@ -48,7 +56,7 @@ public sealed class ConversationEventRenderer
                 {
                     break;
                 }
-                display.ShowReply(e.Text);
+                display.ShowReply(e.Text, peerName);
                 break;
             case "thought": display.ShowThought(e.Text); break;
             case "reasoning": display.ShowReasoning(e.Text); break;

@@ -41,6 +41,17 @@ public class ConversationEventRendererTests
     }
 
     [Fact]
+    public void AttributesRepliesToItsPeerNameWhenGiven()
+    {
+        // A multi-peer client gives each connection its peer's name so replies read "Arden: …".
+        var named = new ConversationEventRenderer(display.Object, peerName: "Arden");
+
+        named.Render(new ConversationEvent(1, "reply", "hello"));
+
+        display.Verify(d => d.ShowReply("hello", "Arden"), Times.Once);
+    }
+
+    [Fact]
     public void SplitsAToolEventBackIntoRequestAndResult()
     {
         Render("tool", "web_search", "cats → 3 results");
