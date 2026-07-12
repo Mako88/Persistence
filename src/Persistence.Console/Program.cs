@@ -17,6 +17,7 @@ if (args.Contains("--preview"))
 
 // `--check-due` is a fast, model-free probe for the wake launcher: exit 0 if any scheduled event is
 // due now, 100 if none. Lets an OS poll gate the expensive model startup on there being real work.
+// (Standalone-deployment path — under the single-owner model the always-on API server owns wakes.)
 if (args.Contains("--check-due"))
 {
     Environment.SetEnvironmentVariable("PERSISTENCE_UIMODE", "Headless");
@@ -28,7 +29,7 @@ if (args.Contains("--check-due"))
 }
 
 // `--wake-runner` is the headless one-shot: fire all due scheduled events as autonomous turns, then
-// exit. An OS trigger launches it (via the launcher) when the interactive app isn't running.
+// exit. An OS trigger launches it when the interactive app isn't running. (Standalone-deployment path.)
 if (args.Contains("--wake-runner"))
 {
     Environment.SetEnvironmentVariable("PERSISTENCE_UIMODE", "Headless");
@@ -39,37 +40,42 @@ if (args.Contains("--wake-runner"))
     return;
 }
 
-// `--client <baseUrl> [--as <localPeer>]` runs the Console as a thin client of a running API server
-// (ADR-0006): no local DB/pipeline/model — it renders the server's conversation stream and sends input
-// over HTTP. Without it, the Console runs the full stack in-process as before.
-if (args.Contains("--client"))
+// `--standalone` runs the full stack in-process (the pre-single-owner behaviour): this process owns the
+// database, turn pipeline, wakes, and the TUI. Kept as an escape hatch (offline/dev); running it
+// alongside the API server risks the lost-update problem the single-owner model exists to prevent.
+if (args.Contains("--standalone"))
 {
-    var baseUrl = ArgAfter(args, "--client") ?? "http://localhost:5000";
+    var serviceProvider = await Initializer.InitializeAsync();
+    var orchestrator = serviceProvider.GetRequiredService<IOrchestrator>();
+
+    using var cts = new CancellationTokenSource();
+    Console.CancelKeyPress += (_, e) =>
+    {
+        e.Cancel = true;
+        cts.Cancel();
+    };
+
+    await orchestrator.RunAsync(cts.Token);
+    return;
+}
+
+// DEFAULT (single-owner model, ADR-0006): run as a thin client of a running API server — no local
+// database, pipeline, or model. It renders the server's conversation stream and sends input over HTTP.
+// `--client <baseUrl>` overrides the server address; `--as <localPeer>` identifies who's speaking.
+{
+    var baseUrl = ArgAfter(args, "--client")
+        ?? Environment.GetEnvironmentVariable("PERSISTENCE_SERVER")
+        ?? "http://localhost:5000";
     var localPeer = ArgAfter(args, "--as");
 
     using var clientCts = new CancellationTokenSource();
     System.Console.CancelKeyPress += (_, e) => { e.Cancel = true; clientCts.Cancel(); };
 
     await Persistence.Console.ClientConsoleHost.RunAsync(baseUrl, localPeer, clientCts.Token);
-    return;
-
-    static string? ArgAfter(string[] args, string flag)
-    {
-        var i = Array.FindIndex(args, a => string.Equals(a, flag, StringComparison.OrdinalIgnoreCase));
-        return i >= 0 && i + 1 < args.Length ? args[i + 1] : null;
-    }
 }
 
-// Build the container — registers all [Singleton]/[Service] types from all assemblies
-var serviceProvider = await Initializer.InitializeAsync();
-
-var orchestrator = serviceProvider.GetRequiredService<IOrchestrator>();
-
-using var cts = new CancellationTokenSource();
-Console.CancelKeyPress += (_, e) =>
+static string? ArgAfter(string[] args, string flag)
 {
-    e.Cancel = true;
-    cts.Cancel();
-};
-
-await orchestrator.RunAsync(cts.Token);
+    var i = Array.FindIndex(args, a => string.Equals(a, flag, StringComparison.OrdinalIgnoreCase));
+    return i >= 0 && i + 1 < args.Length ? args[i + 1] : null;
+}
