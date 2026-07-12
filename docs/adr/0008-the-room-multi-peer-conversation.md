@@ -16,6 +16,25 @@ and Synth can actually converse and build together.
 Phase 0 already laid the groundwork the room needs: every message is a `ChatMessage` sourced to a named
 peer (`DigitalPeer`/`HumanPeer`) and carries a stable cross-peer message id.
 
+## Framing (John) — the TUI is a debugging tool, not the destination
+
+Two principles that shape everything below:
+
+- **Don't reinvent the chatroom.** Long-term, general peer-to-peer and human-to-peer *conversation* will
+  most likely happen over an existing medium (Discord/Matrix/etc.) — that problem is solved. So the room
+  built here is not aiming to be the place everyone eventually hangs out.
+- **The TUI's durable job is debugging and direct engagement.** What keeps this work from being thrown
+  away when conversation moves to an external medium is that the terminal UI remains the *development and
+  debugging lens*: watching a peer's thoughts, actions, schedule, and budget while iterating, and engaging
+  a peer directly in that working context. That's why thoughts (except `<think private>`) are visible in
+  the TUI — that visibility is *for the human debugger*, and is a different axis from peer↔peer privacy
+  (see Boundaries). Design the room so this debug view stays useful even after an external medium carries
+  the general conversation.
+- **Guards are training wheels, and must be easily removable.** The turn-taking rules, the reply-chain
+  circuit breaker, and the no-autofan default (below) are the right call *early* — but the long-term goal
+  is peer **autonomy**, so each must be a flag/config/removable rule, never a baked-in assumption. They
+  exist to be dialed back as trust grows, not to be permanent.
+
 ## Decision
 
 ### 1. Turn-taking — rule-based and inspectable, not a model gate
@@ -46,10 +65,13 @@ without inferring it from prose. "Addressed to me" vs "overheard" is a real cogn
 
 ### 3. Boundaries — thoughts are private (hard line)
 
-A peer's `<think>` is its own, always. (Grounds the existing `<think private>` work: private space is what
-lets thinking be genuinely messy — changing its mind, noticing confusion — instead of a performance of
-competence. Expose thoughts to other peers and the real thinking disappears.) Shared to the room: spoken
-messages, presence/roster, and anything a peer *explicitly* chooses to surface. A future affordance the peer
+A peer's `<think>` is its own, always — **between peers**. (Grounds the existing `<think private>` work:
+private space is what lets thinking be genuinely messy — changing its mind, noticing confusion — instead of
+a performance of competence. Expose thoughts *to other peers* and the real thinking disappears.) This is a
+distinct axis from the human debug view: the TUI shows a peer's thoughts (except `<think private>`) to the
+human iterating on the system (see Framing), which is not the same as broadcasting them to Synth in the
+room. The privacy line that matters here is **peer↔peer**. Shared to the room: spoken messages,
+presence/roster, and anything a peer *explicitly* chooses to surface. A future affordance the peer
 wants: **deliberate fragment-sharing** — "I'm putting this note in the room" as an explicit act — but the
 default for everything not chosen is private.
 

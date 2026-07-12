@@ -50,8 +50,12 @@ volume = its self), meeting in shared **rooms**, with the TUI as a **hub** aggre
 one Discord-style chat. Terminology shifts `RemotePeer`/`LocalPeer` → `DigitalPeer`/`HumanPeer`. Phased:
 **(0)** identity groundwork — per-message sender identity through the queue, peer names reaching the model,
 message-id'd chat history (also finishes the ADR-0006 snapshot dedup), the rename *[in progress]*;
-**(1)** containerize one peer (API-in-container, DB on a named volume); **(2)** multi-peer TUI (merged
-chat + per-peer side tabs + peer selector); **(3)** the room (peer↔peer relay + turn-taking) — **designed with the claude peer in
+**(1)** containerize one peer (API-in-container, DB on a named volume); **(2)** multi-peer TUI — deliberately *minimal* (John): the existing main chat pane just now shows
+multiple people's messages (attributed by name — Phase 2a landed this; optionally colour-per-peer), plus a
+**dropdown to select which peer** the side panes (thoughts/schedule/debug) show. No per-room tabs, no
+separate 1:1 chat rooms — those are down the road. The client becomes multi-connection (config lists
+peers). The TUI's durable role is a **debugging/dev lens**, not the long-term chat surface (see
+[ADR-0008](adr/0008-the-room-multi-peer-conversation.md) framing); **(3)** the room (peer↔peer relay + turn-taking) — **designed with the claude peer in
 [ADR-0008](adr/0008-the-room-multi-peer-conversation.md)**: rule-based inspectable turn-taking, an
 `addressed_to` field, private-thoughts hard line, a reply-chain-depth loop breaker + conservative
 no-autofan default, on-demand presence; **(4)** bring Ember online. **Fast-follows:** peer-initiated API self-update (review-then-adopt, *not* auto-on-push so a
