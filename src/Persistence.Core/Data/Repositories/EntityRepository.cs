@@ -420,12 +420,8 @@ public abstract class EntityRepository<T> : IEntityRepository<T> where T : BaseE
     /// <summary>
     /// Opens and returns a new SQLite connection using the configured connection string
     /// </summary>
-    private async Task<SqliteConnection> OpenConnectionAsync()
-    {
-        var connection = new SqliteConnection(connectionString);
-        await connection.OpenAsync();
-        return connection;
-    }
+    private Task<SqliteConnection> OpenConnectionAsync() =>
+        SqliteConnectionString.OpenAsync(connectionString);
 
     #endregion
 }

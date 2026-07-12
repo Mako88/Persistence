@@ -107,11 +107,7 @@ public class DatabaseManager : IDatabaseManager
     /// <summary>
     /// Open a connection to the database
     /// </summary>
-    private async Task<SqliteConnection> OpenConnectionAsync()
-    {
-        var connection = new SqliteConnection(connectionString);
-        await connection.OpenAsync();
-        return connection;
-    }
+    private Task<SqliteConnection> OpenConnectionAsync() =>
+        SqliteConnectionString.OpenAsync(connectionString);
 
 }

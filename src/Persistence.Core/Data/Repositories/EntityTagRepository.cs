@@ -111,10 +111,6 @@ public class EntityTagRepository : IEntityTagRepository
         return ids.ToList();
     }
 
-    private async Task<SqliteConnection> OpenAsync()
-    {
-        var connection = new SqliteConnection(connectionString);
-        await connection.OpenAsync();
-        return connection;
-    }
+    private Task<SqliteConnection> OpenAsync() =>
+        SqliteConnectionString.OpenAsync(connectionString);
 }
