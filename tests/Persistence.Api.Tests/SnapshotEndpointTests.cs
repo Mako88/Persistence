@@ -28,12 +28,21 @@ public class SnapshotEndpointTests : IClassFixture<ApiTestFixture>
         Assert.NotNull(snap.ScheduledEvents);        // Schedule pane (possibly empty)
         Assert.NotNull(snap.ChatHistory);            // prior conversation to backfill
     }
+}
+
+/// <summary>
+/// Its own fixture (fresh DB) so the conversation is exactly the one turn this test drives — the snapshot
+/// must reflect the CURRENT conversation, queried fresh, so a client connecting mid-session sees it.
+/// </summary>
+public class SnapshotChatHistoryTests : IClassFixture<ApiTestFixture>
+{
+    private readonly ApiTestFixture api;
+
+    public SnapshotChatHistoryTests(ApiTestFixture api) => this.api = api;
 
     [Fact]
     public async Task SnapshotChatHistoryReflectsTheCurrentConversationAfterATurn()
     {
-        // A client connecting mid-session must see the conversation as it is NOW — the snapshot queries
-        // chat history fresh from the store, not a one-time backfill captured at server-start.
         await api.DriveTurnAsync(
             "what's the capital of France?",
             "<respond>Paris.</respond><continue>false</continue>");

@@ -1,6 +1,6 @@
 // The Console is a thin client of the Persistence API server (ADR-0006, single-owner model): it holds no
 // database, turn pipeline, or model. One process — the API server — owns the store, the pipeline, and
-// scheduled wakes; every front-end (this Console, the web client) talks to it over HTTP. This is
+// scheduled wakes; every front-end (this Console, a future web UI) talks to it over HTTP. This is
 // single-owner "by construction": there is no code path here that opens the database.
 
 // `--preview` launches the TUI with sample content in every pane (no DB/model/server) for reviewing the

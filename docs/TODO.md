@@ -56,9 +56,10 @@ dispatch ordering + a decision *against* a forced second model round (see below)
    with the in-process engine, `--standalone`, and the `--check-due`/`--wake-runner` DB-opening paths
    **removed** (the always-on API server owns wakes) — single-owner by construction. Client status labels,
    live budget gauge, and stream reconnect are all server-sourced/live; connect-time chat history is pulled
-   fresh (`IConversationHistoryProvider`). Verified live via the client TUI + tests. **Next up here:**
-   deploy the API server as an always-on service (systemd/Windows service) so wakes fire without a
-   front-end; then bring the web client onto the same snapshot+stream contract.
+   fresh (`IConversationHistoryProvider`). Verified live via the client TUI + tests. The old static
+   `wwwroot` web client was **dropped** (2026-07-12) — a fresh web UI mirroring the console GUI, on the
+   same snapshot+stream contract, is planned separately. **Next up here:** deploy the API server as an
+   always-on service (Windows service / systemd) so wakes fire without a front-end running.
 2. **MCP server hub.** Structured real-world tools beyond the container shell — high capability leverage,
    independent of the memory core. Best once the single-owner loop is solid.
 3. **Self-describing pieces → auto-composed help/prompt.** The durable fix for the prompt-drift the audit

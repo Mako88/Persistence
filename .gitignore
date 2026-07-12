@@ -46,3 +46,5 @@ tui-preview/
 container/docker-compose.override.yml
 
 .codex/
+
+.logs/

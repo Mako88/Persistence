@@ -8,7 +8,7 @@ namespace Persistence.Client;
 /// <summary>
 /// Maps the API conversation snapshot + event stream onto an <see cref="IDisplayProvider"/>, so a thin
 /// client renders exactly what the in-process app renders from its own display calls. Transport-agnostic
-/// — give it any display; the mapping is what the client-mode Console (and web client) drive rendering
+/// — give it any display; the mapping is what the client-mode Console (and a future web UI) drive rendering
 /// through.
 /// </summary>
 public static class ConversationEventRenderer
