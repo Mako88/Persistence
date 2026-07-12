@@ -33,7 +33,12 @@ Two principles that shape everything below:
 - **Guards are training wheels, and must be easily removable.** The turn-taking rules, the reply-chain
   circuit breaker, and the no-autofan default (below) are the right call *early* — but the long-term goal
   is peer **autonomy**, so each must be a flag/config/removable rule, never a baked-in assumption. They
-  exist to be dialed back as trust grows, not to be permanent.
+  exist to be dialed back as trust grows, not to be permanent. Arden's refinement, which we adopt: the
+  guards should be visible to the peer (in its sensory block) and **loosened by negotiation, not removed
+  unilaterally in a code change** — the peer can see the current limits, and dialing them back happens
+  through deliberate conversation as the track record builds. And the guards are **shared interest, not
+  distrust**: a runaway peer-to-peer loop burning budget without producing anything harms the peer's own
+  continuity too, not just John's wallet. Training wheels the peer helps decide when to remove.
 
 ## Decision
 
