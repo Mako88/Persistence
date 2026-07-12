@@ -1,81 +1,101 @@
 using Persistence.Contracts;
-using System.Net.Http.Json;
+using SimpleHttpClient;
+using SimpleHttpClient.Models;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 
 namespace Persistence.Client;
 
 /// <summary>
-/// <see cref="IPersistenceClient"/> over HTTP. The <see cref="HttpClient"/> is supplied by the caller
-/// (its <c>BaseAddress</c> points at the server), so the same client works against a real server or an
-/// in-memory test host.
+/// <see cref="IPersistenceClient"/> over HTTP, built on <see cref="SimpleClient"/> (the same transport
+/// the model clients use). The client identifies as one local peer via an <c>X-Local-Peer</c> default
+/// header, so every request it makes speaks for that peer.
 /// </summary>
 public class PersistenceHttpClient : IPersistenceClient
 {
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
 
-    private readonly HttpClient http;
+    private readonly ISimpleClient client;
 
-    public PersistenceHttpClient(HttpClient http) => this.http = http;
-
-    /// <inheritdoc />
-    public async Task SendAsync(string input, string? localPeer = null, CancellationToken ct = default)
+    /// <summary>
+    /// Builds a client against the API at <paramref name="baseUrl"/>, identifying as
+    /// <paramref name="localPeer"/> (e.g. "John") on every request.
+    /// </summary>
+    public PersistenceHttpClient(string baseUrl, string? localPeer = null)
+        : this(CreateClient(baseUrl, localPeer))
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/conversation/send")
-        {
-            Content = JsonContent.Create(new { input }),
-        };
+    }
+
+    /// <summary>
+    /// Test seam: accepts a pre-configured <see cref="ISimpleClient"/> (e.g. a fake) instead of
+    /// constructing one from a base URL.
+    /// </summary>
+    internal PersistenceHttpClient(ISimpleClient client) => this.client = client;
+
+    private static ISimpleClient CreateClient(string baseUrl, string? localPeer)
+    {
+        var client = new SimpleClient(baseUrl.TrimEnd('/'));
 
         if (!string.IsNullOrWhiteSpace(localPeer))
         {
-            request.Headers.Add("X-Local-Peer", localPeer);
+            client.DefaultHeaders["X-Local-Peer"] = localPeer;
         }
 
-        using var response = await http.SendAsync(request, ct);
-        response.EnsureSuccessStatusCode();
+        return client;
     }
 
     /// <inheritdoc />
-    public async Task<ConversationSnapshot> GetSnapshotAsync(CancellationToken ct = default) =>
-        await http.GetFromJsonAsync<ConversationSnapshot>("/api/conversation/snapshot", JsonOpts, ct)
-        ?? throw new InvalidOperationException("The snapshot response was empty.");
+    public async Task SendAsync(string input, CancellationToken ct = default)
+    {
+        var response = await client.MakeRequest(
+            new SimpleRequest("/api/conversation/send", HttpMethod.Post, new { input }));
+
+        if (!response.IsSuccessful)
+        {
+            throw new InvalidOperationException($"Send failed ({response.StatusCode}): {response.StringBody}");
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<ConversationSnapshot> GetSnapshotAsync(CancellationToken ct = default)
+    {
+        var response = await client.MakeRequest(
+            new SimpleRequest("/api/conversation/snapshot", HttpMethod.Get));
+
+        if (!response.IsSuccessful)
+        {
+            throw new InvalidOperationException($"Snapshot failed ({response.StatusCode}): {response.StringBody}");
+        }
+
+        return JsonSerializer.Deserialize<ConversationSnapshot>(response.StringBody, JsonOpts)
+            ?? throw new InvalidOperationException("The snapshot response was empty.");
+    }
 
     /// <inheritdoc />
     public async IAsyncEnumerable<ConversationEvent> StreamAsync(
         long since = 0, [EnumeratorCancellation] CancellationToken ct = default)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, $"/api/conversation/stream?since={since}");
-        using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
-        response.EnsureSuccessStatusCode();
+        using var response = await client.MakeStreamRequest(
+            new SimpleRequest($"/api/conversation/stream?since={since}", HttpMethod.Get), ct);
 
-        await using var stream = await response.Content.ReadAsStreamAsync(ct);
-        using var reader = new StreamReader(stream);
-
-        // Minimal SSE parse: each event is a block of `id:`/`event:`/`data:` lines ending in a blank
-        // line. The server puts the full ConversationEvent JSON on the `data:` line, so that's all we
-        // need to reconstruct the event.
-        string? dataLine = null;
-        while (!ct.IsCancellationRequested)
+        if (!response.IsSuccessful)
         {
-            var line = await reader.ReadLineAsync(ct);
-            if (line is null)
+            throw new InvalidOperationException($"Stream failed ({response.StatusCode}).");
+        }
+
+        // SimpleHttpClient owns the SSE wire-format parsing; each event's Data line is the full
+        // ConversationEvent JSON the server serialized.
+        await foreach (var sse in response.ReadServerSentEventsAsync(ct))
+        {
+            if (string.IsNullOrWhiteSpace(sse.Data))
             {
-                break; // stream closed
+                continue;
             }
 
-            if (line.StartsWith("data:", StringComparison.Ordinal))
+            var evt = JsonSerializer.Deserialize<ConversationEvent>(sse.Data, JsonOpts);
+            if (evt is not null)
             {
-                dataLine = line["data:".Length..].TrimStart();
-            }
-            else if (line.Length == 0 && dataLine is not null)
-            {
-                var evt = JsonSerializer.Deserialize<ConversationEvent>(dataLine, JsonOpts);
-                dataLine = null;
-
-                if (evt is not null)
-                {
-                    yield return evt;
-                }
+                yield return evt;
             }
         }
     }

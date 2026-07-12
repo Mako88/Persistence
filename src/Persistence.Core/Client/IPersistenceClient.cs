@@ -9,8 +9,8 @@ namespace Persistence.Client;
 /// </summary>
 public interface IPersistenceClient
 {
-    /// <summary>Submits local-peer input; <paramref name="localPeer"/> identifies who's speaking.</summary>
-    Task SendAsync(string input, string? localPeer = null, CancellationToken ct = default);
+    /// <summary>Submits input as the local peer this client identifies as (set at construction).</summary>
+    Task SendAsync(string input, CancellationToken ct = default);
 
     /// <summary>Fetches the state to draw on connect (scheduled events, proposal count, chat, resume seq).</summary>
     Task<ConversationSnapshot> GetSnapshotAsync(CancellationToken ct = default);
