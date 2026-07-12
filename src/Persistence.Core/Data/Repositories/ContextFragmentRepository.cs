@@ -75,7 +75,12 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
             return [];
         }
 
-        var entities = (await GetByIdsAsync(rankedIds, ct)).ToDictionary(e => e.Id);
+        // Exclude forgotten (soft-deleted) fragments: the FTS index is built on content, so flipping
+        // IsDeleted doesn't drop a row from the index — without this filter a forgotten fragment would
+        // still resurface through every relevance-search caller (list_fragments relevant_to, recall).
+        var entities = (await GetByIdsAsync(rankedIds, ct))
+            .Where(e => !e.IsDeleted)
+            .ToDictionary(e => e.Id);
 
         return rankedIds.Where(id => entities.ContainsKey(id)).Select(id => entities[id]);
     }
@@ -165,10 +170,25 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
     }
 
     /// <inheritdoc />
-    public async Task SetDeletedAsync(long id, bool deleted, CancellationToken ct = default) =>
-        await ExecuteAsync(
-            $"UPDATE ContextFragments SET IsDeleted = {deleted}, LastModifiedUtc = {DateTimeOffset.UtcNow} WHERE Id = {id}",
-            ct: ct);
+    public async Task SetDeletedAsync(long id, bool deleted, string? reason = null, CancellationToken ct = default)
+    {
+        var now = DateTimeOffset.UtcNow;
+
+        // On forget, record the (optional) reason in the free-form Notes field so list_forgotten can show
+        // "why did I let this go" later. On unforget we leave Notes as the historical record.
+        if (deleted && !string.IsNullOrWhiteSpace(reason))
+        {
+            await ExecuteAsync(
+                $"UPDATE ContextFragments SET IsDeleted = 1, Notes = {reason.Trim()}, LastModifiedUtc = {now} WHERE Id = {id}",
+                ct: ct);
+        }
+        else
+        {
+            await ExecuteAsync(
+                $"UPDATE ContextFragments SET IsDeleted = {deleted}, LastModifiedUtc = {now} WHERE Id = {id}",
+                ct: ct);
+        }
+    }
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<ContextFragmentEntity>> GetDeletedAsync(int limit = 20, CancellationToken ct = default) =>
@@ -177,6 +197,19 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
         (await QueryAsync<ContextFragmentEntity>(
             $"SELECT * FROM ContextFragments WHERE IsDeleted = 1 ORDER BY LastModifiedUtc DESC LIMIT {limit}",
             ct)).ToList();
+
+    /// <inheritdoc />
+    public async Task<(int Forgotten, int Archived)> CountAsideAsync(CancellationToken ct = default)
+    {
+        var forgotten = (await QueryAsync<int>(
+            $"SELECT COUNT(*) FROM ContextFragments WHERE IsDeleted = 1", ct)).FirstOrDefault();
+
+        var archived = (await QueryAsync<int>(
+            $"SELECT COUNT(*) FROM ContextFragments WHERE IsDeleted = 0 AND Status = {ContextFragmentStatus.Archived}", ct))
+            .FirstOrDefault();
+
+        return (forgotten, archived);
+    }
 
     /// <summary>
     /// Returns the INSERT statement for a context fragment

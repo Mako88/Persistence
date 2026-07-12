@@ -23,5 +23,6 @@ public interface IPromptFormatter
         IReadOnlyList<AuditLogEntity>? recentChanges = null,
         IReadOnlyList<string>? recentActions = null,
         string? archiveNote = null,
-        IReadOnlyList<ContextFragmentEntity>? surfacedMemories = null);
+        IReadOnlyList<ContextFragmentEntity>? surfacedMemories = null,
+        (int Forgotten, int Archived)? curation = null);
 }

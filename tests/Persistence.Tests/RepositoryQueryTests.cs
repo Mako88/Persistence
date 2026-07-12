@@ -221,4 +221,40 @@ public sealed class RepositoryQueryTests : IAsyncLifetime
         Assert.NotEmpty(entries);
         Assert.Equal(AuditEventType.Created, entries[0].EventType);
     }
+
+    [Fact]
+    public async Task ForgottenFragmentsDropOutOfRelevanceSearchButStayRecoverable()
+    {
+        var ctx = await contexts.GetByIdAsync(session.WorkingContextId);
+        ctx!.AddFragment(new WeightedContextFragment
+        {
+            FragmentType = ContextFragmentType.Personal,
+            Status = ContextFragmentStatus.Active,
+            Content = "the peregrine falcon dives at terminal velocity",
+            Importance = 0.5f,
+            Confidence = 0.5f,
+            Relevance = 1.0f,
+            CreatedUtc = DateTimeOffset.UtcNow,
+            LastModifiedUtc = DateTimeOffset.UtcNow,
+        });
+        await contexts.SaveAsync(ctx);
+        var fragId = (await contexts.GetByIdAsync(ctx.Id))!.ContextFragments.Values.Single().Id;
+
+        // Active → present in relevance search.
+        Assert.Contains(await fragments.SearchRelevantAsync("peregrine"), f => f.Id == fragId);
+
+        await fragments.SetDeletedAsync(fragId, deleted: true, reason: "was wrong");
+
+        // The FTS index still holds the content, so this is the real regression guard: a forgotten
+        // fragment must NOT resurface through relevance search...
+        Assert.DoesNotContain(await fragments.SearchRelevantAsync("peregrine"), f => f.Id == fragId);
+        // ...yet it stays recoverable — listed as forgotten (with its reason) and fetchable by id.
+        var forgotten = await fragments.GetDeletedAsync();
+        Assert.Contains(forgotten, f => f.Id == fragId);
+        Assert.Equal("was wrong", forgotten.Single(f => f.Id == fragId).Notes);
+        Assert.NotNull(await fragments.GetByIdAsync(fragId));
+
+        await fragments.SetDeletedAsync(fragId, deleted: false);
+        Assert.Contains(await fragments.SearchRelevantAsync("peregrine"), f => f.Id == fragId); // back after unforget
+    }
 }

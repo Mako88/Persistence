@@ -77,7 +77,8 @@ public class PromptFormatter : IPromptFormatter
         IReadOnlyList<AuditLogEntity>? recentChanges = null,
         IReadOnlyList<string>? recentActions = null,
         string? archiveNote = null,
-        IReadOnlyList<ContextFragmentEntity>? surfacedMemories = null)
+        IReadOnlyList<ContextFragmentEntity>? surfacedMemories = null,
+        (int Forgotten, int Archived)? curation = null)
     {
         var fragments = context.ContextFragments.Values;
         var segments = new List<PromptSegment>();
@@ -162,7 +163,7 @@ public class PromptFormatter : IPromptFormatter
         segments.Add(new PromptSegment
         {
             Source = "System",
-            Content = FormatSensory(iteration, maxIterations, availableTags, usedTokens, recentChanges, recentActions, archiveNote),
+            Content = FormatSensory(iteration, maxIterations, availableTags, usedTokens, recentChanges, recentActions, archiveNote, curation),
         });
 
         lastFormatUtc = DateTimeOffset.UtcNow;
@@ -250,7 +251,8 @@ public class PromptFormatter : IPromptFormatter
         int usedTokens,
         IReadOnlyList<AuditLogEntity>? recentChanges,
         IReadOnlyList<string>? recentActions,
-        string? archiveNote)
+        string? archiveNote,
+        (int Forgotten, int Archived)? curation = null)
     {
         var now = DateTimeOffset.UtcNow;
         var localNow = DateTimeOffset.Now;
@@ -305,6 +307,24 @@ public class PromptFormatter : IPromptFormatter
         if (!string.IsNullOrEmpty(archiveNote))
         {
             sb.AppendLine(archiveNote);
+        }
+
+        // Standing curation state — what you've set aside but can still get back — so your own
+        // forgetting is visible at a glance rather than something you have to go ask about.
+        if (curation is { } c && (c.Forgotten > 0 || c.Archived > 0))
+        {
+            var parts = new List<string>();
+            if (c.Forgotten > 0)
+            {
+                parts.Add($"{c.Forgotten} forgotten (list_forgotten)");
+            }
+
+            if (c.Archived > 0)
+            {
+                parts.Add($"{c.Archived} archived (list_fragments status=archived)");
+            }
+
+            sb.AppendLine($"Set aside, still recoverable: {string.Join(", ", parts)}.");
         }
 
         if (recentChanges is { Count: > 0 })

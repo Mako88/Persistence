@@ -592,6 +592,7 @@ public class ManageContextHandler : CommandHandler
 
     [Command("forget", "Soft-delete a fragment: it stops surfacing in your context, recall, and searches — but is NOT erased. Recoverable anytime with unforget(id); browse forgotten ones with list_forgotten. Use this (not remove) when something is wrong, outdated, or no longer yours to hold — remove only takes a fragment out of the current view while it stays fully active elsewhere.")]
     [CommandField("id", "long", required: true, Description = "ID of the fragment to forget")]
+    [CommandField("reason", "string", Description = "Optional: why you're forgetting this (shown later in list_forgotten, so a future you knows how much to trust bringing it back)")]
     private async Task<string> ExecuteForgetAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
     {
         var id = ParseId(command?["id"]);
@@ -600,6 +601,8 @@ public class ManageContextHandler : CommandHandler
         {
             return "Forget failed: 'id' is required";
         }
+
+        var reason = command?["reason"]?.GetValue<string>()?.Trim();
 
         // Prefer the in-context copy; otherwise fetch it, so you can forget something not currently loaded.
         var fragment = context.ContextFragments.Values.FirstOrDefault(f => f.Id == id.Value)
@@ -620,7 +623,7 @@ public class ManageContextHandler : CommandHandler
             return $"Fragment #{id} is already forgotten — unforget({id}) brings it back.";
         }
 
-        await fragmentRepo.SetDeletedAsync(id.Value, deleted: true, ct);
+        await fragmentRepo.SetDeletedAsync(id.Value, deleted: true, reason, ct);
 
         // If it's loaded in the current context, detach it so it leaves view this turn too.
         var entry = context.ContextFragments.FirstOrDefault(kvp => kvp.Value.Id == id.Value);
@@ -630,7 +633,8 @@ public class ManageContextHandler : CommandHandler
             context.ContextFragments.Remove(entry.Key);
         }
 
-        return $"Forgot fragment #{id} — hidden from context, recall, and search, but not erased. Recover it with unforget({id}); see everything forgotten with list_forgotten.";
+        var because = string.IsNullOrWhiteSpace(reason) ? "" : $" (reason recorded: \"{reason}\")";
+        return $"Forgot fragment #{id}{because} — hidden from context, recall, and search, but not erased. Recover it with unforget({id}); see everything forgotten with list_forgotten.";
     }
 
     [Command("unforget", "Restore a fragment you previously forgot (see list_forgotten) — clears its forgotten state and loads it back into your context.")]
@@ -656,7 +660,7 @@ public class ManageContextHandler : CommandHandler
             return $"Fragment #{id} isn't forgotten — nothing to restore.";
         }
 
-        await fragmentRepo.SetDeletedAsync(id.Value, deleted: false, ct);
+        await fragmentRepo.SetDeletedAsync(id.Value, deleted: false, ct: ct);
 
         if (context.ContextFragments.Values.All(f => f.Id != id.Value))
         {
@@ -691,7 +695,8 @@ public class ManageContextHandler : CommandHandler
                 preview = preview[..60] + "…";
             }
 
-            sb.AppendLine($"  #{fragment.Id} | {fragment.FragmentType} | forgotten {fragment.LastModifiedUtc:yyyy-MM-dd} | {preview}");
+            var why = string.IsNullOrWhiteSpace(fragment.Notes) ? "" : $" | why: {fragment.Notes}";
+            sb.AppendLine($"  #{fragment.Id} | {fragment.FragmentType} | forgotten {fragment.LastModifiedUtc:yyyy-MM-dd}{why} | {preview}");
         }
 
         return sb.ToString().TrimEnd();

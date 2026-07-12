@@ -26,6 +26,7 @@ public class TurnHandler : ITurnHandler
     private readonly ITagRepository tagRepo;
     private readonly IActionLogRepository actionLogRepo;
     private readonly IAuditLogRepository auditLogRepo;
+    private readonly IContextFragmentRepository fragmentRepo;
     private readonly ISessionContext sessionContext;
     private readonly IModelClientResolver modelClientResolver;
     private readonly IModelResponseParser responseParser;
@@ -51,6 +52,7 @@ public class TurnHandler : ITurnHandler
         ITagRepository tagRepo,
         IActionLogRepository actionLogRepo,
         IAuditLogRepository auditLogRepo,
+        IContextFragmentRepository fragmentRepo,
         ISessionContext sessionContext,
         IModelClientResolver modelClientResolver,
         IModelResponseParser responseParser,
@@ -66,6 +68,7 @@ public class TurnHandler : ITurnHandler
         this.tagRepo = tagRepo;
         this.actionLogRepo = actionLogRepo;
         this.auditLogRepo = auditLogRepo;
+        this.fragmentRepo = fragmentRepo;
         this.sessionContext = sessionContext;
         this.modelClientResolver = modelClientResolver;
         this.responseParser = responseParser;
@@ -137,6 +140,10 @@ public class TurnHandler : ITurnHandler
         // loaded. Computed once per turn (like recentChanges) and passed to each iteration's prompt.
         var surfaced = await SurfaceRelevantMemoriesAsync(context, ct);
 
+        // Standing curation state for the sensory block — what's been set aside but is still recoverable.
+        // Computed once per turn (cheap COUNTs); a same-turn forget shows up next turn.
+        var curation = await fragmentRepo.CountAsideAsync(ct);
+
         var iteration = 0;
         var hasResponded = false;
 
@@ -158,7 +165,7 @@ public class TurnHandler : ITurnHandler
                 DrainPendingInput(context);
             }
 
-            var segments = promptFormatter.Format(context, availableTags, iteration, config.MaxActionIterations, recentChanges, recentActions, archiveNote, surfaced);
+            var segments = promptFormatter.Format(context, availableTags, iteration, config.MaxActionIterations, recentChanges, recentActions, archiveNote, surfaced, curation);
             var request = promptBuilder.Build(segments);
             // Resolve the client for the active profile each turn so a mid-session set_model switch
             // takes effect here rather than on restart.

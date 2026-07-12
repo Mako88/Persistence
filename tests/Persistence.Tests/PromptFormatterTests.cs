@@ -180,6 +180,26 @@ public class PromptFormatterTests
     }
 
     [Fact]
+    public void SensoryShowsCurationCountsOfWhatIsSetAside()
+    {
+        var (formatter, _) = CreateFormatterWithSession(new AppConfig());
+
+        var sensory = formatter.Format(ContextWithFragment("hi"), [], curation: (Forgotten: 3, Archived: 5))[^1].Content;
+
+        Assert.Contains("Set aside, still recoverable: 3 forgotten (list_forgotten), 5 archived", sensory);
+    }
+
+    [Fact]
+    public void SensoryOmitsTheCurationLineWhenNothingIsSetAside()
+    {
+        var (formatter, _) = CreateFormatterWithSession(new AppConfig());
+
+        var sensory = formatter.Format(ContextWithFragment("hi"), [], curation: (0, 0))[^1].Content;
+
+        Assert.DoesNotContain("Set aside", sensory);
+    }
+
+    [Fact]
     public void SensoryFlagsAPeerSwitch()
     {
         var (formatter, session) = CreateFormatterWithSession(new AppConfig());

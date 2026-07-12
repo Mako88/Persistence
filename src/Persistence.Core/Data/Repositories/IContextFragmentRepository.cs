@@ -26,12 +26,19 @@ public interface IContextFragmentRepository : IEntityRepository<ContextFragmentE
     /// <summary>
     /// Soft-deletes (<c>forget</c>) or restores (<c>unforget</c>) a fragment by flipping its
     /// <see cref="ContextFragmentEntity.IsDeleted"/> flag only — content, tags, and status untouched.
+    /// When forgetting, an optional <paramref name="reason"/> is recorded (in Notes) for later recall.
     /// </summary>
-    Task SetDeletedAsync(long id, bool deleted, CancellationToken ct = default);
+    Task SetDeletedAsync(long id, bool deleted, string? reason = null, CancellationToken ct = default);
 
     /// <summary>
     /// Returns soft-deleted (forgotten) fragments, most-recently-forgotten first — the recovery
     /// surface for <c>unforget</c>. Flat rows (no tag hydration); intended for a compact listing.
     /// </summary>
     Task<IReadOnlyList<ContextFragmentEntity>> GetDeletedAsync(int limit = 20, CancellationToken ct = default);
+
+    /// <summary>
+    /// Counts what's been set aside but is still recoverable: forgotten (soft-deleted) fragments and
+    /// (separately) archived-but-not-deleted ones. Feeds the sensory block's curation line.
+    /// </summary>
+    Task<(int Forgotten, int Archived)> CountAsideAsync(CancellationToken ct = default);
 }

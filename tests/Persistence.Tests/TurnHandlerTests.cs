@@ -78,7 +78,7 @@ public class TurnHandlerTests
         public static ModelTurn Unparsed() => new() { Actions = [], Continue = false, ParsedSuccessfully = false };
 
         public TurnHandler Build() => new(
-            ContextRepo.Object, TagRepo.Object, ActionLog.Object, AuditLog.Object, Session, TestResolvers.For(Model.Object), Parser.Object,
+            ContextRepo.Object, TagRepo.Object, ActionLog.Object, AuditLog.Object, new Mock<IContextFragmentRepository>().Object, Session, TestResolvers.For(Model.Object), Parser.Object,
             Formatter.Object, Builder.Object, Handlers.Object, new TokenUsageTracker(),
             new Mock<IMemorySurfacer>().Object, Bus, Config);
     }

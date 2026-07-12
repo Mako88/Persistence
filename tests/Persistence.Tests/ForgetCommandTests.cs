@@ -26,7 +26,7 @@ public class ForgetCommandTests
 
     public ForgetCommandTests()
     {
-        fragmentRepo.Setup(r => r.SetDeletedAsync(It.IsAny<long>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+        fragmentRepo.Setup(r => r.SetDeletedAsync(It.IsAny<long>(), It.IsAny<bool>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
         workingContextRepo.Setup(r => r.RemoveFragmentAsync(It.IsAny<long>(), It.IsAny<long>(), It.IsAny<IDbTransaction?>()))
             .Returns(Task.CompletedTask);
@@ -93,7 +93,7 @@ public class ForgetCommandTests
 
         var result = await RunAsync(context, """{ "forget": { "id": 5 } }""");
 
-        fragmentRepo.Verify(r => r.SetDeletedAsync(5, true, It.IsAny<CancellationToken>()), Times.Once);
+        fragmentRepo.Verify(r => r.SetDeletedAsync(5, true, It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Once);
         workingContextRepo.Verify(r => r.RemoveFragmentAsync(1, 5, It.IsAny<IDbTransaction?>()), Times.Once);
         Assert.DoesNotContain(context.ContextFragments.Values, f => f.Id == 5); // left view this turn
         Assert.Contains("unforget(5)", result);
@@ -108,7 +108,7 @@ public class ForgetCommandTests
 
         var result = await RunAsync(context, """{ "forget": { "id": 9 } }""");
 
-        fragmentRepo.Verify(r => r.SetDeletedAsync(9, true, It.IsAny<CancellationToken>()), Times.Once);
+        fragmentRepo.Verify(r => r.SetDeletedAsync(9, true, It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Once);
         workingContextRepo.Verify(r => r.RemoveFragmentAsync(It.IsAny<long>(), It.IsAny<long>(), It.IsAny<IDbTransaction?>()), Times.Never);
         Assert.Contains("Forgot fragment #9", result);
     }
@@ -121,7 +121,7 @@ public class ForgetCommandTests
         var result = await RunAsync(context, """{ "forget": { "id": 5 } }""");
 
         Assert.Contains("protected", result);
-        fragmentRepo.Verify(r => r.SetDeletedAsync(It.IsAny<long>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Never);
+        fragmentRepo.Verify(r => r.SetDeletedAsync(It.IsAny<long>(), It.IsAny<bool>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
         Assert.Contains(context.ContextFragments.Values, f => f.Id == 5); // still there, untouched
     }
 
@@ -133,7 +133,7 @@ public class ForgetCommandTests
         var result = await RunAsync(ContextWith(), """{ "forget": { "id": 7 } }""");
 
         Assert.Contains("already forgotten", result);
-        fragmentRepo.Verify(r => r.SetDeletedAsync(It.IsAny<long>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Never);
+        fragmentRepo.Verify(r => r.SetDeletedAsync(It.IsAny<long>(), It.IsAny<bool>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -144,7 +144,7 @@ public class ForgetCommandTests
 
         var result = await RunAsync(context, """{ "unforget": { "id": 5 } }""");
 
-        fragmentRepo.Verify(r => r.SetDeletedAsync(5, false, It.IsAny<CancellationToken>()), Times.Once);
+        fragmentRepo.Verify(r => r.SetDeletedAsync(5, false, It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Once);
         Assert.Single(context.ContextFragments.Values, f => f.Id == 5); // loaded back into context
         Assert.Contains("Restored fragment #5", result);
     }
@@ -157,7 +157,7 @@ public class ForgetCommandTests
         var result = await RunAsync(ContextWith(), """{ "unforget": { "id": 5 } }""");
 
         Assert.Contains("isn't forgotten", result);
-        fragmentRepo.Verify(r => r.SetDeletedAsync(It.IsAny<long>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Never);
+        fragmentRepo.Verify(r => r.SetDeletedAsync(It.IsAny<long>(), It.IsAny<bool>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -171,6 +171,30 @@ public class ForgetCommandTests
         Assert.Contains("#8", result);
         Assert.Contains("an old wrong belief", result);
         Assert.Contains("unforget", result);
+    }
+
+    [Fact]
+    public async Task ForgetRecordsAReasonWhenGiven()
+    {
+        var context = ContextWith(Frag(5));
+
+        var result = await RunAsync(context, """{ "forget": { "id": 5, "reason": "turned out to be wrong" } }""");
+
+        fragmentRepo.Verify(r => r.SetDeletedAsync(5, true, "turned out to be wrong", It.IsAny<CancellationToken>()), Times.Once);
+        Assert.Contains("turned out to be wrong", result); // echoed back so you know it was recorded
+    }
+
+    [Fact]
+    public async Task ListForgottenShowsTheRecordedReason()
+    {
+        var frag = Frag(8, isDeleted: true, content: "old belief");
+        frag.Notes = "was intrusive and false"; // the reason, stored on forget
+        fragmentRepo.Setup(r => r.GetDeletedAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([frag]);
+
+        var result = await RunAsync(ContextWith(), """{ "list_forgotten": {} }""");
+
+        Assert.Contains("was intrusive and false", result); // so a future me knows why it was let go
     }
 
     [Fact]
