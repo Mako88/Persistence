@@ -46,17 +46,7 @@ public class ContainerExecutor : IContainerExecutor
         var cwd = string.IsNullOrEmpty(session.ContainerCwd) ? settings.WorkingDir : session.ContainerCwd;
         var script = BuildScript(commandLine, cwd, settings.WorkingDir);
 
-        var env = settings.DockerHost is { Length: > 0 } host
-            ? new Dictionary<string, string> { ["DOCKER_HOST"] = host }
-            : null;
-
-        var result = await processRunner.RunAsync(
-            "docker",
-            ["exec", settings.Name, "sh", "-lc", script],
-            settings.TimeoutSeconds,
-            settings.MaxOutputBytes,
-            env,
-            ct);
+        var result = await RunScriptAsync(script, settings, ct);
 
         var (output, newCwd) = ExtractCwd(result.Stdout);
 
@@ -90,7 +80,7 @@ public class ContainerExecutor : IContainerExecutor
             $"awk 'END{{print NR}}' {Quote(path)} 1>&2\n" +      // total line count → stderr
             $"sed -n '{start},{end}p' {Quote(path)}";            // the requested window → stdout
 
-        var result = await DockerExecAsync(script, settings, ct);
+        var result = await RunScriptAsync(script, settings, ct);
 
         if (result.ExitCode == 3 || result.Stderr.Contains(NoFileMarker, StringComparison.Ordinal))
         {
@@ -126,7 +116,7 @@ public class ContainerExecutor : IContainerExecutor
             // base64 carries the content verbatim — no quoting/escaping of arbitrary bytes needed.
             $"printf %s '{b64}' | base64 -d {redirect} {Quote(path)}";
 
-        var result = await DockerExecAsync(script, settings, ct);
+        var result = await RunScriptAsync(script, settings, ct);
 
         return new ContainerExecResult(
             Allowed: true,
@@ -144,10 +134,20 @@ public class ContainerExecutor : IContainerExecutor
         return $"cd {Quote(cwd)} 2>/dev/null || cd {Quote(settings.WorkingDir)}\n";
     }
 
-    /// <summary>Runs a prepared script in the container via <c>docker exec … sh -lc</c>.</summary>
-    private Task<ProcessResult> DockerExecAsync(string script, ContainerSettings settings, CancellationToken ct)
+    /// <summary>
+    /// Runs a prepared script against the peer's computer. In <see cref="ContainerSettings.Local"/> mode
+    /// the runtime is inside its own container, so the script runs as a local <c>sh -lc</c> process;
+    /// otherwise it's dispatched via <c>docker exec</c> into the named sidecar container.
+    /// </summary>
+    private Task<ProcessResult> RunScriptAsync(string script, ContainerSettings settings, CancellationToken ct)
     {
-        var env = settings.DockerHost is { Length: > 0 } host
+        if (settings.Local)
+        {
+            return processRunner.RunAsync(
+                "sh", ["-lc", script], settings.TimeoutSeconds, settings.MaxOutputBytes, environment: null, ct);
+        }
+
+        var dockerEnv = settings.DockerHost is { Length: > 0 } host
             ? new Dictionary<string, string> { ["DOCKER_HOST"] = host }
             : null;
 
@@ -156,7 +156,7 @@ public class ContainerExecutor : IContainerExecutor
             ["exec", settings.Name, "sh", "-lc", script],
             settings.TimeoutSeconds,
             settings.MaxOutputBytes,
-            env,
+            dockerEnv,
             ct);
     }
 
@@ -178,6 +178,12 @@ public class ContainerExecutor : IContainerExecutor
     public async Task<string> GetLogsAsync(string containerName, int lines, CancellationToken ct)
     {
         var settings = config.Container;
+
+        // Inside its own container the peer has no docker daemon to query for another container's logs.
+        if (settings.Local)
+        {
+            return "(container logs aren't available from inside the peer's own container)";
+        }
 
         var env = settings.DockerHost is { Length: > 0 } host
             ? new Dictionary<string, string> { ["DOCKER_HOST"] = host }

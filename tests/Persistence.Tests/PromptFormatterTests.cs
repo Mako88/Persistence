@@ -64,6 +64,48 @@ public class PromptFormatterTests
         return context;
     }
 
+    private static WorkingContextEntity ContextWithChatMessage(string content, SourceType sourceType, string? sourceName)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var context = new WorkingContextEntity { Name = "c", Summary = "s", CreatedUtc = now, LastModifiedUtc = now };
+
+        context.AddFragment(new WeightedContextFragment
+        {
+            FragmentType = ContextFragmentType.ChatMessage,
+            Status = ContextFragmentStatus.Active,
+            Content = content,
+            Importance = 0.3f,
+            Confidence = 0.5f,
+            Relevance = 0.5f,
+            Sources = [new SourceEntity { Id = 1, SourceType = sourceType, Name = sourceName, CreatedUtc = now, LastModifiedUtc = now }],
+            CreatedUtc = now,
+            LastModifiedUtc = now,
+        });
+
+        return context;
+    }
+
+    [Fact]
+    public void HumanChatMessageIsPrefixedWithTheSenderNameAndCarriesHumanAuthorType()
+    {
+        var segments = CreateFormatter().Format(ContextWithChatMessage("can you help?", SourceType.HumanPeer, "John"), []);
+
+        var msg = Assert.Single(segments, s => s.Content.Contains("can you help?"));
+        Assert.Contains("John: can you help?", msg.Content); // the model can see who spoke
+        Assert.Equal(SourceType.HumanPeer, msg.AuthorType); // ...and it maps to the user role by type
+    }
+
+    [Fact]
+    public void DigitalPeerChatMessageIsNotNamePrefixedAndCarriesDigitalAuthorType()
+    {
+        // The peer's own replies are the assistant voice — they shouldn't be prefixed like a human's line.
+        var segments = CreateFormatter().Format(ContextWithChatMessage("here you go", SourceType.DigitalPeer, "Remote Peer"), []);
+
+        var msg = Assert.Single(segments, s => s.Content.Contains("here you go"));
+        Assert.DoesNotContain("Remote Peer: here you go", msg.Content);
+        Assert.Equal(SourceType.DigitalPeer, msg.AuthorType);
+    }
+
     [Fact]
     public void AppendsCommandSegmentWhenSurfacingEnabled()
     {

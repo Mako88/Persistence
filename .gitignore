@@ -44,3 +44,10 @@ tui-preview/
 /shared/
 ## Local, host-specific compose overrides (e.g. mounting an SSH key into the peer's container).
 container/docker-compose.override.yml
+
+.codex/
+
+.logs/
+
+## Peer-memory backups (private — never commit). Off-site backup destination is a separate decision.
+backups/

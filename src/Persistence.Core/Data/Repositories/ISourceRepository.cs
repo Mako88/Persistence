@@ -13,12 +13,7 @@ public interface ISourceRepository : IEntityRepository<SourceEntity>
     Task CreateSystemSourceIfNotExists();
 
     /// <summary>
-    /// Create a source with the LocalPeer type if none exist
-    /// </summary>
-    Task CreateLocalPeerSourceIfNotExists();
-
-    /// <summary>
-    /// Create a source with the RemotePeer type if none exist
+    /// Create the digital-peer source (the runtime's own voice) if none exists
     /// </summary>
     Task CreateRemotePeerSourceIfNotExists();
 
@@ -28,7 +23,7 @@ public interface ISourceRepository : IEntityRepository<SourceEntity>
     Task<SourceEntity?> GetByNameAsync(string name, CancellationToken ct = default);
 
     /// <summary>
-    /// Returns the id of the <see cref="SourceType.LocalPeer"/> source with the given name, creating
+    /// Returns the id of the <see cref="SourceType.HumanPeer"/> source with the given name, creating
     /// it if absent — so each named local peer gets its own source for message attribution.
     /// </summary>
     Task<long> EnsureLocalPeerSourceAsync(string name, CancellationToken ct = default);

@@ -115,7 +115,8 @@ public class TurnHandlerStreamingTests
             new TokenUsageTracker(),
             new Mock<IMemorySurfacer>().Object,
             eventBus,
-            config);
+            config,
+            new Mock<ISourceRepository>().Object);
 
         await turnHandler.ExecuteTurnAsync();
 
@@ -233,7 +234,8 @@ public class TurnHandlerStreamingTests
             new TokenUsageTracker(),
             new Mock<IMemorySurfacer>().Object,
             new EventBus(),
-            config);
+            config,
+            new Mock<ISourceRepository>().Object);
 
         await turnHandler.ExecuteTurnAsync();
 

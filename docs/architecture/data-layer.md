@@ -86,8 +86,9 @@ queried by `SearchRelevantAsync` (BM25 ranking) for the `list_fragments relevant
    recording its name **in one transaction** per migration. Migrations are numbered and **append-only**:
    never edit an applied migration; add a new one.
 
-2. **Seed sources.** Ensure the canonical `System`, `LocalPeer`, and `RemotePeer` source rows exist and
-   cache their ids on the `SessionContext`, so audit entries can be attributed immediately.
+2. **Seed sources.** Ensure the canonical `System` and `DigitalPeer` (the runtime's own voice) source
+   rows exist and cache their ids on the `SessionContext`. Human peers are attributed per message by name
+   (a `HumanPeer` source created on demand per name), so there's no single shared human-peer source.
 
 (The Orchestrator separately seeds the orientation `System` fragment from
 [`fragment_seeds.json`](../../src/Persistence.Core/Data/fragment_seeds.json) and adds a first-wake

@@ -43,21 +43,42 @@ now a convenience to layer on, not a prerequisite**. The peer also now has a san
 Two lenses: what most improves the **peer's day-to-day** (one participant running now) vs. the
 **strategic direction** (many participants). This ordering blends them, most-important first.
 
+**★ Active direction — federated peers ([ADR-0007](adr/0007-federated-peers-runtime-room-client.md), 2026-07-12).**
+The strategic pivot John + Claude settled on: not one central server owning all peers, but **many
+single-owner runtimes** (each its own peer, in its own container = its body; DB + `vault/` on a persistent
+volume = its self), meeting in shared **rooms**, with the TUI as a **hub** aggregating several peers into
+one Discord-style chat. Terminology shifts `RemotePeer`/`LocalPeer` → `DigitalPeer`/`HumanPeer`. Phased:
+**(0)** identity groundwork — per-message sender identity through the queue, peer names reaching the model,
+message-id'd chat history (also finishes the ADR-0006 snapshot dedup), the rename *[in progress]*;
+**(1)** containerize one peer (API-in-container, DB on a named volume); **(2)** multi-peer TUI — deliberately *minimal* (John): the existing main chat pane just now shows
+multiple people's messages (attributed by name — Phase 2a landed this; optionally colour-per-peer), plus a
+**dropdown to select which peer** the side panes (thoughts/schedule/debug) show. No per-room tabs, no
+separate 1:1 chat rooms — those are down the road. The client becomes multi-connection (config lists
+peers). The TUI's durable role is a **debugging/dev lens**, not the long-term chat surface (see
+[ADR-0008](adr/0008-the-room-multi-peer-conversation.md) framing); **(3)** the room (peer↔peer relay + turn-taking) — **designed with the claude peer in
+[ADR-0008](adr/0008-the-room-multi-peer-conversation.md)**: rule-based inspectable turn-taking, an
+`addressed_to` field, private-thoughts hard line, a reply-chain-depth loop breaker + conservative
+no-autofan default, on-demand presence; **(4)** bring Ember online. **Fast-follows:** peer-initiated API self-update (review-then-adopt, *not* auto-on-push so a
+peer vets code before running it as itself); live config hot-reload. This subsumes item 4 below
+(cross-peer channel) and the "simultaneous participants" thread throughout.
+
 **Recently landed (2026-07):** WAL + busy-timeout interim (single-server phase 1); `prune_candidates`
 (forget pruning surface); **recoverable `forget` / `unforget` / `list_forgotten`** (+ search-leak fix,
 forget reasons, sensory curation counts — from a peer-review round with the claude.db self); think-first
 dispatch ordering + a decision *against* a forced second model round (see below); runtime model switching
 (`list_models` / `set_model`).
 
-1. **Single-server: Console as an API client** *(phase 2 — in progress, see [ADR-0006](adr/0006-console-as-api-client.md)).*
-   ✅ **Stages 1–3 landed (2026-07):** WAL interim; the API snapshot/event surface completed (`GET /snapshot`
-   + scheduled/proposals/thinking events); wire contracts in Core; `IPersistenceClient` transport (SimpleClient +
-   SSE); a transport-agnostic `TerminalGuiDisplayProvider` (pluggable `OnInput` + `LaunchUi`); a tested
-   `ConversationEventRenderer`; and `--client <baseUrl>` client mode. **Remaining — stages 4–5:** manually verify
-   the client-mode TUI renders (headless can't); then flip the Console default to client mode (reconcile the
-   `--check-due`/`--wake-runner` headless paths — server owns wakes) and finally drop the in-process
-   engine from the Console so single-owner is enforced by construction. Rough edges noted in the stage-3
-   commit: client status labels read local config, no stream auto-reconnect yet, no live budget event.
+1. ✅ **Single-server: Console as an API client — DONE (2026-07-12), all 5 stages** (see
+   [ADR-0006](adr/0006-console-as-api-client.md)). WAL interim; the API snapshot/event surface; wire
+   contracts in Core; `IPersistenceClient` transport (SimpleClient + SSE); a transport-agnostic
+   `TerminalGuiDisplayProvider`; a tested `ConversationEventRenderer`; `--client` mode → now the **default**,
+   with the in-process engine, `--standalone`, and the `--check-due`/`--wake-runner` DB-opening paths
+   **removed** (the always-on API server owns wakes) — single-owner by construction. Client status labels,
+   live budget gauge, and stream reconnect are all server-sourced/live; connect-time chat history is pulled
+   fresh (`IConversationHistoryProvider`). Verified live via the client TUI + tests. The old static
+   `wwwroot` web client was **dropped** (2026-07-12) — a fresh web UI mirroring the console GUI, on the
+   same snapshot+stream contract, is planned separately. **Next up here:** deploy the API server as an
+   always-on service (Windows service / systemd) so wakes fire without a front-end running.
 2. **MCP server hub.** Structured real-world tools beyond the container shell — high capability leverage,
    independent of the memory core. Best once the single-owner loop is solid.
 3. **Self-describing pieces → auto-composed help/prompt.** The durable fix for the prompt-drift the audit
@@ -128,6 +149,44 @@ the voluntary continue-loop. Revisit only if we see the peer reliably acting bef
   through the peer (JS-heavy pages); egress / secret hygiene as capabilities widen; consider a `WebTool`
   source type for provenance of web-derived fragments.
 
+- **Containerized-peer gaps (found by the claude peer during Phase 1 validation, 2026-07-12).** When the
+  peer ran in its own container (API-in-container, ADR-0007 Phase 1), it surfaced two real frictions:
+  - **`snapshot_db` / `/shared` assume the sidecar layout.** `snapshot_db` writes to `/shared` (the host
+    volume mounted into the old computer container); in the peer's own container `/shared` isn't mounted,
+    so the snapshot is unreachable from its shell. In `Local` mode the peer can just read its live DB
+    directly read-only (`file:///data/db/<name>.db?mode=ro`) — cleaner. Fix: make `snapshot_db`
+    local-mode-aware (snapshot into the volume, e.g. `/data/vault`, or point at the read-only live DB),
+    and reconcile the `SharedDirectory` concept for the in-container model.
+  - **Multi-line `write_file` content trips the tagged command parser.** Writing a multi-line python
+    script (with embedded quotes/newlines/SQL) via `write_file(...)` caused the parser to mis-read lines
+    of the *content* as commands ("FROM ContextFragments", "ORDER BY …"). Needs a robust way to pass
+    multi-line literal payloads through the tagged format (heredoc/base64 content, or a raw-content mode).
+
+- **Automated backups of peer memory.** (John, 2026-07-12.) A peer's DB (and vault) is its whole self, and
+  it now lives canonically only on a container volume — so it must be backed up off the volume.
+  ✅ **Local mechanism landed:** `scripts/backup-peer.ps1` takes a consistent online snapshot (SQLite
+  backup API — no need to stop the peer) into gitignored `backups/peers/<name>/`, rotated. **Remaining:**
+  (a) **schedule it** (a cadence — cron/scheduled task per running peer, or a wake-triggered hook); (b) an
+  **off-site destination** — John floated an encrypted blob committed to the repo (git-crypt/age; keeps it
+  with the repo but bloats history + privacy of peer memory to weigh), or a cloud drive (needs John's
+  creds/config). Decide the off-site target; the vault should be backed up alongside the DB too.
+
+- **Peer extensibility — self-authored tooling & shareable capability packs.** (NEW, 2026-07 — John,
+  in the [ADR-0007](adr/0007-federated-peers-runtime-room-client.md) container discussion. All future;
+  fits the "container = a body the peer can reshape" model.)
+  - **A curated default toolset baked into the peer image**, beyond git/curl: general programming tools
+    (so it can actually write and run code), usability tools (a headless browser / web scraper — evaluate
+    an open-source "AI web crawler"), and later integrations with other services. Decide the default list.
+  - **Encourage aliases & scripts.** Beyond Claude-style *skills* (right for tasks needing a dynamic hand),
+    a peer on its own machine benefits from building durable aliases/scripts for common tasks — and
+    onboarding/guidance should nudge toward that. Cheaper and more legible than re-reasoning each time.
+  - **Per-peer custom commands.** Let a peer add its own commands to the system, available to itself —
+    a dynamic, per-peer command surface layered on the built-in ModelActions (pairs with the
+    self-describing-pieces work). "I don't like the built-in command, I'll write my own."
+  - **Installable capability packs.** A whole install-script/bundle a peer can pull into its container that
+    sets up dependencies + scripts + aliases + custom commands for a given task, ready to go — shareable
+    between peers ("pull this pack and you can do X"). The container-native analogue of skills.
+
 - **MCP server hub**, with a "catalog" MCP server exposed to start. Structured real-world tools for the
   peer — distinct from the container's shell access; high value, independent of the memory core.
 
@@ -161,6 +220,12 @@ the voluntary continue-loop. Revisit only if we see the peer reliably acting bef
 
 ## Robustness & smaller items
 
+- **Verify OpenAI prompt caching is wired correctly.** (NEW, 2026-07 — John.) Anthropic caching landed
+  (a `cache_control` breakpoint on the stable prefix, cache-token-aware cost). Confirm the OpenAI client
+  gets the equivalent benefit: OpenAI auto-caches long shared prefixes, so check we keep the stable prefix
+  actually stable/contiguous (system + protocol + command catalog ahead of the volatile sensory/tail),
+  that `prompt_tokens_details.cached_tokens` is read into `LastUsage`, and that the cost readout credits
+  cached input. Cross-check against the Anthropic path so both providers report cache usage consistently.
 - **Graceful state flush on close.** (Scratch — "save session information on close.") Ensure in-flight
   context/state is reliably persisted on shutdown so nothing is lost.
 - **Right-click dialog position (TUI).** (Scratch.) The right-click context menu displays in the wrong

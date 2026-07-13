@@ -1,75 +1,60 @@
-using Microsoft.Extensions.DependencyInjection;
-using Persistence;
-using Persistence.Data;
-using Persistence.Data.Repositories;
-using Persistence.Runtime;
+// The Console is a thin client of the Persistence API server (ADR-0006, single-owner model): it holds no
+// database, turn pipeline, or model. One process — the API server — owns the store, the pipeline, and
+// scheduled wakes; every front-end (this Console, a future web UI) talks to it over HTTP. This is
+// single-owner "by construction": there is no code path here that opens the database.
 
-// `--preview` launches the TUI with sample content in every pane (no DB/model) for reviewing
-// the layout and colours. Useful for visual/colour work; not part of a normal run.
+// `--preview` launches the TUI with sample content in every pane (no DB/model/server) for reviewing the
+// layout and colours. Not part of a normal run.
 if (args.Contains("--preview"))
 {
-    // An optional variant after --preview (e.g. "--preview A") selects a role-colour combo to compare.
     var variant = args.SkipWhile(a => !string.Equals(a, "--preview", StringComparison.OrdinalIgnoreCase))
         .Skip(1).FirstOrDefault();
     await Persistence.Console.TuiPreview.RunAsync(variant);
     return;
 }
 
-// `--check-due` is a fast, model-free probe for the wake launcher: exit 0 if any scheduled event is
-// due now, 100 if none. Lets an OS poll gate the expensive model startup on there being real work.
-if (args.Contains("--check-due"))
+// Scheduled wakes are owned by the always-on API server now (its hosted orchestrator fires due events for
+// its lifetime). The old OS-triggered, DB-opening wake paths were removed in the single-owner migration;
+// exit with guidance rather than silently falling through to client mode.
+if (args.Contains("--wake-runner") || args.Contains("--check-due"))
 {
-    Environment.SetEnvironmentVariable("PERSISTENCE_UIMODE", "Headless");
-    var provider = await Initializer.InitializeAsync();
-    await provider.GetRequiredService<IDatabaseManager>().InitializeAsync();
-    var due = await provider.GetRequiredService<IScheduledEventRepository>().GetDueEventsAsync();
-    Environment.ExitCode = due.Any() ? 0 : 100;
+    System.Console.Error.WriteLine(
+        "Scheduled wakes are now owned by the always-on API server — run it and it fires due events for "
+        + "its lifetime. The Console's --wake-runner/--check-due paths were removed in the single-owner "
+        + "migration (ADR-0006); update any OS task to keep the API server running instead.");
+    Environment.ExitCode = 2;
     return;
 }
 
-// `--wake-runner` is the headless one-shot: fire all due scheduled events as autonomous turns, then
-// exit. An OS trigger launches it (via the launcher) when the interactive app isn't running.
-if (args.Contains("--wake-runner"))
-{
-    Environment.SetEnvironmentVariable("PERSISTENCE_UIMODE", "Headless");
-    var provider = await Initializer.InitializeAsync();
-    using var wakeCts = new CancellationTokenSource();
-    Console.CancelKeyPress += (_, e) => { e.Cancel = true; wakeCts.Cancel(); };
-    await provider.GetRequiredService<IOrchestrator>().RunWakeCycleAsync(wakeCts.Token);
-    return;
-}
-
-// `--client <baseUrl> [--as <localPeer>]` runs the Console as a thin client of a running API server
-// (ADR-0006): no local DB/pipeline/model — it renders the server's conversation stream and sends input
-// over HTTP. Without it, the Console runs the full stack in-process as before.
-if (args.Contains("--client"))
-{
-    var baseUrl = ArgAfter(args, "--client") ?? "http://localhost:5000";
-    var localPeer = ArgAfter(args, "--as");
-
-    using var clientCts = new CancellationTokenSource();
-    System.Console.CancelKeyPress += (_, e) => { e.Cancel = true; clientCts.Cancel(); };
-
-    await Persistence.Console.ClientConsoleHost.RunAsync(baseUrl, localPeer, clientCts.Token);
-    return;
-
-    static string? ArgAfter(string[] args, string flag)
-    {
-        var i = Array.FindIndex(args, a => string.Equals(a, flag, StringComparison.OrdinalIgnoreCase));
-        return i >= 0 && i + 1 < args.Length ? args[i + 1] : null;
-    }
-}
-
-// Build the container — registers all [Singleton]/[Service] types from all assemblies
-var serviceProvider = await Initializer.InitializeAsync();
-
-var orchestrator = serviceProvider.GetRequiredService<IOrchestrator>();
+// Default: connect to the API server and render its conversation stream, sending input over HTTP.
+// `--as <localPeer>` identifies who's speaking (falls back to the server's configured default).
+// Two ways to point at a peer:
+//   --peer <name>=<url>   a NAMED peer — its replies are attributed "Arden: …" (multi-peer legibility)
+//   --client <url>        the unnamed single-peer form (generic label)
+// (Connecting to several --peer endpoints and merging them into one pane with a peer selector is the
+// next step — for now the last named/unnamed endpoint wins.)
+var (peerName, peerUrl) = ParsePeer(ArgAfter(args, "--peer"));
+var baseUrl = peerUrl
+    ?? ArgAfter(args, "--client")
+    ?? Environment.GetEnvironmentVariable("PERSISTENCE_SERVER")
+    ?? "http://localhost:5000";
+var localPeer = ArgAfter(args, "--as");
 
 using var cts = new CancellationTokenSource();
-Console.CancelKeyPress += (_, e) =>
-{
-    e.Cancel = true;
-    cts.Cancel();
-};
+System.Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
-await orchestrator.RunAsync(cts.Token);
+await Persistence.Console.ClientConsoleHost.RunAsync(baseUrl, localPeer, cts.Token, peerName);
+
+static string? ArgAfter(string[] args, string flag)
+{
+    var i = Array.FindIndex(args, a => string.Equals(a, flag, StringComparison.OrdinalIgnoreCase));
+    return i >= 0 && i + 1 < args.Length ? args[i + 1] : null;
+}
+
+// Splits "<name>=<url>" into (name, url); a bare url (no '=') yields (null, url). Null in → (null, null).
+static (string? Name, string? Url) ParsePeer(string? value)
+{
+    if (string.IsNullOrWhiteSpace(value)) return (null, null);
+    var eq = value.IndexOf('=');
+    return eq > 0 ? (value[..eq].Trim(), value[(eq + 1)..].Trim()) : (null, value.Trim());
+}

@@ -57,14 +57,14 @@ public sealed class OrchestratorProposalCommandsTests : IAsyncLifetime
 
         turnHandler = new Mock<ITurnHandler>();
         turnHandler
-            .Setup(t => t.ExecuteTurnAsync(It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .Setup(t => t.ExecuteTurnAsync(It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
         var wakeUpMonitor = new Mock<IWakeUpMonitor>();
         var scheduledEventRepo = new ScheduledEventRepository(config, session, entityTagRepo);
 
         orchestrator = new Orchestrator(
             db, contextRepo, session, display.Object, eventBus, turnHandler.Object,
-            wakeUpMonitor.Object, resources, config, proposalService, proposalRepo, scheduledEventRepo, sources,
+            wakeUpMonitor.Object, resources, config, proposalService, proposalRepo, scheduledEventRepo,
             new PeerSeeder(config, new TagRepository(config, session, entityTagRepo), session));
 
         // RunAsync subscribes to input, initialises the DB, seeds a context, then awaits the
@@ -194,6 +194,7 @@ public sealed class OrchestratorProposalCommandsTests : IAsyncLifetime
         // carries both the event name and the peer's own note-to-self.
         turnHandler.Verify(t => t.ExecuteTurnAsync(
             null,
+            It.IsAny<string?>(), // peerName — a wake has no human sender
             It.Is<string?>(n => n != null && n.Contains("reflect on values") && n.Contains("reconsider whether I still value X")),
             It.IsAny<CancellationToken>()),
             Times.Once);

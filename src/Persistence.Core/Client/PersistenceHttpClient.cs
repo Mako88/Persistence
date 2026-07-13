@@ -41,6 +41,12 @@ public class PersistenceHttpClient : IPersistenceClient
             client.DefaultHeaders["X-Local-Peer"] = localPeer;
         }
 
+        // The event stream is a long-lived SSE connection; the default request timeout would cut it (and
+        // force a reconnect) every ~30s. Use a week — long enough that reconnect only fires on genuine
+        // drops, but safely under the ~24-day cap where the underlying millisecond delay overflows.
+        // (send/snapshot return near-instantly, so the large ceiling doesn't affect them.)
+        client.Timeout = 7 * 24 * 60 * 60;
+
         return client;
     }
 

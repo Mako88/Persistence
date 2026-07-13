@@ -24,14 +24,16 @@ public class ConversationController : ControllerBase
 
     private readonly IEventBus eventBus;
     private readonly ApiDisplayProvider display;
+    private readonly Persistence.Services.IConversationHistoryProvider history;
 
     /// <summary>
     /// Constructor
     /// </summary>
-    public ConversationController(IEventBus eventBus, ApiDisplayProvider display)
+    public ConversationController(IEventBus eventBus, ApiDisplayProvider display, Persistence.Services.IConversationHistoryProvider history)
     {
         this.eventBus = eventBus;
         this.display = display;
+        this.history = history;
     }
 
     /// <summary>
@@ -61,7 +63,18 @@ public class ConversationController : ControllerBase
     /// <c>?since=LatestSeq</c> so nothing is missed or duplicated.
     /// </summary>
     [HttpGet("snapshot")]
-    public IActionResult Snapshot() => Ok(display.Snapshot());
+    public async Task<IActionResult> Snapshot(CancellationToken ct)
+    {
+        // Capture the stream cut (LatestSeq) BEFORE reading history, not after. History and the event log
+        // are separate sources, so a turn committing between them isn't an atomic snapshot: reading seq
+        // first means a message that lands in that window is included in history AND re-delivered by the
+        // stream (a harmless duplicate) rather than falling into a gap between them and being lost. A
+        // fully atomic cut would need a per-message reconciliation key shared by history and events
+        // (turn-pipeline change) — tracked as a follow-up.
+        var latestSeq = display.LatestSeq;
+        var chat = await history.GetRecentAsync(ct: ct);
+        return Ok(display.Snapshot(latestSeq, chat));
+    }
 
     /// <summary>
     /// Returns conversation events with sequence greater than <paramref name="since"/>.

@@ -34,7 +34,6 @@ public class Orchestrator : IOrchestrator
     private readonly IProposalService proposalService;
     private readonly IProposalRepository proposalRepo;
     private readonly IScheduledEventRepository scheduledEventRepo;
-    private readonly ISourceRepository sourceRepository;
     private readonly IPeerSeeder peerSeeder;
 
     private readonly SemaphoreSlim turnLock = new(1, 1);
@@ -56,7 +55,6 @@ public class Orchestrator : IOrchestrator
         IProposalService proposalService,
         IProposalRepository proposalRepo,
         IScheduledEventRepository scheduledEventRepo,
-        ISourceRepository sourceRepository,
         IPeerSeeder peerSeeder)
     {
         this.db = db;
@@ -71,7 +69,6 @@ public class Orchestrator : IOrchestrator
         this.proposalService = proposalService;
         this.proposalRepo = proposalRepo;
         this.scheduledEventRepo = scheduledEventRepo;
-        this.sourceRepository = sourceRepository;
         this.peerSeeder = peerSeeder;
     }
 
@@ -100,25 +97,6 @@ public class Orchestrator : IOrchestrator
         await display.Start(ct);
     }
 
-    /// <summary>
-    /// Headless one-shot wake-runner: subscribe, initialize, then fire all currently-due events as
-    /// autonomous turns and return. Reuses the exact same wake→turn path as the interactive app
-    /// (<see cref="OnScheduledEventTriggered"/> via the event bus), so there's nothing turn-related to
-    /// reimplement — it just skips the display loop and the 30s poll timer.
-    /// </summary>
-    public async Task RunWakeCycleAsync(CancellationToken ct = default)
-    {
-        eventBus.Subscribe<DisplayInputReceived>(OnDisplayInputReceived);
-        eventBus.Subscribe<ScheduledEventTriggered>(OnScheduledEventTriggered);
-
-        await InitializeAsync();
-        initialized.TrySetResult(); // unblock OnScheduledEventTriggered's initialization gate
-
-        // One sweep. CheckAndFireAsync awaits each ScheduledEventTriggered subscriber, and
-        // PublishAsync awaits the handler, so every due wake runs to completion before this returns.
-        await wakeUpMonitor.CheckAndFireAsync(ct);
-    }
-
     // -- Event Handlers --
 
     /// <summary>
@@ -138,9 +116,10 @@ public class Orchestrator : IOrchestrator
         // context / working context must be set before a turn can run).
         await initialized.Task;
 
-        // Set who's speaking (header-supplied name, else the configured default) so the turn attributes
-        // this message to the right local peer and the sensory block announces them.
-        await SetActiveLocalPeerAsync(e.LocalPeerName);
+        // Who's speaking travels *with* the message (header-supplied name, else the configured default),
+        // not via shared session state set here — several peers can have input in flight at once, and the
+        // turn attributes each message to its own sender when it processes it, under the lock.
+        var peerName = e.LocalPeerName;
 
         if (input.StartsWith('/'))
         {
@@ -150,7 +129,7 @@ public class Orchestrator : IOrchestrator
 
         if (!turnLock.Wait(0))
         {
-            turnHandler.EnqueueInput(input);
+            turnHandler.EnqueueInput(input, peerName);
             display.ShowMessageQueued(input);
 
             // The turn holding the lock may already be past its drain loop (mid-refresh, about to
@@ -164,7 +143,7 @@ public class Orchestrator : IOrchestrator
         try
         {
             display.ShowThinking();
-            await turnHandler.ExecuteTurnAsync(input);
+            await turnHandler.ExecuteTurnAsync(input, peerName);
             await DrainPendingTurnsThenRefreshAsync();
         }
         finally
@@ -330,7 +309,6 @@ public class Orchestrator : IOrchestrator
 
         sessionContext.SessionId = Guid.NewGuid().ToString("N");
         sessionContext.SurfaceCommandsEnabled = config.SurfaceCommands;
-        await SetActiveLocalPeerAsync(null); // seed the active local peer from the configured default
 
         var context = await workingContextRepo.GetMostRecentAsync();
 
@@ -340,38 +318,6 @@ public class Orchestrator : IOrchestrator
         }
 
         sessionContext.WorkingContextId = context.Id;
-
-        var recentMessages = context.ContextFragments.Values
-            .Where(f => f.FragmentType == ContextFragmentType.ChatMessage)
-            .OrderBy(f => f.Order)
-            .TakeLast(10)
-            .Select(f => (
-                // ChatMessage fragments carry their author as a Source (RemotePeer = the
-                // model/assistant), not a Notes role. Notes is always null here.
-                Role: f.Sources.Any(s => s.SourceType == Persistence.Data.Entities.SourceType.RemotePeer) ? "assistant" : "user",
-                Content: f.Content,
-                Timestamp: f.CreatedUtc))
-            .ToList();
-
-        display.ShowChatHistory(recentMessages);
-    }
-
-    /// <summary>
-    /// Resolves who the remote peer is talking with — the given name, or the configured default —
-    /// recording it on the session and pointing <see cref="ISessionContext.LocalPeerSourceId"/> at that
-    /// peer's source (created on demand) so their messages are attributed to them.
-    /// </summary>
-    private async Task SetActiveLocalPeerAsync(string? name)
-    {
-        var resolved = string.IsNullOrWhiteSpace(name) ? config.SelectedLocalPeer : name.Trim();
-
-        if (string.IsNullOrWhiteSpace(resolved))
-        {
-            resolved = "Local Peer";
-        }
-
-        sessionContext.ActiveLocalPeerName = resolved;
-        sessionContext.LocalPeerSourceId = await sourceRepository.EnsureLocalPeerSourceAsync(resolved);
     }
 
     /// <summary>

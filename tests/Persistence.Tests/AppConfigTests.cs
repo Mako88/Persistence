@@ -24,6 +24,7 @@ public class AppConfigTests
         // The nested Container settings are overridden by a hand-rolled path (PERSISTENCE_CONTAINER_*),
         // separate from the reflection loop for top-level scalars — so it needs its own coverage.
         Environment.SetEnvironmentVariable("PERSISTENCE_CONTAINER_ENABLED", "true");
+        Environment.SetEnvironmentVariable("PERSISTENCE_CONTAINER_LOCAL", "true");
         Environment.SetEnvironmentVariable("PERSISTENCE_CONTAINER_TIMEOUTSECONDS", "99");
         Environment.SetEnvironmentVariable("PERSISTENCE_CONTAINER_ALLOWALLCOMMANDS", "true");
         try
@@ -32,12 +33,14 @@ public class AppConfigTests
             var config = await AppConfig.LoadAsync(missing);
 
             Assert.True(config.Container.Enabled);
+            Assert.True(config.Container.Local); // the peer-in-its-own-container flag (ADR-0007)
             Assert.Equal(99, config.Container.TimeoutSeconds);
             Assert.True(config.Container.AllowAllCommands);
         }
         finally
         {
             Environment.SetEnvironmentVariable("PERSISTENCE_CONTAINER_ENABLED", null);
+            Environment.SetEnvironmentVariable("PERSISTENCE_CONTAINER_LOCAL", null);
             Environment.SetEnvironmentVariable("PERSISTENCE_CONTAINER_TIMEOUTSECONDS", null);
             Environment.SetEnvironmentVariable("PERSISTENCE_CONTAINER_ALLOWALLCOMMANDS", null);
         }

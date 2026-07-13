@@ -316,6 +316,7 @@ public class AppConfig : IAppConfig
             Environment.GetEnvironmentVariable($"{EnvPrefix}CONTAINER_{suffix}");
 
         if (Env("ENABLED") is { } enabled && bool.TryParse(enabled, out var en)) config.Container.Enabled = en;
+        if (Env("LOCAL") is { } local && bool.TryParse(local, out var lo)) config.Container.Local = lo;
         if (Env("ALLOWALLCOMMANDS") is { } all && bool.TryParse(all, out var aa)) config.Container.AllowAllCommands = aa;
         if (Env("NAME") is { Length: > 0 } name) config.Container.Name = name;
         if (Env("DOCKERHOST") is { Length: > 0 } host) config.Container.DockerHost = host;
@@ -392,12 +393,6 @@ public enum UiMode
 {
     Tui = 1,
     Api = 2,
-
-    /// <summary>
-    /// No front-end — a no-op display for headless runs (e.g. the scheduled wake-runner that fires
-    /// due events and exits). See <c>HeadlessDisplayProvider</c>.
-    /// </summary>
-    Headless = 3,
 }
 
 /// <summary>

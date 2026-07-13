@@ -96,7 +96,7 @@ public sealed class PeerSeedingIntegrationTests : IAsyncLifetime
             return new Orchestrator(
                 db, contextRepo, session, display.Object, new EventBus(), new NoopTurnHandler(),
                 wakeUpMonitor.Object, resources, config, proposalService, proposalRepo, scheduledEventRepo,
-                sources, seeder);
+                seeder);
         }
 
         return new Harness(config, session, db, contextRepo, seeder, BuildOrchestrator);
@@ -104,10 +104,10 @@ public sealed class PeerSeedingIntegrationTests : IAsyncLifetime
 
     private sealed class NoopTurnHandler : ITurnHandler
     {
-        public Task ExecuteTurnAsync(string? input = null, string? wakeNote = null, CancellationToken ct = default) =>
+        public Task ExecuteTurnAsync(string? input = null, string? peerName = null, string? wakeNote = null, CancellationToken ct = default) =>
             Task.CompletedTask;
 
-        public void EnqueueInput(string input) { }
+        public void EnqueueInput(string input, string? peerName = null) { }
         public void EnqueueSystemNote(string note) { }
         public bool HasPendingInput => false;
     }
@@ -143,7 +143,7 @@ public sealed class PeerSeedingIntegrationTests : IAsyncLifetime
         Assert.Equal(0.9f, identity.Importance);
         Assert.Equal(0.7f, identity.Relevance);
         Assert.False(identity.IsProtected); // the peer owns it — curatable from turn one
-        Assert.Contains(identity.Sources, s => s.SourceType == SourceType.RemotePeer);
+        Assert.Contains(identity.Sources, s => s.SourceType == SourceType.DigitalPeer);
         Assert.Contains(identity.Tags, t => t.Name == "core"); // leaf of identity/core
 
         // A non-authorable requested type falls back to Personal rather than being dropped.

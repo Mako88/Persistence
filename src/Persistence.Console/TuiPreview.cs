@@ -63,9 +63,9 @@ internal static class TuiPreview
         // Conversation — prior history (folded in on startup) then the live exchange and marker lines.
         d.ShowChatHistory(
         [
-            ("user", "Hey, can you remember that my name is John?", now.AddHours(-2)),
-            ("assistant", "Of course — I've noted your name is John.", now.AddHours(-2).AddSeconds(8)),
-            ("user", "And that I value honest, careful engineering.", now.AddHours(-1)),
+            new Persistence.Contracts.ChatHistoryItem(1, "user", "John", "Hey, can you remember that my name is John?", now.AddHours(-2)),
+            new Persistence.Contracts.ChatHistoryItem(2, "assistant", "Remote Peer", "Of course — I've noted your name is John.", now.AddHours(-2).AddSeconds(8)),
+            new Persistence.Contracts.ChatHistoryItem(3, "user", "John", "And that I value honest, careful engineering.", now.AddHours(-1)),
         ]);
 
         d.ShowSystemMessage($"[{now.LocalDateTime:MM/dd/yyyy hh:mm tt}] You: What do you remember about me?");

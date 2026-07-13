@@ -22,12 +22,9 @@ public interface ISessionContext
     long SystemSourceId { get; set; }
 
     /// <summary>
-    /// The ID for the 'LocalPeer' source type.
-    /// </summary>
-    long LocalPeerSourceId { get; set; }
-
-    /// <summary>
-    /// The ID for the 'RemotePeer' source type.
+    /// The ID for the digital-peer source — the runtime's own voice, used to attribute the peer's own
+    /// fragments (replies, thoughts, notes). Human peers are attributed per message by name instead, so
+    /// there is no single shared human-peer source id.
     /// </summary>
     long RemotePeerSourceId { get; set; }
 
@@ -59,9 +56,9 @@ public interface ISessionContext
     string ContainerCwd { get; set; }
 
     /// <summary>
-    /// The name of the local peer the remote peer is currently talking with (e.g. "John", "Claude").
-    /// Set per input from the active selection / <c>X-Local-Peer</c> header; surfaced in the sensory
-    /// block. <see cref="LocalPeerSourceId"/> tracks this peer's source for message attribution.
+    /// The name of the human peer the digital peer is currently talking with (e.g. "John", "Claude").
+    /// Set inside the turn as each message is attributed; surfaced in the sensory block's "speaking with"
+    /// line. Last-writer-wins when a turn drains messages from several peers.
     /// </summary>
     string ActiveLocalPeerName { get; set; }
 }

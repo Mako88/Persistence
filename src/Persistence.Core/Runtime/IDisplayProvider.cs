@@ -1,3 +1,4 @@
+using Persistence.Contracts;
 using Persistence.Data.Entities;
 
 namespace Persistence.Runtime;
@@ -23,9 +24,11 @@ public interface IDisplayProvider
     void ShowThinking(string? label = null);
 
     /// <summary>
-    /// Shows the remote peer's reply text.
+    /// Shows a peer's reply text, attributed to <paramref name="speaker"/> (the peer's name). Null uses
+    /// the generic label — for a single-peer client where the one digital peer needs no disambiguation;
+    /// a multi-peer client passes each connection's peer name so replies read as "Arden: …" / "Ember: …".
     /// </summary>
-    void ShowReply(string reply);
+    void ShowReply(string reply, string? speaker = null);
 
     /// <summary>
     /// Shows the model's reasoning summary (when the provider returns one).
@@ -88,9 +91,10 @@ public interface IDisplayProvider
     void Stop();
 
     /// <summary>
-    /// Shows recent chat history on startup.
+    /// Shows recent chat history on startup — each message attributed to its author (a peer's name),
+    /// carrying the fragment id so a client can reconcile it against the live stream.
     /// </summary>
-    void ShowChatHistory(IReadOnlyList<(string Role, string Content, DateTimeOffset Timestamp)> messages);
+    void ShowChatHistory(IReadOnlyList<ChatHistoryItem> messages);
 
     /// <summary>
     /// Shows a system/local message to the local peer — e.g. the result of a local slash command

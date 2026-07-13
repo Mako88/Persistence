@@ -30,10 +30,10 @@ public class ApiDisplayProvider : IDisplayProvider
     private long seq;
 
     // Latest standing snapshots pushed by the orchestrator (guarded by `sync`). The event log carries
-    // incremental output; these carry current whole-state that a fresh client needs on connect.
+    // incremental output; these carry current whole-state that a fresh client needs on connect. Chat
+    // history is NOT held here — it's queried fresh on connect (see IConversationHistoryProvider).
     private IReadOnlyList<ScheduledEventView> scheduledEvents = [];
     private int openProposalCount;
-    private IReadOnlyList<ChatHistoryItem> chatHistory = [];
 
     /// <summary>
     /// Raised after a new event is appended, so the SSE endpoint can push it live. Handlers run
@@ -63,7 +63,9 @@ public class ApiDisplayProvider : IDisplayProvider
     /// </summary>
     public Task Start(CancellationToken ct)
     {
-        eventBus.Subscribe<RemotePeerReplied>((_, e) => { ShowReply(e.Reply); return Task.CompletedTask; });
+        // Carry the persisted message id (when present) as the event's detail, so a streaming client can
+        // reconcile this reply against the same message in its connect-time snapshot and not draw it twice.
+        eventBus.Subscribe<RemotePeerReplied>((_, e) => { Append("reply", e.Reply, e.MessageId?.ToString()); return Task.CompletedTask; });
         eventBus.Subscribe<ModelThought>((_, e) => { ShowThought(e.Thought); return Task.CompletedTask; });
         eventBus.Subscribe<ToolInvoked>((_, e) => { ShowToolUse(e.Tool, e.Request, e.Result); return Task.CompletedTask; });
         eventBus.Subscribe<ModelReasoningDelta>((_, e) => { ShowReasoningDelta(e.Delta); return Task.CompletedTask; });
@@ -152,7 +154,7 @@ public class ApiDisplayProvider : IDisplayProvider
     /// <summary>
     /// Appends the remote peer's reply text to the log as a "reply" event
     /// </summary>
-    public void ShowReply(string reply) => Append("reply", reply);
+    public void ShowReply(string reply, string? speaker = null) => Append("reply", reply);
 
     /// <summary>
     /// Appends an open thought to the log as a "thought" event
@@ -245,30 +247,23 @@ public class ApiDisplayProvider : IDisplayProvider
     public void ShowDebugInfo(string info) => Append("debug", info);
 
     /// <summary>
-    /// Captures the startup chat-history replay (for <see cref="Snapshot"/>) so a freshly-connected
-    /// client can draw prior conversation before live events arrive. Not appended to the live log —
-    /// it's a one-time backfill served by the snapshot, not incremental output.
+    /// No-op on the API surface: chat history isn't maintained here, it's queried fresh when a client
+    /// connects (<see cref="IConversationHistoryProvider"/>). Clients render it via this same method.
     /// </summary>
-    public void ShowChatHistory(IReadOnlyList<(string Role, string Content, DateTimeOffset Timestamp)> messages)
-    {
-        var items = messages.Select(m => new ChatHistoryItem(m.Role, m.Content, m.Timestamp)).ToList();
-
-        lock (sync)
-        {
-            chatHistory = items;
-        }
-    }
+    public void ShowChatHistory(IReadOnlyList<ChatHistoryItem> messages) { }
 
     /// <summary>
     /// The current standing state for a newly-connected client to draw before subscribing to the stream
-    /// at <see cref="ConversationSnapshot.LatestSeq"/> (so no event is missed or replayed).
+    /// at <paramref name="latestSeq"/> (so no event is missed or replayed). Both the stream cut
+    /// (<paramref name="latestSeq"/>) and the <paramref name="chatHistory"/> are supplied by the caller so
+    /// it controls their ordering relative to the store read (see the snapshot endpoint).
     /// </summary>
-    public ConversationSnapshot Snapshot()
+    public ConversationSnapshot Snapshot(long latestSeq, IReadOnlyList<ChatHistoryItem> chatHistory)
     {
         lock (sync)
         {
             return new ConversationSnapshot(
-                seq, openProposalCount, scheduledEvents, chatHistory,
+                latestSeq, openProposalCount, scheduledEvents, chatHistory,
                 config.Provider, config.Model, sessionContext.SessionId);
         }
     }

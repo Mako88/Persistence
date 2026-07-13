@@ -29,16 +29,12 @@ public class SourceRepository : EntityRepository<SourceEntity>, ISourceRepositor
         EnsureSourceAsync(SourceType.System, "System", id => sessionContext.SystemSourceId = id);
 
     /// <summary>
-    /// Creates a LocalPeer source if none exists and stores its ID in the session context
-    /// </summary>
-    public Task CreateLocalPeerSourceIfNotExists() =>
-        EnsureSourceAsync(SourceType.LocalPeer, "Local Peer", id => sessionContext.LocalPeerSourceId = id);
-
-    /// <summary>
-    /// Creates a RemotePeer source if none exists and stores its ID in the session context
+    /// Creates the digital-peer source (the runtime's own voice) if none exists and stores its ID on the
+    /// session. Human peers no longer have a single shared source — each is resolved by name per message
+    /// (<see cref="EnsureLocalPeerSourceAsync"/>) — so only System and the digital peer are seeded here.
     /// </summary>
     public Task CreateRemotePeerSourceIfNotExists() =>
-        EnsureSourceAsync(SourceType.RemotePeer, "Remote Peer", id => sessionContext.RemotePeerSourceId = id);
+        EnsureSourceAsync(SourceType.DigitalPeer, "Remote Peer", id => sessionContext.RemotePeerSourceId = id);
 
     /// <summary>
     /// Returns the source with the given name (case-insensitive), or null if not found
@@ -50,14 +46,14 @@ public class SourceRepository : EntityRepository<SourceEntity>, ISourceRepositor
     public async Task<long> EnsureLocalPeerSourceAsync(string name, CancellationToken ct = default)
     {
         var id = await ExecuteScalarAsync<long?>(
-            $"SELECT Id FROM Sources WHERE SourceType = {SourceType.LocalPeer} AND Name = {name} COLLATE NOCASE LIMIT 1");
+            $"SELECT Id FROM Sources WHERE SourceType = {SourceType.HumanPeer} AND Name = {name} COLLATE NOCASE LIMIT 1");
 
         if (id == null)
         {
             var now = DateTimeOffset.UtcNow;
             var source = new SourceEntity
             {
-                SourceType = SourceType.LocalPeer,
+                SourceType = SourceType.HumanPeer,
                 Name = name,
                 CreatedUtc = now,
                 LastModifiedUtc = now,

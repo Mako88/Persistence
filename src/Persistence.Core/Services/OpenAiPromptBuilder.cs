@@ -48,13 +48,17 @@ public class OpenAiPromptBuilder : IPromptBuilder
     }
 
     /// <summary>
-    /// Maps a segment's source to an OpenAI role: System to developer, Remote Peer to assistant,
-    /// everything else to user
+    /// Maps a segment to an OpenAI role. Prefers the structured <see cref="PromptSegment.AuthorType"/>
+    /// (digital peer → assistant, human peer → user, system/derived → developer) so role assignment
+    /// stays correct as peers take on arbitrary display names; falls back to the legacy source-string
+    /// mapping for framework segments that carry no author type.
     /// </summary>
-    private static string MapRole(PromptSegment segment) => segment.Source switch
+    private static string MapRole(PromptSegment segment) => segment.AuthorType switch
     {
-        "System" => "developer",
-        "Remote Peer" => "assistant",
-        _ => "user",
+        Persistence.Data.Entities.SourceType.DigitalPeer => "assistant",
+        Persistence.Data.Entities.SourceType.HumanPeer => "user",
+        Persistence.Data.Entities.SourceType.System => "developer",
+        Persistence.Data.Entities.SourceType.DerivedFromFragments => "developer",
+        _ => segment.Source == "System" ? "developer" : "user",
     };
 }

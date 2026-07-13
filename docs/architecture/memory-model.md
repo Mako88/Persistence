@@ -104,10 +104,12 @@ surface (`SetTags` / `RemoveTags` / `GetTagsFor` / `GetEntityIdsWithTag`).
 
 ## Sources — provenance
 
-`SourceEntity` → `Sources`, with `SourceType` ∈ `System`, `RemotePeer`, `LocalPeer`,
-`DerivedFromFragments`. Every fragment has at least one source (the repository auto-attaches the
-System source if none is given), linked via `ContextFragmentSources`. Three canonical sources
-(System, LocalPeer, RemotePeer) are seeded at startup and their ids cached on the session.
+`SourceEntity` → `Sources`, with `SourceType` ∈ `System`, `DigitalPeer`, `HumanPeer`,
+`DerivedFromFragments` (renamed from `RemotePeer`/`LocalPeer` in ADR-0007; integer values unchanged).
+Every fragment has at least one source (the repository auto-attaches the System source if none is given),
+linked via `ContextFragmentSources`. `System` and the `DigitalPeer` (the runtime's own voice) are seeded
+at startup and cached on the session; each `HumanPeer` is created on demand by name, so several named
+people can be attributed distinctly.
 
 ## Proposals — deliberated self-change
 

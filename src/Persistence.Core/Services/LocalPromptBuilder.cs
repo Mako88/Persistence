@@ -1,4 +1,5 @@
 using Persistence.Config;
+using Persistence.Data.Entities;
 using Persistence.DI;
 using System.Text;
 
@@ -25,7 +26,7 @@ public class LocalPromptBuilder : IPromptBuilder
 
         foreach (var segment in segments)
         {
-            if (segment.Source == "System")
+            if (IsSystemSegment(segment))
             {
                 if (systemContent.Length > 0)
                     systemContent.Append("\n\n--\n\n");
@@ -47,4 +48,16 @@ public class LocalPromptBuilder : IPromptBuilder
 
         return new PromptRequest { Messages = messages };
     }
+
+    /// <summary>
+    /// Whether a segment belongs in the single system message (framework instructions, the sensory
+    /// block, the peer's surfaced notes) rather than the concatenated conversation body. Prefers the
+    /// structured <see cref="PromptSegment.AuthorType"/>; falls back to the legacy source string.
+    /// </summary>
+    private static bool IsSystemSegment(PromptSegment segment) => segment.AuthorType switch
+    {
+        SourceType.System or SourceType.DerivedFromFragments => true,
+        SourceType.DigitalPeer or SourceType.HumanPeer => false,
+        _ => segment.Source == "System",
+    };
 }

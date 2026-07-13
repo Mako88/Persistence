@@ -37,8 +37,9 @@ public class TurnHandler : ITurnHandler
     private readonly IMemorySurfacer memorySurfacer;
     private readonly IEventBus eventBus;
     private readonly IAppConfig config;
+    private readonly ISourceRepository sourceRepository;
 
-    private readonly ConcurrentQueue<string> pendingInput = new();
+    private readonly ConcurrentQueue<PendingInput> pendingInput = new();
 
     // System notes queued from outside a turn (e.g. the local peer accepted/rejected a proposal),
     // surfaced to the peer as transient context at the start of its next turn.
@@ -62,7 +63,8 @@ public class TurnHandler : ITurnHandler
         ITokenUsageTracker usageTracker,
         IMemorySurfacer memorySurfacer,
         IEventBus eventBus,
-        IAppConfig config)
+        IAppConfig config,
+        ISourceRepository sourceRepository)
     {
         this.workingContextRepo = workingContextRepo;
         this.tagRepo = tagRepo;
@@ -79,6 +81,7 @@ public class TurnHandler : ITurnHandler
         this.memorySurfacer = memorySurfacer;
         this.eventBus = eventBus;
         this.config = config;
+        this.sourceRepository = sourceRepository;
     }
 
     /// <summary>
@@ -86,7 +89,7 @@ public class TurnHandler : ITurnHandler
     /// dispatching to action handlers, and stops when the remote peer yields
     /// or the iteration cap is reached
     /// </summary>
-    public async Task ExecuteTurnAsync(string? input = null, string? wakeNote = null, CancellationToken ct = default)
+    public async Task ExecuteTurnAsync(string? input = null, string? peerName = null, string? wakeNote = null, CancellationToken ct = default)
     {
         // Stamp the turn start so the proposal deliberation gap can tell "proposed this turn"
         // from "proposed earlier" — a proposal can only be accepted in a later turn.
@@ -125,10 +128,10 @@ public class TurnHandler : ITurnHandler
 
         if (input != null)
         {
-            await PersistUserMessageAsync(context, input);
+            await PersistUserMessageAsync(context, input, peerName);
         }
 
-        DrainPendingInput(context, annotate: input != null);
+        await DrainPendingInput(context, annotate: input != null);
 
         var availableTags = await tagRepo.GetAllRootAsync();
         // The peer's recent self-changes (as of turn start), surfaced in the sensory block so it can
@@ -162,7 +165,7 @@ public class TurnHandler : ITurnHandler
         {
             if (iteration > 0)
             {
-                DrainPendingInput(context);
+                await DrainPendingInput(context);
             }
 
             var segments = promptFormatter.Format(context, availableTags, iteration, config.MaxActionIterations, recentChanges, recentActions, archiveNote, surfaced, curation);
@@ -411,10 +414,10 @@ public class TurnHandler : ITurnHandler
     }
 
     /// <summary>
-    /// Queues input from the local peer to be injected into the working context
-    /// before the next model call within the current turn's iteration loop.
+    /// Queues input from a human peer (tagged with the sender's name) to be injected into the working
+    /// context before the next model call within the current turn's iteration loop.
     /// </summary>
-    public void EnqueueInput(string input) => pendingInput.Enqueue(input);
+    public void EnqueueInput(string input, string? peerName = null) => pendingInput.Enqueue(new PendingInput(input, peerName));
 
     /// <summary>
     /// Queues a system note to surface to the peer at the start of its next turn.
@@ -481,9 +484,9 @@ public class TurnHandler : ITurnHandler
         });
     }
 
-    private void DrainPendingInput(WorkingContextEntity context, bool annotate = true)
+    private async Task DrainPendingInput(WorkingContextEntity context, bool annotate = true)
     {
-        var injected = new List<string>();
+        var injected = new List<PendingInput>();
 
         while (pendingInput.TryDequeue(out var queued))
         {
@@ -495,15 +498,14 @@ public class TurnHandler : ITurnHandler
             return;
         }
 
-        var now = DateTimeOffset.UtcNow;
-
         if (annotate)
         {
+            var now = DateTimeOffset.UtcNow;
             context.AddFragment(new WeightedContextFragment
             {
                 FragmentType = ContextFragmentType.ActionResponse,
                 Status = ContextFragmentStatus.Active,
-                Content = "The following messages were added by the local peer during your last iteration:",
+                Content = "The following messages arrived from your peer(s) during your last iteration:",
                 Importance = 1.0f,
                 Confidence = 1.0f,
                 Relevance = 1.0f,
@@ -512,26 +514,11 @@ public class TurnHandler : ITurnHandler
             });
         }
 
+        // Each queued message carries its own sender, so a message John queued while an Ember turn
+        // was running is still attributed to John — not to whoever most recently touched the session.
         foreach (var message in injected)
         {
-            context.AddFragment(new WeightedContextFragment
-            {
-                FragmentType = ContextFragmentType.ChatMessage,
-                Status = ContextFragmentStatus.Active,
-                Content = message,
-                Importance = 0.3f, // raw transcript — deprioritised vs. the peer's authored notes
-                Confidence = 0.5f,
-                Relevance = 0.5f,
-                Sources = [new SourceEntity
-                {
-                    Id = sessionContext.LocalPeerSourceId,
-                    SourceType = SourceType.LocalPeer,
-                    CreatedUtc = now,
-                    LastModifiedUtc = now,
-                }],
-                CreatedUtc = now,
-                LastModifiedUtc = now,
-            });
+            await AddHumanMessageAsync(context, message.Content, message.PeerName);
         }
     }
 
@@ -568,35 +555,60 @@ public class TurnHandler : ITurnHandler
     }
 
     /// <summary>
-    /// Adds the user's message to the working context as a ChatMessage fragment
-    /// and saves the context (which cascades to the fragment and junction table)
+    /// Adds the initial human-peer message to the working context as a ChatMessage fragment,
+    /// attributed to <paramref name="peerName"/>, and saves the context (which cascades to the
+    /// fragment and junction table).
     /// </summary>
-    private async Task PersistUserMessageAsync(WorkingContextEntity context, string input)
+    private async Task PersistUserMessageAsync(WorkingContextEntity context, string input, string? peerName)
     {
+        await AddHumanMessageAsync(context, input, peerName);
+        await workingContextRepo.SaveAsync(context);
+    }
+
+    /// <summary>
+    /// Adds a human peer's message as a ChatMessage fragment attributed to that peer's source (created
+    /// on demand, named after the peer so the prompt can show who spoke), and records them as the active
+    /// speaker for the sensory block. Resolution happens here — inside the turn, under the turn lock —
+    /// rather than on shared session state before the lock, so concurrent senders can't misattribute one
+    /// another. The fragment carries low raw-transcript weights so the peer's own authored notes outrank it.
+    /// </summary>
+    private async Task AddHumanMessageAsync(WorkingContextEntity context, string content, string? peerName)
+    {
+        var resolvedName = ResolveHumanPeerName(peerName);
+        var sourceId = await sourceRepository.EnsureLocalPeerSourceAsync(resolvedName);
+        sessionContext.ActiveLocalPeerName = resolvedName;
+
         var now = DateTimeOffset.UtcNow;
 
         context.AddFragment(new WeightedContextFragment
         {
             FragmentType = ContextFragmentType.ChatMessage,
             Status = ContextFragmentStatus.Active,
-            Content = input,
-            // Raw transcript: low defaults so it's deprioritised vs. the peer's authored notes (and
-            // is a natural archive/prune candidate). The substance lives in the fragments the peer writes.
+            Content = content,
             Importance = 0.3f,
             Confidence = 0.5f,
             Relevance = 0.5f,
             Sources = [new SourceEntity
             {
-                Id = sessionContext.LocalPeerSourceId,
-                SourceType = SourceType.LocalPeer,
+                Id = sourceId,
+                SourceType = SourceType.HumanPeer,
+                Name = resolvedName,
                 CreatedUtc = now,
                 LastModifiedUtc = now,
             }],
             CreatedUtc = now,
             LastModifiedUtc = now,
         });
+    }
 
-        await workingContextRepo.SaveAsync(context);
+    /// <summary>
+    /// Resolves who a message is from: the supplied name, else the configured default peer, else a
+    /// generic "Local Peer". Trimmed. Matches the resolution the orchestrator used to do before the lock.
+    /// </summary>
+    private string ResolveHumanPeerName(string? peerName)
+    {
+        var resolved = string.IsNullOrWhiteSpace(peerName) ? config.SelectedLocalPeer : peerName.Trim();
+        return string.IsNullOrWhiteSpace(resolved) ? "Local Peer" : resolved;
     }
 
     /// <summary>
