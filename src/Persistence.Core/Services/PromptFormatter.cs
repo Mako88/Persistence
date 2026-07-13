@@ -618,9 +618,17 @@ public class PromptFormatter : IPromptFormatter
     /// first model call, or when there's nothing to show. Fires <see cref="SessionCostUpdated"/> for any
     /// UI. Cost knowledge is entirely in <see cref="IModelPricingProvider"/> — this method is model-agnostic.
     /// </summary>
-    // Prompt-cache pricing relative to base input: reads are ~10% of input price, writes ~125%.
-    private const decimal CacheReadMultiplier = 0.1m;
-    private const decimal CacheWriteMultiplier = 1.25m;
+    /// <summary>
+    /// Prompt-cache pricing relative to base input price, by provider — the two families cache
+    /// differently: Anthropic charges cache READS at ~10% of input and cache WRITES at ~125% (a one-time
+    /// premium to populate the cache), while OpenAI auto-caches long prefixes with reads at ~50% and no
+    /// separate cache-creation charge. Using Anthropic's 10% for an OpenAI read would badly under-count.
+    /// </summary>
+    private (decimal Read, decimal Write) CacheMultipliers() =>
+        Enum.TryParse<ModelProvider>(config.Provider, ignoreCase: true, out var p)
+            && p is ModelProvider.OpenAI or ModelProvider.OpenAiChat
+            ? (0.5m, 1.0m)
+            : (0.1m, 1.25m);
 
     private string FormatSessionCost()
     {
@@ -644,9 +652,10 @@ public class PromptFormatter : IPromptFormatter
 
         if (rate is { } r)
         {
+            var (cacheReadMult, cacheWriteMult) = CacheMultipliers();
             var cost = (input * r.InputPerMillion
-                        + cacheRead * r.InputPerMillion * CacheReadMultiplier
-                        + cacheCreate * r.InputPerMillion * CacheWriteMultiplier
+                        + cacheRead * r.InputPerMillion * cacheReadMult
+                        + cacheCreate * r.InputPerMillion * cacheWriteMult
                         + output * r.OutputPerMillion) / 1_000_000m;
             eventBus.FireAndForget(this, new SessionCostUpdated(cost, processedInput, output, calls));
             return $"Session cost (est.): ~{FormatUsd(cost)} · {usage}";

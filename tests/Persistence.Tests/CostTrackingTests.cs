@@ -27,7 +27,7 @@ public class CostTrackingTests
     }
 
     [Theory]
-    [InlineData("gpt-5.4-mini")]  // no built-in price — caller shows tokens without a dollar figure
+    [InlineData("gemini-2.5-pro")]  // no built-in price — caller shows tokens without a dollar figure
     [InlineData("gemma")]
     [InlineData("")]
     public void ReturnsNullForUnpricedModels(string model)

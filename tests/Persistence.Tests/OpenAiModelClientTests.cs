@@ -169,6 +169,25 @@ public class OpenAiModelClientTests
     }
 
     [Fact]
+    public async Task SplitsCachedPromptTokensOutOfInput()
+    {
+        // OpenAI reports the auto-cached prefix under input_tokens_details.cached_tokens; input_tokens is
+        // the total. The client should bill the uncached remainder as input and the cached part as a
+        // (discounted) cache read.
+        var body = """
+        {
+          "output": [ { "type": "message", "content": [ { "type": "output_text", "text": "hi" } ] } ],
+          "usage": { "input_tokens": 1000, "output_tokens": 40, "input_tokens_details": { "cached_tokens": 800 } }
+        }
+        """;
+        var (client, _, _) = CreateClient(body);
+
+        await client.CompleteAsync(Request());
+
+        Assert.Equal(new ModelUsage(200, 40, CacheReadTokens: 800), client.LastUsage);
+    }
+
+    [Fact]
     public async Task ConcatenatesMultipleOutputTextParts()
     {
         var body = """

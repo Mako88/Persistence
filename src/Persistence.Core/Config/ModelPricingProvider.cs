@@ -39,6 +39,16 @@ public class ModelPricingProvider : IModelPricingProvider
         ["claude-sonnet"] = new(3m, 15m),
         ["claude-haiku"] = new(1m, 5m),
         ["claude"] = new(3m, 15m),
+
+        // OpenAI (GPT). Longest-prefix match: "gpt-5.4-mini" beats "gpt-5.4" beats "gpt". These are
+        // ESTIMATES — verify against your account's current rates and override in model_pricing.json.
+        // OpenAI cached input is billed at ~50% of input (see PromptFormatter.CacheMultipliers).
+        ["gpt-5.4-mini"] = new(0.25m, 2m),
+        ["gpt-5.4"] = new(2.5m, 10m),
+        ["gpt-5"] = new(2.5m, 10m),
+        ["gpt-4o-mini"] = new(0.15m, 0.6m),
+        ["gpt-4o"] = new(2.5m, 10m),
+        ["gpt"] = new(2.5m, 10m),
     };
 
     private readonly Dictionary<string, ModelPricing> map;

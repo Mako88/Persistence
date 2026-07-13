@@ -183,7 +183,11 @@ public class TurnHandler : ITurnHandler
             // clients that report no usage (local/out-of-band) simply don't contribute.
             if (modelClient.LastUsage is { } usage)
             {
-                usageTracker.Record(usage.InputTokens, TokenEstimator.Estimate(segments.Select(s => s.Content)));
+                // Calibrate against the TOTAL real input (uncached + cache reads + cache writes) — with
+                // prompt caching active, InputTokens alone is just the uncached remainder and would badly
+                // under-read the true prompt size versus our whole-prompt estimate.
+                var realInput = usage.InputTokens + usage.CacheReadTokens + usage.CacheCreationTokens;
+                usageTracker.Record(realInput, TokenEstimator.Estimate(segments.Select(s => s.Content)));
                 usageTracker.AddUsage(usage);
             }
 

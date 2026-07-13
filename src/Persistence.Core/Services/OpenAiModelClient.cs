@@ -139,7 +139,16 @@ public class OpenAiModelClient : IModelClient, IDisposable
             && usage.TryGetProperty("input_tokens", out var input) && input.TryGetInt32(out var inTok))
         {
             var outTok = usage.TryGetProperty("output_tokens", out var o) && o.TryGetInt32(out var ot) ? ot : 0;
-            return new ModelUsage(inTok, outTok);
+
+            // OpenAI auto-caches long shared prefixes and reports the cached portion under
+            // input_tokens_details.cached_tokens. input_tokens is the TOTAL (cached + uncached), so split
+            // it: ModelUsage.InputTokens is the uncached part (billed at full rate) and CacheReadTokens is
+            // the cached part (billed at the discounted rate), matching how the cost readout sums them.
+            // OpenAI doesn't bill a separate cache-creation cost, so CacheCreationTokens stays 0.
+            var cached = usage.TryGetProperty("input_tokens_details", out var details)
+                && details.TryGetProperty("cached_tokens", out var c) && c.TryGetInt32(out var cTok) ? cTok : 0;
+
+            return new ModelUsage(Math.Max(0, inTok - cached), outTok, CacheReadTokens: cached);
         }
 
         return null;

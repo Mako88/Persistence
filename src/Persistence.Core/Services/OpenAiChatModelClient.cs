@@ -123,7 +123,8 @@ public class OpenAiChatModelClient : IModelClient, IDisposable
 
     /// <summary>
     /// Reads the Chat Completions usage block (<c>usage.prompt_tokens</c> / <c>completion_tokens</c>),
-    /// or null when the provider omitted it.
+    /// splitting out the cached prefix (<c>prompt_tokens_details.cached_tokens</c>) so cached input is
+    /// billed at the discounted rate. Null when the provider omitted usage.
     /// </summary>
     private static ModelUsage? ReadUsage(JsonElement root)
     {
@@ -131,7 +132,14 @@ public class OpenAiChatModelClient : IModelClient, IDisposable
             && usage.TryGetProperty("prompt_tokens", out var input) && input.TryGetInt32(out var inTok))
         {
             var outTok = usage.TryGetProperty("completion_tokens", out var o) && o.TryGetInt32(out var ot) ? ot : 0;
-            return new ModelUsage(inTok, outTok);
+
+            // prompt_tokens is the TOTAL (cached + uncached); cached is the auto-cached prefix. Split so
+            // InputTokens is uncached (full rate) and CacheReadTokens is cached (discounted). No separate
+            // cache-creation charge on OpenAI.
+            var cached = usage.TryGetProperty("prompt_tokens_details", out var details)
+                && details.TryGetProperty("cached_tokens", out var c) && c.TryGetInt32(out var cTok) ? cTok : 0;
+
+            return new ModelUsage(Math.Max(0, inTok - cached), outTok, CacheReadTokens: cached);
         }
 
         return null;
