@@ -23,6 +23,22 @@ public class AppConfigTests
     }
 
     [Fact]
+    public async Task ConfigPathEnvPointsLoadAtAnExplicitFile()
+    {
+        await using var temp = new TempFile("""{ "MaxActionIterations": 33 }""");
+        Environment.SetEnvironmentVariable("PERSISTENCE_CONFIGPATH", temp.Path);
+        try
+        {
+            var config = await AppConfig.LoadAsync(); // no explicit arg — resolves via the env path
+            Assert.Equal(33, config.MaxActionIterations);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PERSISTENCE_CONFIGPATH", null);
+        }
+    }
+
+    [Fact]
     public async Task ReloadIfChangedIsANoOpWhenUnchanged()
     {
         await using var temp = new TempFile("""{ "MaxActionIterations": 7 }""");

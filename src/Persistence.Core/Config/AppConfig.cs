@@ -257,6 +257,14 @@ public class AppConfig : IAppConfig
     {
         const string fileName = "persistence.json";
 
+        // An explicit path wins over discovery — used to point a peer container at its own mounted config
+        // file (e.g. PERSISTENCE_CONFIGPATH=/config/ember.json), which the app then also hot-reloads.
+        var explicitPath = GetEnvIgnoreCase(EnvPrefix + "ConfigPath");
+        if (!string.IsNullOrWhiteSpace(explicitPath))
+        {
+            return explicitPath;
+        }
+
         if (File.Exists(fileName))
         {
             return fileName;
