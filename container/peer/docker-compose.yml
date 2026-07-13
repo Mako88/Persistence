@@ -21,6 +21,9 @@ services:
       - "${PEER_PORT:?set PEER_PORT}:8080"  # the peer's API, for a client (the TUI) to connect to
     volumes:
       - data:/data                          # the peer's persistent self: memory (db/) + vault/
+      # Read-only GitHub token (shared across peers for now). The image's git credential helper reads it
+      # from here; rotating = replacing the host file. Defaults to John's host path; override the env var.
+      - ${PERSISTENCE_TOKEN_FILE:-C:/Users/John/.persistence/github-token}:/run/secrets/github-token:ro
     environment:
       # Identity: the DB filename selects who this peer is (per-database seeding: seeds/<name>.json).
       - PERSISTENCE_DATABASEPATH=/data/db/${PEER_NAME}.db

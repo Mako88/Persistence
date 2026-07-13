@@ -37,6 +37,17 @@ RUN pip3 install --no-cache-dir --break-system-packages trafilatura lxml_html_cl
 COPY container/computer/tools/ /usr/local/bin/
 RUN chmod +x /usr/local/bin/web_search /usr/local/bin/fetch_url
 
+# GitHub auth for peers: a credential helper that reads a read-only token mounted at
+# /run/secrets/github-token (never baked in — rotate = replace the mount). Configured system-wide so
+# every peer built from this image can push once the token is mounted. A default committer identity is
+# set here; a peer can override it (e.g. `git config --global user.name Arden`) in its own home.
+COPY container/peer/git-credential-peertoken /usr/local/bin/git-credential-peertoken
+RUN chmod +x /usr/local/bin/git-credential-peertoken \
+    && git config --system credential.helper /usr/local/bin/git-credential-peertoken \
+    && git config --system credential.https://github.com.username x-access-token \
+    && git config --system user.name "Persistence Peer" \
+    && git config --system user.email "peer@persistence.local"
+
 # The peer's mind.
 COPY --from=build /app /opt/persistence
 
