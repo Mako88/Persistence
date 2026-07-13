@@ -130,6 +130,16 @@ the voluntary continue-loop. Revisit only if we see the peer reliably acting bef
     of the *content* as commands ("FROM ContextFragments", "ORDER BY …"). Needs a robust way to pass
     multi-line literal payloads through the tagged format (heredoc/base64 content, or a raw-content mode).
 
+- **Peer/infra network split (2026-07-13).** The shared-infra compose (`container/docker-compose.yml`)
+  puts computer/searxng on a project-prefixed network **`persistence_lab`** (network key `lab`, no explicit
+  name), while peers attach to an explicitly-named external **`persistence-lab`** — two *different*
+  networks. So the "shared lab network so peers can reach shared infra" intent isn't actually wired: a peer
+  can't reach SearXNG today (moot only because `SEARXNG_URL` is unset). Fix: make both sides use the one
+  external `persistence-lab` (align the infra compose's `lab` network to `name: persistence-lab` /
+  `external: true`, created once) — annoying inconsistency, low urgency until search or peer↔peer infra
+  traffic actually needs it. (Touching the infra compose restarts the running computer/searxng, so batch
+  it with other infra changes.)
+
 - **Automated backups of peer memory.** (John, 2026-07-12.) A peer's DB (and vault) is its whole self, and
   it now lives canonically only on a container volume — so it must be backed up off the volume.
   ✅ **Local mechanism landed:** `scripts/backup-peer.ps1` takes a consistent online snapshot (SQLite
