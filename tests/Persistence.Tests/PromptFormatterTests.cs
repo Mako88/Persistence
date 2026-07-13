@@ -14,7 +14,7 @@ public class PromptFormatterTests
 
     private static PromptFormatter CreateFormatter(
         int maxInputTokens = 8000, ITokenUsageTracker? tracker = null, string model = "local",
-        bool surfaceCommands = false, IModelPricingProvider? pricing = null)
+        bool surfaceCommands = false, IModelPricingProvider? pricing = null, int contextWindow = 200000)
     {
         var session = new Mock<ISessionContext>();
         session.SetupGet(s => s.SessionId).Returns("test-session");
@@ -27,7 +27,7 @@ public class PromptFormatterTests
         catalog.Setup(c => c.GetCompactListing()).Returns(CommandsMarker);
 
         var windows = new Mock<IContextWindowProvider>();
-        windows.Setup(w => w.GetContextWindow(It.IsAny<string>())).Returns(200000);
+        windows.Setup(w => w.GetContextWindow(It.IsAny<string>())).Returns(contextWindow);
 
         var config = new AppConfig { MaxInputTokens = maxInputTokens, Model = model };
 
@@ -275,8 +275,9 @@ public class PromptFormatterTests
     [Fact]
     public void BudgetWarningNamesTheSummarizeTool()
     {
-        // A tiny budget makes the prompt read as over-capacity, triggering the nudge.
-        var sensory = CreateFormatter(maxInputTokens: 10)
+        // A tiny budget makes the prompt read as over-capacity, triggering the nudge. The default
+        // (non-local) config now sizes the budget from the model's context window, so drive that.
+        var sensory = CreateFormatter(contextWindow: 10)
             .Format(ContextWithFragment("hi"), [])[^1].Content;
 
         Assert.Contains("summarize_fragments", sensory);
@@ -557,8 +558,9 @@ public class PromptFormatterTests
     [Fact]
     public void BudgetNudgesCriticalWhenNearlyFull()
     {
-        // Tiny budget forces the prompt over capacity, triggering the CRITICAL nudge.
-        var formatter = CreateFormatter(maxInputTokens: 1);
+        // Tiny budget forces the prompt over capacity, triggering the CRITICAL nudge (budget now sizes
+        // from the model's context window for the default non-local config).
+        var formatter = CreateFormatter(contextWindow: 1);
         var sensory = formatter.Format(ContextWithFragment("a fragment that easily exceeds one token"), [])[^1].Content;
 
         Assert.Contains("CRITICAL", sensory);
