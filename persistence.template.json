@@ -18,6 +18,9 @@
     { "Name": "Local Peer", "Description": "the person at the keyboard" }
   ],
 
+  "_HubPeers_comment": "Optional. Peers the Console hub connects to (ADR-0007 Phase 2b). Two or more open the multi-peer hub (aggregated chat + per-peer side panes + selector) with no flags; --peer flags override. LocalPeer is who you speak as to that peer (null = --as / server default). Example: [ { \"Name\": \"Arden\", \"BaseUrl\": \"http://localhost:5001\", \"LocalPeer\": \"John\" }, { \"Name\": \"Ember\", \"BaseUrl\": \"http://localhost:5002\", \"LocalPeer\": \"John\" } ]",
+  "HubPeers": [],
+
   "SelectedModel": "anthropic",
   "Models": [
     {

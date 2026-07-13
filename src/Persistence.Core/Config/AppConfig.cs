@@ -95,6 +95,12 @@ public class AppConfig : IAppConfig
     /// </summary>
     public List<LocalPeerProfile> LocalPeers { get; set; } = [];
 
+    /// <summary>
+    /// Peers the Console hub connects to (ADR-0007 Phase 2b). Two or more open the multi-peer hub;
+    /// <c>--peer</c> flags override this. Empty (default) = a plain single-server client.
+    /// </summary>
+    public List<HubPeerProfile> HubPeers { get; set; } = [];
+
     // --- Model selection ---
 
     /// <summary>

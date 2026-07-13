@@ -147,6 +147,9 @@ public interface IAppConfig
     /// </summary>
     List<LocalPeerProfile> LocalPeers { get; set; }
 
+    /// <summary>Peers the Console hub connects to (ADR-0007 Phase 2b); empty = a plain single client.</summary>
+    List<HubPeerProfile> HubPeers { get; set; }
+
     /// <summary>
     /// The configured model profiles that can be switched between at runtime (see
     /// <see cref="TrySwitchModel"/>). The active one is named by <see cref="ActiveModelName"/>.

@@ -22,13 +22,15 @@ public static class ClientConsoleHost
 {
     /// <summary>Back-compat single-peer entry (an unnamed or one named endpoint).</summary>
     public static Task RunAsync(string baseUrl, string? localPeer, CancellationToken ct, string? peerName = null) =>
-        RunAsync([new PeerEndpoint(peerName, baseUrl, localPeer)], ct);
+        RunAsync([new PeerEndpoint(peerName, baseUrl, localPeer)], localPeer, ct);
 
-    public static async Task RunAsync(IReadOnlyList<PeerEndpoint> peers, CancellationToken ct)
+    public static async Task RunAsync(IReadOnlyList<PeerEndpoint> cliPeers, string? cliLocalPeer, CancellationToken ct)
     {
         var config = await AppConfig.LoadAsync();
         var session = new SessionContext();
         var display = new TerminalGuiDisplayProvider(new EventBus(), session, config);
+
+        var peers = ResolvePeers(cliPeers, cliLocalPeer, config);
 
         // A single unnamed endpoint keeps the original 1:1 behaviour (generic label, no selector).
         if (peers is [{ Name: null } only])
@@ -38,6 +40,26 @@ public static class ClientConsoleHost
         }
 
         await RunHubAsync(display, config, peers, ct);
+    }
+
+    /// <summary>
+    /// Resolves which peers to connect to: explicit <c>--peer</c>/<c>--client</c> CLI endpoints win;
+    /// otherwise the config's <see cref="IAppConfig.HubPeers"/> (ADR-0007 Phase 2b); otherwise the
+    /// default single local server. Config peers with no local identity inherit the CLI <c>--as</c>.
+    /// </summary>
+    internal static IReadOnlyList<PeerEndpoint> ResolvePeers(IReadOnlyList<PeerEndpoint> cliPeers, string? cliLocalPeer, IAppConfig config)
+    {
+        if (cliPeers.Count > 0)
+        {
+            return cliPeers;
+        }
+
+        var configured = config.HubPeers
+            .Where(h => !string.IsNullOrWhiteSpace(h.BaseUrl))
+            .Select(h => new PeerEndpoint(string.IsNullOrWhiteSpace(h.Name) ? null : h.Name, h.BaseUrl, h.LocalPeer ?? cliLocalPeer))
+            .ToList();
+
+        return configured.Count > 0 ? configured : [new PeerEndpoint(null, "http://localhost:5000", cliLocalPeer)];
     }
 
     /// <summary>The 1:1 path: one connection driving the panes directly (no hub aggregation).</summary>

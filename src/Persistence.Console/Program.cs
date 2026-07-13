@@ -33,6 +33,7 @@ if (args.Contains("--wake-runner") || args.Contains("--check-due"))
 //                         Repeat --peer to open a HUB: all peers aggregate into one pane, with a selector
 //                         choosing which peer the side tabs + status show (ADR-0007 Phase 2b).
 //   --client <url>        the unnamed single-peer form (generic label).
+//   (config) HubPeers   two-plus peers declared in config open the hub with no flags at all.
 var localPeer = ArgAfter(args, "--as");
 var peerEndpoints = ArgsAfter(args, "--peer")
     .Select(ParsePeer)
@@ -40,18 +41,19 @@ var peerEndpoints = ArgsAfter(args, "--peer")
     .Select(p => new Persistence.Console.PeerEndpoint(p.Name, p.Url!, localPeer))
     .ToList();
 
-if (peerEndpoints.Count == 0)
+// An explicit --client / PERSISTENCE_SERVER is a single-endpoint override. With neither, and no --peer,
+// the host consults config.HubPeers (falling back to the default local server) — so a configured hub
+// launches with no flags.
+if (peerEndpoints.Count == 0
+    && (ArgAfter(args, "--client") ?? Environment.GetEnvironmentVariable("PERSISTENCE_SERVER")) is { } url)
 {
-    var baseUrl = ArgAfter(args, "--client")
-        ?? Environment.GetEnvironmentVariable("PERSISTENCE_SERVER")
-        ?? "http://localhost:5000";
-    peerEndpoints.Add(new Persistence.Console.PeerEndpoint(null, baseUrl, localPeer));
+    peerEndpoints.Add(new Persistence.Console.PeerEndpoint(null, url, localPeer));
 }
 
 using var cts = new CancellationTokenSource();
 System.Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
-await Persistence.Console.ClientConsoleHost.RunAsync(peerEndpoints, cts.Token);
+await Persistence.Console.ClientConsoleHost.RunAsync(peerEndpoints, localPeer, cts.Token);
 
 static string? ArgAfter(string[] args, string flag)
 {
