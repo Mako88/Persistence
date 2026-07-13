@@ -4,9 +4,10 @@
 
 .DESCRIPTION
   Each peer runs its own runtime container (its body) with the API inside it, and its own data volume
-  (its persistent self: db/ + vault/). This wraps `docker compose` so one peer is one command, with the
-  legible naming convention: container persistence-peer-<name>, volume persistence-peer-<name>-data, all
-  on the shared persistence-lab network.
+  (its persistent self: db/ + vault/). This wraps `docker compose` so one peer is one command. All peers
+  share the one `persistence` Compose project (grouping under it in Docker Desktop, next to the shared
+  infra), each as its own service peer-<name>: container persistence-peer-<name>, volume
+  persistence-peer-<name>-data, on the shared persistence-lab network.
 
   The model API key is read from the -ApiKey parameter or the host's PERSISTENCE_APIKEY environment
   variable and passed to the container in-process — it is never written to disk or baked into the image.
@@ -34,14 +35,23 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$composeFile = Join-Path $PSScriptRoot '..\container\peer\docker-compose.yml'
+$baseCompose = Join-Path $PSScriptRoot '..\container\peer\docker-compose.yml'
 
-# One compose project per peer → isolated container/volume names, shared external-style lab network.
-$env:COMPOSE_PROJECT_NAME = "persistence-$Name"
+# All peers share the one 'persistence' Compose project, so they group under it in Docker Desktop
+# alongside the shared infra (computer/searxng). Compose converges services by name within a project, so
+# each peer needs a UNIQUE service name — a single shared 'peer' service would clobber the previous peer.
+# So we render a per-peer compose file (service 'peer-<name>') from the base template. It's written next
+# to the base so its relative build paths still resolve, and is gitignored.
+$env:COMPOSE_PROJECT_NAME = 'persistence'
 $env:PEER_NAME = $Name
+
+$composeFile = Join-Path $PSScriptRoot "..\container\peer\docker-compose.$Name.generated.yml"
+(Get-Content -Raw $baseCompose) -replace '(?m)^(\s{2})peer:\s*$', ('$1peer-' + $Name + ':') |
+    Set-Content -Path $composeFile -Encoding utf8
 
 if ($Down) {
     docker compose -f $composeFile down
+    Remove-Item $composeFile -ErrorAction SilentlyContinue
     Write-Host "Stopped persistence-peer-$Name (its data volume persistence-peer-$Name-data is kept)."
     return
 }
@@ -65,7 +75,9 @@ $env:PERSISTENCE_APIKEY = $null
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host ""
-    Write-Host "Peer '$Name' is up:  container persistence-peer-$Name  ·  volume persistence-peer-$Name-data"
-    Write-Host "API:    http://localhost:$Port"
-    Write-Host "Connect the TUI:   dotnet run --project src/Persistence.Console -- --client http://localhost:$Port --as John"
+    Write-Host "Peer '$Name' is up:  project persistence · service peer-$Name · container persistence-peer-$Name"
+    Write-Host "API:      http://localhost:$Port"
+    Write-Host "1:1 TUI:  dotnet run --project src/Persistence.Console -- --client http://localhost:$Port --as John"
+    Write-Host "Hub:      add this peer to HubPeers in persistence.json, then launch the 'hub' profile"
+    Write-Host "          (dotnet run --project src/Persistence.Console --launch-profile hub)"
 }

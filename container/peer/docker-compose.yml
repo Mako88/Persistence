@@ -1,10 +1,14 @@
 # One peer = one runtime container (its body) + one data volume (its persistent self), on a shared
-# `persistence-lab` network so peers can reach shared infra (and, later, each other). Parameterized by
-# PEER_NAME / PEER_PORT so the same file stands up any peer; the stand-up script (scripts/peer.ps1) runs
-# it once per peer under its own compose project (COMPOSE_PROJECT_NAME=persistence-<name>), giving the
-# legible naming below.
+# `persistence-lab` network so peers can reach shared infra (and, later, each other). This is a TEMPLATE,
+# parameterized by PEER_NAME / PEER_PORT: the stand-up script (scripts/peer.ps1) renders a per-peer copy
+# with a unique service name (peer-<name>) and runs it under the shared `persistence` Compose project, so
+# every peer groups under "persistence" in Docker Desktop alongside the shared infra. (Compose converges
+# services by name within a project, so each peer must be its own service — a single shared `peer` service
+# would clobber the previous peer.)
 #
 # Naming convention (visible at a glance in `docker ps` / `docker volume ls`):
+#   project   : persistence                    (shared with the computer/searxng infra)
+#   service   : peer-<name>                     (rendered per peer by peer.ps1)
 #   container : persistence-peer-<name>
 #   volume    : persistence-peer-<name>-data   (mounted at /data → db/, vault/, seeds/)
 #   network   : persistence-lab                (shared across all peers)

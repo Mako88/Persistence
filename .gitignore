@@ -51,3 +51,6 @@ container/docker-compose.override.yml
 
 ## Peer-memory backups (private — never commit). Off-site backup destination is a separate decision.
 backups/
+
+## Per-peer compose files rendered by scripts/peer.ps1 (service peer-<name>); transient, regenerated per run.
+container/peer/docker-compose.*.generated.yml
