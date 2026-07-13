@@ -162,6 +162,10 @@ public interface IAppConfig
     /// </summary>
     IReadOnlyList<ModelProfile> ModelProfiles { get; }
 
+    /// <summary>Re-reads the source config file if it changed on disk since the last check, applying the
+    /// new values in place — so config tweaks take effect without restarting. Cheap to call each turn.</summary>
+    void ReloadIfChanged();
+
     /// <summary>Name of the currently-active model profile.</summary>
     string ActiveModelName { get; }
 

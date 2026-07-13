@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -234,8 +235,13 @@ public class AppConfig : IAppConfig
     /// </summary>
     public static async Task<IAppConfig> LoadAsync(string? path = null)
     {
-        var config = await LoadFromFileAsync(path ?? ResolveConfigPath());
+        var resolved = path ?? ResolveConfigPath();
+        var config = await LoadFromFileAsync(resolved);
         ApplyEnvironmentOverrides(config);
+
+        // Remember the source + its write time so ReloadIfChanged() can hot-reload on later edits.
+        config.sourcePath = resolved;
+        config.sourceWriteUtc = File.Exists(resolved) ? File.GetLastWriteTimeUtc(resolved) : DateTime.MinValue;
         return config;
     }
 
@@ -376,33 +382,108 @@ public class AppConfig : IAppConfig
         if (Env("MAXOUTPUTBYTES") is { } m && int.TryParse(m, out var mb)) config.Container.MaxOutputBytes = mb;
     }
 
-    private static async Task<AppConfig> LoadFromFileAsync(string path)
+    private static async Task<AppConfig> LoadFromFileAsync(string path) =>
+        File.Exists(path) ? ParseConfig(await File.ReadAllTextAsync(path)) : new AppConfig().ResolveActiveModel();
+
+    /// <summary>Parses config JSON into a resolved <see cref="AppConfig"/>, falling back to defaults on a
+    /// parse error (used for the initial load, where defaults beat a crash).</summary>
+    private static AppConfig ParseConfig(string json) =>
+        TryParseConfig(json, out var config) ? config : new AppConfig().ResolveActiveModel();
+
+    /// <summary>Strictly parses config JSON (migrating a legacy flat shape) — returns false on a parse
+    /// error rather than substituting defaults, so a hot-reload of a malformed edit keeps the current config.</summary>
+    private static bool TryParseConfig(string json, out AppConfig config)
     {
-        if (!File.Exists(path))
-        {
-            return new AppConfig().ResolveActiveModel();
-        }
-
-        var json = await File.ReadAllTextAsync(path);
-
         try
         {
             var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-            var config = JsonSerializer.Deserialize<AppConfig>(json, opts) ?? new AppConfig();
+            var parsed = JsonSerializer.Deserialize<AppConfig>(json, opts) ?? new AppConfig();
 
             // Backward-compat: an older flat config has no Models array — migrate its top-level
             // model fields (Provider/Model/ApiKey/token limits/…) into a single profile.
-            if (config.Models.Count == 0)
+            if (parsed.Models.Count == 0)
             {
-                config.Models = [JsonSerializer.Deserialize<ModelProfile>(json, opts) ?? new ModelProfile()];
+                parsed.Models = [JsonSerializer.Deserialize<ModelProfile>(json, opts) ?? new ModelProfile()];
             }
 
-            return config.ResolveActiveModel();
+            config = parsed.ResolveActiveModel();
+            return true;
         }
         catch
         {
-            return new AppConfig().ResolveActiveModel();
+            config = null!;
+            return false;
         }
+    }
+
+    // --- Hot-reload (mtime cache-bust): the config re-reads its source file when it changes on disk, so
+    // tweaks apply without restarting the peer. Cheap — a stat per check, a re-parse only when it changed.
+
+    /// <summary>The source file this config was loaded from, and its last-seen write time (for hot-reload).</summary>
+    private string? sourcePath;
+    private DateTime sourceWriteUtc;
+
+    /// <summary>
+    /// Re-reads the source config file if it has changed on disk since the last check, applying the new
+    /// values in place (so all holders of this singleton see them). Cheap to call often — it stats the
+    /// file and only re-parses when the write time advanced. Behaviour/model settings hot-reload; infra
+    /// set up once at startup (database/shared/seeds directories, container) is left alone. A malformed
+    /// edit is ignored (the current config stays) and retried on the next change.
+    /// </summary>
+    public void ReloadIfChanged()
+    {
+        if (sourcePath is null || !File.Exists(sourcePath))
+        {
+            return;
+        }
+
+        DateTime writeUtc;
+        try { writeUtc = File.GetLastWriteTimeUtc(sourcePath); }
+        catch { return; }
+
+        if (writeUtc <= sourceWriteUtc)
+        {
+            return;
+        }
+
+        try
+        {
+            if (!TryParseConfig(File.ReadAllText(sourcePath), out var fresh))
+            {
+                return; // malformed edit — keep the current config, retry on the next change (mtime unmoved)
+            }
+
+            ApplyEnvironmentOverrides(fresh);
+            CopyReloadableFrom(fresh);
+            sourceWriteUtc = writeUtc; // only mark seen once a valid config is actually applied
+        }
+        catch
+        {
+            // A half-written file / transient read error — keep the current config; retry on the next turn.
+        }
+    }
+
+    /// <summary>Names of infra settings that are only acted on at startup, so they must NOT hot-reload
+    /// (changing them mid-run would desync from already-open resources).</summary>
+    private static readonly HashSet<string> NonReloadable =
+        new(StringComparer.Ordinal) { nameof(DatabaseDirectory), nameof(SharedDirectory), nameof(SeedsDirectory), nameof(Container) };
+
+    /// <summary>Copies the file-backed (non-<see cref="JsonIgnoreAttribute"/>) settable properties from a
+    /// freshly-loaded config, skipping startup-only infra, then re-resolves the active model.</summary>
+    private void CopyReloadableFrom(AppConfig fresh)
+    {
+        foreach (var p in typeof(AppConfig).GetProperties(
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+        {
+            if (p.CanRead && p.CanWrite
+                && p.GetCustomAttribute<JsonIgnoreAttribute>() is null
+                && !NonReloadable.Contains(p.Name))
+            {
+                p.SetValue(this, p.GetValue(fresh));
+            }
+        }
+
+        ResolveActiveModel();
     }
 }
 

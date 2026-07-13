@@ -94,6 +94,11 @@ public class TurnHandler : ITurnHandler
     /// </summary>
     public async Task ExecuteTurnAsync(string? input = null, string? peerName = null, string? wakeNote = null, CancellationToken ct = default)
     {
+        // Hot-reload config edits before the turn reads any settings, so tweaks apply without a restart
+        // (cheap — a stat, re-parsing only when the file changed). Turn-start granularity keeps the whole
+        // turn on one consistent config snapshot.
+        config.ReloadIfChanged();
+
         // Stamp the turn start so the proposal deliberation gap can tell "proposed this turn"
         // from "proposed earlier" — a proposal can only be accepted in a later turn.
         sessionContext.TurnStartedUtc = DateTimeOffset.UtcNow;

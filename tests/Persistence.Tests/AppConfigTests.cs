@@ -6,6 +6,48 @@ namespace Persistence.Tests;
 public class AppConfigTests
 {
     [Fact]
+    public async Task ReloadIfChangedAppliesEditsWithoutReloading()
+    {
+        await using var temp = new TempFile("""{ "MaxActionIterations": 5 }""");
+        var config = await AppConfig.LoadAsync(temp.Path);
+        Assert.Equal(5, config.MaxActionIterations);
+
+        // Edit the file with a new value and advance its write time.
+        File.WriteAllText(temp.Path, """{ "MaxActionIterations": 42, "SessionCostLimit": 3.5 }""");
+        File.SetLastWriteTimeUtc(temp.Path, DateTime.UtcNow.AddSeconds(5));
+
+        config.ReloadIfChanged();
+
+        Assert.Equal(42, config.MaxActionIterations);
+        Assert.Equal(3.5m, config.SessionCostLimit);
+    }
+
+    [Fact]
+    public async Task ReloadIfChangedIsANoOpWhenUnchanged()
+    {
+        await using var temp = new TempFile("""{ "MaxActionIterations": 7 }""");
+        var config = await AppConfig.LoadAsync(temp.Path);
+
+        config.ReloadIfChanged(); // file untouched — nothing changes
+
+        Assert.Equal(7, config.MaxActionIterations);
+    }
+
+    [Fact]
+    public async Task ReloadIfChangedKeepsCurrentConfigOnAMalformedEdit()
+    {
+        await using var temp = new TempFile("""{ "MaxActionIterations": 9 }""");
+        var config = await AppConfig.LoadAsync(temp.Path);
+
+        File.WriteAllText(temp.Path, "{ this is not valid json");
+        File.SetLastWriteTimeUtc(temp.Path, DateTime.UtcNow.AddSeconds(5));
+
+        config.ReloadIfChanged(); // bad edit ignored
+
+        Assert.Equal(9, config.MaxActionIterations);
+    }
+
+    [Fact]
     public async Task ReturnsDefaultsWhenFileMissing()
     {
         var path = Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}.json");
