@@ -9,6 +9,30 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-07-13 — "breathing room" batch (John, via the hub)
+
+### Changed — continue cap lifted
+`MaxActionIterations` default 5 → 100. The per-turn `<continue>` cap is a runaway backstop, not a normal
+limit — the real limiters are context size and cost — so a peer that legitimately needs several rounds
+isn't cut off mid-work.
+
+### Changed — cloud models use their real context window
+`EffectiveBudget` now sizes the context budget from the model's true per-model window (the
+model→window map) for cloud/broker models, instead of `MaxInputTokens` — which is a *local*-model knob
+(a local server's window is whatever it compiled). For cloud models cost, not tokens, is the limiter.
+
+### Added — session cost ceiling (soft + optional hard)
+`SessionCostLimit` (USD) shows on the sensory cost line as " · ceiling ~$Y (NN%)" with a wind-down nudge,
+so a peer self-manages against cost. `SessionCostLimitHard` makes it a hard stop — the turn pipeline
+refuses further model calls once estimated spend reaches it (soft/warning is the default). A shared
+`ISessionCostEstimator` keeps the sensory readout and the ceiling agreeing on the number.
+
+### Added — config hot-reload
+`IAppConfig.ReloadIfChanged()` re-reads the config file when its mtime advances and applies the new values
+in place; the turn handler calls it each turn, so tweaks take effect without a restart. Startup-only infra
+(db/shared/seeds dirs, container) is left alone; a malformed edit keeps the current config. John's mtime
+cache-bust approach — no FileSystemWatcher.
+
 ## 2026-07-13
 
 ### Changed — peer containers group under the shared `persistence` Compose project
