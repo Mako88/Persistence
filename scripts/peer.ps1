@@ -43,6 +43,9 @@ $baseCompose = Join-Path $PSScriptRoot '..\container\peer\docker-compose.yml'
 # So we render a per-peer compose file (service 'peer-<name>') from the base template. It's written next
 # to the base so its relative build paths still resolve, and is gitignored.
 $env:COMPOSE_PROJECT_NAME = 'persistence'
+# Each peer's compose file defines only its own service, so the shared-infra + other-peer containers in
+# the project look like "orphans" to it. They're not — don't offer to remove them.
+$env:COMPOSE_IGNORE_ORPHANS = 'true'
 $env:PEER_NAME = $Name
 
 $composeFile = Join-Path $PSScriptRoot "..\container\peer\docker-compose.$Name.generated.yml"
@@ -67,15 +70,22 @@ $env:PERSISTENCE_APIKEY = $key
 $env:PERSISTENCE_PROVIDER = $Provider
 $env:PERSISTENCE_MODEL = $Model
 
-$buildArg = if ($NoBuild) { @() } else { @('--build') }
-docker compose -f $composeFile up -d @buildArg
+# Ensure the shared external lab network exists (the peer compose attaches to it, doesn't create it).
+docker network inspect persistence-lab *> $null
+if ($LASTEXITCODE -ne 0) { docker network create persistence-lab | Out-Null }
+
+if ($NoBuild) {
+    docker compose -f $composeFile up -d
+} else {
+    docker compose -f $composeFile up -d --build
+}
 
 # Don't leave the key sitting in this shell's environment after we've handed it to compose.
 $env:PERSISTENCE_APIKEY = $null
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host ""
-    Write-Host "Peer '$Name' is up:  project persistence · service peer-$Name · container persistence-peer-$Name"
+    Write-Host "Peer '$Name' is up:  project persistence | service peer-$Name | container persistence-peer-$Name"
     Write-Host "API:      http://localhost:$Port"
     Write-Host "1:1 TUI:  dotnet run --project src/Persistence.Console -- --client http://localhost:$Port --as John"
     Write-Host "Hub:      add this peer to HubPeers in persistence.json, then launch the 'hub' profile"

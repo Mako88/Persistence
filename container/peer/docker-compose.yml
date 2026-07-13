@@ -46,8 +46,11 @@ services:
     mem_limit: 4g
 
 networks:
+  # The shared lab network is EXTERNAL: it's created once (scripts/peer.ps1 ensures it) and shared across
+  # every peer's own Compose invocation, so no single peer's stack owns or relabels it. Attach-only.
   lab:
     name: persistence-lab
+    external: true
 
 volumes:
   data:
