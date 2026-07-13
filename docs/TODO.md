@@ -2,41 +2,12 @@
 
 Open work, grouped by theme. "Claude's opinion" on ordering welcome; reorder freely. Rationale in parentheses.
 
-**Foundations (all landed):** scheduled wake-ups (closed-app headless runner), the legibility quick-wins
-batch, first-class local peers, and phase-1 automated decay (raw-context archival) are all done — details
-in the themed sections below. **Current priorities live in "Next up" above.**
-
-The **"eyes + hands" memory core** is complete — budget awareness, relevance, summarize/collapse/remove,
-plain-language errors, browsing/swapping working contexts, first-class proposals, generic/polymorphic
-tagging, wake-ups-drive-a-turn, surfaced proposal resolutions, the recent-changes digest, and the
-per-turn command catalog. Silent truncation is no longer the failure mode, so **automated forgetting is
-now a convenience to layer on, not a prerequisite**. The peer also now has a sandboxed container
-"computer" (`shell`: web search/fetch + scripting), verified end-to-end.
-
-**Recent work (2026-07 — John + Claude via Claude Code):** landed since the above —
-- **Native Anthropic client** (`ModelProvider.Anthropic`, Messages API, streaming + non-streaming) as a
-  first-class provider; the OpenAI Responses/Chat clients refactored to expose real provider usage
-  (`IModelClient.LastUsage`), consumed in one place in the turn handler.
-- **Running cost + real usage readout** in the sensory block (data-driven `ModelPricingProvider` +
-  `model_pricing.json`), and **Anthropic prompt caching** (a `cache_control` breakpoint on the stable
-  prefix, with cache-token-aware cost).
-- **Native reasoning off by default** (`ReasoningEffort: "off"`) — the peer reasons in the persisted
-  `<think>` channel instead of a redundant, ephemeral one.
-- **Thought persistence**: `<think>` is saved as a `Thought` fragment on a rolling window
-  (`ThoughtContextWindow`, default 8, archived-not-deleted); **`=== THIS TURN ===`** delineation marker;
-  the id-0 label "transient" → "new" (it misled the peer into thinking thoughts don't persist).
-- **Per-participant containers**: `exec`/`read_file`/`write_file` commands, a per-profile `ContainerName`
-  + `AllowAllCommands` override, and .NET 10 SDK + sudo baked into the image.
-- **Orientation cluster**: the `note()` working-note command, **enriched recent-changes** (field-level
-  diffs + content snippets, not just IDs), a **fuller numbered turn action-log**, **private thoughts**
-  (`<think private>` — persisted but kept off the console), model/provider shown in the sensory block,
-  and the autonomous-wake sensory no longer claiming a peer is present.
-- **Associative recall + peer data access**: memories relevant to the current conversation auto-surface
-  each turn (`MemorySurfacer` — FTS/BM25 × importance/confidence, excluding what's already loaded;
-  `set_recall(count)` to tune, 0 = off); a `/shared` container volume + `snapshot_db` so the peer can
-  inspect its own DB directly; SSH plumbing (gitignored override) so it can `git push`.
-- **Prompt/instruction audit** (done): reconciled the onboarding seed, protocol instructions, and stale
-  doc comments with actual behaviour.
+This file is **forward-looking** — open work only. For what's already landed (and why), see
+[CHANGELOG.md](CHANGELOG.md); for the *why* behind big choices, [adr/](adr/). At a glance, the baseline that
+exists today: the "eyes + hands" memory core (budget/relevance/summarize/forget, proposals, tagging,
+wake-ups, recent-changes digest, per-turn command catalog), first-class local peers, a sandboxed container
+"computer", the single-owner API + thin-client Console (ADR-0006), native Anthropic + OpenAI clients with
+real cost/caching, and the multi-peer TUI hub (ADR-0007 Phase 2b).
 
 ## Next up (ranked — Claude's recommendation, 2026-07; reorder freely)
 
@@ -63,18 +34,7 @@ no-autofan default, on-demand presence; **(4)** bring Ember online. **Fast-follo
 peer vets code before running it as itself); live config hot-reload. This subsumes item 4 below
 (cross-peer channel) and the "simultaneous participants" thread throughout.
 
-**Recently landed (2026-07):** WAL + busy-timeout interim (single-server phase 1); `prune_candidates`
-(forget pruning surface); **recoverable `forget` / `unforget` / `list_forgotten`** (+ search-leak fix,
-forget reasons, sensory curation counts — from a peer-review round with the claude.db self); think-first
-dispatch ordering + a decision *against* a forced second model round (see below); runtime model switching
-(`list_models` / `set_model`).
-
-**Recently landed (2026-07-12 — John + Claude via Claude Code):** the **multi-peer hub** (Phase 2b, above);
-**OpenAI cost + prompt caching** (cached-prefix split into `CacheReadTokens`, provider-aware cache
-multipliers, built-in GPT rates) with **`gpt-5.4` as the default cloud model**; **idempotent migrations**
-(re-running on an already-migrated DB no-ops instead of crashing) + the ChatGPT-importer migration-name
-fix; WAL justification reframed as a standing choice. **Deferred (filed):** actual-cost reconciliation via
-the Admin/Cost APIs (org-level, admin-key — see Robustness).
+*(Recently-landed notes moved to [CHANGELOG.md](CHANGELOG.md).)*
 
 1. ✅ **Single-server: Console as an API client — DONE (2026-07-12), all 5 stages** (see
    [ADR-0006](adr/0006-console-as-api-client.md)). WAL interim; the API snapshot/event surface; wire
