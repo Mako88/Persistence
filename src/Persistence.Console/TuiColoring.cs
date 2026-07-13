@@ -70,15 +70,18 @@ internal static class TuiColoring
     /// <summary>A <c>|</c> separator inside a fragment header (preceded by <c>[#digit…</c> on the line).</summary>
     private const string HeaderPipe = @"(?<=\[#\d[^\]]*)\|";
 
-    /// <summary>A numeric value right after an R:/I:/C: marker (the relevance/importance/confidence number).</summary>
-    private const string RicValue = @"(?<=[RIC]:)[\d.]+";
+    /// <summary>A numeric value right after an R:/I:/C: marker <em>inside a header</em> — the value must
+    /// be preceded by <c>[#digit…</c> on the same line, so a bare "C:3" in prose/tool-output isn't tinted.</summary>
+    private const string RicValue = @"(?<=\[#\d[^\]]*[RIC]:)[\d.]+";
 
     /// <summary>A fragment's type name — the word right after <c>#42 | </c> in a header.</summary>
     private const string FragmentTypeName = @"(?<=#\d+ \| )[A-Za-z][A-Za-z]+";
 
-    /// <summary>The R:/I:/C: relevance/importance/confidence markers in a header — a letter + colon
-    /// immediately before a number (so <c>is_protected</c>, <c>C:\paths</c>, times, etc. don't match).</summary>
-    private const string RicMarker = @"[RIC]:(?=\d)";
+    /// <summary>The R:/I:/C: relevance/importance/confidence markers <em>inside a header</em>: a letter +
+    /// colon before a number, but only when a <c>[#digit…</c> header prefix precedes it on the same line.
+    /// Anchoring to the header keeps stray "C:3"/"R:5" in a message body or tool result from being tinted
+    /// (a header wrapping mid-R/I/C loses the tint on the wrapped row — a rare, acceptable trade).</summary>
+    private const string RicMarker = @"(?<=\[#\d[^\]]*)[RIC]:(?=\d)";
 
     /// <summary>The "protected" flag in a *real* header — "protected" following the <c>| </c>
     /// separator on a line that began with a numeric id (<c>[#42 …</c>). This keeps it from colouring

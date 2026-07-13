@@ -595,7 +595,29 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
     private void BuildLayout(Toplevel top)
     {
         var driver = Application.Driver;
+        var (baseTheme, paneScheme) = ApplyTheme(top, driver);
 
+        // Reserve rows at the bottom: 1 for the key-bindings hint, 6 for the compose box (a border
+        // plus ~4 input lines, so its scrollbar is usable), and 1 for the status bar.
+        const int bottomRows = 8;
+
+        // Compose the screen from region builders rather than hand-placing every view here — each builder
+        // owns its region's coordinates and wires its own panes. Left: the conversation. Right: the tabbed
+        // side column. Bottom: the hint row, the compose box, and the status bar.
+        var conversation = BuildConversationPane(baseTheme, paneScheme, bottomRows);
+        tabView = BuildSideColumn(conversation, baseTheme, paneScheme, bottomRows);
+        var (hint, compose) = BuildComposeArea(baseTheme, paneScheme, bottomRows);
+        WirePaneNavigation();
+
+        BuildStatusBar(driver, top, bottomRows);
+        top.Add(conversation, tabView, hint, compose);
+        AddPeerSelector(top, tabView);
+        input.SetFocus();
+    }
+
+    /// <summary>Applies the shared white-on-black theme to the toplevel and returns the (base, pane) schemes.</summary>
+    private static (ColorScheme Base, ColorScheme Pane) ApplyTheme(Toplevel top, ConsoleDriver driver)
+    {
         var baseTheme = Scheme(driver, TuiColors.Body, Color.Black);
         Colors.TopLevel = baseTheme;
         Colors.Base = baseTheme;
@@ -605,12 +627,14 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
 
         // All panes share a white base; meaning is carried by per-rule accent colours (TuiColoring).
         var paneScheme = Scheme(driver, TuiColors.Body, Color.Black);
+        return (baseTheme, paneScheme);
+    }
 
-        // Reserve rows at the bottom: 1 for the key-bindings hint, 6 for the compose box (a border
-        // plus ~4 input lines, so its scrollbar is usable), and 1 for the status bar.
-        const int bottomRows = 8;
-
-        var outputFrame = new FocusTitleFrameView("Conversation")
+    /// <summary>The left conversation region: a titled frame around the aggregated, colour-attributed chat.
+    /// Sets the <see cref="output"/> field and returns the frame to add.</summary>
+    private FocusTitleFrameView BuildConversationPane(ColorScheme baseTheme, ColorScheme paneScheme, int bottomRows)
+    {
+        var frame = new FocusTitleFrameView("Conversation")
         {
             X = 0,
             Y = 0,
@@ -619,14 +643,20 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
             ColorScheme = baseTheme,
         };
         output = MakeColoredPaneView(paneScheme).ForConversation(humanNames, TuiColors.User, TuiColors.Peer);
-        outputFrame.Add(output);
+        frame.Add(output);
         AddScrollbar(output);
+        return frame;
+    }
 
+    /// <summary>The right side column: the Thoughts/Actions/Schedule/Debug tab view (a peer selector sits
+    /// above it in hub mode). Sets the four side-pane fields and returns the tab view.</summary>
+    private TabView BuildSideColumn(View leftOf, ColorScheme baseTheme, ColorScheme paneScheme, int bottomRows)
+    {
         // In hub mode a 1-row peer selector sits above the tabs, so start the tabs one row lower.
         var hasSelector = peerSelectorNames is { Count: > 0 };
-        tabView = new HighlightedTabView
+        var tabs = new HighlightedTabView
         {
-            X = Pos.Right(outputFrame),
+            X = Pos.Right(leftOf),
             Y = hasSelector ? 1 : 0,
             Width = Dim.Fill(),
             Height = Dim.Fill(bottomRows),
@@ -646,17 +676,34 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
         schedule.WordWrap = false;
 
         // Tab titles get a space of horizontal padding on each side.
-        tabView.AddTab(new TabView.Tab(" Thoughts ", WrapPane(reasoning, paneScheme)), andSelect: true);
-        tabView.AddTab(new TabView.Tab(" Actions ", WrapPane(tools, paneScheme)), andSelect: false);
-        tabView.AddTab(new TabView.Tab(" Schedule ", WrapPane(schedule, paneScheme)), andSelect: false);
-        tabView.AddTab(new TabView.Tab(" Debug ", WrapPane(debug, paneScheme)), andSelect: false);
+        tabs.AddTab(new TabView.Tab(" Thoughts ", WrapPane(reasoning, paneScheme)), andSelect: true);
+        tabs.AddTab(new TabView.Tab(" Actions ", WrapPane(tools, paneScheme)), andSelect: false);
+        tabs.AddTab(new TabView.Tab(" Schedule ", WrapPane(schedule, paneScheme)), andSelect: false);
+        tabs.AddTab(new TabView.Tab(" Debug ", WrapPane(debug, paneScheme)), andSelect: false);
 
         // Tab switching is reserved for Ctrl+Left/Right (handled on the focused view). Drop TabView's
         // built-in plain-arrow bindings so a stray Left/Right doesn't change tabs when the tab bar or a
         // pane has focus — plain arrows should just move the cursor / scroll the focused pane.
-        tabView.ClearKeybinding(Key.CursorLeft);
-        tabView.ClearKeybinding(Key.CursorRight);
+        tabs.ClearKeybinding(Key.CursorLeft);
+        tabs.ClearKeybinding(Key.CursorRight);
 
+        // Preview can open on a specific tab (for screenshots); defaults to the first.
+        var allTabs = tabs.Tabs.ToList();
+        if (PreviewInitialTab > 0 && PreviewInitialTab < allTabs.Count)
+        {
+            tabs.SelectedTab = allTabs[PreviewInitialTab];
+        }
+
+        return tabs;
+    }
+
+    /// <summary>
+    /// Wires keyboard behaviour shared across the read-only panes: Ctrl+Arrow navigation, redirect-typing-
+    /// to-compose, and the Actions pane's collapse/expand on activation. Runs once both the conversation
+    /// pane and the side column exist, since it spans both.
+    /// </summary>
+    private void WirePaneNavigation()
+    {
         // Ctrl+Arrows navigate from any pane (or the input): Left/Right switch tabs, Up/Down cycle
         // focus through the visible panes so each can be scrolled with the keyboard. Plain typing on a
         // pane jumps to the compose box (carrying the character), since that's the only place input is
@@ -676,16 +723,12 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
         {
             toolsView.OnLineActivated = ToggleActionAt;
         }
+    }
 
-        // Preview can open on a specific tab (for screenshots); defaults to the first.
-        var allTabs = tabView.Tabs.ToList();
-        if (PreviewInitialTab > 0 && PreviewInitialTab < allTabs.Count)
-        {
-            tabView.SelectedTab = allTabs[PreviewInitialTab];
-        }
-
-        // Compose area: a colour-keyed key-bindings hint on its own row, then the bordered multi-line
-        // input below (titled "Compose", which highlights with focus like the Conversation frame).
+    /// <summary>The bottom compose region: a centred key-bindings hint above a titled multi-line input box.
+    /// Sets the <see cref="input"/> field and returns (hint, compose frame) for the caller to add.</summary>
+    private (View Hint, FocusTitleFrameView Compose) BuildComposeArea(ColorScheme baseTheme, ColorScheme paneScheme, int bottomRows)
+    {
         const string hintText = "Enter: Send · Shift+Enter: Newline · Ctrl+Left/Right: Tabs · Ctrl+Up/Down: Panes";
         var hint = MakeColoredPaneView(paneScheme).ForComposeHint();
         hint.Text = hintText;
@@ -721,10 +764,7 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
         inputFrame.Add(input);
         AddScrollbar(input);
 
-        BuildStatusBar(driver, top, bottomRows);
-        top.Add(outputFrame, tabView, hint, inputFrame);
-        AddPeerSelector(top, tabView);
-        input.SetFocus();
+        return (hint, inputFrame);
     }
 
     /// <summary>
