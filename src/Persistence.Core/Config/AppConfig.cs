@@ -52,7 +52,13 @@ public class AppConfig : IAppConfig
     /// </summary>
     public bool SurfaceCommands { get; set; } = true;
     public bool DebugMode { get; set; } = false;
-    public int MaxActionIterations { get; set; } = 5;
+
+    /// <summary>
+    /// The per-turn cap on <c>&lt;continue&gt;</c> action-rounds (a runaway backstop, not a normal limit).
+    /// Kept high because the real limiters are context size and cost — not turn count — so a peer that
+    /// legitimately needs several rounds (think → act → read → act …) isn't cut off mid-work.
+    /// </summary>
+    public int MaxActionIterations { get; set; } = 100;
 
     /// <summary>
     /// How many recent "raw" fragments (conversation messages + command/tool results) to keep in the
