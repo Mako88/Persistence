@@ -658,7 +658,7 @@ public class PromptFormatter : IPromptFormatter
                         + cacheCreate * r.InputPerMillion * cacheWriteMult
                         + output * r.OutputPerMillion) / 1_000_000m;
             eventBus.FireAndForget(this, new SessionCostUpdated(cost, processedInput, output, calls));
-            return $"Session cost (est.): ~{FormatUsd(cost)} · {usage}";
+            return $"Session cost (est.): ~{FormatUsd(cost)} · {usage}{CostCeiling(cost)}";
         }
 
         eventBus.FireAndForget(this, new SessionCostUpdated(null, processedInput, output, calls));
@@ -667,6 +667,31 @@ public class PromptFormatter : IPromptFormatter
 
     /// <summary>Formats a USD amount, widening precision for sub-cent running totals so early turns aren't all "$0.00".</summary>
     private static string FormatUsd(decimal cost) => cost < 0.01m ? $"${cost:0.0000}" : $"${cost:0.00}";
+
+    /// <summary>
+    /// The optional spend-ceiling suffix on the cost line — " · ceiling ~$Y (NN%)" with a wind-down nudge
+    /// as it fills — when a <see cref="IAppConfig.SessionCostLimit"/> is configured. Cost, not tokens, is a
+    /// cloud model's real limiter, so this is how a peer sees where it stands. Empty when no ceiling is set.
+    /// (Soft here; hard-stop enforcement lives in the turn pipeline when <c>SessionCostLimitHard</c> is on.)
+    /// </summary>
+    private string CostCeiling(decimal cost)
+    {
+        if (config.SessionCostLimit is not { } limit || limit <= 0)
+        {
+            return "";
+        }
+
+        var percent = (int)Math.Round(100m * cost / limit);
+        var label = config.SessionCostLimitHard ? "hard ceiling" : "ceiling";
+        var nudge = (percent, config.SessionCostLimitHard) switch
+        {
+            ( >= 100, true) => " — reached; further turns will be refused until it's raised",
+            ( >= 100, false) => " — over the soft ceiling (still running); consider winding down or curating",
+            ( >= 80, _) => " — approaching the ceiling; wind down or curate soon",
+            _ => "",
+        };
+        return $" · {label} ~{FormatUsd(limit)} ({percent}%){nudge}";
+    }
 
     /// <summary>
     /// The effective token budget: the configured working limit if positive, otherwise the model's

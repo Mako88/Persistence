@@ -61,6 +61,17 @@ public class AppConfig : IAppConfig
     public int MaxActionIterations { get; set; } = 100;
 
     /// <summary>
+    /// Optional per-session spend ceiling in USD (null = none). For cloud models, cost — not tokens — is
+    /// the real limiter, so this is surfaced in the sensory cost line for the peer to self-manage against.
+    /// Soft by default (a warning); set <see cref="SessionCostLimitHard"/> to make it a hard stop.
+    /// </summary>
+    public decimal? SessionCostLimit { get; set; }
+
+    /// <summary>When true, <see cref="SessionCostLimit"/> is enforced as a hard stop — turns are refused
+    /// once the estimated session cost reaches it — rather than a soft sensory warning. Default false.</summary>
+    public bool SessionCostLimitHard { get; set; }
+
+    /// <summary>
     /// How many recent "raw" fragments (conversation messages + command/tool results) to keep in the
     /// active context. Older ones are archived out (kept in the store, searchable and restorable) to
     /// keep the context lean and turns fast. The peer's authored fragments are never auto-archived.

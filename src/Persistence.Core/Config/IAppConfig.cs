@@ -98,6 +98,12 @@ public interface IAppConfig
     /// </summary>
     int MaxActionIterations { get; set; }
 
+    /// <summary>Optional per-session USD spend ceiling (null = none); surfaced in the sensory cost line.</summary>
+    decimal? SessionCostLimit { get; set; }
+
+    /// <summary>When true, <see cref="SessionCostLimit"/> is a hard stop (turns refuse past it), not a warning.</summary>
+    bool SessionCostLimitHard { get; set; }
+
     /// <summary>
     /// How many recent raw fragments (conversation + tool results) to keep in the active context
     /// before archiving older ones (kept in the store, searchable/restorable). 0 disables it.

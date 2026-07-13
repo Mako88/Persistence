@@ -4,6 +4,10 @@
   "MaxActionIterations": 100,
   "DebugMode": false,
 
+  "_SessionCostLimit_comment": "Optional per-session USD spend ceiling (omit/null = none). Shown in the sensory cost line so a peer sees where it stands; cost — not tokens — is a cloud model's real limiter. Soft by default; set SessionCostLimitHard to enforce it.",
+  "SessionCostLimit": null,
+  "SessionCostLimitHard": false,
+
   "_SeedsDirectory_comment": "Optional. Folder of per-database identity seed files; {dbName}.json seeds a brand-new {dbName}.db with authored identity fragments. Blank (default) = a 'seeds' folder beside the database directory.",
   "SeedsDirectory": "",
 
