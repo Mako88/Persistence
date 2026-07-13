@@ -3,7 +3,7 @@ using Persistence.Config;
 namespace Persistence.Tests;
 
 [Collection("EnvironmentVariables")]
-public class AppConfigTests
+public class AppConfigTests : EnvironmentVariableTestBase
 {
     [Fact]
     public async Task ReloadIfChangedAppliesEditsWithoutReloading()

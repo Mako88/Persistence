@@ -3,7 +3,7 @@ using Persistence.Config;
 namespace Persistence.Tests;
 
 [Collection("EnvironmentVariables")]
-public class ModelProfileTests
+public class ModelProfileTests : EnvironmentVariableTestBase
 {
     [Fact]
     public void UnsetDatabasePathDefaultsToDbsFolderNamedAfterTheProfile()
