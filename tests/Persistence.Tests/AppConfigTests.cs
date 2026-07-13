@@ -164,6 +164,39 @@ public class AppConfigTests
     }
 
     [Fact]
+    public async Task UppercaseSelectedModelEnvSwitchesTheActiveProfile()
+    {
+        // Regression: the profile switch is keyed on PERSISTENCE_SelectedModel (PascalCase), but it's
+        // documented/set in UPPER (PERSISTENCE_SELECTEDMODEL). Env vars are case-sensitive on Linux, so
+        // an uppercase override in a container used to silently no-op — the peer booted on the file's
+        // default model (e.g. Ember coming up on Anthropic instead of its chosen substrate).
+        var json = """
+        {
+          "SelectedModel": "local",
+          "Models": [
+            { "Name": "cloud", "Provider": "OpenAI", "Model": "gpt-5.4" },
+            { "Name": "local", "Provider": "OpenAiChat", "Model": "gemma", "ApiBaseUrl": "http://127.0.0.1:8080/v1" }
+          ]
+        }
+        """;
+        await using var temp = new TempFile(json);
+
+        Environment.SetEnvironmentVariable("PERSISTENCE_SELECTEDMODEL", "cloud");
+        try
+        {
+            var config = await AppConfig.LoadAsync(temp.Path);
+
+            Assert.Equal("cloud", config.ActiveModelName);   // switched, not left on the file's "local"
+            Assert.Equal("OpenAI", config.Provider);
+            Assert.Equal("gpt-5.4", config.Model);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PERSISTENCE_SELECTEDMODEL", null);
+        }
+    }
+
+    [Fact]
     public async Task ActiveProfileContainerNameOverridesTheSharedContainer()
     {
         var json = """

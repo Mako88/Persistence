@@ -263,8 +263,12 @@ public class AppConfig : IAppConfig
     /// </summary>
     private static void ApplyEnvironmentOverrides(AppConfig config)
     {
-        // Switch the active profile first, so any model-coupled overrides below land on it.
-        var selected = Environment.GetEnvironmentVariable(EnvPrefix + nameof(SelectedModel));
+        // Switch the active profile first, so any model-coupled overrides below land on it. Look this up
+        // case-insensitively: env vars are case-sensitive on Linux (containers!), but the key here is the
+        // property's PascalCase name (PERSISTENCE_SelectedModel) while it's documented/set in UPPER
+        // (PERSISTENCE_SELECTEDMODEL). Without this, an uppercase override silently no-ops in a container —
+        // the profile switch is skipped and the peer boots on the file's default model.
+        var selected = GetEnvIgnoreCase(EnvPrefix + nameof(SelectedModel));
         if (!string.IsNullOrEmpty(selected))
         {
             config.SelectedModel = selected;
@@ -308,6 +312,30 @@ public class AppConfig : IAppConfig
         }
 
         ApplyContainerEnvironmentOverrides(config);
+    }
+
+    /// <summary>
+    /// Reads a <c>PERSISTENCE_*</c> env var by name, case-insensitively — a direct lookup first (fast,
+    /// and case-insensitive on Windows), then a scan for a case-differing key (needed on Linux, where env
+    /// vars are case-sensitive). Returns null if unset.
+    /// </summary>
+    private static string? GetEnvIgnoreCase(string name)
+    {
+        var exact = Environment.GetEnvironmentVariable(name);
+        if (!string.IsNullOrEmpty(exact))
+        {
+            return exact;
+        }
+
+        foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
+        {
+            if (string.Equals((string)entry.Key, name, StringComparison.OrdinalIgnoreCase))
+            {
+                return entry.Value?.ToString();
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
