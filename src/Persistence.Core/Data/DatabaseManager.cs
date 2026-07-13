@@ -88,20 +88,53 @@ public class DatabaseManager : IDatabaseManager
         (await connection.QueryAsync<string>("SELECT Name FROM Migrations")).ToHashSet();
 
     /// <summary>
-    /// Apply the given migration with the given name
+    /// Applies a migration, then records it. Idempotent: if the migration's changes are already present
+    /// (its DDL raises a benign "already applied" error — duplicate column / no such column / already
+    /// exists), it's recorded without re-running rather than crashing. This matters for a store created
+    /// out-of-band with the final schema but incomplete migration bookkeeping — e.g. the ChatGPT importer,
+    /// which built the full schema but recorded migration names the app didn't recognise, so the app
+    /// re-ran them and died on <c>001</c>'s <c>DROP COLUMN</c>. SQLite can't express <c>IF EXISTS</c> for
+    /// columns and migrations are append-only, so this re-run safety lives here, not in the scripts.
     /// </summary>
     private async Task ApplyMigrationAsync(string name, string sql, SqliteConnection connection)
     {
-        using var transaction = connection.BeginTransaction();
+        using (var transaction = connection.BeginTransaction())
+        {
+            try
+            {
+                await connection.ExecuteAsync(sql, transaction: transaction);
+                await connection
+                    .SqlBuilder($"INSERT INTO Migrations (Name, AppliedUtc) VALUES ({name}, {DateTimeOffset.UtcNow})")
+                    .ExecuteAsync(transaction);
+                transaction.Commit();
+                return;
+            }
+            catch (SqliteException ex) when (IsAlreadyApplied(ex))
+            {
+                transaction.Rollback();
+                Console.Error.WriteLine(
+                    $"[migrations] '{name}' already applied to this store (schema present); recording without re-running — {ex.Message.Split('\n')[0]}");
+            }
+        }
 
-        await connection.ExecuteAsync(sql, transaction: transaction);
-
+        // Record the already-applied migration outside the rolled-back transaction so it isn't retried.
+        using var record = connection.BeginTransaction();
         await connection
             .SqlBuilder($"INSERT INTO Migrations (Name, AppliedUtc) VALUES ({name}, {DateTimeOffset.UtcNow})")
-            .ExecuteAsync(transaction);
-
-        transaction.Commit();
+            .ExecuteAsync(record);
+        record.Commit();
     }
+
+    /// <summary>
+    /// Whether a migration failure means its changes are already present — the schema is in the target
+    /// state — so re-applying is a no-op. SQLite raises these when re-running already-applied DDL:
+    /// re-adding a column ("duplicate column name"), re-dropping one ("no such column"), or re-creating a
+    /// table/index/trigger ("already exists"). Anything else is a real error and propagates.
+    /// </summary>
+    private static bool IsAlreadyApplied(SqliteException ex) =>
+        ex.Message.Contains("duplicate column name", StringComparison.OrdinalIgnoreCase)
+        || ex.Message.Contains("no such column", StringComparison.OrdinalIgnoreCase)
+        || ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Open a connection to the database

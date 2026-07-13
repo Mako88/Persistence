@@ -116,11 +116,17 @@ def utc_now() -> str:
 
 def apply_schema(conn: sqlite3.Connection, repo: Path) -> None:
     migrations = repo / "src" / "Persistence.Core" / "Data" / "Migrations"
-    for path in [migrations / "Bootstrap.sql", *sorted(migrations.glob("[0-9][0-9][0-9]_*.sql"))]:
+    # Bootstrap creates the Migrations table itself and the app does NOT record it (it runs the bootstrap
+    # separately from the tracked migrations). Run it, but don't add a Migrations row for it.
+    conn.executescript((migrations / "Bootstrap.sql").read_text(encoding="utf-8-sig"))
+    for path in sorted(migrations.glob("[0-9][0-9][0-9]_*.sql")):
         conn.executescript(path.read_text(encoding="utf-8-sig"))
+        # Record migrations under the app's embedded-resource name (e.g.
+        # "Persistence.Data.Migrations.000_InitialCreate.sql"), NOT the bare filename — otherwise the app
+        # doesn't recognise them as applied on boot and re-runs them (which crashed on 001's DROP COLUMN).
         conn.execute(
             "INSERT OR IGNORE INTO Migrations (Name, AppliedUtc) VALUES (?, ?)",
-            (path.name, utc_now()),
+            (f"Persistence.Data.Migrations.{path.name}", utc_now()),
         )
 
 
