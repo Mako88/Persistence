@@ -216,8 +216,8 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
     /// </summary>
     protected override FormattableString GetInsertSql(ContextFragmentEntity entity) =>
         $"""
-        INSERT INTO ContextFragments (FragmentType, Status, Content, Summary, LastAccessedUtc, Importance, Confidence, IsProtected, IsDeleted, CreatedUtc, LastModifiedUtc, Notes)
-        VALUES ({entity.FragmentType}, {entity.Status}, {entity.Content}, {entity.Summary}, {entity.LastAccessedUtc}, {entity.Importance}, {entity.Confidence}, {entity.IsProtected}, {entity.IsDeleted}, {entity.CreatedUtc}, {entity.LastModifiedUtc}, {entity.Notes})
+        INSERT INTO ContextFragments (FragmentType, Status, Content, Summary, LastAccessedUtc, Importance, Confidence, IsProtected, IsDeleted, CreatedUtc, LastModifiedUtc, Notes, AddressedTo)
+        VALUES ({entity.FragmentType}, {entity.Status}, {entity.Content}, {entity.Summary}, {entity.LastAccessedUtc}, {entity.Importance}, {entity.Confidence}, {entity.IsProtected}, {entity.IsDeleted}, {entity.CreatedUtc}, {entity.LastModifiedUtc}, {entity.Notes}, {entity.AddressedTo})
         """;
 
     /// <summary>
@@ -229,7 +229,7 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
         SET FragmentType = {entity.FragmentType}, Status = {entity.Status}, Content = {entity.Content},
             Summary = {entity.Summary}, LastAccessedUtc = {entity.LastAccessedUtc}, Importance = {entity.Importance},
             Confidence = {entity.Confidence}, IsProtected = {entity.IsProtected}, IsDeleted = {entity.IsDeleted},
-            LastModifiedUtc = {entity.LastModifiedUtc}, Notes = {entity.Notes}
+            LastModifiedUtc = {entity.LastModifiedUtc}, Notes = {entity.Notes}, AddressedTo = {entity.AddressedTo}
         WHERE Id = {entity.Id}
         """;
 

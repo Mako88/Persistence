@@ -44,6 +44,7 @@
     <EmbeddedResource Include="Data\Migrations\003_UniqueFragmentOrder.sql" />
     <EmbeddedResource Include="Data\Migrations\004_AddWakePrompt.sql" />
     <EmbeddedResource Include="Data\Migrations\005_GenericTags.sql" />
+    <EmbeddedResource Include="Data\Migrations\006_AddChatMessageAddressing.sql" />
   </ItemGroup>
 
   <ItemGroup>

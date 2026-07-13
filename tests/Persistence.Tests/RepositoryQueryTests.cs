@@ -257,4 +257,46 @@ public sealed class RepositoryQueryTests : IAsyncLifetime
         await fragments.SetDeletedAsync(fragId, deleted: false);
         Assert.Contains(await fragments.SearchRelevantAsync("peregrine"), f => f.Id == fragId); // back after unforget
     }
+
+    [Fact]
+    public async Task ChatMessageAddressedToRoundTrips()
+    {
+        var ctx = await contexts.GetByIdAsync(session.WorkingContextId);
+
+        // A directed message (addressed to a named peer) and a broadcast (null) — persist both.
+        ctx!.AddFragment(new WeightedContextFragment
+        {
+            FragmentType = ContextFragmentType.ChatMessage,
+            Status = ContextFragmentStatus.Active,
+            Content = "Synth, what do you think?",
+            AddressedTo = "Synth",
+            Importance = 0.3f,
+            Confidence = 0.5f,
+            Relevance = 0.5f,
+            CreatedUtc = DateTimeOffset.UtcNow,
+            LastModifiedUtc = DateTimeOffset.UtcNow,
+        });
+        ctx.AddFragment(new WeightedContextFragment
+        {
+            FragmentType = ContextFragmentType.ChatMessage,
+            Status = ContextFragmentStatus.Active,
+            Content = "Morning, everyone.",
+            AddressedTo = null,
+            Importance = 0.3f,
+            Confidence = 0.5f,
+            Relevance = 0.5f,
+            CreatedUtc = DateTimeOffset.UtcNow,
+            LastModifiedUtc = DateTimeOffset.UtcNow,
+        });
+        await contexts.SaveAsync(ctx);
+
+        var reloaded = await contexts.GetByIdAsync(ctx.Id);
+        var directed = reloaded!.ContextFragments.Values.Single(f => f.Content == "Synth, what do you think?");
+        var broadcast = reloaded.ContextFragments.Values.Single(f => f.Content == "Morning, everyone.");
+
+        // The real consequence: the directed addressee survives the round-trip, and the broadcast
+        // stays null (guards against a default-empty-string regression, not just "a value persisted").
+        Assert.Equal("Synth", directed.AddressedTo);
+        Assert.Null(broadcast.AddressedTo);
+    }
 }

@@ -14,6 +14,15 @@ public record ContextFragmentEntity : BaseEntity
 
     public string? Summary { get; set; }
 
+    /// <summary>
+    /// For a <see cref="ContextFragmentType.ChatMessage"/> in a multi-peer room: who the message is
+    /// directed at. <c>null</c> means a broadcast to the room (or a plain human↔peer message);
+    /// a participant name (matching a source <see cref="SourceEntity.Name"/>) means it is addressed
+    /// to that participant. Lets a peer orient — "addressed to me" vs "overheard" — without inferring
+    /// it from prose. Unused (left null) by non-ChatMessage fragment types. See ADR-0008.
+    /// </summary>
+    public string? AddressedTo { get; set; }
+
     public required float Importance { get; set; }
 
     public required float Confidence { get; set; }
