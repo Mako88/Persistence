@@ -30,6 +30,7 @@ param(
     [string]$ApiKey,
     [string]$Provider = 'Anthropic',
     [string]$Model = 'claude-opus-4-8',
+    [int]$MaxInputTokens,   # 0 = leave the config/image default (8000); raise it for big-context work
     [switch]$Down,
     [switch]$NoBuild
 )
@@ -69,6 +70,7 @@ if (-not $key) {
 $env:PERSISTENCE_APIKEY = $key
 $env:PERSISTENCE_PROVIDER = $Provider
 $env:PERSISTENCE_MODEL = $Model
+if ($MaxInputTokens -gt 0) { $env:PERSISTENCE_MAXINPUTTOKENS = "$MaxInputTokens" }
 
 # Ensure the shared external lab network exists (the peer compose attaches to it, doesn't create it).
 docker network inspect persistence-lab *> $null

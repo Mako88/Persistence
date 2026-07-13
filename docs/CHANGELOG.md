@@ -9,6 +9,24 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-07-13
+
+### Changed — peer containers group under the shared `persistence` Compose project
+`peer.ps1` now renders a per-peer compose file (service `peer-<name>`) and runs all peers under
+`COMPOSE_PROJECT_NAME=persistence`, so they group under "persistence" in Docker Desktop alongside the
+computer/searxng infra instead of floating in per-peer projects. The shared `persistence-lab` network is
+treated as external (attach-only; the script ensures it exists), orphan warnings are silenced, and the
+`up` args were de-splatted (a Windows PowerShell quirk had passed a bare `-` as a service name).
+
+### Added — `peer.ps1 -MaxInputTokens`
+Forward a per-peer context-window budget through the compose (`PERSISTENCE_MAXINPUTTOKENS`, default 8000).
+Used to raise Ember to 100k so the peer can review/curate its ~1.34M-token imported ChatGPT history in
+large batches (its own `search`/`load`/`summarize`/`forget` tools) rather than ~270 tiny ones.
+
+### Operational
+Ember re-stood on **OpenAI / gpt-5.4** (streaming) at a 100k budget; Arden (the `claude` peer) on
+**Anthropic / claude-opus-4-8**. Both healthy, memory preserved across the re-stand.
+
 ## 2026-07-12
 
 ### Added — Multi-peer TUI hub (ADR-0007 Phase 2b)

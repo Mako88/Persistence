@@ -36,6 +36,9 @@ services:
       - PERSISTENCE_PROVIDER=${PERSISTENCE_PROVIDER:-Anthropic}
       - PERSISTENCE_MODEL=${PERSISTENCE_MODEL:-claude-opus-4-8}
       - PERSISTENCE_APIKEY=${PERSISTENCE_APIKEY:-}
+      # Context-window budget (tokens). Default matches the config default; raise it for big-context work
+      # (e.g. a peer curating a large imported history) via peer.ps1 -MaxInputTokens.
+      - PERSISTENCE_MAXINPUTTOKENS=${PERSISTENCE_MAXINPUTTOKENS:-8000}
       # Optional shared search (SearXNG on persistence-lab); web_search is inert if unset.
       - SEARXNG_URL=${SEARXNG_URL:-}
     restart: unless-stopped
