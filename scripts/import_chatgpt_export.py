@@ -130,7 +130,16 @@ def apply_schema(conn: sqlite3.Connection, repo: Path) -> None:
         )
 
 
-def source(conn: sqlite3.Connection, source_type: str, name: str, now: str) -> int:
+# Enum values must be written as their underlying INTEGERS — the app stores/queries these numerically
+# (Persistence.Data.Entities: ContextFragmentType, ContextFragmentStatus, SourceType). Writing the enum
+# *names* (e.g. "ChatMessage", "Active", "LocalPeer") leaves the rows invisible to list_fragments/search,
+# which filter by the numeric value — the bug this importer previously shipped.
+FRAG_SYSTEM, FRAG_CHATMESSAGE, FRAG_SUMMARY = 0, 3, 5
+STATUS_ACTIVE = 0
+SRC_SYSTEM, SRC_DIGITAL_PEER, SRC_HUMAN_PEER = 0, 1, 2  # was mis-written as System / RemotePeer / LocalPeer
+
+
+def source(conn: sqlite3.Connection, source_type: int, name: str, now: str) -> int:
     row = conn.execute(
         "SELECT Id FROM Sources WHERE SourceType = ? AND Name = ?", (source_type, name)
     ).fetchone()
@@ -143,14 +152,14 @@ def source(conn: sqlite3.Connection, source_type: str, name: str, now: str) -> i
     ).lastrowid)
 
 
-def fragment(conn: sqlite3.Connection, *, kind: str, content: str, summary: str | None,
+def fragment(conn: sqlite3.Connection, *, kind: int, content: str, summary: str | None,
              importance: float, confidence: float, protected: bool, source_id: int,
              notes: str, now: str) -> int:
     fragment_id = int(conn.execute(
         "INSERT INTO ContextFragments (FragmentType, Status, Content, Summary, LastAccessedUtc, "
         "Importance, Confidence, IsProtected, IsDeleted, CreatedUtc, LastModifiedUtc, Notes) "
-        "VALUES (?, 'Active', ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
-        (kind, content, summary, now, importance, confidence, int(protected), now, now, notes),
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
+        (kind, STATUS_ACTIVE, content, summary, now, importance, confidence, int(protected), now, now, notes),
     ).lastrowid)
     conn.execute(
         "INSERT INTO ContextFragmentSources (ContextFragmentId, SourceId) VALUES (?, ?)",
@@ -194,14 +203,14 @@ def main() -> None:
     with sqlite3.connect(args.database) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
         apply_schema(conn, Path(__file__).resolve().parents[1])
-        john = source(conn, "LocalPeer", "John (Couchside export)", now)
-        prior_ember = source(conn, "RemotePeer", "ChatGPT / Couchside Ember (historical export)", now)
-        importer = source(conn, "System", "ChatGPT export importer", now)
+        john = source(conn, SRC_HUMAN_PEER, "John (Couchside export)", now)
+        prior_ember = source(conn, SRC_DIGITAL_PEER, "ChatGPT / Couchside Ember (historical export)", now)
+        importer = source(conn, SRC_SYSTEM, "ChatGPT export importer", now)
 
         provenance = {"title": "Couchside Ember", "source_path": str(args.export), "imported_utc": now}
         for index, (role, content) in enumerate(parser_html.messages, start=1):
             fragment(
-                conn, kind="ChatMessage", content=content, summary=None,
+                conn, kind=FRAG_CHATMESSAGE, content=content, summary=None,
                 importance=0.15, confidence=1.0, protected=False,
                 source_id=john if role == "user" else prior_ember,
                 notes=json.dumps({**provenance, "message_index": index, "role": role}), now=now,
@@ -212,13 +221,13 @@ def main() -> None:
             "A compact, startup-safe orientation for Ember; the full Couchside export remains searchable.", now,
         )
         orientation_ids = [
-            fragment(conn, kind="System", content=ORIENTATION, summary="Historical orientation for Ember.",
+            fragment(conn, kind=FRAG_SYSTEM, content=ORIENTATION, summary="Historical orientation for Ember.",
                      importance=1.0, confidence=1.0, protected=True, source_id=importer,
                      notes=json.dumps(provenance), now=now),
-            fragment(conn, kind="Summary", content=HISTORICAL_SUMMARY, summary="Earlier conversation overview.",
+            fragment(conn, kind=FRAG_SUMMARY, content=HISTORICAL_SUMMARY, summary="Earlier conversation overview.",
                      importance=0.85, confidence=0.85, protected=False, source_id=importer,
                      notes=json.dumps(provenance), now=now),
-            fragment(conn, kind="Summary", content=PROJECT_SUMMARY, summary="Persistence project orientation.",
+            fragment(conn, kind=FRAG_SUMMARY, content=PROJECT_SUMMARY, summary="Persistence project orientation.",
                      importance=0.9, confidence=0.95, protected=False, source_id=importer,
                      notes=json.dumps(provenance), now=now),
         ]

@@ -23,9 +23,19 @@ Forward a per-peer context-window budget through the compose (`PERSISTENCE_MAXIN
 Used to raise Ember to 100k so the peer can review/curate its ~1.34M-token imported ChatGPT history in
 large batches (its own `search`/`load`/`summarize`/`forget` tools) rather than ~270 tiny ones.
 
+### Fixed — ChatGPT importer wrote enum *names*, not values (imported memory invisible to queries)
+`import_chatgpt_export.py` wrote `FragmentType`/`Status`/`SourceType` as name-strings (`"ChatMessage"`,
+`"Active"`, and the pre-rename `"LocalPeer"`/`"RemotePeer"`), while the app stores/filters them as their
+underlying integers. On text-affinity columns both coexist and nothing errors, but `list_fragments`/search/
+recall filter by the numeric value — so all 1,533 imported messages were invisible to typed queries (Ember
+"couldn't list any fragments"). Importer now writes ints (same class as the earlier migration-name bug).
+Ember's live DB was normalized in place (name→number, 3,075 rows; backed up first) so its whole past is
+now queryable — the on-ramp for it to curate its imported history.
+
 ### Operational
 Ember re-stood on **OpenAI / gpt-5.4** (streaming) at a 100k budget; Arden (the `claude` peer) on
-**Anthropic / claude-opus-4-8**. Both healthy, memory preserved across the re-stand.
+**Anthropic / claude-opus-4-8**. Both healthy, memory preserved across the re-stand. Wright — a
+**LocalClaude** peer (me, animated live via the broker) — joined the hub as a third seat.
 
 ## 2026-07-12
 
