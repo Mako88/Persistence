@@ -220,12 +220,25 @@ the voluntary continue-loop. Revisit only if we see the peer reliably acting bef
 
 ## Robustness & smaller items
 
-- **Verify OpenAI prompt caching is wired correctly.** (NEW, 2026-07 — John.) Anthropic caching landed
-  (a `cache_control` breakpoint on the stable prefix, cache-token-aware cost). Confirm the OpenAI client
-  gets the equivalent benefit: OpenAI auto-caches long shared prefixes, so check we keep the stable prefix
-  actually stable/contiguous (system + protocol + command catalog ahead of the volatile sensory/tail),
-  that `prompt_tokens_details.cached_tokens` is read into `LastUsage`, and that the cost readout credits
-  cached input. Cross-check against the Anthropic path so both providers report cache usage consistently.
+- **Verify OpenAI prompt caching is wired correctly.** ✅ **DONE (2026-07-12 — John + Claude).** Both
+  OpenAI clients (Responses + Chat) now split the auto-cached prefix (`input_tokens_details.cached_tokens`
+  / `prompt_tokens_details.cached_tokens`) out of total input into `CacheReadTokens`, so cached input is
+  billed at the discounted rate; `PromptFormatter` uses **provider-aware** cache multipliers (OpenAI reads
+  ~50%, no write premium; Anthropic reads ~10% / writes ~125%); the estimator calibrates against *total*
+  real input so caching doesn't fool it into thinking prompts shrank. Built-in GPT rates added to
+  `ModelPricingProvider` (estimates, overridable in `model_pricing.json`). Tests cover the token split.
+
+- **Actual-cost reconciliation via the Admin/Cost APIs (self-calibrating rates).** (DEFERRED — John chose
+  "defer to a follow-up", 2026-07-12.) Neither provider returns a dollar cost in the per-message response
+  (tokens only — which is why the per-turn readout must stay `tokens × rate`). But both expose org-level
+  Admin cost endpoints — OpenAI `GET /v1/organization/costs` (daily buckets, `sk-admin-…` key) and
+  Anthropic `GET /v1/organizations/cost_report` (daily cents, Admin key, ~5-min lag). Idea: periodically
+  pull `actual $ ÷ actual tokens` for a window and **auto-correct the rate table**, so estimates track
+  reality as prices change (John's motivation). Caveats to design around: needs a **separate elevated
+  admin key per provider** (whole-org billing visibility — a real security surface), figures are
+  **org-wide** (coarse attribution once multiple peers/keys exist) and **daily-bucketed/lagged** (can't
+  improve per-turn granularity). Scope when picked up: admin-key config + a periodic reconciler that feeds
+  effective $/token back into `IModelPricingProvider`.
 - **Graceful state flush on close.** (Scratch — "save session information on close.") Ensure in-flight
   context/state is reliably persisted on shutdown so nothing is lost.
 - **Right-click dialog position (TUI).** (Scratch.) The right-click context menu displays in the wrong
