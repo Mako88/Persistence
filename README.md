@@ -120,6 +120,29 @@ Then run:
 dotnet run --project src/Persistence.Console
 ```
 
+### Importing a ChatGPT conversation
+
+The importer turns a ChatGPT HTML export into a **new** Persistence store. It keeps
+every message as a searchable `ChatMessage` fragment with local-/remote-peer
+provenance, then creates a small `Ember Orientation` working context instead of
+putting the whole transcript in the first prompt.
+
+```powershell
+python scripts/import_chatgpt_export.py D:\Downloads\conversation.html dbs\ember.db
+```
+
+It refuses to overwrite an existing database. To run the imported store with an
+already-configured model profile, override only that profile's database path for the
+process:
+
+```powershell
+$env:PERSISTENCE_DATABASEPATH = "$PWD\dbs\ember.db"
+dotnet run --project src/Persistence.Console
+```
+
+The imported orientation is historical context, not a claim that a newly started
+model is the same participant as the instance represented in the export.
+
 ### Configuration
 
 `persistence.json` separates **shared** settings from a list of **model profiles**. You define one
