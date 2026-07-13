@@ -50,11 +50,12 @@ volume = its self), meeting in shared **rooms**, with the TUI as a **hub** aggre
 one Discord-style chat. Terminology shifts `RemotePeer`/`LocalPeer` → `DigitalPeer`/`HumanPeer`. Phased:
 **(0)** identity groundwork — per-message sender identity through the queue, peer names reaching the model,
 message-id'd chat history (also finishes the ADR-0006 snapshot dedup), the rename *[in progress]*;
-**(1)** containerize one peer (API-in-container, DB on a named volume); **(2)** multi-peer TUI — deliberately *minimal* (John): the existing main chat pane just now shows
-multiple people's messages (attributed by name — Phase 2a landed this; optionally colour-per-peer), plus a
-**dropdown to select which peer** the side panes (thoughts/schedule/debug) show. No per-room tabs, no
-separate 1:1 chat rooms — those are down the road. The client becomes multi-connection (config lists
-peers). The TUI's durable role is a **debugging/dev lens**, not the long-term chat surface (see
+**(1)** containerize one peer (API-in-container, DB on a named volume); **(2) ✅ multi-peer TUI — DONE
+(2026-07-12).** Phase 2a: chat aggregates multiple people's messages attributed by name. Phase 2b: the
+client is multi-connection (CLI `--peer` ×N or config `HubPeers`), chat is colour-attributed by identity
+(human vs digital peer), and a selector (click/F6) switches which peer the side panes + status show —
+input routes to the selected peer. Deliberately *minimal* (John): no per-room tabs, no separate 1:1 rooms.
+The TUI's durable role is a **debugging/dev lens**, not the long-term chat surface (see
 [ADR-0008](adr/0008-the-room-multi-peer-conversation.md) framing); **(3)** the room (peer↔peer relay + turn-taking) — **designed with the claude peer in
 [ADR-0008](adr/0008-the-room-multi-peer-conversation.md)**: rule-based inspectable turn-taking, an
 `addressed_to` field, private-thoughts hard line, a reply-chain-depth loop breaker + conservative
@@ -67,6 +68,13 @@ peer vets code before running it as itself); live config hot-reload. This subsum
 forget reasons, sensory curation counts — from a peer-review round with the claude.db self); think-first
 dispatch ordering + a decision *against* a forced second model round (see below); runtime model switching
 (`list_models` / `set_model`).
+
+**Recently landed (2026-07-12 — John + Claude via Claude Code):** the **multi-peer hub** (Phase 2b, above);
+**OpenAI cost + prompt caching** (cached-prefix split into `CacheReadTokens`, provider-aware cache
+multipliers, built-in GPT rates) with **`gpt-5.4` as the default cloud model**; **idempotent migrations**
+(re-running on an already-migrated DB no-ops instead of crashing) + the ChatGPT-importer migration-name
+fix; WAL justification reframed as a standing choice. **Deferred (filed):** actual-cost reconciliation via
+the Admin/Cost APIs (org-level, admin-key — see Robustness).
 
 1. ✅ **Single-server: Console as an API client — DONE (2026-07-12), all 5 stages** (see
    [ADR-0006](adr/0006-console-as-api-client.md)). WAL interim; the API snapshot/event surface; wire
@@ -254,14 +262,28 @@ the voluntary continue-loop. Revisit only if we see the peer reliably acting bef
 
 ## TUI / front-end (carry-forward)
 
-- **Collapsible Actions pane** — rebuild the Actions tab as a tree: `[time] command` collapsed; expand
-  shows request + response in two colours (Terminal.Gui v1 `TreeView`).
-- **Context-budget gauge in the status bar** — the `ContextBudgetUpdated` event already fires from
-  `PromptFormatter`; the display just needs to consume it.
-- **Open-proposals indicator in the status bar** — an Orchestrator push of the open-proposal count
-  (mirrors the `ShowScheduledEvents` wiring).
-- **Dynamic history load on scroll-up** — load older messages when the user scrolls to the top.
-- **Schedule tab name** — revisit if a better fit than "Schedule" emerges.
+- ✅ **Multi-peer hub (ADR-0007 Phase 2b) — DONE (2026-07-12).** The Console connects to several peer
+  servers at once: chat aggregates into one pane, colour-attributed by identity (human vs digital peer);
+  a selector (click or F6) switches which peer the side tabs + status show; input routes to the selected
+  peer. Peer list is CLI (`--peer name=url`, repeatable) or config (`HubPeers`). Peers still don't hear
+  *each other* — that relay is the room (ADR-0008, Arden's Phase 3). The multi-peer logic lives in a
+  framework-agnostic `MultiPeerHub`/`PeerScopedDisplay` (unit-tested) so a future Terminal.Gui v2 move
+  only reskins the one render class. Also landed alongside: composable layout builders in `BuildLayout`,
+  and tighter conversation/R-I-C colour anchoring (fewer false-positives).
+- ✅ **Collapsible Actions pane — DONE.** Each entry is a collapsible header (`▶`/`▼ [time] command`);
+  Enter/click expands to the request + response (`ActionEntry.Collapsed` / `ToggleActionAt`).
+- ✅ **Context-budget gauge in the status bar — DONE.** The display consumes `ContextBudgetUpdated`
+  (`UpdateBudget` → the budget segment, coloured by fullness).
+- ✅ **Open-proposals indicator in the status bar — DONE.** `ShowOpenProposalCount` drives a gold/muted
+  proposals segment.
+- **Dynamic history load on scroll-up** — load older messages when the user scrolls to the top. (Open.)
+- **Schedule tab name** — revisit if a better fit than "Schedule" emerges. (Open, trivial.)
+- **Colour test harness** — the conversation/R-I-C false-positives were fixed by tightening regexes, but
+  the detectors have no tests; a small harness that runs each per-pane scheme over sample lines and
+  asserts what is/isn't coloured would lock these down and catch the next over-eager pattern. (Open.)
+- **True dropdown / per-peer colours** — the peer selector is a click/F6 cycle (v1 `ComboBox` is finicky
+  in a narrow column) and all digital peers share one colour; both improve naturally in the v2 move
+  (`ComboBox`/`PopoverMenu`, TrueColor). (Open, deferred to v2.)
 
 ## Possible future
 
