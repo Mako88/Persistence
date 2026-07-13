@@ -83,6 +83,7 @@ public class TurnHandlerTests
         public TurnHandler Build() => new(
             ContextRepo.Object, TagRepo.Object, ActionLog.Object, AuditLog.Object, new Mock<IContextFragmentRepository>().Object, Session, TestResolvers.For(Model.Object), Parser.Object,
             Formatter.Object, Builder.Object, Handlers.Object, new TokenUsageTracker(),
+            new Mock<ISessionCostEstimator>().Object,
             new Mock<IMemorySurfacer>().Object, Bus, Config, Sources.Object);
     }
 

@@ -34,6 +34,7 @@ public class TurnHandler : ITurnHandler
     private readonly IPromptBuilder promptBuilder;
     private readonly IIndex<ModelAction, IActionHandler> actionHandlers;
     private readonly ITokenUsageTracker usageTracker;
+    private readonly ISessionCostEstimator costEstimator;
     private readonly IMemorySurfacer memorySurfacer;
     private readonly IEventBus eventBus;
     private readonly IAppConfig config;
@@ -61,6 +62,7 @@ public class TurnHandler : ITurnHandler
         IPromptBuilder promptBuilder,
         IIndex<ModelAction, IActionHandler> actionHandlers,
         ITokenUsageTracker usageTracker,
+        ISessionCostEstimator costEstimator,
         IMemorySurfacer memorySurfacer,
         IEventBus eventBus,
         IAppConfig config,
@@ -78,6 +80,7 @@ public class TurnHandler : ITurnHandler
         this.promptBuilder = promptBuilder;
         this.actionHandlers = actionHandlers;
         this.usageTracker = usageTracker;
+        this.costEstimator = costEstimator;
         this.memorySurfacer = memorySurfacer;
         this.eventBus = eventBus;
         this.config = config;
@@ -163,6 +166,19 @@ public class TurnHandler : ITurnHandler
         {
         while (iteration <= config.MaxActionIterations)
         {
+            // Hard cost ceiling: refuse further model calls once the estimated session spend reaches the
+            // configured hard limit (cost, not tokens, is a cloud model's real limiter). A soft limit only
+            // warns, in the sensory cost line; this is the opt-in hard stop.
+            if (config.SessionCostLimitHard
+                && config.SessionCostLimit is { } costLimit && costLimit > 0
+                && costEstimator.CurrentCost() is { } spent && spent >= costLimit)
+            {
+                await eventBus.PublishAsync(this, new RemotePeerReplied(
+                    $"[Cost ceiling reached — this session's estimated spend (~${spent:0.00}) is at the ${costLimit:0.00} "
+                    + "hard limit. Pausing further model calls; raise SessionCostLimit or set SessionCostLimitHard=false to continue.]"));
+                break;
+            }
+
             if (iteration > 0)
             {
                 await DrainPendingInput(context);
