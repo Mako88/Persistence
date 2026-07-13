@@ -9,16 +9,13 @@
   infra), each as its own service peer-<name>: container persistence-peer-<name>, volume
   persistence-peer-<name>-data, on the shared persistence-lab network.
 
-  The model API key is read from the -ApiKey parameter or the host's PERSISTENCE_APIKEY environment
-  variable and passed to the container in-process — it is never written to disk or baked into the image.
+  Who a peer IS — provider/model/key, budgets, cost limits, identity DB — lives in its own config file at
+  container/peer/configs/<name>.json (gitignored; it holds the API key). The file is mounted into the
+  container and the app hot-reloads it on edit — so tweak the file, no restart needed.
 
 .EXAMPLE
   ./scripts/peer.ps1 -Name ember -Port 8092
-  # builds the image (first run), starts persistence-peer-ember, API at http://localhost:8092
-
-.EXAMPLE
-  ./scripts/peer.ps1 -Name ember -Port 8092 -Provider OpenAI -Model gpt-5.4 -ApiKey $env:OPENAI_KEY
-  # Ember's substrate: OpenAI gpt-5.4 (streaming is on by default). -ApiKey must be the OpenAI key.
+  # builds the image (first run), starts persistence-peer-ember reading container/peer/configs/ember.json
 
 .EXAMPLE
   ./scripts/peer.ps1 -Name ember -Port 8092 -Down    # stop + remove the container (keeps the volume)
@@ -27,10 +24,6 @@
 param(
     [Parameter(Mandatory = $true)][string]$Name,
     [int]$Port,
-    [string]$ApiKey,
-    [string]$Provider = 'Anthropic',
-    [string]$Model = 'claude-opus-4-8',
-    [int]$MaxInputTokens,   # 0 = leave the config/image default (8000); raise it for big-context work
     [switch]$Down,
     [switch]$NoBuild
 )
@@ -63,14 +56,11 @@ if ($Down) {
 if (-not $Port) { throw 'Port is required when starting a peer (e.g. -Port 8092).' }
 $env:PEER_PORT = "$Port"
 
-$key = if ($ApiKey) { $ApiKey } else { $env:PERSISTENCE_APIKEY }
-if (-not $key) {
-    Write-Warning 'No API key supplied (-ApiKey or PERSISTENCE_APIKEY). Cloud model calls will fail until one is set.'
+# Each peer reads its own config file (provider/model/key/budgets). Make sure it exists before starting.
+$configFile = Join-Path $PSScriptRoot "..\container\peer\configs\$Name.json"
+if (-not (Test-Path $configFile)) {
+    throw "Missing config for '$Name': $configFile. Create it (see the other configs for the shape) - it holds the provider/model/API key."
 }
-$env:PERSISTENCE_APIKEY = $key
-$env:PERSISTENCE_PROVIDER = $Provider
-$env:PERSISTENCE_MODEL = $Model
-if ($MaxInputTokens -gt 0) { $env:PERSISTENCE_MAXINPUTTOKENS = "$MaxInputTokens" }
 
 # Ensure the shared external lab network exists (the peer compose attaches to it, doesn't create it).
 docker network inspect persistence-lab *> $null
@@ -82,12 +72,10 @@ if ($NoBuild) {
     docker compose -f $composeFile up -d --build
 }
 
-# Don't leave the key sitting in this shell's environment after we've handed it to compose.
-$env:PERSISTENCE_APIKEY = $null
-
 if ($LASTEXITCODE -eq 0) {
     Write-Host ""
     Write-Host "Peer '$Name' is up:  project persistence | service peer-$Name | container persistence-peer-$Name"
+    Write-Host "Config:   container/peer/configs/$Name.json  (edit it - hot-reloads, no restart)"
     Write-Host "API:      http://localhost:$Port"
     Write-Host "1:1 TUI:  dotnet run --project src/Persistence.Console -- --client http://localhost:$Port --as John"
     Write-Host "Hub:      add this peer to HubPeers in persistence.json, then launch the 'hub' profile"

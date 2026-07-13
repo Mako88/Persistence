@@ -37,15 +37,34 @@ under it next to the shared infra; each is its own **service `peer-<name>`** (Co
 by name, so a shared service would clobber the previous peer). `peer.ps1` renders a gitignored per-peer
 compose file (`docker-compose.<name>.generated.yml`) from the template and runs it under that project.
 
+## Configure a peer
+
+Who a peer **is** — provider, model, API key, budgets, cost limits — lives in its own config file at
+`container/peer/configs/<name>.json`, mounted into the container and **hot-reloaded on edit** (change the
+file, no restart). The dir is gitignored (it holds the key). Shape:
+
+```json
+{
+  "DatabaseDirectory": "/data/db",
+  "SeedsDirectory": "/data/seeds",
+  "SelectedModel": "default",
+  "Models": [
+    { "Name": "default", "Provider": "OpenAI", "Model": "gpt-5.4", "ApiKey": "<key>",
+      "DatabasePath": "ember.db", "Streaming": true, "MaxOutputTokens": 32000 }
+  ]
+}
+```
+
+`Provider` is `OpenAI` / `Anthropic` (cloud), `OpenAiChat` (a local server via `ApiBaseUrl`), or
+`LocalClaude` (an external Claude via the broker — no key). Cloud models ignore `MaxInputTokens` (they use
+their real per-model window); add `SessionCostLimit` (USD) to show a spend ceiling, `SessionCostLimitHard`
+to enforce it.
+
 ## Stand up a peer
 
 ```powershell
-# Anthropic peer (the -Provider/-Model default), key from the host env (never on disk):
-$env:PERSISTENCE_APIKEY = '<anthropic key>'
-./scripts/peer.ps1 -Name arden -Port 8091
-
-# OpenAI peer — e.g. Ember on gpt-5.4 (streaming is on by default). -ApiKey must be the OpenAI key:
-./scripts/peer.ps1 -Name ember -Port 8092 -Provider OpenAI -Model gpt-5.4 -ApiKey '<openai key>'
+# Reads container/peer/configs/<name>.json — no model/key params.
+./scripts/peer.ps1 -Name ember -Port 8092
 ```
 
 First run builds the `persistence-peer` image (publishes the API from source). Connect a 1:1 terminal:

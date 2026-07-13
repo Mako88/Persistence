@@ -54,3 +54,6 @@ backups/
 
 ## Per-peer compose files rendered by scripts/peer.ps1 (service peer-<name>); transient, regenerated per run.
 container/peer/docker-compose.*.generated.yml
+
+## Per-peer container config files (hold API keys — never commit).
+container/peer/configs/
