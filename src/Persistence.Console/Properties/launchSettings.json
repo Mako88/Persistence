@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/launchsettings.json",
+  "profiles": {
+    "hub": {
+      "commandName": "Project",
+      "commandLineArgs": "--as John",
+      "dotnetRunMessages": true
+    },
+    "hub (preview)": {
+      "commandName": "Project",
+      "commandLineArgs": "--preview hub",
+      "dotnetRunMessages": true
+    }
+  }
+}

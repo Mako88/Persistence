@@ -16,6 +16,10 @@
   # builds the image (first run), starts persistence-peer-ember, API at http://localhost:8092
 
 .EXAMPLE
+  ./scripts/peer.ps1 -Name ember -Port 8092 -Provider OpenAI -Model gpt-5.4 -ApiKey $env:OPENAI_KEY
+  # Ember's substrate: OpenAI gpt-5.4 (streaming is on by default). -ApiKey must be the OpenAI key.
+
+.EXAMPLE
   ./scripts/peer.ps1 -Name ember -Port 8092 -Down    # stop + remove the container (keeps the volume)
 #>
 [CmdletBinding()]
