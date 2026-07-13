@@ -672,10 +672,25 @@ public class PromptFormatter : IPromptFormatter
     /// The effective token budget: the configured working limit if positive, otherwise the model's
     /// full context window resolved from the model→window map.
     /// </summary>
-    private int EffectiveBudget() =>
-        config.MaxInputTokens > 0
-            ? config.MaxInputTokens
-            : contextWindows.GetContextWindow(config.Model);
+    private int EffectiveBudget()
+    {
+        // Cloud/broker models have a real, fixed per-model window (the model->window map) — use it, and
+        // ignore MaxInputTokens, which is really a *local*-model knob: a locally-served model's window is
+        // whatever the server compiled, so there MaxInputTokens is the operative limit. For cloud models
+        // the limiter is cost, not tokens (see the session-cost line), so we don't cap the window here.
+        if (IsLocalModel())
+        {
+            return config.MaxInputTokens > 0 ? config.MaxInputTokens : contextWindows.GetContextWindow(config.Model);
+        }
+
+        var window = contextWindows.GetContextWindow(config.Model);
+        return window > 0 ? window : Math.Max(config.MaxInputTokens, 0);
+    }
+
+    /// <summary>A locally-served model (the OpenAI-compatible chat client, pointed at a local server) —
+    /// its context window is compiled, not a published per-model value, so MaxInputTokens governs it.</summary>
+    private bool IsLocalModel() =>
+        Enum.TryParse<ModelProvider>(config.Provider, ignoreCase: true, out var p) && p == ModelProvider.OpenAiChat;
 
     #endregion
 }
