@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Terminal.Gui;
 
 namespace Persistence.Console;
@@ -169,17 +170,29 @@ internal static class TuiColoring
     /// (its first line and any wrapped continuation, detected as a line ending in "]" that isn't a
     /// fresh "[…" marker) reds over the rest. Then the other markers, timestamp, and role labels.
     /// </summary>
-    public static ColoredTextView ForConversation(this ColoredTextView v, Color userColor, Color peerColor) => v
-        .Suggestions()
-        .ColorLinesStartingWith("[Error", TuiColors.Error)
-        .ColorLine(t => t.TrimEnd().EndsWith("]") && !t.TrimStart().StartsWith("["), TuiColors.Error)
-        .ColorLinesStartingWith("[WAKE-UP", TuiColors.Gold)
-        .ColorLinesStartingWith("[Queued", TuiColors.Muted)
-        .ColorSubstring("Unknown command:", TuiColors.Error)        // label red; the command stays white
-        .ColorPattern(@"(?<=Executed ).+", TuiColors.Gold)          // the echoed local command, in yellow
-        .Timestamps()
-        .ColorSubstring("You:", userColor)
-        .ColorSubstring("Remote Peer:", peerColor);
+    public static ColoredTextView ForConversation(this ColoredTextView v, IReadOnlyCollection<string> humanNames, Color userColor, Color peerColor)
+    {
+        v.Suggestions()
+            .ColorLinesStartingWith("[Error", TuiColors.Error)
+            .ColorLinesStartingWith("[WAKE-UP", TuiColors.Gold)
+            .ColorLinesStartingWith("[Queued", TuiColors.Muted)
+            .ColorSubstring("Unknown command:", TuiColors.Error)        // label red; the command stays white
+            // The echoed local slash command (yellow) — anchored to the "[time] Executed " prefix so the
+            // word "executed" inside a normal message body is never coloured.
+            .ColorPattern(@"(?<=^\[\d[^\]]*\] Executed ).+", TuiColors.Gold)
+            .Timestamps();
+
+        // Colour the speaker label at the head of a chat line ("[time] Name:"). Human name(s) → user
+        // colour; every other speaker → one shared digital-peer colour. Humans are registered first so,
+        // with first-match-wins per column, a human's label wins over the catch-all peer rule below.
+        foreach (var name in humanNames)
+        {
+            v.ColorPattern($@"(?<=^\[\d[^\]]*\] ){Regex.Escape(name)}(?=:)", userColor);
+        }
+
+        // Any remaining "Author:" right after a leading timestamp is a digital peer (Arden, Ember, …).
+        return v.ColorPattern(@"(?<=^\[\d[^\]]*\] )[^:\n]+(?=:)", peerColor);
+    }
 
     /// <summary>Thoughts: just the leading timestamp; thoughts/summaries stay white.</summary>
     public static ColoredTextView ForThoughts(this ColoredTextView v) => v

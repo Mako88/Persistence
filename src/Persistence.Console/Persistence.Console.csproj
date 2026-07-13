@@ -19,6 +19,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The multi-peer hub logic (MultiPeerHub / IMultiPeerRenderTarget) is internal but unit-tested. -->
+    <InternalsVisibleTo Include="Persistence.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
     <PackageReference Include="Terminal.Gui" Version="1.19.0" />
   </ItemGroup>

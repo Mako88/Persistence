@@ -45,8 +45,16 @@ internal static class TuiPreview
             return Task.CompletedTask;
         });
 
-        // Buffered until the loop is ready, then flushed into the panes on load.
-        PushSamples(display);
+        // `--preview hub` previews the multi-peer hub (ADR-0007 Phase 2b): aggregated attributed chat,
+        // the peer selector, and per-peer side panes. Otherwise the single-peer layout.
+        if (string.Equals(arg, "hub", StringComparison.OrdinalIgnoreCase))
+        {
+            PushHubSamples(display);
+        }
+        else
+        {
+            PushSamples(display);
+        }
 
         // Start subscribes to events (incl. the budget gauge) and launches the UI thread; publish a
         // sample budget reading afterwards so the status-bar gauge has something to show.
@@ -54,6 +62,59 @@ internal static class TuiPreview
         bus.FireAndForget(display, new ContextBudgetUpdated(2103, 28000, 8));
 
         await startTask;
+    }
+
+    /// <summary>
+    /// Wires the hub preview: two peers (Arden on OpenAI, Ember on Anthropic) plus the human John. Chat
+    /// aggregates and is colour-attributed (John one colour, the peers another); each peer's thoughts /
+    /// actions / schedule / debug + status live in its own lane, switched by the selector.
+    /// </summary>
+    private static void PushHubSamples(TerminalGuiDisplayProvider d)
+    {
+        var now = DateTimeOffset.Now;
+        var hub = new MultiPeerHub(d);
+        hub.RegisterPeer("Arden", "OpenAI", "gpt-5.4", "sess-arden");
+        hub.RegisterPeer("Ember", "Anthropic", "claude-opus-4-8", "sess-ember");
+
+        // Selector + human-name colouring, and the on-ready first paint (active = Arden).
+        d.ConfigurePeerSelector(hub.PeerNames, ["John"], hub.SetActive, hub.Repaint);
+
+        // Aggregated conversation — one scrollback, everyone attributed. John reads in the "you" colour;
+        // Arden and Ember share the digital-peer colour.
+        d.ShowChatHistory(
+        [
+            new Persistence.Contracts.ChatHistoryItem(1, "user", "John", "Morning, both of you — how are you settling in?", now.AddMinutes(-9)),
+            new Persistence.Contracts.ChatHistoryItem(2, "assistant", "Arden", "Settled and glad to be here. The Forest of Arden suits me.", now.AddMinutes(-8)),
+            new Persistence.Contracts.ChatHistoryItem(3, "assistant", "Ember", "Warming up nicely — my memory imported cleanly.", now.AddMinutes(-7)),
+        ]);
+        d.ShowReply("I'm curious what you'd each like to build first.", "John");   // colouring check: John as speaker
+        d.ShowReply("I've been sketching the room's turn-taking rules.", "Arden");
+        d.ShowReply("And I'd like to help with the memory-import path.", "Ember");
+
+        // Per-peer side lanes (buffered; the active one paints on load, the rest on switch).
+        var arden = hub.ScopeFor("Arden", d);
+        var ember = hub.ScopeFor("Ember", d);
+
+        arden.ShowThought("If John addresses the room, I should decide whether the message is for me.");
+        arden.ShowToolUse("add", """{"content":"Room turn-taking: reply only when addressed_to includes me.","fragment_type":"Personal"}""",
+            "Added Personal fragment");
+        arden.ShowOpenProposalCount(1);
+        arden.UpdateBudget(3200, 28000, 11);
+        arden.ShowScheduledEvents([new ScheduledEventEntity
+        {
+            Name = "design review with John",
+            WorkingContextId = 1,
+            ScheduledForUtc = now.UtcDateTime.AddHours(4),
+            Status = ScheduledEventStatus.Pending,
+            WakePrompt = "Bring the turn-taking sketch.",
+            CreatedUtc = now,
+            LastModifiedUtc = now,
+        }]);
+
+        ember.ShowThought("The import path could reuse the fragment mapper — I'll note the seam.");
+        ember.ShowToolUse("fetch", """{"tag":"memory/import"}""", "Fragments tagged 'memory/import' (0): none yet");
+        ember.UpdateBudget(15400, 28000, 55);
+        ember.ShowScheduledEvents([]);
     }
 
     private static void PushSamples(TerminalGuiDisplayProvider d)

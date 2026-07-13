@@ -26,29 +26,49 @@ if (args.Contains("--wake-runner") || args.Contains("--check-due"))
     return;
 }
 
-// Default: connect to the API server and render its conversation stream, sending input over HTTP.
-// `--as <localPeer>` identifies who's speaking (falls back to the server's configured default).
-// Two ways to point at a peer:
-//   --peer <name>=<url>   a NAMED peer — its replies are attributed "Arden: …" (multi-peer legibility)
-//   --client <url>        the unnamed single-peer form (generic label)
-// (Connecting to several --peer endpoints and merging them into one pane with a peer selector is the
-// next step — for now the last named/unnamed endpoint wins.)
-var (peerName, peerUrl) = ParsePeer(ArgAfter(args, "--peer"));
-var baseUrl = peerUrl
-    ?? ArgAfter(args, "--client")
-    ?? Environment.GetEnvironmentVariable("PERSISTENCE_SERVER")
-    ?? "http://localhost:5000";
+// Default: connect to one or more API servers and render their conversation stream(s), sending input
+// over HTTP. `--as <localPeer>` identifies who's speaking (falls back to the server's configured default).
+// Point at peers with:
+//   --peer <name>=<url>   a NAMED peer — its replies are attributed "Arden: …" (multi-peer legibility).
+//                         Repeat --peer to open a HUB: all peers aggregate into one pane, with a selector
+//                         choosing which peer the side tabs + status show (ADR-0007 Phase 2b).
+//   --client <url>        the unnamed single-peer form (generic label).
 var localPeer = ArgAfter(args, "--as");
+var peerEndpoints = ArgsAfter(args, "--peer")
+    .Select(ParsePeer)
+    .Where(p => p.Url is not null)
+    .Select(p => new Persistence.Console.PeerEndpoint(p.Name, p.Url!, localPeer))
+    .ToList();
+
+if (peerEndpoints.Count == 0)
+{
+    var baseUrl = ArgAfter(args, "--client")
+        ?? Environment.GetEnvironmentVariable("PERSISTENCE_SERVER")
+        ?? "http://localhost:5000";
+    peerEndpoints.Add(new Persistence.Console.PeerEndpoint(null, baseUrl, localPeer));
+}
 
 using var cts = new CancellationTokenSource();
 System.Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
-await Persistence.Console.ClientConsoleHost.RunAsync(baseUrl, localPeer, cts.Token, peerName);
+await Persistence.Console.ClientConsoleHost.RunAsync(peerEndpoints, cts.Token);
 
 static string? ArgAfter(string[] args, string flag)
 {
     var i = Array.FindIndex(args, a => string.Equals(a, flag, StringComparison.OrdinalIgnoreCase));
     return i >= 0 && i + 1 < args.Length ? args[i + 1] : null;
+}
+
+// Every value following an occurrence of <paramref name="flag"/> — so `--peer a=... --peer b=...` yields both.
+static IEnumerable<string> ArgsAfter(string[] args, string flag)
+{
+    for (var i = 0; i < args.Length - 1; i++)
+    {
+        if (string.Equals(args[i], flag, StringComparison.OrdinalIgnoreCase))
+        {
+            yield return args[i + 1];
+        }
+    }
 }
 
 // Splits "<name>=<url>" into (name, url); a bare url (no '=') yields (null, url). Null in → (null, null).

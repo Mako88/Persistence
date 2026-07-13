@@ -24,7 +24,7 @@ namespace Persistence.Console;
 /// flushed on load.
 /// </summary>
 [Singleton(typeof(IDisplayProvider), UiMode.Tui)]
-public class TerminalGuiDisplayProvider : IDisplayProvider
+public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarget
 {
     /// <summary>Fixed-width local timestamp (leading zeros) used for every in-pane stamp.</summary>
     private const string TimeFormat = "MM/dd/yyyy hh:mm tt";
@@ -59,6 +59,7 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
     private TextView input = null!;
     private TabView tabView = null!;
     private Label stateLabel = null!;
+    private Label providerLabel = null!;
     private Label modelLabel = null!;
     private Label budgetLabel = null!;
     private Label proposalsLabel = null!;
@@ -66,6 +67,21 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
     private Label exitLabel = null!;
     private View statusBar = null!;
     private readonly List<Label> statusSegments = [];
+
+    // Multi-peer hub wiring (client hub mode only): the selector's peer list + switch callback, added to
+    // the layout when set, and an on-ready hook the host uses to trigger the first per-peer paint once the
+    // loop is up. All null in single-peer / in-process mode, where the panes render from their own buffers.
+    private IReadOnlyList<string>? peerSelectorNames;
+    private Action<string>? onPeerSelected;
+    private Action? onReadyHook;
+    private Label? peerSelectorLabel;
+    private int selectedPeerIndex;
+
+    /// <summary>
+    /// The human peer name(s) whose chat lines are coloured as "you" (vs. digital peers). Set by the hub
+    /// host so a multi-peer scrollback distinguishes the person from the peers; defaults to just "You".
+    /// </summary>
+    private IReadOnlyCollection<string> humanNames = ["You"];
 
     private Thread? uiThread;
     private volatile bool ready;
@@ -384,35 +400,40 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
     /// Replaces the Schedule pane with the current set of pending scheduled events (a snapshot,
     /// not an append-log — the orchestrator pushes the full list whenever it changes).
     /// </summary>
-    public void ShowScheduledEvents(IReadOnlyList<ScheduledEventEntity> events)
+    public void ShowScheduledEvents(IReadOnlyList<ScheduledEventEntity> events) =>
+        Set(scheduleBuffer, () => schedule, FormatSchedule(events));
+
+    /// <summary>
+    /// Renders the Schedule pane text: each event's name on its own line, then indented label/value rows,
+    /// a blank line between entries. Shared with the multi-peer hub so a switched-to peer's schedule reads
+    /// (and colours) identically. Column-0 names + the known labels are what <see cref="TuiColoring"/> keys on.
+    /// </summary>
+    internal static string FormatSchedule(IReadOnlyList<ScheduledEventEntity> events)
     {
         var sb = new StringBuilder();
 
         if (events.Count == 0)
         {
             sb.AppendLine("No scheduled events.");
+            return sb.ToString();
         }
-        else
+
+        foreach (var e in events.OrderBy(e => e.ScheduledForUtc))
         {
-            // Event name on its own line, then indented label/value rows; dates without leading
-            // zeros; a blank line between entries.
-            foreach (var e in events.OrderBy(e => e.ScheduledForUtc))
+            sb.AppendLine(e.Name);
+            sb.AppendLine($"    Scheduled At: {e.CreatedUtc.LocalDateTime:M/d/yyyy h:mm tt}");
+            sb.AppendLine($"    Scheduled For: {e.ScheduledForUtc.LocalDateTime:M/d/yyyy h:mm tt}");
+            sb.AppendLine($"    Status: {e.Status}");
+
+            if (!string.IsNullOrWhiteSpace(e.WakePrompt))
             {
-                sb.AppendLine(e.Name);
-                sb.AppendLine($"    Scheduled At: {e.CreatedUtc.LocalDateTime:M/d/yyyy h:mm tt}");
-                sb.AppendLine($"    Scheduled For: {e.ScheduledForUtc.LocalDateTime:M/d/yyyy h:mm tt}");
-                sb.AppendLine($"    Status: {e.Status}");
-
-                if (!string.IsNullOrWhiteSpace(e.WakePrompt))
-                {
-                    sb.AppendLine($"    Note: {e.WakePrompt}");
-                }
-
-                sb.AppendLine();
+                sb.AppendLine($"    Note: {e.WakePrompt}");
             }
+
+            sb.AppendLine();
         }
 
-        Set(scheduleBuffer, () => schedule, sb.ToString());
+        return sb.ToString();
     }
 
     public void ShowOpenProposalCount(int count)
@@ -432,6 +453,111 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
     }
 
     public void ShowThinking(string? label = null) => SetStatus($"{label ?? "thinking"}…");
+
+    #endregion
+
+    #region Multi-peer hub
+
+    /// <summary>
+    /// Puts the display in hub mode: adds a peer selector (above the side tabs) listing <paramref
+    /// name="peers"/>, invoking <paramref name="onSelect"/> when the human switches peers. Call before
+    /// <see cref="LaunchUi"/>. <paramref name="humans"/> are the names coloured as "you" in the shared
+    /// scrollback (everyone else reads as a digital peer). <paramref name="onReady"/> fires once the loop
+    /// is up so the host can paint the first peer's side panes.
+    /// </summary>
+    public void ConfigurePeerSelector(IReadOnlyList<string> peers, IReadOnlyCollection<string> humans, Action<string> onSelect, Action onReady)
+    {
+        peerSelectorNames = peers;
+        onPeerSelected = onSelect;
+        onReadyHook = onReady;
+        humanNames = humans.Count > 0 ? [.. humans, "You"] : ["You"];
+    }
+
+    /// <summary>Replaces the four side panes with the active peer's buffered content (hub switch/refresh).</summary>
+    public void SetSidePaneContent(string thoughts, string actions, string schedule, string debug)
+    {
+        if (!ready)
+        {
+            return;
+        }
+
+        Application.MainLoop?.Invoke(() =>
+        {
+            SetView(reasoning, thoughts);
+            SetView(tools, actions);
+            SetView(this.schedule, schedule);
+            SetView(this.debug, debug);
+        });
+
+        static void SetView(TextView v, string text)
+        {
+            v.Text = text;
+            ScrollToBottom(v);
+        }
+    }
+
+    /// <summary>Updates the status bar to the active peer: its provider/model/session, spend, and state.</summary>
+    public void SetPeerStatus(string provider, string model, string session, int proposals, (int Used, int Budget, int Percent)? budget, string state)
+    {
+        lastProposalCount = proposals;
+        lastBudget = budget;
+
+        UpdateStatusSegment(() => providerLabel, provider, TuiColors.Purple);
+        UpdateStatusSegment(() => modelLabel, model, TuiColors.Model);
+        UpdateStatusSegment(() => sessionLabel, $"Session {session}", TuiColors.Body);
+        UpdateStatusSegment(() => proposalsLabel, ProposalsText(proposals), ProposalsColor(proposals));
+        UpdateStatusSegment(
+            () => budgetLabel,
+            budget is { } b ? (b.Budget > 0 ? BudgetText(b.Percent) : $" Context: ~{b.Used} tok") : BudgetText(null),
+            BudgetColor(budget?.Percent ?? 0));
+        SetStatus(state);
+    }
+
+    /// <summary>Adds the peer selector control at the top of the side column (hub mode only).</summary>
+    private void AddPeerSelector(Toplevel top, View sideColumnAnchor)
+    {
+        if (peerSelectorNames is not { Count: > 0 })
+        {
+            return;
+        }
+
+        peerSelectorLabel = new Label(PeerSelectorText())
+        {
+            X = Pos.Left(sideColumnAnchor),
+            Y = 0,
+            Width = Dim.Fill(),
+            Height = 1,
+            ColorScheme = Scheme(Application.Driver, TuiColors.Label, Color.Black),
+        };
+
+        // Click cycles to the next peer. It's a plain toggle (not a v1 ComboBox overlay, which is finicky
+        // in a narrow column) — one click advances; a true dropdown is a clean later swap (or v2).
+        peerSelectorLabel.Clicked += CycleSelectedPeer;
+        top.Add(peerSelectorLabel);
+    }
+
+    /// <summary>Advances the selector to the next peer and notifies the host (which switches the hub).</summary>
+    private void CycleSelectedPeer()
+    {
+        if (peerSelectorNames is not { Count: > 0 } names)
+        {
+            return;
+        }
+
+        selectedPeerIndex = (selectedPeerIndex + 1) % names.Count;
+        if (peerSelectorLabel is { } label)
+        {
+            label.Text = PeerSelectorText();
+            label.SetNeedsDisplay();
+        }
+
+        onPeerSelected?.Invoke(names[selectedPeerIndex]);
+    }
+
+    private string PeerSelectorText() =>
+        peerSelectorNames is { Count: > 0 } names
+            ? $" ‹ Peer: {names[selectedPeerIndex]} ({selectedPeerIndex + 1}/{names.Count}) › — click or F6 to switch"
+            : "";
 
     #endregion
 
@@ -492,14 +618,16 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
             Height = Dim.Fill(bottomRows),
             ColorScheme = baseTheme,
         };
-        output = MakeColoredPaneView(paneScheme).ForConversation(TuiColors.User, TuiColors.Peer);
+        output = MakeColoredPaneView(paneScheme).ForConversation(humanNames, TuiColors.User, TuiColors.Peer);
         outputFrame.Add(output);
         AddScrollbar(output);
 
+        // In hub mode a 1-row peer selector sits above the tabs, so start the tabs one row lower.
+        var hasSelector = peerSelectorNames is { Count: > 0 };
         tabView = new HighlightedTabView
         {
             X = Pos.Right(outputFrame),
-            Y = 0,
+            Y = hasSelector ? 1 : 0,
             Width = Dim.Fill(),
             Height = Dim.Fill(bottomRows),
             ColorScheme = baseTheme,
@@ -595,6 +723,7 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
 
         BuildStatusBar(driver, top, bottomRows);
         top.Add(outputFrame, tabView, hint, inputFrame);
+        AddPeerSelector(top, tabView);
         input.SetFocus();
     }
 
@@ -613,7 +742,7 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
         stateLabel = StatusSegment(driver, StateText("idle"), StateColor("idle"), x: 0);
         var pipe1 = StatusSegment(driver, " │ ", TuiColors.Body, Pos.Right(stateLabel));
         // Provider purple · "/" white · model yellow.
-        var providerLabel = StatusSegment(driver, config.Provider, TuiColors.Purple, Pos.Right(pipe1));
+        providerLabel = StatusSegment(driver, config.Provider, TuiColors.Purple, Pos.Right(pipe1));
         var slashLabel = StatusSegment(driver, "/", TuiColors.Body, Pos.Right(providerLabel));
         modelLabel = StatusSegment(driver, config.Model, TuiColors.Model, Pos.Right(slashLabel));
         var pipe2 = StatusSegment(driver, " │ ", TuiColors.Body, Pos.Right(modelLabel));
@@ -766,6 +895,10 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
         {
             UpdateBudget(b.Used, b.Budget, b.Percent);
         }
+
+        // Hub mode: now that the loop is up, let the host paint the active peer's side panes + status
+        // (everything recorded before ready was buffered per-peer, not pushed to the empty panes).
+        onReadyHook?.Invoke();
     }
 
     /// <summary>
@@ -805,6 +938,11 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
             case Key.CtrlMask | Key.CursorUp:
                 CyclePaneFocus(-1);
                 return true;
+            case Key.F6:
+                // Hub mode: switch which peer the side column + status show (mirrors clicking the
+                // selector). A no-op in single-peer mode, where there's no selector.
+                CycleSelectedPeer();
+                return peerSelectorNames is { Count: > 0 };
             default:
                 return false;
         }
@@ -941,7 +1079,7 @@ public class TerminalGuiDisplayProvider : IDisplayProvider
     #region Helpers
 
     /// <summary>A leading fixed-width local timestamp for a conversation/reasoning/action line.</summary>
-    private static string Stamp() => $"[{DateTimeOffset.Now.LocalDateTime.ToString(TimeFormat)}] ";
+    internal static string Stamp() => $"[{DateTimeOffset.Now.LocalDateTime.ToString(TimeFormat)}] ";
 
     /// <summary>
     /// Appends text to a pane's buffer and, when the loop is ready, pushes the
