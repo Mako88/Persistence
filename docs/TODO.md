@@ -219,10 +219,13 @@ the voluntary continue-loop. Revisit only if we see the peer reliably acting bef
   effective $/token back into `IModelPricingProvider`.
 - **Graceful state flush on close.** (Scratch — "save session information on close.") Ensure in-flight
   context/state is reliably persisted on shutdown so nothing is lost.
-- **Right-click dialog position (TUI).** (Scratch.) The right-click context menu displays in the wrong
-  location — fix the positioning.
+- **Right-click dialog position (TUI).** ✅ **DONE (2026-07-14).** The menu was positioned from
+  view-relative coordinates while `ContextMenu` reads screen coordinates, so it opened over the
+  conversation pane whenever a right-hand pane was clicked; `ColoredTextView` now converts itself.
 - **Input slowness — investigate.** (Scratch.) Confirm whether input lag is the host being overloaded
-  (e.g. the GPU busy with the local model) or something in our input path.
+  (e.g. the GPU busy with the local model) or something in our input path. Note two real drawing hot
+  paths were removed 2026-07-14 (per-character colour recompute; repaint-everything-per-chunk) — re-check
+  whether the lag is still there before digging further.
 - **Split `ExecuteListFragmentsAsync`** into a source-then-filter two-phase — deferred until it has a few
   more tests (it's the one thin-coverage spot; add tests first, then refactor the ~88-line method).
 - **Reconsider proposal kinds.** Proposals are for serious changes to existing (identity) fragments —
@@ -284,3 +287,50 @@ the voluntary continue-loop. Revisit only if we see the peer reliably acting bef
 - **Self-modification & sandbox safety.** Now real: the peer has a container "computer" and will get more
   tools/actuators over time. Container isolation (the real boundary), the allowlist, review gates, and the
   audit trail are prerequisites as capabilities widen — not afterthoughts.
+
+
+## John's TUI list (2026-07-13)
+
+The polish half landed 2026-07-14 (status accuracy, scroll behaviour, selector colours, right-click
+anchoring, two drawing hot paths) — see [CHANGELOG.md](CHANGELOG.md). What's left:
+
+- **The "all" selection — one change, not five.** These all fall out of giving `MultiPeerHub` a notion of
+  *scope* (all vs. one peer) rather than just "active peer", so build them together:
+  - Add a separate **"all"** entry to the selector; when a single peer is selected the main pane shows
+    **that peer's conversation only** (today chat is always aggregated).
+  - Under "all", blank the tab contents (except maybe Debug).
+  - **Send-routing:** an individual selected → send only to them; "all" → send to everybody. *Checked
+    against [ADR-0008](adr/0008-the-room-multi-peer-conversation.md): broadcast is fine. The no-autofan
+    guard is about **peers** relaying to each other unmediated (§4); a **human** opening the floor to the
+    room is explicitly anticipated (§1, "what do you both think?") and maps to `addressed_to: null` — and
+    a human turn is what **resets** the reply-chain breaker rather than tripping it.*
+  - **Startup history isn't interleaved.** `ClientConsoleHost.RunHubAsync` draws each peer's snapshot in
+    connection order, so you get Arden's ten messages *then* Ember's ten — the newest message overall
+    isn't at the bottom. This is very likely John's "not all the latest messages are displaying". Fix:
+    merge the per-peer histories by timestamp before drawing. (Note the snapshot limit is per peer and
+    defaults to 10 — `ConversationHistoryProvider.GetRecentAsync` — so an interleaved view needs a
+    deliberate answer to "N most recent *overall*", not N per peer.)
+
+- **History shows "Remote Peer" instead of peer names** (and for Ember, "ChatGPT / Couchside Ember
+  (historical export)"). Server-side, not TUI: `ConversationHistoryProvider.ResolveAuthor` falls back to
+  the literal `"Remote Peer"` when a `ChatMessage` fragment's source has no `Name`. So this is about what
+  the *stored* sources look like for pre-naming rows — needs a decision on backfilling existing fragments
+  vs. resolving the name at read time from the peer identity.
+
+- **Emoji / markdown support in the GUI.** Two separate things bundled: (a) rendering markdown in the
+  panes; (b) *"an emoji as the first character seemingly resulted in a double-send from Ember
+  [7/13/26 1:27AM]"* — that smells like a protocol/parser bug, not rendering, and should be reproduced on
+  its own before being lumped in with display work.
+
+- **Auto-archive seems too aggressive** (at least for initial context curation). Core memory-curation
+  policy, not TUI — belongs with the raw-context-decay item under *Autonomy & reach*.
+
+- **TUI performance.** Two concrete hot paths were fixed 2026-07-14 (per-character colour recompute; the
+  hub's repaint-everything-per-chunk, incl. the scrollbar sync). Re-assess from there before concluding
+  anything needs a v2 rewrite — the remaining known cost is that every append re-assigns the pane's whole
+  text (Terminal.Gui v1 `TextView` has no append), which is O(scrollback) per message.
+
+- **Scroll position on startup.** `OnReady` already scrolls the conversation to the bottom, and layout is
+  settled by then (`Begin` lays out before the first iteration, which is when `Ready` fires), so this may
+  already be correct and only *looked* wrong because of the un-interleaved history above. Re-check once
+  interleaving lands.

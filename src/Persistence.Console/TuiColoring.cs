@@ -129,6 +129,13 @@ internal static class TuiColoring
     /// results (e.g. the Actions pane), where the suggestion isn't at the end of the line.</summary>
     private const string SuggestedInline = @"(?<=did you mean ')[^']+(?=')";
 
+    /// <summary>The selected peer's name in the selector row — what sits between "Peer: " and the
+    /// "(n/m)" counter. Matched by position so a name containing spaces still colours as one unit.</summary>
+    private const string PeerSelectorName = @"(?<=Peer: ).+?(?= \(\d+/\d+\))";
+
+    /// <summary>The selector's "(1/3)" position counter.</summary>
+    private const string PeerSelectorCounter = @"\(\d+/\d+\)";
+
     // --- Detector helpers (recognise a pattern, colour it) ---
 
     private static ColoredTextView Timestamps(this ColoredTextView v) => v.ColorPattern(Timestamp, TuiColors.Timestamp);
@@ -247,6 +254,26 @@ internal static class TuiColoring
         .FragmentHeaders()
         .SensoryLabels()
         .ResponseTags();
+
+    /// <summary>
+    /// The peer selector row (hub mode). Previously one flat green label; now the row is read at a glance
+    /// by colour: the ‹ › cycle arrows and the F6 chord green (the interactive affordances — the same
+    /// convention the compose hint uses for chord keys), the selected peer's name light purple (the very
+    /// colour it wears in the conversation pane, so the selector and the scrollback agree), and the
+    /// "Peer:" label white with the counter and click hint muted.
+    ///
+    /// Registered most-specific-first: the name is claimed by position (between "Peer: " and the counter)
+    /// before the broader label/hint rules can take it.
+    /// </summary>
+    public static ColoredTextView ForPeerSelector(this ColoredTextView v) => v
+        .ColorPattern(PeerSelectorName, TuiColors.Peer)
+        .ColorPattern(PeerSelectorCounter, TuiColors.Muted)
+        .ColorSubstring("‹", TuiColors.Label)
+        .ColorSubstring("›", TuiColors.Label)
+        .ColorSubstring("F6", TuiColors.Label)
+        .ColorSubstring("Peer:", TuiColors.Body)
+        .ColorSubstring("click or", TuiColors.Muted)
+        .ColorSubstring("to switch", TuiColors.Muted);
 
     /// <summary>The centred key-bindings hint row (above the input box): the chord keys accented, the
     /// framing dashes and connective text white.</summary>

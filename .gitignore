@@ -57,3 +57,7 @@ container/peer/docker-compose.*.generated.yml
 
 ## Per-peer container config files (hold API keys — never commit).
 container/peer/configs/
+
+## Python bytecode cache (e.g. from scripts/import_chatgpt_export.py) — regenerated on every run.
+__pycache__/
+*.pyc

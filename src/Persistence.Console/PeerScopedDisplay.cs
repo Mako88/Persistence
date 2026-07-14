@@ -23,14 +23,33 @@ namespace Persistence.Console;
 internal sealed class PeerScopedDisplay(MultiPeerHub hub, string peer, IDisplayProvider chat) : IDisplayProvider
 {
     // --- Chat: aggregated, straight through to the shared conversation pane ---
+    //
+    // The three that end a turn (reply / error / wake-up) also settle *this* peer's lane back to idle.
+    // The shared chat surface can't do it: it hears every peer, but the status bar shows only the
+    // selected one, so a reply from a background peer would report the watched peer as idle mid-thought.
 
-    public void ShowReply(string reply, string? speaker = null) => chat.ShowReply(reply, speaker ?? peer);
+    public void ShowReply(string reply, string? speaker = null)
+    {
+        chat.ShowReply(reply, speaker ?? peer);
+        hub.RecordState(peer, IdleState);
+    }
+
+    public void ShowError(string message)
+    {
+        chat.ShowError(message);
+        hub.RecordState(peer, IdleState);
+    }
+
+    public void ShowWakeUpEvent(ScheduledEventEntity evt)
+    {
+        chat.ShowWakeUpEvent(evt);
+        hub.RecordState(peer, IdleState);
+    }
+
     public void ShowChatHistory(IReadOnlyList<ChatHistoryItem> messages) => chat.ShowChatHistory(messages);
-    public void ShowError(string message) => chat.ShowError(message);
     public void ShowSystemMessage(string message) => chat.ShowSystemMessage(message);
     public void ShowUnknownCommand(string command) => chat.ShowUnknownCommand(command);
     public void ShowMessageQueued(string input) => chat.ShowMessageQueued(input);
-    public void ShowWakeUpEvent(ScheduledEventEntity evt) => chat.ShowWakeUpEvent(evt);
 
     // --- Side panes + per-peer status: routed to the hub, keyed by this connection's peer ---
 
@@ -42,7 +61,17 @@ internal sealed class PeerScopedDisplay(MultiPeerHub hub, string peer, IDisplayP
     public void ShowDebugInfo(string info) => hub.RecordDebug(peer, info);
     public void ShowOpenProposalCount(int count) => hub.RecordProposals(peer, count);
     public void UpdateBudget(int usedTokens, int budgetTokens, int percentFull) => hub.RecordBudget(peer, usedTokens, budgetTokens, percentFull);
-    public void ShowThinking(string? label = null) => hub.RecordState(peer, label ?? "thinking");
+
+    /// <summary>
+    /// Records this peer as busy. The trailing ellipsis is load-bearing, not decoration: it's how the
+    /// status bar tells a working state from a settled one (and so colours the chip green vs. gray). The
+    /// single-peer path appends it at the point of display, so a lane that stored the bare label would
+    /// leave the chip permanently gray no matter what the peer was doing.
+    /// </summary>
+    public void ShowThinking(string? label = null) => hub.RecordState(peer, $"{label ?? "thinking"}…");
+
+    /// <summary>The settled state — matches the single-peer path's wording, and carries no ellipsis.</summary>
+    private const string IdleState = "idle";
 
     // --- Lifecycle: the hub owns the one real display; per-peer facades don't drive it. ---
 

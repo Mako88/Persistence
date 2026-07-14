@@ -100,6 +100,14 @@ internal sealed class ColoredTextView : TextView
 
     public override bool ProcessKey(KeyEvent kb)
     {
+        // Shift+F10 opens the context menu, and the base class mis-places it exactly as the right-click
+        // path does — route it through the same screen-anchored open, from the cursor.
+        if (kb.Key == ContextMenu.Key)
+        {
+            ShowContextMenuAt(CursorPosition.X - LeftColumn, CursorPosition.Y - TopRow);
+            return true;
+        }
+
         // A printable keystroke on a read-only pane is redirected to the input (carrying the char).
         if (ReadOnly && OnPrintableInput is not null && IsPrintable(kb))
         {
@@ -134,9 +142,13 @@ internal sealed class ColoredTextView : TextView
 
     #region Mouse
 
-    /// <summary>Lines moved per mouse-wheel notch. Terminal.Gui's default of one line is painfully
-    /// slow for long panes; a larger step makes the wheel usable.</summary>
-    private const int WheelLines = 3;
+    /// <summary>
+    /// Lines moved per mouse-wheel notch. Terminal.Gui's default of one line is painfully slow for long
+    /// panes, and a small fixed step still crawls once a pane is tall — so scale the step to the pane
+    /// (about a third of a screenful per notch), clamped so a short pane still moves usefully and a tall
+    /// one never jumps so far that you lose your place.
+    /// </summary>
+    private int WheelLines => Math.Clamp(Bounds.Height / 3, 3, 12);
 
     public override bool MouseEvent(MouseEvent ev)
     {
@@ -148,6 +160,14 @@ internal sealed class ColoredTextView : TextView
         if (ev.Flags.HasFlag(MouseFlags.WheeledUp))
         {
             return ScrollByLines(-WheelLines);
+        }
+
+        // Right-click: anchor the context menu to this pane (see ShowContextMenuAt) rather than letting
+        // the base class mis-place it. Matched by equality, as TextView itself does.
+        if (ev.Flags == ContextMenu.MouseFlags)
+        {
+            ShowContextMenuAt(ev.X, ev.Y);
+            return true;
         }
 
         // A left-click activates the clicked line (Enter-equivalent): let the base move the cursor to
@@ -172,7 +192,65 @@ internal sealed class ColoredTextView : TextView
 
     #endregion
 
+    #region Context menu
+
+    /// <summary>
+    /// Opens the built-in context menu (cut/copy/paste/select-all) anchored to <em>this</em> pane.
+    ///
+    /// Terminal.Gui positions a <see cref="ContextMenu"/> in <b>screen</b> coordinates, but TextView sets
+    /// <c>ContextMenu.Position</c> from the <b>view-relative</b> click (and, for Shift+F10, the
+    /// view-relative cursor). The two only agree for a pane at the screen origin — so right-clicking any
+    /// pane in the right-hand column popped the menu up over the conversation pane instead. Converting to
+    /// screen coordinates first puts it under the pointer, in whichever pane was clicked.
+    /// </summary>
+    private void ShowContextMenuAt(int col, int row)
+    {
+        var screen = ViewToScreen(col, row);
+
+        // The +2 nudge matches TextView's own placement, so the menu sits just off the click rather than
+        // under the pointer. Show() clamps to the screen, so a pane at the right edge is still fine.
+        ContextMenu.Position = new Point(screen.X + 2, screen.Y + 2);
+        ContextMenu.Show();
+    }
+
+    /// <summary>
+    /// Converts a view-relative position to screen coordinates by summing frame offsets up the SuperView
+    /// chain. Mirrors Terminal.Gui's own <c>View.ViewToScreen</c>, which is <c>internal</c> and so out of
+    /// reach for a subclass in another assembly.
+    /// </summary>
+    private Point ViewToScreen(int col, int row)
+    {
+        var x = col + Frame.X;
+        var y = row + Frame.Y;
+
+        for (var parent = SuperView; parent is not null; parent = parent.SuperView)
+        {
+            x += parent.Frame.X;
+            y += parent.Frame.Y;
+        }
+
+        return new Point(x, y);
+    }
+
+    #endregion
+
     #region Rendering
+
+    // Terminal.Gui asks for the colour one character at a time, handing us the row's runes and a column
+    // index. Rebuilding the row's text on every one of those calls makes drawing a row O(chars²) — and a
+    // full-pane redraw O(rows × chars²), which is the dominant cost when scrolling a long pane. Since
+    // Redraw walks a row's columns contiguously (and hands us the same List<Rune> throughout), memoising
+    // just the row being drawn collapses that back to one text build per row. Cleared each draw pass, so
+    // a row whose content changed between passes is never served stale colours.
+    private List<System.Rune>? drawingLine;
+    private Color?[]? drawingLineColors;
+
+    public override void Redraw(Rect bounds)
+    {
+        drawingLine = null;
+        drawingLineColors = null;
+        base.Redraw(bounds);
+    }
 
     // Read-only panes draw via SetReadOnlyColor; override the others too so the same
     // rules apply regardless of focus / "used" state.
@@ -192,10 +270,18 @@ internal sealed class ColoredTextView : TextView
 
     private Color?[] ColorsFor(List<System.Rune> line)
     {
+        // The row currently being drawn — the overwhelmingly common case, one lookup per character.
+        if (ReferenceEquals(line, drawingLine) && drawingLineColors is not null)
+        {
+            return drawingLineColors;
+        }
+
         var text = string.Concat(line.Select(r => r.ToString()));
 
         if (cache.TryGetValue(text, out var cached))
         {
+            drawingLine = line;
+            drawingLineColors = cached;
             return cached;
         }
 
@@ -221,6 +307,8 @@ internal sealed class ColoredTextView : TextView
         }
 
         cache[text] = colors;
+        drawingLine = line;
+        drawingLineColors = colors;
         return colors;
     }
 

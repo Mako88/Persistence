@@ -74,8 +74,14 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
     private IReadOnlyList<string>? peerSelectorNames;
     private Action<string>? onPeerSelected;
     private Action? onReadyHook;
-    private Label? peerSelectorLabel;
+    private ColoredTextView? peerSelector;
     private int selectedPeerIndex;
+
+    // Hub mode: each peer's turn state lives in its own lane (recorded via PeerScopedDisplay), so the
+    // shared chat surface must not drive the status chip — a background peer replying would otherwise
+    // reset the *selected* peer's chip to idle mid-thought. Single-peer mode has exactly one peer, so
+    // there the direct transitions are correct.
+    private bool hubMode;
 
     /// <summary>
     /// The human peer name(s) whose chat lines are coloured as "you" (vs. digital peers). Set by the hub
@@ -173,19 +179,34 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
     public void ShowReply(string reply, string? speaker = null)
     {
         Append(outputBuffer, () => output, $"{Stamp()}{speaker ?? "Remote Peer"}: {reply}\n\n");
-        SetStatus("idle");
+        GoIdle();
     }
 
     public void ShowError(string message)
     {
         Append(outputBuffer, () => output, $"[Error: {message}]\n\n");
-        SetStatus("idle");
+        GoIdle();
     }
 
     public void ShowWakeUpEvent(ScheduledEventEntity evt)
     {
         Append(outputBuffer, () => output, $"[WAKE-UP: {evt.Name}]\n\n");
-        SetStatus("idle");
+        GoIdle();
+    }
+
+    /// <summary>
+    /// A turn ended, so the status chip returns to idle — but only in single-peer mode. In hub mode these
+    /// chat calls arrive from <em>every</em> connected peer through the one shared conversation pane, and
+    /// the chip shows the <em>selected</em> peer; letting a background peer's reply reset it would report
+    /// "idle" while the peer you're actually watching is still thinking. There the per-peer lane owns the
+    /// state instead (<see cref="PeerScopedDisplay"/> records it, <see cref="SetPeerStatus"/> paints it).
+    /// </summary>
+    private void GoIdle()
+    {
+        if (!hubMode)
+        {
+            SetStatus("idle");
+        }
     }
 
     public void ShowMessageQueued(string text) => Append(outputBuffer, () => output, $"[Queued: {text}]\n\n");
@@ -471,10 +492,14 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
         onPeerSelected = onSelect;
         onReadyHook = onReady;
         humanNames = humans.Count > 0 ? [.. humans, "You"] : ["You"];
+        hubMode = true;
     }
 
+    // What each side pane last rendered, so an unchanged pane can be left alone (see SetSidePaneContent).
+    private string shownThoughts = "", shownActions = "", shownSchedule = "", shownDebug = "";
+
     /// <summary>Replaces the four side panes with the active peer's buffered content (hub switch/refresh).</summary>
-    public void SetSidePaneContent(string thoughts, string actions, string schedule, string debug)
+    public void SetSidePaneContent(string thoughts, string actions, string schedule, string debug, bool peerSwitched)
     {
         if (!ready)
         {
@@ -483,17 +508,38 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
 
         Application.MainLoop?.Invoke(() =>
         {
-            SetView(reasoning, thoughts);
-            SetView(tools, actions);
-            SetView(this.schedule, schedule);
-            SetView(this.debug, debug);
+            // The hub repaints the whole side column on every recorded event — and a streaming reasoning
+            // delta records one per chunk — so assigning all four panes each time would re-parse three
+            // unchanged documents per chunk, on the UI thread. Only touch what actually changed.
+            SetPaneIfChanged(reasoning, thoughts, ref shownThoughts, peerSwitched);
+            SetPaneIfChanged(tools, actions, ref shownActions, peerSwitched);
+            SetPaneIfChanged(this.schedule, schedule, ref shownSchedule, peerSwitched);
+            SetPaneIfChanged(this.debug, debug, ref shownDebug, peerSwitched);
         });
+    }
 
-        static void SetView(TextView v, string text)
+    /// <summary>
+    /// Re-renders one side pane only if its text changed. On a peer switch the pane jumps to the newest
+    /// line (it's different content, and the reader's old scroll position means nothing in it); on a live
+    /// update it follows the tail only if the reader was already there.
+    /// </summary>
+    private static void SetPaneIfChanged(TextView view, string text, ref string shown, bool peerSwitched)
+    {
+        if (string.Equals(shown, text, StringComparison.Ordinal))
         {
-            v.Text = text;
-            ScrollToBottom(v);
+            return;
         }
+
+        shown = text;
+
+        if (peerSwitched)
+        {
+            view.Text = text;
+            ScrollToBottom(view);
+            return;
+        }
+
+        SetKeepingScrollPosition(view, text);
     }
 
     /// <summary>Updates the status bar to the active peer: its provider/model/session, spend, and state.</summary>
@@ -521,19 +567,24 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
             return;
         }
 
-        peerSelectorLabel = new Label(PeerSelectorText())
-        {
-            X = Pos.Left(sideColumnAnchor),
-            Y = 0,
-            Width = Dim.Fill(),
-            Height = 1,
-            ColorScheme = Scheme(Application.Driver, TuiColors.Label, Color.Black),
-        };
+        // A ColoredTextView rather than a Label: a Label carries exactly one colour, and this row reads
+        // far better with the arrows/chord, the peer's name, and the hint distinguished (see
+        // TuiColoring.ForPeerSelector).
+        var selector = MakeColoredPaneView(Scheme(Application.Driver, TuiColors.Body, Color.Black)).ForPeerSelector();
+        selector.X = Pos.Left(sideColumnAnchor);
+        selector.Y = 0;
+        selector.Width = Dim.Fill();
+        selector.Height = 1;
+        selector.WordWrap = false;
+        selector.Text = PeerSelectorText();
 
         // Click cycles to the next peer. It's a plain toggle (not a v1 ComboBox overlay, which is finicky
         // in a narrow column) — one click advances; a true dropdown is a clean later swap (or v2).
-        peerSelectorLabel.Clicked += CycleSelectedPeer;
-        top.Add(peerSelectorLabel);
+        selector.OnLineActivated = _ => CycleSelectedPeer();
+        selector.OnPrintableInput = RedirectTypingToInput;
+
+        peerSelector = selector;
+        top.Add(selector);
     }
 
     /// <summary>Advances the selector to the next peer and notifies the host (which switches the hub).</summary>
@@ -545,10 +596,10 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
         }
 
         selectedPeerIndex = (selectedPeerIndex + 1) % names.Count;
-        if (peerSelectorLabel is { } label)
+        if (peerSelector is { } selector)
         {
-            label.Text = PeerSelectorText();
-            label.SetNeedsDisplay();
+            selector.Text = PeerSelectorText();
+            selector.SetNeedsDisplay();
         }
 
         onPeerSelected?.Invoke(names[selectedPeerIndex]);
@@ -823,14 +874,35 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
     /// <summary>Gold when there are open proposals awaiting a decision, muted when none.</summary>
     private static Color ProposalsColor(int count) => count > 0 ? TuiColors.Gold : TuiColors.Muted;
 
-    private static Label StatusSegment(ConsoleDriver driver, string text, Color fg, Pos x) => new(text)
+    /// <summary>
+    /// One status-bar segment. Its width is driven explicitly from the text (here and in
+    /// <see cref="SetSegmentText"/>) rather than left to <c>AutoSize</c>: v1's auto-sizing grows a label
+    /// to fit longer text but does not reliably shrink it again, so switching from a peer with a long
+    /// provider/model name to one with a short name left the old width behind as a gap — the segments
+    /// after it are positioned with <c>Pos.Right</c>, so the whole bar kept the stale spacing.
+    /// </summary>
+    private static Label StatusSegment(ConsoleDriver driver, string text, Color fg, Pos x)
     {
-        X = x,
-        Y = 0,   // relative to the status-bar container, which is itself anchored to the last row
-        Height = 1,
-        AutoSize = true,
-        ColorScheme = Scheme(driver, fg, TuiColors.StatusBg),
-    };
+        var label = new Label(text)
+        {
+            X = x,
+            Y = 0,   // relative to the status-bar container, which is itself anchored to the last row
+            Height = 1,
+            AutoSize = false,
+            ColorScheme = Scheme(driver, fg, TuiColors.StatusBg),
+        };
+
+        label.Width = Dim.Sized(label.Text.RuneCount);
+        return label;
+    }
+
+    /// <summary>Sets a segment's text and colour, resizing it to exactly fit (see <see cref="StatusSegment"/>).</summary>
+    private static void SetSegmentText(Label label, string text, Color colour)
+    {
+        label.Text = text;
+        label.Width = Dim.Sized(label.Text.RuneCount);
+        label.ColorScheme = Scheme(Application.Driver, colour, TuiColors.StatusBg);
+    }
 
     private static ColorScheme Scheme(ConsoleDriver driver, Color fg, Color bg) => new()
     {
@@ -887,8 +959,23 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
             CanFocus = false,
         };
 
+        // DrawContent fires on every repaint of the pane, but the scrollbar only needs touching when the
+        // content length or the scroll position actually moved — and Refresh()/LayoutSubviews() do real
+        // layout work (Refresh re-runs the show/hide sizing pass). Syncing unconditionally made every
+        // repaint, including each streamed chunk, pay for a full scrollbar relayout.
+        var lastSize = -1;
+        var lastPosition = -1;
+
         view.DrawContent += _ =>
         {
+            if (view.Lines == lastSize && view.TopRow == lastPosition)
+            {
+                return;
+            }
+
+            lastSize = view.Lines;
+            lastPosition = view.TopRow;
+
             scrollbar.Size = view.Lines;
             scrollbar.Position = view.TopRow;
             scrollbar.LayoutSubviews();
@@ -1140,13 +1227,38 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
             return;
         }
 
-        Application.MainLoop?.Invoke(() =>
-        {
-            var v = view();
-            v.Text = snapshot;
-            ScrollToBottom(v);
-        });
+        Application.MainLoop?.Invoke(() => SetKeepingScrollPosition(view(), snapshot));
     }
+
+    /// <summary>
+    /// Replaces an append-log pane's text, following the newest content only if the reader was already
+    /// at the bottom. Scrolling down is a request to watch the live tail; scrolling up is a request to
+    /// read something, and unconditionally snapping to the newest line makes that impossible while a peer
+    /// is talking. Appends only add lines below the viewport, so holding the top row keeps the reader's
+    /// place exactly.
+    /// </summary>
+    private static void SetKeepingScrollPosition(TextView view, string text)
+    {
+        var wasAtBottom = IsScrolledToBottom(view);
+        var topRow = view.TopRow;
+
+        view.Text = text;
+
+        if (wasAtBottom)
+        {
+            ScrollToBottom(view);
+            return;
+        }
+
+        view.TopRow = topRow;
+        view.SetNeedsDisplay();
+    }
+
+    /// <summary>
+    /// True when the pane's last line is on screen — i.e. the reader is watching the live tail. An empty
+    /// or not-yet-laid-out pane counts as at-bottom, so the default is to follow.
+    /// </summary>
+    private static bool IsScrolledToBottom(TextView view) => view.TopRow >= Math.Max(0, view.Lines - view.Bounds.Height);
 
     /// <summary>
     /// Replaces a pane's buffer with <paramref name="text"/> (for snapshot panes like Schedule that
@@ -1194,9 +1306,8 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
 
         Application.MainLoop?.Invoke(() =>
         {
-            stateLabel.Text = StateText(state);
-            stateLabel.ColorScheme = Scheme(Application.Driver, StateColor(state), TuiColors.StatusBg);
             // The chip's width changes with the text; re-size + relayout so the bar stays centred.
+            SetSegmentText(stateLabel, StateText(state), StateColor(state));
             RecenterStatusBar();
             Application.Top?.LayoutSubviews();
             Application.Top?.SetNeedsDisplay();
@@ -1229,9 +1340,7 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
 
         Application.MainLoop?.Invoke(() =>
         {
-            var label = segment();
-            label.Text = text;
-            label.ColorScheme = Scheme(Application.Driver, colour, TuiColors.StatusBg);
+            SetSegmentText(segment(), text, colour);
             RecenterStatusBar();
             Application.Top?.LayoutSubviews();
             Application.Top?.SetNeedsDisplay();

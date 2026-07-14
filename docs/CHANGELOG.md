@@ -9,6 +9,58 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-07-14 — TUI polish batch (John's human-facing list)
+
+The first half of the front-end list John raised: the items about scrolling, status accuracy, and
+mis-placed chrome. The "all"-selection work (per-conversation panes, send-routing, datetime-interleaved
+startup history) is deliberately a separate pass — see [TODO.md](TODO.md).
+
+### Fixed — the status bar reported the wrong peer's state
+In hub mode, chat is shared but the status chip shows the *selected* peer — and `ShowReply`/`ShowError`/
+`ShowWakeUpEvent` set the chip to "idle" directly from that shared surface. So any background peer
+finishing a turn reported the peer you were watching as idle, mid-thought. Turn-end now settles the
+peer's own lane (`PeerScopedDisplay`), and the shared surface only drives the chip in single-peer mode,
+where there *is* only one peer. Also: a lane recorded `"thinking"` where the chip detects working-ness by
+a trailing ellipsis, so the chip stayed gray however hard a peer was working — lanes now store the same
+string the single-peer path renders.
+
+### Fixed — status-bar spacing didn't collapse when switching peers
+Segments were `AutoSize` labels, and v1's auto-sizing grows a label to fit longer text but doesn't
+reliably shrink it again. Switching Ember (`Anthropic/claude-opus-4-8`) → Arden (`OpenAI/gpt-5.4`) left
+the old width behind as gaps — and, since segments chain with `Pos.Right`, pushed `/exit to quit` off the
+right edge. Widths are now driven explicitly from the text.
+
+### Fixed — the right-click menu opened over the conversation pane
+`TextView` sets `ContextMenu.Position` from the *view-relative* click, but a `ContextMenu` is positioned
+in *screen* coordinates — the two only agree for a pane at the screen origin. So right-clicking anything
+in the right-hand column popped the menu up over the conversation pane on the left. `ColoredTextView` now
+converts to screen coordinates itself (mirroring the `internal` `View.ViewToScreen`). Shift+F10 had the
+same defect and goes through the same path.
+
+### Fixed — the panes yanked to the bottom while you were reading
+Every append scrolled to the newest line unconditionally, so reading back through the scrollback was
+impossible while a peer was talking. Panes now follow the tail only if you were already at the bottom;
+scrolling up holds your place. A peer *switch* still jumps to the newest line — it's different content,
+so the old scroll position means nothing in it.
+
+### Changed — scrolling is faster, and drawing is much cheaper
+The wheel step scales to the pane (~a third of a screenful per notch, clamped) instead of a flat 3 lines.
+Two real hot paths went with it, both of which made the whole TUI feel sluggish rather than just the
+scrolling:
+- **Colouring was O(chars²) per row.** Terminal.Gui asks for the colour one character at a time, handing
+  over the row's runes; `ColoredTextView` rebuilt the row's text on *every* call. Memoising the row being
+  drawn (Redraw walks a row's columns contiguously) makes it one text build per row.
+- **The hub repainted all four side panes on every recorded event** — and a streaming reasoning delta
+  records one per chunk, so three unchanged documents were re-parsed per chunk on the UI thread. Only
+  changed panes are touched now. The scrollbar sync had the same shape: it ran `Refresh()`/
+  `LayoutSubviews()` on every repaint, and now only when the content length or position actually moved.
+
+### Changed — the peer selector reads in colour
+Was one flat green label. Now the ‹ › arrows and the F6 chord are green (the affordances, matching the
+compose hint's convention), the peer's name is light purple — the same colour it wears in the
+conversation pane, so selector and scrollback agree — and the "Peer:" label is white with the counter and
+hint muted. Required making it a `ColoredTextView`; a `Label` carries exactly one colour.
+
 ## 2026-07-13 — "breathing room" batch (John, via the hub)
 
 ### Changed — continue cap lifted

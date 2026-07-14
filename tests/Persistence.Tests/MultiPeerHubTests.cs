@@ -1,5 +1,7 @@
 using Persistence.Console;
+using Persistence.Contracts;
 using Persistence.Data.Entities;
+using Persistence.Runtime;
 
 namespace Persistence.Tests;
 
@@ -18,13 +20,15 @@ public class MultiPeerHubTests
         public (int Used, int Budget, int Percent)? Budget;
         public int SidePaneRepaints;
         public int StatusRepaints;
+        public bool? LastPeerSwitched;
 
-        public void SetSidePaneContent(string thoughts, string actions, string schedule, string debug)
+        public void SetSidePaneContent(string thoughts, string actions, string schedule, string debug, bool peerSwitched)
         {
             Thoughts = thoughts;
             Actions = actions;
             Schedule = schedule;
             Debug = debug;
+            LastPeerSwitched = peerSwitched;
             SidePaneRepaints++;
         }
 
@@ -38,6 +42,32 @@ public class MultiPeerHubTests
             State = state;
             StatusRepaints++;
         }
+    }
+
+    /// <summary>
+    /// Stands in for the shared conversation pane a <c>PeerScopedDisplay</c> writes chat through. The
+    /// state assertions below are about the hub's lanes, not the chat text, so this just swallows it.
+    /// </summary>
+    private sealed class NullChat : IDisplayProvider
+    {
+        public Task Start(CancellationToken ct) => Task.CompletedTask;
+        public void Stop() { }
+        public void ShowThinking(string? label = null) { }
+        public void ShowReply(string reply, string? speaker = null) { }
+        public void ShowReasoning(string summary) { }
+        public void ShowReasoningDelta(string delta) { }
+        public void ShowThought(string thought) { }
+        public void ShowToolUse(string tool, string request, string result) { }
+        public void ShowWakeUpEvent(ScheduledEventEntity evt) { }
+        public void ShowScheduledEvents(IReadOnlyList<ScheduledEventEntity> events) { }
+        public void ShowOpenProposalCount(int count) { }
+        public void UpdateBudget(int usedTokens, int budgetTokens, int percentFull) { }
+        public void ShowError(string message) { }
+        public void ShowDebugInfo(string info) { }
+        public void ShowChatHistory(IReadOnlyList<ChatHistoryItem> messages) { }
+        public void ShowSystemMessage(string message) { }
+        public void ShowUnknownCommand(string command) { }
+        public void ShowMessageQueued(string input) { }
     }
 
     private static MultiPeerHub HubWith(FakeTarget target, params string[] peers)
@@ -140,6 +170,74 @@ public class MultiPeerHubTests
 
         Assert.Contains("Ember wake", target.Schedule);
         Assert.Equal((100, 1000, 42), target.Budget);
+    }
+
+    [Fact]
+    public void SwitchingPeerIsFlaggedSoThePanesJumpToTheNewestLine()
+    {
+        var target = new FakeTarget();
+        var hub = HubWith(target, "Arden", "Ember");
+
+        hub.SetActive("Ember");
+
+        // Different content is now on screen, so where the reader had scrolled to means nothing.
+        Assert.True(target.LastPeerSwitched);
+    }
+
+    [Fact]
+    public void LiveUpdatesToTheShownPeerAreNotFlaggedAsASwitch()
+    {
+        var target = new FakeTarget();
+        var hub = HubWith(target, "Arden", "Ember");
+
+        hub.RecordThought("Arden", "still going");
+
+        // An append to the peer already on screen must respect where the reader is (no forced scroll).
+        Assert.False(target.LastPeerSwitched);
+    }
+
+    [Fact]
+    public void ABackgroundPeersReplyDoesNotSettleTheWatchedPeersState()
+    {
+        var target = new FakeTarget();
+        var hub = HubWith(target, "Arden", "Ember");   // Arden active
+        var chat = new NullChat();
+
+        hub.ScopeFor("Arden", chat).ShowThinking();      // the peer being watched starts a turn
+        hub.ScopeFor("Ember", chat).ShowReply("done");   // a background peer finishes one
+
+        // Chat aggregates, so Ember's reply reaches the shared pane — but the status bar shows Arden,
+        // who is still working. Reporting "idle" here was the reason the chip lied about the peer.
+        Assert.Contains("thinking", target.State);
+    }
+
+    [Fact]
+    public void APeersOwnReplySettlesItsOwnState()
+    {
+        var target = new FakeTarget();
+        var hub = HubWith(target, "Arden");
+        var chat = new NullChat();
+        var arden = hub.ScopeFor("Arden", chat);
+
+        arden.ShowThinking();
+        Assert.Contains("thinking", target.State);
+
+        arden.ShowReply("here you go");
+
+        Assert.Equal("idle", target.State);
+    }
+
+    [Fact]
+    public void AThinkingStateCarriesTheEllipsisTheStatusChipColoursOn()
+    {
+        var target = new FakeTarget();
+        var hub = HubWith(target, "Arden");
+
+        hub.ScopeFor("Arden", new NullChat()).ShowThinking("recalling");
+
+        // The status bar tells "working" from "settled" by the trailing ellipsis, so a lane storing the
+        // bare label would leave the chip gray however hard the peer was working.
+        Assert.Equal("recalling…", target.State);
     }
 
     [Fact]

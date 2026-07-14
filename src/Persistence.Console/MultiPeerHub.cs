@@ -11,8 +11,15 @@ namespace Persistence.Console;
 /// </summary>
 internal interface IMultiPeerRenderTarget
 {
-    /// <summary>Replaces the four side panes with the active peer's buffered content.</summary>
-    void SetSidePaneContent(string thoughts, string actions, string schedule, string debug);
+    /// <summary>
+    /// Replaces the four side panes with the active peer's buffered content.
+    ///
+    /// <paramref name="peerSwitched"/> distinguishes the two reasons this is called, which want opposite
+    /// scroll behaviour. A <em>switch</em> (or the first paint) puts different content on screen, so the
+    /// panes should jump to its newest line. An <em>update</em> to the peer already on screen is a
+    /// live append, so it must respect where the reader has scrolled to.
+    /// </summary>
+    void SetSidePaneContent(string thoughts, string actions, string schedule, string debug, bool peerSwitched);
 
     /// <summary>Updates the status bar to reflect the active peer (its model, spend, and turn state).</summary>
     void SetPeerStatus(string provider, string model, string session, int proposals, (int Used, int Budget, int Percent)? budget, string state);
@@ -125,11 +132,18 @@ internal sealed class MultiPeerHub(IMultiPeerRenderTarget target)
             active = peer;
         }
 
-        Repaint();
+        Paint(peerSwitched: true);
     }
 
     /// <summary>Pushes the active peer's full lane to the render target — call once the UI loop is ready.</summary>
-    public void Repaint()
+    public void Repaint() => Paint(peerSwitched: true);
+
+    /// <summary>
+    /// Pushes the active peer's lane to the render target. <paramref name="peerSwitched"/> is true when
+    /// the content is changing peer (a switch, or the first paint) and false when it's a live update to
+    /// the peer already on screen — the target uses it to decide whether to jump to the newest line.
+    /// </summary>
+    private void Paint(bool peerSwitched)
     {
         string thoughts, actions, schedule, debug, provider, model, session, state;
         int proposals;
@@ -154,7 +168,7 @@ internal sealed class MultiPeerHub(IMultiPeerRenderTarget target)
             state = lane.State;
         }
 
-        target.SetSidePaneContent(thoughts, actions, schedule, debug);
+        target.SetSidePaneContent(thoughts, actions, schedule, debug, peerSwitched);
         target.SetPeerStatus(provider, model, session, proposals, budget, state);
     }
 
@@ -176,7 +190,7 @@ internal sealed class MultiPeerHub(IMultiPeerRenderTarget target)
 
         if (isActive)
         {
-            Repaint();
+            Paint(peerSwitched: false);
         }
     }
 
