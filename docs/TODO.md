@@ -291,25 +291,28 @@ the voluntary continue-loop. Revisit only if we see the peer reliably acting bef
 
 ## John's TUI list (2026-07-13)
 
-The polish half landed 2026-07-14 (status accuracy, scroll behaviour, selector colours, right-click
-anchoring, two drawing hot paths) — see [CHANGELOG.md](CHANGELOG.md). What's left:
+Both halves landed 2026-07-14 — the polish (status accuracy, scroll behaviour, selector colours,
+right-click anchoring, two drawing hot paths) and the **"all" scope** (per-peer conversations,
+datetime-interleaved history, blanked tabs, send-routing). See [CHANGELOG.md](CHANGELOG.md). What's left:
 
-- **The "all" selection — one change, not five.** These all fall out of giving `MultiPeerHub` a notion of
-  *scope* (all vs. one peer) rather than just "active peer", so build them together:
-  - Add a separate **"all"** entry to the selector; when a single peer is selected the main pane shows
-    **that peer's conversation only** (today chat is always aggregated).
-  - Under "all", blank the tab contents (except maybe Debug).
-  - **Send-routing:** an individual selected → send only to them; "all" → send to everybody. *Checked
-    against [ADR-0008](adr/0008-the-room-multi-peer-conversation.md): broadcast is fine. The no-autofan
-    guard is about **peers** relaying to each other unmediated (§4); a **human** opening the floor to the
-    room is explicitly anticipated (§1, "what do you both think?") and maps to `addressed_to: null` — and
-    a human turn is what **resets** the reply-chain breaker rather than tripping it.*
-  - **Startup history isn't interleaved.** `ClientConsoleHost.RunHubAsync` draws each peer's snapshot in
-    connection order, so you get Arden's ten messages *then* Ember's ten — the newest message overall
-    isn't at the bottom. This is very likely John's "not all the latest messages are displaying". Fix:
-    merge the per-peer histories by timestamp before drawing. (Note the snapshot limit is per peer and
-    defaults to 10 — `ConversationHistoryProvider.GetRecentAsync` — so an interleaved view needs a
-    deliberate answer to "N most recent *overall*", not N per peer.)
+- **Cross-peer message id — the principled fix for broadcast duplicates.** (Fell out of the "all" work.)
+  With no cross-peer id, a message broadcast to everybody is persisted separately in *each* peer's store,
+  so the merged "all" view sees it N times. There's a narrow mitigation in `MultiPeerHub.RenderChat` — a
+  *human* line byte-identical to the one immediately before it collapses — but it is a heuristic: it leans
+  on exact text equality, and can't help two peers who were sent the same thing a minute apart. The real
+  answer is the cross-peer message id that [ADR-0007](adr/0007-federated-peers-runtime-room-client.md)
+  Phase 0 and [ADR-0008](adr/0008-the-room-multi-peer-conversation.md) §2 both call for. Retire the
+  heuristic when that lands.
+
+- **"All" shows the N most recent *per peer*, not overall.** `ConversationHistoryProvider.GetRecentAsync`
+  defaults to 10 and the snapshot is per peer, so a two-peer hub opens on 10 + 10 interleaved rather than
+  "the 10 most recent messages". Fine at today's peer counts; needs a deliberate answer (fetch more per
+  peer and trim client-side? a limit the client passes?) before it grows.
+
+- **Debug under "all".** John's note was "blank out the tab contents (except maybe debug)" — all four are
+  blanked for now. A merged Debug across peers could genuinely help when debugging, but it needs the debug
+  lane to become timestamped entries (as chat now is) rather than a pre-stamped string, so it can be
+  interleaved rather than concatenated. Open question; not obviously worth the change.
 
 - **History shows "Remote Peer" instead of peer names** (and for Ember, "ChatGPT / Couchside Ember
   (historical export)"). Server-side, not TUI: `ConversationHistoryProvider.ResolveAuthor` falls back to

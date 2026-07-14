@@ -12,6 +12,13 @@ namespace Persistence.Console;
 internal interface IMultiPeerRenderTarget
 {
     /// <summary>
+    /// Replaces the conversation pane with the current scope's chat — one peer's conversation, or every
+    /// peer's merged by time under the "all" scope. <paramref name="scopeChanged"/> carries the same
+    /// meaning as on <see cref="SetSidePaneContent"/>.
+    /// </summary>
+    void SetConversation(string chat, bool scopeChanged);
+
+    /// <summary>
     /// Replaces the four side panes with the active peer's buffered content.
     ///
     /// <paramref name="peerSwitched"/> distinguishes the two reasons this is called, which want opposite
@@ -26,18 +33,37 @@ internal interface IMultiPeerRenderTarget
 }
 
 /// <summary>
-/// Aggregates several peer connections into one Terminal.Gui hub. Chat is shared — every peer's messages
-/// land in the one conversation pane (see <see cref="PeerScopedDisplay"/>). The side column (thoughts /
-/// actions / schedule / debug) and the status bar are <em>per peer</em>: each peer's stream is buffered
-/// into its own <see cref="Lane"/>, and a selector chooses which lane the side column shows. Switching is
-/// instant and lossless — a lane keeps accumulating in the background while another peer is on screen.
+/// Aggregates several peer connections into one Terminal.Gui hub, under a single selectable
+/// <b>scope</b>: either one peer, or <see cref="AllScope"/>.
+///
+/// <list type="bullet">
+/// <item><b>A peer scope</b> shows that peer alone — its conversation in the main pane, its thoughts /
+/// actions / schedule / debug in the side column, its model and spend in the status bar. Input goes only
+/// to it.</item>
+/// <item><b>The "all" scope</b> is the overview: every peer's conversation merged into one scrollback
+/// ordered by time, the side column blanked (there's no single peer to show), and input broadcast to
+/// everybody.</item>
+/// </list>
+///
+/// Everything is buffered per peer, so switching scope is instant and lossless — a background peer keeps
+/// accumulating while another is on screen.
 ///
 /// This is intentionally client-side only: peers do not hear each other here (that cross-peer relay is
 /// the room, ADR-0008). The hub just lets one human watch, and talk to, several peers at once.
 /// </summary>
 internal sealed class MultiPeerHub(IMultiPeerRenderTarget target)
 {
-    /// <summary>Per-peer side-column + status buffers. Chat is not laned (it aggregates).</summary>
+    /// <summary>
+    /// The selector entry for the merged overview — every peer's conversation, no single peer's lane.
+    /// It's a scope, not a peer: it never appears in <see cref="PeerNames"/> and has no lane of its own.
+    /// </summary>
+    public const string AllScope = "All";
+
+    /// <summary>What the side column shows under <see cref="AllScope"/>, which has no single peer's lane.</summary>
+    private const string AllScopePlaceholder =
+        "No peer selected.\nPick a peer in the selector above (click it, or press F6) to see its thoughts,\nactions and schedule.\n";
+
+    /// <summary>Per-peer side-column + status buffers. Chat is laned separately (see <see cref="chat"/>).</summary>
     private sealed class Lane
     {
         public readonly StringBuilder Thoughts = new();
@@ -52,10 +78,35 @@ internal sealed class MultiPeerHub(IMultiPeerRenderTarget target)
         public string Session = "";
     }
 
+    /// <summary>
+    /// One rendered conversation line, kept as data rather than appended into a string, because the "all"
+    /// scope has to merge several peers' lines <em>by time</em> — which a per-peer string can't do.
+    /// </summary>
+    /// <param name="Peer">
+    /// Whose conversation this belongs to. <see langword="null"/> means "every conversation" — a message
+    /// the human broadcast, or a local system line — so it shows whatever scope is selected.
+    /// </param>
+    /// <param name="At">When it was said. Live lines stamp now; history carries the store's real
+    /// timestamp, which is what lets a fresh start interleave peers correctly instead of showing one
+    /// peer's history and then the next's.</param>
+    /// <param name="FromHuman">Whether the human said it — used only by the "all" scope's duplicate
+    /// collapse (see <see cref="RenderChat"/>).</param>
+    private sealed record ChatLine(string? Peer, DateTimeOffset At, string Text, bool FromHuman);
+
     private readonly object sync = new();
     private readonly Dictionary<string, Lane> lanes = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<string> order = [];
+    private readonly List<ChatLine> chat = [];
+
+    /// <summary>The selected scope: a peer's name, or null for <see cref="AllScope"/> (the default).</summary>
     private string? active;
+
+    // Composing the conversation means filtering, sorting and re-joining every line, but a repaint fires
+    // on every recorded event — including one per streamed reasoning chunk, none of which touch chat. So
+    // the composed text is cached and rebuilt only when the conversation or the scope actually changes.
+    private string chatRendered = "";
+    private string? chatRenderedScope;
+    private bool chatRenderedValid;
 
     /// <summary>The peers, in registration order — the selector's list.</summary>
     public IReadOnlyList<string> PeerNames
@@ -63,16 +114,25 @@ internal sealed class MultiPeerHub(IMultiPeerRenderTarget target)
         get { lock (sync) { return order.ToArray(); } }
     }
 
-    /// <summary>The peer the side column is currently showing (input is also routed here).</summary>
+    /// <summary>
+    /// The selected peer — the one the side column shows and input is routed to — or <see langword="null"/>
+    /// under <see cref="AllScope"/>, where the conversation is merged and input is broadcast.
+    /// </summary>
     public string? ActivePeer
     {
         get { lock (sync) { return active; } }
     }
 
+    /// <summary>The selector's entries: <see cref="AllScope"/> first, then the peers in registration order.</summary>
+    public IReadOnlyList<string> SelectorEntries
+    {
+        get { lock (sync) { return [AllScope, .. order]; } }
+    }
+
     /// <summary>
-    /// Registers a peer connection (its snapshot model/provider/session for the status bar). The first
-    /// registered peer becomes active. Safe to call before the UI loop is ready — the first paint is
-    /// driven later by <see cref="Repaint"/>.
+    /// Registers a peer connection (its snapshot model/provider/session for the status bar). Safe to call
+    /// before the UI loop is ready — the first paint is driven later by <see cref="Repaint"/>. The scope
+    /// starts at <see cref="AllScope"/>, so a fresh start opens on the merged conversation.
     /// </summary>
     public void RegisterPeer(string name, string provider, string model, string session)
     {
@@ -88,12 +148,130 @@ internal sealed class MultiPeerHub(IMultiPeerRenderTarget target)
             lane.Provider = provider;
             lane.Model = model;
             lane.Session = session;
-            active ??= name;
         }
     }
 
     /// <summary>The per-peer render facade the connection's event renderer draws through.</summary>
-    public IDisplayProvider ScopeFor(string peer, IDisplayProvider chat) => new PeerScopedDisplay(this, peer, chat);
+    public IDisplayProvider ScopeFor(string peer) => new PeerScopedDisplay(this, peer);
+
+    // --- Chat (laned per peer; the "all" scope merges them by time) ---
+
+    /// <summary>Records a peer's reply into its own conversation.</summary>
+    public void RecordReply(string peer, string text, string? speaker = null)
+    {
+        var name = speaker ?? peer;
+        AddChat(new ChatLine(peer, DateTimeOffset.Now, $"{TerminalGuiDisplayProvider.Stamp()}{name}: {text}\n\n", FromHuman: false));
+    }
+
+    /// <summary>
+    /// Records a peer's connect-time history into its conversation, keeping each message's <em>store</em>
+    /// timestamp. That's what lets the "all" scope interleave several peers' histories into one true
+    /// chronology, rather than showing one peer's backlog and then the next's.
+    /// </summary>
+    public void RecordHistory(string peer, IReadOnlyList<Persistence.Contracts.ChatHistoryItem> messages)
+    {
+        var lines = messages.Select(m => new ChatLine(
+            peer,
+            m.Timestamp,
+            $"{TerminalGuiDisplayProvider.Stamp(m.Timestamp)}{m.Author}: {m.Content}\n\n",
+            IsHuman(m.Role)));
+
+        lock (sync)
+        {
+            chat.AddRange(lines);
+            chatRenderedValid = false;
+        }
+
+        Paint(scopeChanged: false);
+    }
+
+    /// <summary>A line tied to one peer's conversation but not spoken by it (an error, a queued notice).</summary>
+    public void RecordChatNotice(string peer, string text) =>
+        AddChat(new ChatLine(peer, DateTimeOffset.Now, text, FromHuman: false));
+
+    /// <summary>
+    /// Records a line that belongs to <em>every</em> conversation — the local echo of something the human
+    /// sent, or a system/error line raised by the client itself. Under a peer scope it's attributed to
+    /// that peer (it's what you said to them); under <see cref="AllScope"/> it was broadcast, so it
+    /// belongs to all of them.
+    /// </summary>
+    public void RecordLocalChat(string text)
+    {
+        string? scope;
+        lock (sync)
+        {
+            scope = active;
+        }
+
+        AddChat(new ChatLine(scope, DateTimeOffset.Now, $"{TerminalGuiDisplayProvider.Stamp()}{text}\n\n", FromHuman: true));
+    }
+
+    /// <summary>The store's coarse role for a human-authored message.</summary>
+    private static bool IsHuman(string role) => string.Equals(role, "user", StringComparison.OrdinalIgnoreCase);
+
+    private void AddChat(ChatLine line)
+    {
+        lock (sync)
+        {
+            chat.Add(line);
+            chatRenderedValid = false;
+        }
+
+        Paint(scopeChanged: false);
+    }
+
+    /// <summary>The conversation for <paramref name="scope"/>, composed only when it could have changed.</summary>
+    private string RenderChatCached(string? scope)
+    {
+        if (chatRenderedValid && string.Equals(chatRenderedScope, scope, StringComparison.OrdinalIgnoreCase))
+        {
+            return chatRendered;
+        }
+
+        chatRendered = RenderChat(scope);
+        chatRenderedScope = scope;
+        chatRenderedValid = true;
+        return chatRendered;
+    }
+
+    /// <summary>
+    /// Renders the conversation for <paramref name="scope"/>: one peer's lines (plus anything addressed to
+    /// everyone), or — under "all" — every peer's, ordered by time. OrderBy is stable, so lines sharing a
+    /// timestamp keep the order they arrived in.
+    /// </summary>
+    private string RenderChat(string? scope)
+    {
+        var visible = chat
+            .Where(l => scope is null || l.Peer is null || string.Equals(l.Peer, scope, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(l => l.At);
+
+        var sb = new StringBuilder();
+        ChatLine? previous = null;
+
+        foreach (var line in visible)
+        {
+            // Under "all", one thing the human broadcast is stored once per peer, so the merge sees it
+            // once per peer and would print it N times. Collapse a human line that is byte-identical to
+            // the one just before it (same stamp, same author, same text) — after sorting, those copies
+            // are necessarily adjacent. This is deliberately narrow: it can't touch a peer's own words,
+            // and it can't merge anything a minute apart. The principled fix is the cross-peer message id
+            // that ADR-0007 Phase 0 / ADR-0008 call for, which doesn't exist yet — see TODO.md.
+            var duplicateBroadcast = scope is null
+                && previous is not null
+                && line.FromHuman
+                && previous.FromHuman
+                && string.Equals(previous.Text, line.Text, StringComparison.Ordinal);
+
+            if (!duplicateBroadcast)
+            {
+                sb.Append(line.Text);
+            }
+
+            previous = line;
+        }
+
+        return sb.ToString();
+    }
 
     // --- Recording (called off the UI thread by each connection's renderer via PeerScopedDisplay) ---
 
@@ -119,63 +297,100 @@ internal sealed class MultiPeerHub(IMultiPeerRenderTarget target)
 
     public void RecordState(string peer, string state) => Mutate(peer, l => l.State = state);
 
-    /// <summary>Switches which peer the side column + status bar show (selector callback).</summary>
-    public void SetActive(string peer)
+    /// <summary>
+    /// Switches scope (selector callback): <see cref="AllScope"/> for the merged overview, or a peer's
+    /// name to focus that peer alone. An unknown name is ignored.
+    /// </summary>
+    public void SetActive(string scope)
     {
         lock (sync)
         {
-            if (!lanes.ContainsKey(peer))
+            if (string.Equals(scope, AllScope, StringComparison.OrdinalIgnoreCase))
+            {
+                active = null;
+            }
+            else if (lanes.ContainsKey(scope))
+            {
+                active = scope;
+            }
+            else
             {
                 return;
             }
-
-            active = peer;
         }
 
-        Paint(peerSwitched: true);
+        Paint(scopeChanged: true);
     }
 
-    /// <summary>Pushes the active peer's full lane to the render target — call once the UI loop is ready.</summary>
-    public void Repaint() => Paint(peerSwitched: true);
+    /// <summary>Pushes the current scope to the render target — call once the UI loop is ready.</summary>
+    public void Repaint() => Paint(scopeChanged: true);
 
     /// <summary>
-    /// Pushes the active peer's lane to the render target. <paramref name="peerSwitched"/> is true when
-    /// the content is changing peer (a switch, or the first paint) and false when it's a live update to
-    /// the peer already on screen — the target uses it to decide whether to jump to the newest line.
+    /// Pushes the current scope to the render target. <paramref name="scopeChanged"/> is true when the
+    /// content is changing scope (a switch, or the first paint) and false when it's a live update to the
+    /// scope already on screen — the target uses it to decide whether to jump to the newest line.
     /// </summary>
-    private void Paint(bool peerSwitched)
+    private void Paint(bool scopeChanged)
     {
-        string thoughts, actions, schedule, debug, provider, model, session, state;
+        string chatText, thoughts, actions, schedule, debug, provider, model, session, state;
         int proposals;
         (int, int, int)? budget;
 
         lock (sync)
         {
-            if (active is null || !lanes.TryGetValue(active, out var lane))
+            chatText = RenderChatCached(active);
+
+            if (active is null)
+            {
+                // The "all" scope: the side column has no single peer to show, so it's blanked (John's
+                // call). The status bar still carries what's meaningful across peers — the total open
+                // proposals, and whether *anyone* is working — but not a model or spend, which are
+                // per peer. An empty model collapses the bar's "/" separator (see SetPeerStatus).
+                thoughts = actions = schedule = debug = AllScopePlaceholder;
+                provider = lanes.Count == 1 ? "1 peer" : $"{lanes.Count} peers";
+                model = "";
+                session = "—";
+                proposals = lanes.Values.Sum(l => l.Proposals);
+                budget = null;
+                state = lanes.Values.Any(l => IsBusy(l.State)) ? "thinking…" : "idle";
+            }
+            else if (lanes.TryGetValue(active, out var lane))
+            {
+                thoughts = lane.Thoughts.ToString();
+                actions = lane.Actions.ToString();
+                schedule = lane.Schedule;
+                debug = lane.Debug.ToString();
+                provider = lane.Provider;
+                model = lane.Model;
+                session = lane.Session;
+                proposals = lane.Proposals;
+                budget = lane.Budget;
+                state = lane.State;
+            }
+            else
             {
                 return;
             }
-
-            thoughts = lane.Thoughts.ToString();
-            actions = lane.Actions.ToString();
-            schedule = lane.Schedule;
-            debug = lane.Debug.ToString();
-            provider = lane.Provider;
-            model = lane.Model;
-            session = lane.Session;
-            proposals = lane.Proposals;
-            budget = lane.Budget;
-            state = lane.State;
         }
 
-        target.SetSidePaneContent(thoughts, actions, schedule, debug, peerSwitched);
+        target.SetConversation(chatText, scopeChanged);
+        target.SetSidePaneContent(thoughts, actions, schedule, debug, scopeChanged);
         target.SetPeerStatus(provider, model, session, proposals, budget, state);
     }
 
-    /// <summary>Applies a mutation to a peer's lane, then repaints if that peer is the one on screen.</summary>
+    /// <summary>
+    /// Whether a lane's state means "working". Mirrors how the status chip decides its colour: a settled
+    /// state is a bare word, a working one carries the trailing ellipsis.
+    /// </summary>
+    private static bool IsBusy(string state) => state.Contains('…');
+
+    /// <summary>
+    /// Applies a mutation to a peer's lane, then repaints if it would change what's on screen — that's
+    /// the peer's own scope, or "all" (whose status aggregates every lane's proposals and busy-ness).
+    /// </summary>
     private void Mutate(string peer, Action<Lane> mutate)
     {
-        bool isActive;
+        bool onScreen;
 
         lock (sync)
         {
@@ -185,12 +400,12 @@ internal sealed class MultiPeerHub(IMultiPeerRenderTarget target)
             }
 
             mutate(lane);
-            isActive = string.Equals(peer, active, StringComparison.OrdinalIgnoreCase);
+            onScreen = active is null || string.Equals(peer, active, StringComparison.OrdinalIgnoreCase);
         }
 
-        if (isActive)
+        if (onScreen)
         {
-            Paint(peerSwitched: false);
+            Paint(scopeChanged: false);
         }
     }
 

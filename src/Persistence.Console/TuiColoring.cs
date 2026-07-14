@@ -133,6 +133,13 @@ internal static class TuiColoring
     /// "(n/m)" counter. Matched by position so a name containing spaces still colours as one unit.</summary>
     private const string PeerSelectorName = @"(?<=Peer: ).+?(?= \(\d+/\d+\))";
 
+    /// <summary>
+    /// The "All" scope in the selector. Registered before <see cref="PeerSelectorName"/> so the overview
+    /// reads gold rather than wearing a peer's colour — it isn't a peer, and the distinction matters when
+    /// a glance at the selector is what tells you whether input is about to go to one peer or to everyone.
+    /// </summary>
+    private const string PeerSelectorAllScope = @"(?<=Peer: )All(?= \(\d+/\d+\))";
+
     /// <summary>The selector's "(1/3)" position counter.</summary>
     private const string PeerSelectorCounter = @"\(\d+/\d+\)";
 
@@ -266,6 +273,7 @@ internal static class TuiColoring
     /// before the broader label/hint rules can take it.
     /// </summary>
     public static ColoredTextView ForPeerSelector(this ColoredTextView v) => v
+        .ColorPattern(PeerSelectorAllScope, TuiColors.Gold)
         .ColorPattern(PeerSelectorName, TuiColors.Peer)
         .ColorPattern(PeerSelectorCounter, TuiColors.Muted)
         .ColorSubstring("‹", TuiColors.Label)

@@ -94,13 +94,13 @@ public static class ClientConsoleHost
         await pump;
     }
 
-    /// <summary>The hub path: several connections, one aggregated pane, a per-peer side column + selector.</summary>
+    /// <summary>The hub path: several connections, a scope selector, and per-peer lanes behind it.</summary>
     private static async Task RunHubAsync(TerminalGuiDisplayProvider display, IAppConfig config, IReadOnlyList<PeerEndpoint> peers, CancellationToken ct)
     {
         var hub = new MultiPeerHub(display);
         var clients = new Dictionary<string, IPersistenceClient>(StringComparer.OrdinalIgnoreCase);
         var humans = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var connections = new List<(ConversationEventRenderer Renderer, IPersistenceClient Client, ConversationSnapshot? Snapshot)>();
+        var connections = new List<(ConversationEventRenderer Renderer, IPersistenceClient Client, IDisplayProvider Scoped, ConversationSnapshot? Snapshot)>();
 
         foreach (var p in peers)
         {
@@ -123,22 +123,40 @@ public static class ClientConsoleHost
             }
 
             hub.RegisterPeer(name, snap?.Provider ?? config.Provider, snap?.Model ?? config.Model, snap?.SessionId ?? "—");
-            var renderer = new ConversationEventRenderer(hub.ScopeFor(name, display), name);
-            connections.Add((renderer, client, snap));
+
+            // The scoped display is this connection's whole surface — the pump reports through it too, so
+            // a disconnect notice lands in the right peer's conversation rather than on the raw display,
+            // whose own buffer the hub doesn't render in hub mode.
+            var scoped = hub.ScopeFor(name);
+            connections.Add((new ConversationEventRenderer(scoped, name), client, scoped, snap));
         }
 
-        // Input is sent to whichever peer the selector currently has active.
+        // Input goes to the selected peer — or, under the "all" scope, to every peer. Broadcasting is the
+        // human opening the floor to the room, which ADR-0008 §1 explicitly anticipates; the no-autofan
+        // guard there is about *peers* relaying to each other unmediated, and a human turn is what resets
+        // the reply-chain breaker rather than tripping it.
         display.OnInput = text =>
         {
             var target = hub.ActivePeer;
-            return target is not null && clients.TryGetValue(target, out var c) ? c.SendAsync(text, ct) : Task.CompletedTask;
+
+            if (target is null)
+            {
+                return Task.WhenAll(clients.Values.Select(c => c.SendAsync(text, ct)));
+            }
+
+            return clients.TryGetValue(target, out var c) ? c.SendAsync(text, ct) : Task.CompletedTask;
         };
 
-        // Wire the selector (peer list + human names for colouring) and the on-ready first paint.
-        display.ConfigurePeerSelector(hub.PeerNames, humans, hub.SetActive, hub.Repaint);
+        // The hub composes the conversation from per-peer lanes, so the echo of what you just sent has to
+        // be filed against the current scope rather than appended to the display's own buffer.
+        display.OnLocalChat = hub.RecordLocalChat;
 
-        // Draw each snapshot: chat history aggregates into the shared pane; schedule/proposals lane per peer.
-        foreach (var (renderer, _, snap) in connections)
+        // Wire the selector ("all" + the peers, human names for colouring) and the on-ready first paint.
+        display.ConfigurePeerSelector(hub.SelectorEntries, humans, hub.SetActive, hub.Repaint);
+
+        // Draw each snapshot into its peer's lane. History carries the store's timestamps, so the "all"
+        // scope interleaves the peers into one chronology instead of one backlog after another.
+        foreach (var (renderer, _, _, snap) in connections)
         {
             if (snap is not null)
             {
@@ -147,7 +165,7 @@ public static class ClientConsoleHost
         }
 
         var pumps = connections
-            .Select(c => Task.Run(() => PumpAsync(c.Client, c.Renderer, display, c.Snapshot?.LatestSeq ?? 0, ct), ct))
+            .Select(c => Task.Run(() => PumpAsync(c.Client, c.Renderer, c.Scoped, c.Snapshot?.LatestSeq ?? 0, ct), ct))
             .ToArray();
 
         await display.LaunchUi(ct);

@@ -6,50 +6,49 @@ namespace Persistence.Console;
 
 /// <summary>
 /// An <see cref="IDisplayProvider"/> facade bound to one peer connection, used by that connection's
-/// <see cref="Persistence.Client.ConversationEventRenderer"/> in the multi-peer hub. It splits the
-/// render surface in two:
+/// <see cref="Persistence.Client.ConversationEventRenderer"/> in the multi-peer hub. Everything it
+/// receives is recorded against <em>this peer's</em> lane in the <see cref="MultiPeerHub"/> — its
+/// conversation, its side panes (thoughts / actions / schedule / debug), and its status (proposals,
+/// budget, turn state).
 ///
-/// <list type="bullet">
-/// <item><b>Chat</b> (replies, history, errors, system/queued messages, wake-ups) goes straight to the
-/// shared conversation pane — every peer's messages aggregate into one attributed scrollback.</item>
-/// <item><b>Side panes</b> (thoughts, actions, schedule, debug) and the per-peer status (proposals,
-/// budget, thinking state) are routed to the <see cref="MultiPeerHub"/>, which buffers them per peer so
-/// the selector can switch which peer the side column shows.</item>
-/// </list>
+/// Nothing here renders directly. The hub composes what's actually on screen from the selected scope: one
+/// peer's lane, or every peer's conversation merged under <see cref="MultiPeerHub.AllScope"/>. That's why
+/// even chat is laned rather than written straight to a shared pane — a peer scope has to be able to show
+/// that peer's conversation alone.
 ///
-/// This is deliberately transport- and framework-agnostic — it holds no Terminal.Gui types — so the
-/// same split survives a future renderer swap (e.g. Terminal.Gui v2 or a web UI).
+/// Deliberately transport- and framework-agnostic — it holds no Terminal.Gui types — so the same split
+/// survives a future renderer swap (e.g. Terminal.Gui v2 or a web UI).
 /// </summary>
-internal sealed class PeerScopedDisplay(MultiPeerHub hub, string peer, IDisplayProvider chat) : IDisplayProvider
+internal sealed class PeerScopedDisplay(MultiPeerHub hub, string peer) : IDisplayProvider
 {
-    // --- Chat: aggregated, straight through to the shared conversation pane ---
+    // --- Chat: recorded into this peer's conversation ---
     //
-    // The three that end a turn (reply / error / wake-up) also settle *this* peer's lane back to idle.
-    // The shared chat surface can't do it: it hears every peer, but the status bar shows only the
-    // selected one, so a reply from a background peer would report the watched peer as idle mid-thought.
+    // The three that end a turn (reply / error / wake-up) also settle this peer's lane back to idle. It
+    // has to be per peer: the status bar shows the selected peer, so a background peer's reply must not
+    // report the watched peer as idle mid-thought.
 
     public void ShowReply(string reply, string? speaker = null)
     {
-        chat.ShowReply(reply, speaker ?? peer);
+        hub.RecordReply(peer, reply, speaker);
         hub.RecordState(peer, IdleState);
     }
 
     public void ShowError(string message)
     {
-        chat.ShowError(message);
+        hub.RecordChatNotice(peer, $"[Error: {message}]\n\n");
         hub.RecordState(peer, IdleState);
     }
 
     public void ShowWakeUpEvent(ScheduledEventEntity evt)
     {
-        chat.ShowWakeUpEvent(evt);
+        hub.RecordChatNotice(peer, $"[WAKE-UP: {evt.Name}]\n\n");
         hub.RecordState(peer, IdleState);
     }
 
-    public void ShowChatHistory(IReadOnlyList<ChatHistoryItem> messages) => chat.ShowChatHistory(messages);
-    public void ShowSystemMessage(string message) => chat.ShowSystemMessage(message);
-    public void ShowUnknownCommand(string command) => chat.ShowUnknownCommand(command);
-    public void ShowMessageQueued(string input) => chat.ShowMessageQueued(input);
+    public void ShowChatHistory(IReadOnlyList<ChatHistoryItem> messages) => hub.RecordHistory(peer, messages);
+    public void ShowSystemMessage(string message) => hub.RecordChatNotice(peer, $"{message}\n\n");
+    public void ShowUnknownCommand(string command) => hub.RecordChatNotice(peer, $"Unknown command: {command}\n\n");
+    public void ShowMessageQueued(string input) => hub.RecordChatNotice(peer, $"[Queued: {input}]\n\n");
 
     // --- Side panes + per-peer status: routed to the hub, keyed by this connection's peer ---
 

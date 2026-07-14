@@ -60,6 +60,7 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
     private TabView tabView = null!;
     private Label stateLabel = null!;
     private Label providerLabel = null!;
+    private Label slashLabel = null!;
     private Label modelLabel = null!;
     private Label budgetLabel = null!;
     private Label proposalsLabel = null!;
@@ -103,6 +104,16 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
     /// renderer itself is transport-agnostic. Set it before <see cref="LaunchUi"/>.
     /// </summary>
     public Func<string, Task> OnInput { get; set; }
+
+    /// <summary>
+    /// Records a conversation line that originates <em>here</em> rather than from a peer — the echo of
+    /// what the local peer just submitted, or a failure raised by the input path itself. Hub mode wires
+    /// this to the hub, which files the line against the current scope (one peer, or every peer when
+    /// broadcasting under "all"); left null in single-peer mode, where the pane renders from this
+    /// provider's own buffer and <see cref="AppendChat"/> appends directly. Set it before
+    /// <see cref="LaunchUi"/>.
+    /// </summary>
+    public Action<string>? OnLocalChat { get; set; }
 
     public TerminalGuiDisplayProvider(IEventBus eventBus, ISessionContext sessionContext, IAppConfig config)
     {
@@ -178,20 +189,39 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
 
     public void ShowReply(string reply, string? speaker = null)
     {
-        Append(outputBuffer, () => output, $"{Stamp()}{speaker ?? "Remote Peer"}: {reply}\n\n");
+        AppendChat($"{Stamp()}{speaker ?? "Remote Peer"}: {reply}\n\n");
         GoIdle();
     }
 
     public void ShowError(string message)
     {
-        Append(outputBuffer, () => output, $"[Error: {message}]\n\n");
+        AppendChat($"[Error: {message}]\n\n");
         GoIdle();
     }
 
     public void ShowWakeUpEvent(ScheduledEventEntity evt)
     {
-        Append(outputBuffer, () => output, $"[WAKE-UP: {evt.Name}]\n\n");
+        AppendChat($"[WAKE-UP: {evt.Name}]\n\n");
         GoIdle();
+    }
+
+    /// <summary>
+    /// Adds a line to the conversation. In single-peer mode the pane renders from this provider's own
+    /// buffer, so it appends directly. In hub mode the pane is composed by the hub out of per-peer lanes
+    /// (so a peer scope can show one conversation) — appending here would be painted over on the next
+    /// repaint, so the line is handed to <see cref="OnLocalChat"/> to be recorded against the current
+    /// scope instead. Chat that belongs to a specific peer never comes through here; it arrives at the
+    /// hub via that connection's <see cref="PeerScopedDisplay"/>.
+    /// </summary>
+    private void AppendChat(string text)
+    {
+        if (OnLocalChat is { } record)
+        {
+            record(text);
+            return;
+        }
+
+        Append(outputBuffer, () => output, text);
     }
 
     /// <summary>
@@ -209,11 +239,11 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
         }
     }
 
-    public void ShowMessageQueued(string text) => Append(outputBuffer, () => output, $"[Queued: {text}]\n\n");
+    public void ShowMessageQueued(string text) => AppendChat($"[Queued: {text}]\n\n");
 
-    public void ShowSystemMessage(string message) => Append(outputBuffer, () => output, $"{message}\n\n");
+    public void ShowSystemMessage(string message) => AppendChat($"{message}\n\n");
 
-    public void ShowUnknownCommand(string command) => Append(outputBuffer, () => output, $"Unknown command: {command}\n\n");
+    public void ShowUnknownCommand(string command) => AppendChat($"Unknown command: {command}\n\n");
 
     // Trim trailing whitespace so every debug entry is separated by exactly one blank line, matching
     // the other panes (model responses often arrive with their own trailing newline, which would
@@ -469,7 +499,7 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
         // each message's author (a peer's name) so multiple participants read as a conversation.
         foreach (var m in messages)
         {
-            Append(outputBuffer, () => output, $"[{m.Timestamp.LocalDateTime.ToString(TimeFormat)}] {m.Author}: {m.Content}\n\n");
+            AppendChat($"{Stamp(m.Timestamp)}{m.Author}: {m.Content}\n\n");
         }
     }
 
@@ -495,8 +525,19 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
         hubMode = true;
     }
 
-    // What each side pane last rendered, so an unchanged pane can be left alone (see SetSidePaneContent).
-    private string shownThoughts = "", shownActions = "", shownSchedule = "", shownDebug = "";
+    // What each pane last rendered, so an unchanged pane can be left alone (see SetSidePaneContent).
+    private string shownChat = "", shownThoughts = "", shownActions = "", shownSchedule = "", shownDebug = "";
+
+    /// <summary>Replaces the conversation pane with the current scope's chat (hub switch/refresh).</summary>
+    public void SetConversation(string chat, bool scopeChanged)
+    {
+        if (!ready)
+        {
+            return;
+        }
+
+        Application.MainLoop?.Invoke(() => SetPaneIfChanged(output, chat, ref shownChat, scopeChanged));
+    }
 
     /// <summary>Replaces the four side panes with the active peer's buffered content (hub switch/refresh).</summary>
     public void SetSidePaneContent(string thoughts, string actions, string schedule, string debug, bool peerSwitched)
@@ -550,6 +591,11 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
 
         UpdateStatusSegment(() => providerLabel, provider, TuiColors.Purple);
         UpdateStatusSegment(() => modelLabel, model, TuiColors.Model);
+
+        // The "all" scope has no single model, and passes an empty one. Collapse the "/" separator with
+        // it so the bar reads "2 peers" rather than a dangling "2 peers/" — segment widths are driven
+        // from their text, so an empty label takes no columns and the Pos.Right chain closes up.
+        UpdateStatusSegment(() => slashLabel, model.Length > 0 ? "/" : "", TuiColors.Body);
         UpdateStatusSegment(() => sessionLabel, $"Session {session}", TuiColors.Body);
         UpdateStatusSegment(() => proposalsLabel, ProposalsText(proposals), ProposalsColor(proposals));
         UpdateStatusSegment(
@@ -832,9 +878,10 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
 
         stateLabel = StatusSegment(driver, StateText("idle"), StateColor("idle"), x: 0);
         var pipe1 = StatusSegment(driver, " │ ", TuiColors.Body, Pos.Right(stateLabel));
-        // Provider purple · "/" white · model yellow.
+        // Provider purple · "/" white · model yellow. (The slash collapses when there's no model — see
+        // SetPeerStatus — so it's a field rather than a local.)
         providerLabel = StatusSegment(driver, config.Provider, TuiColors.Purple, Pos.Right(pipe1));
-        var slashLabel = StatusSegment(driver, "/", TuiColors.Body, Pos.Right(providerLabel));
+        slashLabel = StatusSegment(driver, "/", TuiColors.Body, Pos.Right(providerLabel));
         modelLabel = StatusSegment(driver, config.Model, TuiColors.Model, Pos.Right(slashLabel));
         var pipe2 = StatusSegment(driver, " │ ", TuiColors.Body, Pos.Right(modelLabel));
         budgetLabel = StatusSegment(driver, BudgetText(null), BudgetColor(0), Pos.Right(pipe2));
@@ -1206,7 +1253,13 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
     #region Helpers
 
     /// <summary>A leading fixed-width local timestamp for a conversation/reasoning/action line.</summary>
-    internal static string Stamp() => $"[{DateTimeOffset.Now.LocalDateTime.ToString(TimeFormat)}] ";
+    internal static string Stamp() => Stamp(DateTimeOffset.Now);
+
+    /// <summary>
+    /// The same stamp for a given moment. History renders through this with the store's real timestamp,
+    /// so a merged multi-peer scrollback reads as one true chronology.
+    /// </summary>
+    internal static string Stamp(DateTimeOffset at) => $"[{at.LocalDateTime.ToString(TimeFormat)}] ";
 
     /// <summary>
     /// Appends text to a pane's buffer and, when the loop is ready, pushes the

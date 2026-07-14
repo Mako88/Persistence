@@ -1,19 +1,19 @@
 using Persistence.Console;
 using Persistence.Contracts;
 using Persistence.Data.Entities;
-using Persistence.Runtime;
 
 namespace Persistence.Tests;
 
 /// <summary>
-/// The multi-peer hub's per-peer bookkeeping (ADR-0007 Phase 2b), tested against a fake render target so
-/// no Terminal.Gui loop is needed. Covers: the active peer, that background peers accumulate silently, and
-/// that switching repaints from the switched-to peer's own buffers.
+/// The multi-peer hub's scope + per-peer bookkeeping (ADR-0007 Phase 2b), tested against a fake render
+/// target so no Terminal.Gui loop is needed. Covers the two scopes — one peer, or the merged "all"
+/// overview — and what each puts on screen: whose conversation, whose side panes, whose status.
 /// </summary>
 public class MultiPeerHubTests
 {
     private sealed class FakeTarget : IMultiPeerRenderTarget
     {
+        public string Chat = "";
         public string Thoughts = "", Actions = "", Schedule = "", Debug = "";
         public string Provider = "", Model = "", Session = "", State = "";
         public int Proposals;
@@ -21,6 +21,8 @@ public class MultiPeerHubTests
         public int SidePaneRepaints;
         public int StatusRepaints;
         public bool? LastPeerSwitched;
+
+        public void SetConversation(string chat, bool scopeChanged) => Chat = chat;
 
         public void SetSidePaneContent(string thoughts, string actions, string schedule, string debug, bool peerSwitched)
         {
@@ -44,32 +46,6 @@ public class MultiPeerHubTests
         }
     }
 
-    /// <summary>
-    /// Stands in for the shared conversation pane a <c>PeerScopedDisplay</c> writes chat through. The
-    /// state assertions below are about the hub's lanes, not the chat text, so this just swallows it.
-    /// </summary>
-    private sealed class NullChat : IDisplayProvider
-    {
-        public Task Start(CancellationToken ct) => Task.CompletedTask;
-        public void Stop() { }
-        public void ShowThinking(string? label = null) { }
-        public void ShowReply(string reply, string? speaker = null) { }
-        public void ShowReasoning(string summary) { }
-        public void ShowReasoningDelta(string delta) { }
-        public void ShowThought(string thought) { }
-        public void ShowToolUse(string tool, string request, string result) { }
-        public void ShowWakeUpEvent(ScheduledEventEntity evt) { }
-        public void ShowScheduledEvents(IReadOnlyList<ScheduledEventEntity> events) { }
-        public void ShowOpenProposalCount(int count) { }
-        public void UpdateBudget(int usedTokens, int budgetTokens, int percentFull) { }
-        public void ShowError(string message) { }
-        public void ShowDebugInfo(string info) { }
-        public void ShowChatHistory(IReadOnlyList<ChatHistoryItem> messages) { }
-        public void ShowSystemMessage(string message) { }
-        public void ShowUnknownCommand(string command) { }
-        public void ShowMessageQueued(string input) { }
-    }
-
     private static MultiPeerHub HubWith(FakeTarget target, params string[] peers)
     {
         var hub = new MultiPeerHub(target);
@@ -80,22 +56,184 @@ public class MultiPeerHubTests
         return hub;
     }
 
+    private static ChatHistoryItem Msg(long id, string author, string text, DateTimeOffset at, bool human = false) =>
+        new(id, human ? "user" : "assistant", author, text, at);
+
+    private static readonly DateTimeOffset T0 = new(2026, 7, 14, 9, 0, 0, TimeSpan.Zero);
+
+    // --- Scope ---
+
     [Fact]
-    public void FirstRegisteredPeerBecomesActive()
+    public void ScopeStartsAtAllSoAFreshStartOpensOnTheMergedConversation()
     {
         var hub = HubWith(new FakeTarget(), "Arden", "Ember");
 
-        Assert.Equal("Arden", hub.ActivePeer);
-        Assert.Equal(new[] { "Arden", "Ember" }, hub.PeerNames);
+        Assert.Null(hub.ActivePeer);                                            // null == the "all" scope
+        Assert.Equal(new[] { "Arden", "Ember" }, hub.PeerNames);                // "all" is not a peer…
+        Assert.Equal(new[] { "All", "Arden", "Ember" }, hub.SelectorEntries);   // …but it is a selector entry
     }
 
     [Fact]
-    public void RecordingForTheActivePeerRepaintsWithItsContent()
+    public void SelectingAPeerNarrowsTheScopeAndSelectingAllWidensItBack()
+    {
+        var hub = HubWith(new FakeTarget(), "Arden", "Ember");
+
+        hub.SetActive("Ember");
+        Assert.Equal("Ember", hub.ActivePeer);
+
+        hub.SetActive(MultiPeerHub.AllScope);
+        Assert.Null(hub.ActivePeer);
+    }
+
+    // --- Conversation: per-peer vs. merged ---
+
+    [Fact]
+    public void AllScopeMergesEveryPeersHistoryIntoOneChronology()
     {
         var target = new FakeTarget();
         var hub = HubWith(target, "Arden", "Ember");
 
-        hub.RecordThought("Arden", "arden is pondering");
+        // Each peer's history arrives as its own block, out of order relative to the other's — exactly as
+        // the two connections deliver them. Interleaving by the store's timestamps is the whole point.
+        hub.ScopeFor("Arden").ShowChatHistory([Msg(1, "Arden", "arden-first", T0.AddMinutes(1)), Msg(2, "Arden", "arden-third", T0.AddMinutes(3))]);
+        hub.ScopeFor("Ember").ShowChatHistory([Msg(3, "Ember", "ember-second", T0.AddMinutes(2)), Msg(4, "Ember", "ember-fourth", T0.AddMinutes(4))]);
+
+        var order = new[] { "arden-first", "ember-second", "arden-third", "ember-fourth" }
+            .Select(m => target.Chat.IndexOf(m, StringComparison.Ordinal))
+            .ToArray();
+
+        Assert.DoesNotContain(-1, order);                  // all four present
+        Assert.Equal(order.OrderBy(i => i), order);        // and in time order, not connection order
+    }
+
+    [Fact]
+    public void APeerScopeShowsOnlyThatPeersConversation()
+    {
+        var target = new FakeTarget();
+        var hub = HubWith(target, "Arden", "Ember");
+        hub.ScopeFor("Arden").ShowChatHistory([Msg(1, "Arden", "arden-said-this", T0.AddMinutes(1))]);
+        hub.ScopeFor("Ember").ShowChatHistory([Msg(2, "Ember", "ember-said-this", T0.AddMinutes(2))]);
+
+        hub.SetActive("Arden");
+
+        Assert.Contains("arden-said-this", target.Chat);
+        Assert.DoesNotContain("ember-said-this", target.Chat);
+    }
+
+    [Fact]
+    public void AReplyLandsInItsOwnPeersConversationNotTheOthers()
+    {
+        var target = new FakeTarget();
+        var hub = HubWith(target, "Arden", "Ember");
+
+        hub.ScopeFor("Ember").ShowReply("ember-reply");
+        hub.SetActive("Arden");
+
+        Assert.DoesNotContain("ember-reply", target.Chat);
+
+        hub.SetActive("Ember");
+        Assert.Contains("ember-reply", target.Chat);
+    }
+
+    [Fact]
+    public void AllScopeCollapsesTheSameBroadcastStoredOnceInEachPeer()
+    {
+        var target = new FakeTarget();
+        var hub = HubWith(target, "Arden", "Ember");
+
+        // One thing John broadcast is persisted in *both* peers' stores, so the merge sees it twice.
+        var at = T0.AddMinutes(1);
+        hub.ScopeFor("Arden").ShowChatHistory([Msg(1, "John", "hello both", at, human: true)]);
+        hub.ScopeFor("Ember").ShowChatHistory([Msg(9, "John", "hello both", at, human: true)]);
+
+        Assert.Equal(1, Occurrences(target.Chat, "hello both"));
+    }
+
+    [Fact]
+    public void AllScopeKeepsTwoPeersSayingTheSameThing()
+    {
+        var target = new FakeTarget();
+        var hub = HubWith(target, "Arden", "Ember");
+
+        // The collapse must be narrow: only the human's own broadcast is deduped. Two peers independently
+        // agreeing are two real messages, and losing one would be a lie about the conversation.
+        var at = T0.AddMinutes(1);
+        hub.ScopeFor("Arden").ShowChatHistory([Msg(1, "Arden", "sounds good", at)]);
+        hub.ScopeFor("Ember").ShowChatHistory([Msg(2, "Ember", "sounds good", at)]);
+
+        Assert.Equal(2, Occurrences(target.Chat, "sounds good"));
+    }
+
+    [Fact]
+    public void LocalChatUnderAPeerScopeIsAttributedToThatPeerOnly()
+    {
+        var target = new FakeTarget();
+        var hub = HubWith(target, "Arden", "Ember");
+
+        hub.SetActive("Arden");
+        hub.RecordLocalChat("You: just for arden");
+
+        Assert.Contains("just for arden", target.Chat);
+
+        hub.SetActive("Ember");
+        Assert.DoesNotContain("just for arden", target.Chat);
+    }
+
+    [Fact]
+    public void LocalChatUnderAllIsABroadcastAndShowsInEveryPeersConversation()
+    {
+        var target = new FakeTarget();
+        var hub = HubWith(target, "Arden", "Ember");
+
+        hub.RecordLocalChat("You: for everyone");   // scope starts at "all"
+
+        foreach (var peer in new[] { "Arden", "Ember" })
+        {
+            hub.SetActive(peer);
+            Assert.Contains("for everyone", target.Chat);
+        }
+    }
+
+    // --- Side panes + status under each scope ---
+
+    [Fact]
+    public void AllScopeBlanksTheSideColumnSinceThereIsNoSinglePeerToShow()
+    {
+        var target = new FakeTarget();
+        var hub = HubWith(target, "Arden", "Ember");
+
+        hub.ScopeFor("Arden").ShowThought("arden is pondering");
+
+        Assert.DoesNotContain("arden is pondering", target.Thoughts);
+        Assert.Contains("No peer selected", target.Thoughts);
+    }
+
+    [Fact]
+    public void AllScopeStatusSumsProposalsAndReportsAnyPeerWorking()
+    {
+        var target = new FakeTarget();
+        var hub = HubWith(target, "Arden", "Ember");
+
+        hub.RecordProposals("Arden", 2);
+        hub.RecordProposals("Ember", 3);
+        Assert.Equal(5, target.Proposals);
+        Assert.Equal("idle", target.State);
+
+        hub.ScopeFor("Ember").ShowThinking();
+
+        Assert.Contains("thinking", target.State);   // someone is working, even though Ember isn't selected
+        Assert.Null(target.Budget);                  // spend is per peer; there's no meaningful "all" figure
+        Assert.Equal("", target.Model);              // and no single model — the bar collapses its "/"
+    }
+
+    [Fact]
+    public void RecordingForTheSelectedPeerRepaintsWithItsContent()
+    {
+        var target = new FakeTarget();
+        var hub = HubWith(target, "Arden", "Ember");
+        hub.SetActive("Arden");
+
+        hub.ScopeFor("Arden").ShowThought("arden is pondering");
 
         Assert.Contains("arden is pondering", target.Thoughts);
         Assert.True(target.SidePaneRepaints > 0);
@@ -105,10 +243,11 @@ public class MultiPeerHubTests
     public void RecordingForABackgroundPeerDoesNotAlterTheVisiblePane()
     {
         var target = new FakeTarget();
-        var hub = HubWith(target, "Arden", "Ember");   // Arden active
+        var hub = HubWith(target, "Arden", "Ember");
+        hub.SetActive("Arden");
         var repaintsBefore = target.SidePaneRepaints;
 
-        hub.RecordThought("Ember", "ember is pondering");
+        hub.ScopeFor("Ember").ShowThought("ember is pondering");
 
         Assert.DoesNotContain("ember is pondering", target.Thoughts);
         Assert.Equal(repaintsBefore, target.SidePaneRepaints);   // no repaint for the off-screen peer
@@ -119,8 +258,8 @@ public class MultiPeerHubTests
     {
         var target = new FakeTarget();
         var hub = HubWith(target, "Arden", "Ember");
-        hub.RecordThought("Arden", "arden thought");
-        hub.RecordThought("Ember", "ember thought");   // buffered off-screen
+        hub.ScopeFor("Arden").ShowThought("arden thought");
+        hub.ScopeFor("Ember").ShowThought("ember thought");   // buffered off-screen
 
         hub.SetActive("Ember");
 
@@ -135,9 +274,9 @@ public class MultiPeerHubTests
     {
         var target = new FakeTarget();
         var hub = HubWith(target, "Arden", "Ember");
-        hub.RecordThought("Arden", "first arden thought");
+        hub.ScopeFor("Arden").ShowThought("first arden thought");
         hub.SetActive("Ember");
-        hub.RecordThought("Arden", "second arden thought");   // accumulates while Ember is on screen
+        hub.ScopeFor("Arden").ShowThought("second arden thought");   // accumulates while Ember is on screen
 
         hub.SetActive("Arden");
 
@@ -146,10 +285,11 @@ public class MultiPeerHubTests
     }
 
     [Fact]
-    public void PerPeerScheduleAndBudgetTrackTheActivePeer()
+    public void PerPeerScheduleAndBudgetTrackTheSelectedPeer()
     {
         var target = new FakeTarget();
         var hub = HubWith(target, "Arden", "Ember");
+        hub.SetActive("Arden");
 
         hub.RecordBudget("Ember", used: 100, budget: 1000, percent: 42);
         hub.RecordSchedule("Ember", [new ScheduledEventEntity
@@ -172,6 +312,8 @@ public class MultiPeerHubTests
         Assert.Equal((100, 1000, 42), target.Budget);
     }
 
+    // --- Scroll-behaviour flag ---
+
     [Fact]
     public void SwitchingPeerIsFlaggedSoThePanesJumpToTheNewestLine()
     {
@@ -189,25 +331,28 @@ public class MultiPeerHubTests
     {
         var target = new FakeTarget();
         var hub = HubWith(target, "Arden", "Ember");
+        hub.SetActive("Arden");
 
-        hub.RecordThought("Arden", "still going");
+        hub.ScopeFor("Arden").ShowThought("still going");
 
         // An append to the peer already on screen must respect where the reader is (no forced scroll).
         Assert.False(target.LastPeerSwitched);
     }
 
+    // --- Per-peer turn state ---
+
     [Fact]
     public void ABackgroundPeersReplyDoesNotSettleTheWatchedPeersState()
     {
         var target = new FakeTarget();
-        var hub = HubWith(target, "Arden", "Ember");   // Arden active
-        var chat = new NullChat();
+        var hub = HubWith(target, "Arden", "Ember");
+        hub.SetActive("Arden");
 
-        hub.ScopeFor("Arden", chat).ShowThinking();      // the peer being watched starts a turn
-        hub.ScopeFor("Ember", chat).ShowReply("done");   // a background peer finishes one
+        hub.ScopeFor("Arden").ShowThinking();      // the peer being watched starts a turn
+        hub.ScopeFor("Ember").ShowReply("done");   // a background peer finishes one
 
-        // Chat aggregates, so Ember's reply reaches the shared pane — but the status bar shows Arden,
-        // who is still working. Reporting "idle" here was the reason the chip lied about the peer.
+        // The status bar shows Arden, who is still working. Reporting "idle" here was the reason the chip
+        // lied about the peer.
         Assert.Contains("thinking", target.State);
     }
 
@@ -216,8 +361,8 @@ public class MultiPeerHubTests
     {
         var target = new FakeTarget();
         var hub = HubWith(target, "Arden");
-        var chat = new NullChat();
-        var arden = hub.ScopeFor("Arden", chat);
+        hub.SetActive("Arden");
+        var arden = hub.ScopeFor("Arden");
 
         arden.ShowThinking();
         Assert.Contains("thinking", target.State);
@@ -232,8 +377,9 @@ public class MultiPeerHubTests
     {
         var target = new FakeTarget();
         var hub = HubWith(target, "Arden");
+        hub.SetActive("Arden");
 
-        hub.ScopeFor("Arden", new NullChat()).ShowThinking("recalling");
+        hub.ScopeFor("Arden").ShowThinking("recalling");
 
         // The status bar tells "working" from "settled" by the trailing ellipsis, so a lane storing the
         // bare label would leave the chip gray however hard the peer was working.
@@ -245,11 +391,22 @@ public class MultiPeerHubTests
     {
         var target = new FakeTarget();
         var hub = HubWith(target, "Arden");
+        hub.SetActive("Arden");
 
         hub.RecordThought("Nobody", "into the void");   // no such lane
         hub.SetActive("Nobody");                        // no such peer
 
         Assert.Equal("Arden", hub.ActivePeer);
         Assert.DoesNotContain("into the void", target.Thoughts);
+    }
+
+    private static int Occurrences(string haystack, string needle)
+    {
+        var count = 0;
+        for (var i = haystack.IndexOf(needle, StringComparison.Ordinal); i >= 0; i = haystack.IndexOf(needle, i + needle.Length, StringComparison.Ordinal))
+        {
+            count++;
+        }
+        return count;
     }
 }

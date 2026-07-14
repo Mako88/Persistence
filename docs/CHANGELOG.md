@@ -9,6 +9,47 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-07-14 — the hub gets a scope ("all" vs. one peer)
+
+The second half of John's front-end list. It reads as five asks, but they're one change: the hub had a
+notion of "the active peer" and a conversation that was *always* aggregated. Replacing that with a
+**scope** — either one peer, or `All` — makes the rest fall out.
+
+### Added — an "all" scope, and per-peer conversations
+The selector now lists `All` first, then the peers, and the scope decides everything on screen:
+- **A peer scope** shows that peer alone: its conversation only, its side panes, its model and spend.
+- **The "all" scope** is the overview: every peer's conversation merged, the side column blanked (there's
+  no single peer to show), and the status bar carrying only what's meaningful across peers — total open
+  proposals, and whether *anyone* is working.
+
+A fresh start opens on `All`. `All` is coloured gold rather than a peer's purple: a glance at the
+selector is what tells you whether input is about to reach one peer or everyone.
+
+### Fixed — startup history wasn't interleaved (John's "not all the latest messages are displaying")
+`RunHubAsync` drew each peer's snapshot in *connection* order, so you got Arden's ten messages and then
+Ember's ten — the newest message overall wasn't at the bottom, and the scrollback wasn't a conversation.
+Chat is now laned per peer as timestamped entries rather than appended into one string, and the "all"
+scope merges them by the store's real timestamps. This is why chat had to move into the hub: a per-peer
+string can't be merged by time, and a peer scope has to be able to show one conversation alone.
+
+Note the snapshot limit is still **10 per peer** (`ConversationHistoryProvider.GetRecentAsync`), so "all"
+shows the 10 most recent *per peer*, not the 10 most recent overall. Left as-is deliberately — see TODO.
+
+### Added — send routing (individual → them, "all" → everybody)
+Input goes to the selected peer, or to every peer under `All`. Checked against
+[ADR-0008](adr/0008-the-room-multi-peer-conversation.md) first: broadcasting is fine. The no-autofan
+guard (§4) is about *peers* relaying to each other unmediated; a *human* opening the floor to the room is
+explicitly anticipated (§1, "what do you both think?"), and a human turn is what **resets** the
+reply-chain breaker rather than tripping it.
+
+### Known gap — a broadcast is stored once per peer
+With no cross-peer message id (ADR-0007 Phase 0 / ADR-0008 call for one; it doesn't exist yet), one
+message sent to everybody is persisted separately in each peer's store, so the merged view sees it N
+times. Mitigated narrowly: under "all", a *human* line byte-identical to the one immediately before it
+collapses — after sorting, those copies are necessarily adjacent. It can't touch a peer's own words (two
+peers agreeing stay two messages) and can't merge anything a minute apart. The real fix is the cross-peer
+id.
+
 ## 2026-07-14 — TUI polish batch (John's human-facing list)
 
 The first half of the front-end list John raised: the items about scrolling, status accuracy, and

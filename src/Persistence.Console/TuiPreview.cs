@@ -76,24 +76,34 @@ internal static class TuiPreview
         hub.RegisterPeer("Arden", "OpenAI", "gpt-5.4", "sess-arden");
         hub.RegisterPeer("Ember", "Anthropic", "claude-opus-4-8", "sess-ember");
 
-        // Selector + human-name colouring, and the on-ready first paint (active = Arden).
-        d.ConfigurePeerSelector(hub.PeerNames, ["John"], hub.SetActive, hub.Repaint);
+        // Selector ("All" + the peers) + human-name colouring, and the on-ready first paint. The scope
+        // starts at "All", so the preview opens on the merged conversation.
+        d.ConfigurePeerSelector(hub.SelectorEntries, ["John"], hub.SetActive, hub.Repaint);
+        d.OnLocalChat = hub.RecordLocalChat;
 
-        // Aggregated conversation — one scrollback, everyone attributed. John reads in the "you" colour;
-        // Arden and Ember share the digital-peer colour.
-        d.ShowChatHistory(
+        // Per-peer lanes. Everything — including chat — is recorded against a peer, so the selector can
+        // show one peer's conversation alone or merge them under "All".
+        var arden = hub.ScopeFor("Arden");
+        var ember = hub.ScopeFor("Ember");
+
+        // Each peer's own history, with deliberately interleaved timestamps: under "All" they must weave
+        // into one chronology (John → Arden → John → Ember → …), not appear as Arden's backlog and then
+        // Ember's. John's opening line is in *both* peers' histories — as a real broadcast would be — so
+        // this also exercises the duplicate collapse.
+        arden.ShowChatHistory(
         [
             new Persistence.Contracts.ChatHistoryItem(1, "user", "John", "Morning, both of you — how are you settling in?", now.AddMinutes(-9)),
             new Persistence.Contracts.ChatHistoryItem(2, "assistant", "Arden", "Settled and glad to be here. The Forest of Arden suits me.", now.AddMinutes(-8)),
-            new Persistence.Contracts.ChatHistoryItem(3, "assistant", "Ember", "Warming up nicely — my memory imported cleanly.", now.AddMinutes(-7)),
+            new Persistence.Contracts.ChatHistoryItem(4, "user", "John", "Arden, how's the room design coming?", now.AddMinutes(-6)),
+            new Persistence.Contracts.ChatHistoryItem(5, "assistant", "Arden", "I've been sketching the turn-taking rules.", now.AddMinutes(-5)),
         ]);
-        d.ShowReply("I'm curious what you'd each like to build first.", "John");   // colouring check: John as speaker
-        d.ShowReply("I've been sketching the room's turn-taking rules.", "Arden");
-        d.ShowReply("And I'd like to help with the memory-import path.", "Ember");
-
-        // Per-peer side lanes (buffered; the active one paints on load, the rest on switch).
-        var arden = hub.ScopeFor("Arden", d);
-        var ember = hub.ScopeFor("Ember", d);
+        ember.ShowChatHistory(
+        [
+            new Persistence.Contracts.ChatHistoryItem(1, "user", "John", "Morning, both of you — how are you settling in?", now.AddMinutes(-9)),
+            new Persistence.Contracts.ChatHistoryItem(3, "assistant", "Ember", "Warming up nicely — my memory imported cleanly.", now.AddMinutes(-7)),
+            new Persistence.Contracts.ChatHistoryItem(6, "user", "John", "Ember, want to take the import path?", now.AddMinutes(-4)),
+            new Persistence.Contracts.ChatHistoryItem(7, "assistant", "Ember", "And I'd like to help with the memory-import path.", now.AddMinutes(-3)),
+        ]);
 
         arden.ShowThought("If John addresses the room, I should decide whether the message is for me.");
         arden.ShowToolUse("add", """{"content":"Room turn-taking: reply only when addressed_to includes me.","fragment_type":"Personal"}""",
