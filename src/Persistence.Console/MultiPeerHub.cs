@@ -63,12 +63,40 @@ internal sealed class MultiPeerHub(IMultiPeerRenderTarget target)
     private const string AllScopePlaceholder =
         "No peer selected.\nPick a peer in the selector above (click it, or press F6) to see its thoughts,\nactions and schedule.\n";
 
+    /// <summary>
+    /// An append-only pane buffer that remembers what it last rendered to.
+    ///
+    /// This exists to make the repaint path cheap <em>by construction</em> rather than by everyone
+    /// downstream remembering to guard. A repaint composes the whole scope — but it fires on every
+    /// recorded event, and a streamed reasoning delta records one per chunk, none of which touch the
+    /// other panes. Rebuilding a StringBuilder per paint made each chunk cost O(scrollback) per pane for
+    /// output that was then compared and thrown away.
+    ///
+    /// Memoising here means an untouched buffer hands back the <em>same string reference</em>, so the
+    /// render target's "did this change?" comparison short-circuits on reference equality instead of
+    /// walking the text. One small type, and the whole path is O(1) for anything that didn't change.
+    /// </summary>
+    private sealed class PaneBuffer
+    {
+        private readonly StringBuilder text = new();
+        private string? rendered;
+
+        public void Append(string s)
+        {
+            text.Append(s);
+            rendered = null;
+        }
+
+        /// <summary>The buffer's contents — the same instance until something appends.</summary>
+        public string Text => rendered ??= text.ToString();
+    }
+
     /// <summary>Per-peer side-column + status buffers. Chat is laned separately (see <see cref="chat"/>).</summary>
     private sealed class Lane
     {
-        public readonly StringBuilder Thoughts = new();
-        public readonly StringBuilder Actions = new();
-        public readonly StringBuilder Debug = new();
+        public readonly PaneBuffer Thoughts = new();
+        public readonly PaneBuffer Actions = new();
+        public readonly PaneBuffer Debug = new();
         public string Schedule = "No scheduled events.\n";
         public int Proposals;
         public (int Used, int Budget, int Percent)? Budget;
@@ -101,9 +129,9 @@ internal sealed class MultiPeerHub(IMultiPeerRenderTarget target)
     /// <summary>The selected scope: a peer's name, or null for <see cref="AllScope"/> (the default).</summary>
     private string? active;
 
-    // Composing the conversation means filtering, sorting and re-joining every line, but a repaint fires
-    // on every recorded event — including one per streamed reasoning chunk, none of which touch chat. So
-    // the composed text is cached and rebuilt only when the conversation or the scope actually changes.
+    // The conversation's equivalent of PaneBuffer's memo, keyed by scope as well as content: composing it
+    // means filtering, sorting and re-joining every line, and a repaint must not pay that for a chunk of
+    // streamed reasoning. Same contract — an unchanged conversation hands back the same string reference.
     private string chatRendered = "";
     private string? chatRenderedScope;
     private bool chatRenderedValid;
@@ -329,6 +357,14 @@ internal sealed class MultiPeerHub(IMultiPeerRenderTarget target)
     /// Pushes the current scope to the render target. <paramref name="scopeChanged"/> is true when the
     /// content is changing scope (a switch, or the first paint) and false when it's a live update to the
     /// scope already on screen — the target uses it to decide whether to jump to the newest line.
+    ///
+    /// <para><b>Invariant — keep this cheap.</b> Paint runs on <em>every</em> recorded event, and a
+    /// streamed reasoning delta records one per chunk, so it is the hottest path in the client. Every
+    /// value read below must be an O(1) lookup that returns the <em>same string reference</em> when
+    /// nothing changed (<see cref="PaneBuffer.Text"/>, the chat memo, the const placeholder, the plain
+    /// Schedule/Provider/Model fields). That's what lets the render target's "did this change?" check
+    /// short-circuit on reference equality instead of walking the text. If you add a surface here, give
+    /// it the same property — do not compose or concatenate in this method.</para>
     /// </summary>
     private void Paint(bool scopeChanged)
     {
@@ -356,10 +392,10 @@ internal sealed class MultiPeerHub(IMultiPeerRenderTarget target)
             }
             else if (lanes.TryGetValue(active, out var lane))
             {
-                thoughts = lane.Thoughts.ToString();
-                actions = lane.Actions.ToString();
+                thoughts = lane.Thoughts.Text;
+                actions = lane.Actions.Text;
                 schedule = lane.Schedule;
-                debug = lane.Debug.ToString();
+                debug = lane.Debug.Text;
                 provider = lane.Provider;
                 model = lane.Model;
                 session = lane.Session;

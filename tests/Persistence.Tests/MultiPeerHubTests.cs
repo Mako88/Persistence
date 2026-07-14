@@ -339,6 +339,58 @@ public class MultiPeerHubTests
         Assert.False(target.LastPeerSwitched);
     }
 
+    // --- The repaint path stays cheap ---
+    //
+    // Paint runs on every recorded event, and a streamed reasoning delta records one per chunk, so it is
+    // the hottest path in the client. These pin the invariant that makes it affordable: a surface that
+    // didn't change hands back the *same string reference*, so the render target's "did this change?"
+    // check short-circuits instead of walking the text. They fail the moment someone composes in Paint
+    // (a StringBuilder.ToString(), a concat, a re-sort) — which is exactly the mistake worth catching,
+    // because its only symptom is the whole TUI feeling slow.
+
+    [Fact]
+    public void AnUnchangedPaneIsNotRecomposedOnRepaint()
+    {
+        var target = new FakeTarget();
+        var hub = HubWith(target, "Arden");
+        hub.SetActive("Arden");
+        hub.ScopeFor("Arden").ShowThought("a thought");
+        var before = target.Thoughts;
+
+        hub.RecordBudget("Arden", used: 1, budget: 2, percent: 3);   // touches status, not thoughts
+
+        Assert.Same(before, target.Thoughts);
+    }
+
+    [Fact]
+    public void AnUnchangedConversationIsNotRecomposedOnRepaint()
+    {
+        var target = new FakeTarget();
+        var hub = HubWith(target, "Arden");
+        hub.SetActive("Arden");
+        hub.ScopeFor("Arden").ShowReply("hello");
+        var before = target.Chat;
+
+        hub.ScopeFor("Arden").ShowReasoningDelta("streamed chunk");   // a reasoning chunk is not chat
+
+        Assert.Same(before, target.Chat);
+    }
+
+    [Fact]
+    public void ChangingAPaneDoesRecomposeIt()
+    {
+        var target = new FakeTarget();
+        var hub = HubWith(target, "Arden");
+        hub.SetActive("Arden");
+        hub.ScopeFor("Arden").ShowThought("first");
+        var before = target.Thoughts;
+
+        hub.ScopeFor("Arden").ShowThought("second");
+
+        Assert.NotSame(before, target.Thoughts);
+        Assert.Contains("second", target.Thoughts);
+    }
+
     // --- Per-peer turn state ---
 
     [Fact]
