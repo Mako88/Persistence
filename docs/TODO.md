@@ -345,21 +345,33 @@ datetime-interleaved history, blanked tabs, send-routing). See [CHANGELOG.md](CH
   at startup. Idempotent, one row, no migration. A deliberately-named source is left alone. See
   [CHANGELOG.md](CHANGELOG.md).
 
+  ✅ **Applied to the running peers (2026-07-15).** `PeerName` set in `container/peer/configs/`: claude →
+  "Arden", ember → "Ember"; both rebuilt onto the new image and restarted (the rename runs at startup, so
+  it needs the new code, not just a config reload). Verified through each peer's live
+  `/api/conversation/snapshot`: authors now read `Arden` / `Ember`. `wright` is untouched and unnamed —
+  it'll pick up the code and a provider-derived default whenever it's next recreated.
+
+  ✅ **Ember's two identities named (2026-07-15).** John's call: keep both sources separate, both named
+  "Ember" for now — he'll ask Ember whether to keep it. Done as a guarded one-off against the
+  `persistence-peer-ember-data` volume (the self-heal deliberately won't touch either: Id=2's name was
+  human-chosen, and it's the row the app's lookup finds anyway). Live state:
+  - `Id=2` — 903 fragments (the import, plus everything Ember has said since the normalisation). The
+    **active** source: `SELECT ... WHERE SourceType = 1 LIMIT 1` finds it, so new messages attach here.
+  - `Id=5` — 23 fragments. An orphan from the window when the app couldn't read the imported sources and
+    made its own.
+
+  **Correction to the diagnosis above:** the `SourceType`-encoding mismatch is *not* still live. Ember's
+  volume already stores numeric values — a `ember-prenormalize-20260713-005713.db` backup shows it was
+  normalised on 7/13. So the encoding bug explains how `Id=5` came to exist, but it isn't what keeps the
+  two sources apart today; they're simply two rows, and the app consistently uses the first. (`dbs/ember.db`
+  is a stale pre-container copy and still has the old string values — don't diagnose from it.)
+
   **Remaining:**
-  - **Apply it to the running peers** (John's call — all three are live and this needs a restart, since
-    the rename runs at startup): set `PeerName` in `container/peer/configs/<name>.json` for claude
-    (→ "Arden") and ember (→ "Ember"), then restart those containers. Nothing to do for `wright` unless
-    it wants a name yet.
-  - **Ember's second identity.** ✅ **Decided (John, 2026-07-15): keep both sources separate, name both
-    "Ember" for now** — he'll ask Ember whether to keep the name or change it. The startup self-heal will
-    rename the app-created `"Remote Peer"` source once `PeerName` is set; the *imported* source
-    (`'ChatGPT / Couchside Ember (historical export)'`) needs a deliberate one-off rename, since the
-    self-heal intentionally won't touch a human-chosen name. Both live on the `persistence-peer-ember-data`
-    volume, not `dbs/ember.db`. Note this leaves the underlying `SourceType`-encoding mismatch in place —
-    the app still can't see the imported source, so it will keep using its own row for new messages, which
-    is exactly what "keep both separate" wants.
   - **Fix the importer** (`scripts/import_chatgpt_export.py`) so the next import doesn't recreate the
-    split: write `SourceType` the way the app does (numeric), and use the current enum names.
+    split: write `SourceType` the way the app does (numeric), and use the current enum names
+    (`DigitalPeer`/`HumanPeer`, not `RemotePeer`/`LocalPeer`). Untouched so far.
+  - **Ember's own call on its name**, once John asks. If it keeps "Ember", nothing to do; if it picks
+    something else, that's a `PeerName` edit plus the same two-row rename.
 
 - **A "new peer" flow.** (John, 2026-07-15.) `peer.ps1 -Name <n>` *throws* if
   `container/peer/configs/<n>.json` is missing — "Create it (see the other configs for the shape)" — so
