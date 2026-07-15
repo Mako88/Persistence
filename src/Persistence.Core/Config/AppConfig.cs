@@ -108,6 +108,14 @@ public class AppConfig : IAppConfig
     public string SelectedLocalPeer { get; set; } = "Local Peer";
 
     /// <summary>
+    /// This peer's own name — who the runtime <em>is</em>, as distinct from <see cref="SelectedLocalPeer"/>
+    /// (who it's talking to). Blank (the default) derives a starting name from the provider — "Claude" on
+    /// Anthropic, "ChatGPT" on OpenAI — which the peer wears until it chooses its own, at which point
+    /// that choice is set here. Overridable via <c>PERSISTENCE_PEERNAME</c>. See <see cref="PeerIdentity"/>.
+    /// </summary>
+    public string PeerName { get; set; } = "";
+
+    /// <summary>
     /// Optional descriptions for known local peers, surfaced to the remote peer. Names not listed are
     /// still accepted (just without a description).
     /// </summary>

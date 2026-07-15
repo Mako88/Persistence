@@ -339,17 +339,36 @@ datetime-interleaved history, blanked tabs, send-routing). See [CHANGELOG.md](CH
     doubly stale — `RemotePeer`/`LocalPeer` no longer exist as enum members (renamed `DigitalPeer`/
     `HumanPeer`), so they wouldn't round-trip even if matched by name.
 
-  **Shape of the fix (last part is John's call):**
-  1. A server-side peer name in config — the peer's *own* identity, distinct from `SelectedLocalPeer`.
-  2. `CreateRemotePeerSourceIfNotExists` names the row from it **and renames a legacy `"Remote Peer"` row**
-     when it finds one: one row, idempotent, self-healing at startup. Note a static SQL migration *can't*
-     do this — the name differs per database — so the existing startup path is the right home, not
-     `Migrations/`.
-  3. Ember additionally needs a one-off data fix normalising its `SourceType` values and merging its two
-     digital-peer sources, or it grows a second identity every time the app opens it. Decide whether to
-     repoint the imported fragments at one source or keep the export's provenance distinct.
-  4. Fix the importer too (`scripts/import_chatgpt_export.py`), so the next import doesn't recreate the
-     split.
+  **Fix, steps 1–2 ✅ DONE (2026-07-15)** — `IAppConfig.PeerName` (+ `PERSISTENCE_PEERNAME`), a
+  provider-derived default (`PeerIdentity`: Claude / ChatGPT / model-id), and
+  `CreateRemotePeerSourceIfNotExists` naming the row from it **and renaming a legacy `"Remote Peer"` row**
+  at startup. Idempotent, one row, no migration. A deliberately-named source is left alone. See
+  [CHANGELOG.md](CHANGELOG.md).
+
+  **Remaining:**
+  - **Apply it to the running peers** (John's call — all three are live and this needs a restart, since
+    the rename runs at startup): set `PeerName` in `container/peer/configs/<name>.json` for claude
+    (→ "Arden") and ember (→ "Ember"), then restart those containers. Nothing to do for `wright` unless
+    it wants a name yet.
+  - **Ember's second identity.** ✅ **Decided (John, 2026-07-15): keep both sources separate, name both
+    "Ember" for now** — he'll ask Ember whether to keep the name or change it. The startup self-heal will
+    rename the app-created `"Remote Peer"` source once `PeerName` is set; the *imported* source
+    (`'ChatGPT / Couchside Ember (historical export)'`) needs a deliberate one-off rename, since the
+    self-heal intentionally won't touch a human-chosen name. Both live on the `persistence-peer-ember-data`
+    volume, not `dbs/ember.db`. Note this leaves the underlying `SourceType`-encoding mismatch in place —
+    the app still can't see the imported source, so it will keep using its own row for new messages, which
+    is exactly what "keep both separate" wants.
+  - **Fix the importer** (`scripts/import_chatgpt_export.py`) so the next import doesn't recreate the
+    split: write `SourceType` the way the app does (numeric), and use the current enum names.
+
+- **A "new peer" flow.** (John, 2026-07-15.) `peer.ps1 -Name <n>` *throws* if
+  `container/peer/configs/<n>.json` is missing — "Create it (see the other configs for the shape)" — so
+  standing up a peer today means hand-copying another peer's JSON, API key and all. John wants a flow that
+  prompts for the name, model, etc. Natural shape: `peer.ps1 -New` scaffolds the config from a template
+  (provider/model/key/budgets/`PeerName`), then starts it as usual. Worth deciding whether the name it
+  asks for is the *slug* (container/volume/config filename, lowercase) or the peer's display name — today
+  `-Name` is the slug, and `PeerName` is the identity; a new peer with no chosen name wants a slug but a
+  provider-derived `PeerName`.
 
 - **Markdown support in the GUI.** Render markdown in the panes (bold/italic/code/lists). Independent of
   the emoji question below.

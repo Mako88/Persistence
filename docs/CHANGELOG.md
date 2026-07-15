@@ -9,6 +9,34 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-07-15 — a peer knows its own name
+
+### Added — `PeerName`, and a provider-derived default
+A peer had no idea what it was called. Config carried `SelectedLocalPeer` (who the *human* is) but nothing
+for "I am Arden" — so live replies were labelled only because the *client* supplied the name from
+`--peer name=url`, and anything read back from the store (i.e. all history) fell back to whatever the
+source row said. `IAppConfig.PeerName` fixes the gap (env: `PERSISTENCE_PEERNAME`); it's also what
+[ADR-0007](adr/0007-federated-peers-runtime-room-client.md) Phase 0 wants for "peer names reaching the
+model".
+
+Blank derives a starting name from the provider (`PeerIdentity`): **Claude** on Anthropic/LocalClaude,
+**ChatGPT** on OpenAI. Providers that could be a vendor endpoint *or* somebody's local server
+(`OpenAiChat`, `Local`) fall back to the model id — guessing "ChatGPT" for a Gemma would be worse than
+saying nothing. It's explicitly a placeholder: a peer's name is its own to choose (the claude.db peer
+picked "Arden"), and once it does, that goes in `PeerName` and the default stops being consulted.
+
+### Fixed — history was attributed to "Remote Peer"
+Not a missing name, as previously recorded here: `SourceRepository` created the digital-peer source
+*literally named* `"Remote Peer"`, and `ResolveAuthor` faithfully returned it. It now names the row from
+`PeerName`, and **renames a store still carrying the old placeholder** on startup. That's one row —
+`Sources` is normalised, with `ContextFragmentSources` pointing many fragments at one source — so a single
+rename re-attributes the peer's entire history. A static SQL migration couldn't do this (the right name
+differs per store), which is why it lives in the startup path that already creates the row rather than in
+`Migrations/`.
+
+Only the built-in placeholder is replaced; a deliberately-named source (an import's provenance) is left
+alone. The self-heal fixes what the system got wrong — it doesn't overwrite what a human decided.
+
 ## 2026-07-14 — panes become a component
 
 Prompted by John asking whether the rendering invites the bug I'd nearly reintroduced in the hub's

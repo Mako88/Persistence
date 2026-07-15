@@ -12,6 +12,7 @@ namespace Persistence.Data.Repositories;
 public class SourceRepository : EntityRepository<SourceEntity>, ISourceRepository
 {
     private readonly ISessionContext sessionContext;
+    private readonly IAppConfig config;
 
     /// <summary>
     /// Constructor
@@ -20,6 +21,7 @@ public class SourceRepository : EntityRepository<SourceEntity>, ISourceRepositor
         : base(config, sessionContext)
     {
         this.sessionContext = sessionContext;
+        this.config = config;
     }
 
     /// <summary>
@@ -29,12 +31,56 @@ public class SourceRepository : EntityRepository<SourceEntity>, ISourceRepositor
         EnsureSourceAsync(SourceType.System, "System", id => sessionContext.SystemSourceId = id);
 
     /// <summary>
-    /// Creates the digital-peer source (the runtime's own voice) if none exists and stores its ID on the
-    /// session. Human peers no longer have a single shared source — each is resolved by name per message
-    /// (<see cref="EnsureLocalPeerSourceAsync"/>) — so only System and the digital peer are seeded here.
+    /// Ensures the digital-peer source — the runtime's own voice — exists, is named after this peer, and
+    /// has its id on the session. Human peers no longer have a single shared source (each is resolved by
+    /// name per message, see <see cref="EnsureLocalPeerSourceAsync"/>), so only System and the digital
+    /// peer are seeded here.
+    ///
+    /// <para><b>It also renames a store still carrying the old placeholder.</b> Before peers had names,
+    /// this row was created literally named "Remote Peer" — so every message the peer ever sent reads
+    /// back authored by "Remote Peer", however the client labels it live. Renaming here (rather than in a
+    /// migration) is deliberate: the right name differs per store, which is precisely what a static SQL
+    /// migration can't know, and this already runs at startup with the config to hand. It's one row —
+    /// <c>Sources</c> is normalised, with <c>ContextFragmentSources</c> pointing many fragments at one
+    /// source — so a single rename re-attributes the peer's whole history.</para>
+    ///
+    /// <para>Only the built-in placeholder is replaced. A source someone deliberately named (an import's
+    /// provenance, say) is left alone: this heals what the system got wrong, it doesn't overwrite what a
+    /// human decided.</para>
     /// </summary>
-    public Task CreateRemotePeerSourceIfNotExists() =>
-        EnsureSourceAsync(SourceType.DigitalPeer, "Remote Peer", id => sessionContext.RemotePeerSourceId = id);
+    public async Task CreateRemotePeerSourceIfNotExists()
+    {
+        var name = PeerIdentity.ResolveName(config);
+
+        var existing = await QueryFirstOrDefaultAsync(
+            $"SELECT * FROM Sources WHERE SourceType = {SourceType.DigitalPeer} LIMIT 1");
+
+        if (existing is null)
+        {
+            var now = DateTimeOffset.UtcNow;
+            var source = new SourceEntity
+            {
+                SourceType = SourceType.DigitalPeer,
+                Name = name,
+                CreatedUtc = now,
+                LastModifiedUtc = now,
+            };
+
+            await SaveAsync(source);
+            sessionContext.RemotePeerSourceId = source.Id;
+            return;
+        }
+
+        if (string.Equals(existing.Name, PeerIdentity.LegacyDefaultName, StringComparison.Ordinal)
+            && !string.Equals(name, PeerIdentity.LegacyDefaultName, StringComparison.Ordinal))
+        {
+            existing.Name = name;
+            existing.LastModifiedUtc = DateTimeOffset.UtcNow;
+            await SaveAsync(existing);
+        }
+
+        sessionContext.RemotePeerSourceId = existing.Id;
+    }
 
     /// <summary>
     /// Returns the source with the given name (case-insensitive), or null if not found

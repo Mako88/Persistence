@@ -17,6 +17,9 @@
   "_SurfacedMemoryCount_comment": "Associative recall: how many of the peer's authored memories (relevant to the current conversation, not already loaded) to auto-surface each turn, ranked by relevance × importance × confidence. 0 disables it. The peer can override per-session with set_recall(count=N).",
   "SurfacedMemoryCount": 5,
 
+  "_PeerName_comment": "This peer's OWN name — who the runtime is, not who it's talking to (that's SelectedLocalPeer). It names the source its messages are attributed to, so it's what clients show as the author of this peer's history. Blank derives a starting name from the provider ('Claude' on Anthropic, 'ChatGPT' on OpenAI) which the peer wears until it picks its own — set that choice here.",
+  "PeerName": "",
+
   "SelectedLocalPeer": "Local Peer",
   "LocalPeers": [
     { "Name": "Local Peer", "Description": "the person at the keyboard" }

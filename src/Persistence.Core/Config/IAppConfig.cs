@@ -149,6 +149,15 @@ public interface IAppConfig
     string SelectedLocalPeer { get; set; }
 
     /// <summary>
+    /// This peer's <em>own</em> name — who the runtime is, not who it's talking to (that's
+    /// <see cref="SelectedLocalPeer"/>). It names the digital-peer source its messages are attributed to,
+    /// so it's what every client reads back as the author of this peer's history. Blank derives a
+    /// starting name from the provider (see <see cref="PeerIdentity"/>); a peer that picks its own name
+    /// gets it set here.
+    /// </summary>
+    string PeerName { get; set; }
+
+    /// <summary>
     /// Optional descriptions for known local peers, surfaced to the remote peer.
     /// </summary>
     List<LocalPeerProfile> LocalPeers { get; set; }
