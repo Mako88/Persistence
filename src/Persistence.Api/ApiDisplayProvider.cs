@@ -152,7 +152,15 @@ public class ApiDisplayProvider : IDisplayProvider
     #region IDisplayProvider — output (logged)
 
     /// <summary>
-    /// Appends the remote peer's reply text to the log as a "reply" event
+    /// Appends the remote peer's reply text to the log as a "reply" event.
+    ///
+    /// <para><b>Not the live path, and a trap if it becomes one.</b> Replies actually reach clients via
+    /// the <see cref="RemotePeerReplied"/> subscription in <see cref="Start"/>, which carries the
+    /// persisted message id as the event's detail — that id is the <em>only</em> thing letting a client
+    /// reconcile a reply against the same message in its connect-time snapshot
+    /// (<c>ConversationEventRenderer</c> dedups on it). This overload has no id to carry, so anything
+    /// wired to call it would emit a reply the client cannot dedup, and the message would draw twice.
+    /// If you need it, give it the id.</para>
     /// </summary>
     public void ShowReply(string reply, string? speaker = null) => Append("reply", reply);
 

@@ -320,10 +320,30 @@ datetime-interleaved history, blanked tabs, send-routing). See [CHANGELOG.md](CH
   the *stored* sources look like for pre-naming rows — needs a decision on backfilling existing fragments
   vs. resolving the name at read time from the peer identity.
 
-- **Emoji / markdown support in the GUI.** Two separate things bundled: (a) rendering markdown in the
-  panes; (b) *"an emoji as the first character seemingly resulted in a double-send from Ember
-  [7/13/26 1:27AM]"* — that smells like a protocol/parser bug, not rendering, and should be reproduced on
-  its own before being lumped in with display work.
+- **Markdown support in the GUI.** Render markdown in the panes (bold/italic/code/lists). Independent of
+  the emoji question below.
+
+- **Emoji double-send (Ember, 7/13/26 1:27AM) — investigated 2026-07-14, not reproduced.** *"An emoji as
+  the first character seemingly resulted in a double-send from Ember."* The obvious suspect was the tagged
+  parser (an emoji is a UTF-16 surrogate pair — the shape that trips char-indexing and character classes),
+  but it's **exonerated with tests**: an emoji-leading `<respond>` parses to exactly one `RespondToUser`,
+  emoji anywhere in a turn parse to one think + one respond, and `\w` doesn't extend to emoji (category
+  `So`) so a literal `<🎉>` can't open a tag (`TaggedResponseParserTests`). Streaming is fine too —
+  `StreamModelOutputAsync` appends already-decoded delta strings in order, so a surrogate pair split
+  across two deltas reassembles correctly. The renderer dedups replies on the persisted message id, and
+  the only id-less "reply" events are `TurnHandler`'s synthetic status lines (never persisted, so never
+  duplicated against a snapshot).
+  **What's left — the one mechanism that produces exactly this symptom:** if the model emits *two*
+  `<respond>` blocks in a turn, `TurnHandler` dispatches both, silently, and you get two sends. Nothing
+  coalesces or warns. That's model behaviour rather than a parser bug, and an emoji could plausibly
+  correlate with the model formatting oddly, but it's a guess without evidence.
+  **To settle it:** Ember's raw response at that timestamp (the Debug pane, or the `ActionResponse`/debug
+  rows in its store) would show two `<respond>` tags immediately. Then decide whether `TurnHandler` should
+  coalesce multiple responds into one message, or surface a warning. Also worth a look: whether the model
+  saw an emoji from *John* and mirrored it — i.e. which side started it.
+  *(Related trap, documented in place: `ApiDisplayProvider.ShowReply` appends a reply event with no
+  message id, which a client cannot dedup. It's unreachable today — only tests call it — but anything
+  wired to it would double-draw.)*
 
 - **Auto-archive seems too aggressive** (at least for initial context curation). Core memory-curation
   policy, not TUI — belongs with the raw-context-decay item under *Autonomy & reach*.

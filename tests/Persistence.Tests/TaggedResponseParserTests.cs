@@ -142,4 +142,48 @@ public class TaggedResponseParserTests
         Assert.False(turn.ParsedSuccessfully);
         Assert.Empty(turn.Actions);
     }
+
+    // --- Emoji ---
+    //
+    // From John: "an emoji as the first character seemingly resulted in a double-send from ember
+    // [7/13/26 1:27AM]". An emoji is a UTF-16 surrogate pair, which is exactly the shape that trips
+    // char-indexing and character classes, so the parser is the first place to rule in or out: if it
+    // ever produced two RespondToUser actions from one reply, the turn would dispatch two sends.
+
+    [Fact]
+    public void AnEmojiLeadingReplyParsesToExactlyOneResponse()
+    {
+        var turn = Parser.Parse("<respond>\U0001F389 Congratulations!</respond><continue>false</continue>");
+
+        Assert.True(turn.ParsedSuccessfully);
+        var reply = Assert.Single(turn.Actions);
+        Assert.Equal(ModelAction.RespondToUser, reply.Action);
+        Assert.Equal("\U0001F389 Congratulations!", reply.Data?.GetValue<string>());
+    }
+
+    [Fact]
+    public void EmojiThroughoutATurnStillParseToOneThinkAndOneResponse()
+    {
+        var turn = Parser.Parse(
+            "<think>\U0001F914 hmm</think>\n"
+            + "<respond>\U0001F389 hi \U0001F44B there \U0001F3F3️</respond>\n"
+            + "<continue>false</continue>");
+
+        Assert.True(turn.ParsedSuccessfully);
+        Assert.Equal(2, turn.Actions.Count);
+        Assert.Single(turn.Actions, a => a.Action == ModelAction.RespondToUser);
+        Assert.Equal("\U0001F389 hi \U0001F44B there \U0001F3F3️", turn.Actions[1].Data?.GetValue<string>());
+    }
+
+    [Fact]
+    public void AnEmojiIsNotMistakenForATagName()
+    {
+        // The tag pattern is <\w+...>. .NET's \w is Unicode-aware, so it's worth pinning that it does
+        // not extend to emoji (category So) — a "<\U0001F389>" in prose must not open a tag and swallow
+        // the rest of the reply.
+        var turn = Parser.Parse("<respond>a literal <\U0001F389> in prose</respond>");
+
+        var reply = Assert.Single(turn.Actions);
+        Assert.Equal("a literal <\U0001F389> in prose", reply.Data?.GetValue<string>());
+    }
 }
