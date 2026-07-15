@@ -66,13 +66,28 @@ public sealed class ProposalTests : IAsyncLifetime
     private async Task<string> RunInNewTurnAsync(string commandJson)
     {
         // Each call simulates a fresh turn so a proposal made in one call can be accepted in a later one.
-        session.TurnStartedUtc = DateTimeOffset.UtcNow;
-        await Task.Delay(2); // ensure a strictly later timestamp than any proposal created in a prior call
+        session.TurnStartedUtc = await NextTurnStartAsync();
 
         published.Clear();
         var current = await contextRepo.GetByIdAsync(session.WorkingContextId);
         await handler.HandleAsync(current!, JsonNode.Parse(commandJson));
         return published.Single().Result;
+    }
+
+    /// <summary>
+    /// A turn-start stamp strictly later than every open proposal, so the deliberation gap
+    /// (accepting needs <c>CreatedUtc &lt; TurnStartedUtc</c>) sees a genuinely new turn.
+    /// </summary>
+    /// <remarks>
+    /// Derived from the proposals rather than slept for, so the gap never depends on how finely the
+    /// wall clock happens to tick.
+    /// </remarks>
+    private async Task<DateTimeOffset> NextTurnStartAsync()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var latest = (await proposalRepo.GetOpenAsync()).Max(p => (DateTimeOffset?)p.CreatedUtc);
+
+        return latest >= now ? latest.Value.AddTicks(1) : now;
     }
 
     private async Task<WorkingContextEntity> SeedContextAsync() =>
@@ -195,9 +210,10 @@ public sealed class ProposalTests : IAsyncLifetime
     {
         await SeedContextAsync();
 
-        // Propose and accept within ONE turn (no turn-clock advance between them).
+        // Propose and accept within ONE turn (no turn-clock advance between them). Stamping the turn
+        // before the proposal is enough on its own: the proposal can only be stamped at or after this
+        // instant, which is what the deliberation gap treats as same-turn.
         session.TurnStartedUtc = DateTimeOffset.UtcNow;
-        await Task.Delay(2);
 
         var current = await contextRepo.GetByIdAsync(session.WorkingContextId);
         await handler.HandleAsync(current!,
