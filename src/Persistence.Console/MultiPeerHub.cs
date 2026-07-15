@@ -223,7 +223,14 @@ internal sealed class MultiPeerHub(IMultiPeerRenderTarget target)
     /// that peer (it's what you said to them); under <see cref="AllScope"/> it was broadcast, so it
     /// belongs to all of them.
     /// </summary>
-    public void RecordLocalChat(string text)
+    /// <param name="line">
+    /// The finished line, <em>exactly</em> as it should appear — already stamped (where it takes a stamp;
+    /// errors and queue notices don't) and already carrying its trailing blank line. Unlike the other
+    /// Record* methods this one does no formatting, because the display has already done it: this is text
+    /// it was about to write to its own pane before hub mode redirected it here. Stamping again is how
+    /// you get "[time] [time] You: ping".
+    /// </param>
+    public void RecordLocalChat(string line)
     {
         string? scope;
         lock (sync)
@@ -231,7 +238,7 @@ internal sealed class MultiPeerHub(IMultiPeerRenderTarget target)
             scope = active;
         }
 
-        AddChat(new ChatLine(scope, DateTimeOffset.Now, $"{TerminalGuiDisplayProvider.Stamp()}{text}\n\n", FromHuman: true));
+        AddChat(new ChatLine(scope, DateTimeOffset.Now, line, FromHuman: true));
     }
 
     /// <summary>The store's coarse role for a human-authored message.</summary>

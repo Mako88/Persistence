@@ -165,6 +165,20 @@ public class MultiPeerHubTests
     }
 
     [Fact]
+    public void LocalChatIsRecordedExactlyAsGiven()
+    {
+        var target = new FakeTarget();
+        var hub = HubWith(target, "Arden");
+
+        // The display has already formatted this — it's the line it was about to write to its own pane
+        // before hub mode redirected it here. Formatting it again is how the echo ends up reading
+        // "[time] [time] You: ping".
+        hub.RecordLocalChat("[07/14/2026 08:42 PM] You: ping\n\n");
+
+        Assert.Equal("[07/14/2026 08:42 PM] You: ping\n\n", target.Chat);
+    }
+
+    [Fact]
     public void LocalChatUnderAPeerScopeIsAttributedToThatPeerOnly()
     {
         var target = new FakeTarget();

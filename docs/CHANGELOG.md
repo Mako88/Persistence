@@ -9,6 +9,45 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-07-14 — panes become a component
+
+Prompted by John asking whether the rendering invites the bug I'd nearly reintroduced in the hub's
+`Paint`. It did, and the evidence was five separate ad-hoc "did it actually change?" guards at five
+layers — four added the same day. Two of those are fair (the per-row colour memo and the scrollbar guard
+are adapters to v1 APIs). Three were the same root cause: the expensive path was the default, so every
+new surface had to *remember* to guard it.
+
+### Changed — a `Pane` type owns text, rendering, and the scroll rule
+"A pane" used to be five things scattered across the display provider: a `TextView`, a `StringBuilder`
+beside it, a third field remembering what was rendered, a scroll rule re-derived per call site, and a
+scrollbar wired separately — repeated per pane. Updating one correctly meant remembering all five, so
+each new surface re-derived the rules and the ones that got them wrong only showed up as "the TUI feels
+slow" or "it keeps scrolling away from me". `Pane` owns them, and deletes `Append`, `Set`,
+`SetKeepingScrollPosition`, `IsScrolledToBottom`, `SetPaneIfChanged`, `ScrollToBottom`,
+`MakeColoredPaneView`, `WrapPane`, `AddScrollbar`, five `StringBuilder`s and five `shown*` fields.
+
+Panes now exist from construction rather than from `BuildLayout`, so a pane can buffer text before the UI
+loop is up — which is the normal case (a hub pushes every peer's history before `LaunchUi`). Colours need
+a driver, so those are applied later via `Pane.Configure`.
+
+`bool peerSwitched` became an explicit `ScrollBehaviour` (`JumpToNewest` / `FollowTail` / `KeepPosition`)
+— it was two functions wearing a trench coat, and the third case was already lurking: expanding an
+Actions entry wants "never move", which the bool couldn't say.
+
+### Fixed — `Paint` recomposed every pane on every event
+`Paint` called `StringBuilder.ToString()` on three lanes each time, and it runs per recorded event — so
+every streamed reasoning chunk rebuilt three whole scrollbacks, which were then compared and thrown away.
+`PaneBuffer` memoises and drops the memo on append, so an untouched buffer hands back the *same string
+reference* and the change-check short-circuits on reference equality. Every value `Paint` reads now has
+that property, stated as an invariant on the method and pinned by tests that fail if someone composes
+there again.
+
+### Fixed — the local echo was stamped twice
+Shipped in the "all" scope change and caught by driving the UI, not by tests: `AppendChat` passes an
+already-formatted line and `RecordLocalChat` stamped it again, so sending "ping" read
+`[08:42 PM] [08:42 PM] You: ping`. The earlier captures only ever showed history, never a typed message.
+`RecordLocalChat` now records the line exactly as given, and says so in its contract.
+
 ## 2026-07-14 — the hub gets a scope ("all" vs. one peer)
 
 The second half of John's front-end list. It reads as five asks, but they're one change: the hub had a

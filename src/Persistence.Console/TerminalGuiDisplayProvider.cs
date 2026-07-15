@@ -18,10 +18,11 @@ namespace Persistence.Console;
 /// side column (Reasoning / Actions / Schedule / Debug) on the right, a multi-line compose
 /// box, and a status line at the bottom.
 ///
-/// Per-pane colouring lives in <see cref="TuiColoring"/> (one named call per pane); colours in
-/// <see cref="TuiColors"/>. All pane mutations are marshalled onto the UI thread via
-/// <see cref="MainLoop.Invoke"/>. Output that arrives before the loop is ready is buffered and
-/// flushed on load.
+/// This type owns the <em>layout</em> and the status bar. It deliberately does not own how a pane
+/// updates: each is a <see cref="Pane"/>, which holds its own text, skips work when that text hasn't
+/// changed, marshals onto the UI thread, and takes a named <see cref="ScrollBehaviour"/> rather than
+/// re-deriving the scroll rule per call site. Per-pane colouring lives in <see cref="TuiColoring"/> (one
+/// named call per pane); colours in <see cref="TuiColors"/>.
 /// </summary>
 [Singleton(typeof(IDisplayProvider), UiMode.Tui)]
 public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarget
@@ -38,24 +39,24 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
 
     private readonly TaskCompletionSource stopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    // Per-pane text buffers are the source of truth; the TextViews render from them.
+    // Guards the Actions entry list below. Each pane's own text is its business (see Pane), so this is
+    // the only shared state left here.
     private readonly object sync = new();
-    private readonly StringBuilder outputBuffer = new();
-    private readonly StringBuilder reasoningBuffer = new();
-    private readonly StringBuilder toolsBuffer = new();
-    private readonly StringBuilder scheduleBuffer = new();
-    private readonly StringBuilder debugBuffer = new();
 
-    // The Actions pane is a list of collapsible entries (rebuilt into toolsBuffer on change);
+    // The Actions pane is a list of collapsible entries (rebuilt into the pane's text on change);
     // actionHeaderRows maps each entry to its header line, so a toggle can resolve a cursor/click row.
     private readonly List<ActionEntry> actionEntries = [];
     private List<int> actionHeaderRows = [];
 
-    private TextView output = null!;
-    private TextView reasoning = null!;
-    private TextView tools = null!;
-    private TextView schedule = null!;
-    private TextView debug = null!;
+    // Each pane owns its own text, its "what's on screen" bookkeeping, and its scroll rule (see Pane).
+    // They exist from construction, not from BuildLayout: content arrives before the UI loop is up (a
+    // hub pushes every peer's history before LaunchUi), and a pane that exists can buffer it. Their
+    // colours need a driver, so those are applied in BuildLayout via Pane.Configure.
+    private readonly Pane output = Pane.Create();
+    private readonly Pane reasoning = Pane.Create();
+    private readonly Pane tools = Pane.Create();
+    private readonly Pane schedule = Pane.Create();
+    private readonly Pane debug = Pane.Create();
     private TextView input = null!;
     private TabView tabView = null!;
     private Label stateLabel = null!;
@@ -221,7 +222,7 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
             return;
         }
 
-        Append(outputBuffer, () => output, text);
+        output.Append(text);
     }
 
     /// <summary>
@@ -248,13 +249,13 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
     // Trim trailing whitespace so every debug entry is separated by exactly one blank line, matching
     // the other panes (model responses often arrive with their own trailing newline, which would
     // otherwise add a second blank line here).
-    public void ShowDebugInfo(string info) => Append(debugBuffer, () => debug, $"{Stamp()}{info.TrimEnd()}\n\n");
+    public void ShowDebugInfo(string info) => debug.Append($"{Stamp()}{info.TrimEnd()}\n\n");
 
-    public void ShowReasoning(string summary) => Append(reasoningBuffer, () => reasoning, $"{Stamp()}{summary}\n\n");
+    public void ShowReasoning(string summary) => reasoning.Append($"{Stamp()}{summary}\n\n");
 
-    public void ShowReasoningDelta(string delta) => Append(reasoningBuffer, () => reasoning, delta);
+    public void ShowReasoningDelta(string delta) => reasoning.Append(delta);
 
-    public void ShowThought(string thought) => Append(reasoningBuffer, () => reasoning, $"{Stamp()}{thought}\n\n");
+    public void ShowThought(string thought) => reasoning.Append($"{Stamp()}{thought}\n\n");
 
     public void ShowToolUse(string tool, string request, string result)
     {
@@ -327,28 +328,12 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
             }
 
             actionHeaderRows = headerRows;
-            toolsBuffer.Clear();
-            toolsBuffer.Append(sb.ToString());
             snapshot = sb.ToString();
         }
 
-        if (!ready)
-        {
-            return;
-        }
-
-        Application.MainLoop?.Invoke(() =>
-        {
-            tools.Text = snapshot;
-            if (scrollToBottom)
-            {
-                ScrollToBottom(tools);
-            }
-            else
-            {
-                tools.SetNeedsDisplay();
-            }
-        });
+        // A new action is newest-content (jump to it); a collapse/expand happens under the reader's
+        // cursor, so the view must not move at all.
+        tools.Set(snapshot, scrollToBottom ? ScrollBehaviour.JumpToNewest : ScrollBehaviour.KeepPosition);
     }
 
     /// <summary>
@@ -395,7 +380,7 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
                     headerRow = index < actionHeaderRows.Count ? actionHeaderRows[index] : 0;
                 }
 
-                tools.CursorPosition = new Point(0, headerRow);
+                tools.View.CursorPosition = new Point(0, headerRow);
             });
         }
     }
@@ -452,7 +437,7 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
     /// not an append-log — the orchestrator pushes the full list whenever it changes).
     /// </summary>
     public void ShowScheduledEvents(IReadOnlyList<ScheduledEventEntity> events) =>
-        Set(scheduleBuffer, () => schedule, FormatSchedule(events));
+        schedule.Set(FormatSchedule(events), ScrollBehaviour.JumpToNewest);
 
     /// <summary>
     /// Renders the Schedule pane text: each event's name on its own line, then indented label/value rows,
@@ -525,63 +510,29 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
         hubMode = true;
     }
 
-    // What each pane last rendered, so an unchanged pane can be left alone (see SetSidePaneContent).
-    private string shownChat = "", shownThoughts = "", shownActions = "", shownSchedule = "", shownDebug = "";
-
     /// <summary>Replaces the conversation pane with the current scope's chat (hub switch/refresh).</summary>
-    public void SetConversation(string chat, bool scopeChanged)
-    {
-        if (!ready)
-        {
-            return;
-        }
-
-        Application.MainLoop?.Invoke(() => SetPaneIfChanged(output, chat, ref shownChat, scopeChanged));
-    }
+    public void SetConversation(string chat, bool scopeChanged) => output.Set(chat, OnScopeChange(scopeChanged));
 
     /// <summary>Replaces the four side panes with the active peer's buffered content (hub switch/refresh).</summary>
     public void SetSidePaneContent(string thoughts, string actions, string schedule, string debug, bool peerSwitched)
     {
-        if (!ready)
-        {
-            return;
-        }
+        var behaviour = OnScopeChange(peerSwitched);
 
-        Application.MainLoop?.Invoke(() =>
-        {
-            // The hub repaints the whole side column on every recorded event — and a streaming reasoning
-            // delta records one per chunk — so assigning all four panes each time would re-parse three
-            // unchanged documents per chunk, on the UI thread. Only touch what actually changed.
-            SetPaneIfChanged(reasoning, thoughts, ref shownThoughts, peerSwitched);
-            SetPaneIfChanged(tools, actions, ref shownActions, peerSwitched);
-            SetPaneIfChanged(this.schedule, schedule, ref shownSchedule, peerSwitched);
-            SetPaneIfChanged(this.debug, debug, ref shownDebug, peerSwitched);
-        });
+        // Each pane ignores a push that matches what it's already showing, so repainting the whole column
+        // on every recorded event costs nothing for the panes that didn't change (see Pane.Render).
+        reasoning.Set(thoughts, behaviour);
+        tools.Set(actions, behaviour);
+        this.schedule.Set(schedule, behaviour);
+        this.debug.Set(debug, behaviour);
     }
 
     /// <summary>
-    /// Re-renders one side pane only if its text changed. On a peer switch the pane jumps to the newest
-    /// line (it's different content, and the reader's old scroll position means nothing in it); on a live
-    /// update it follows the tail only if the reader was already there.
+    /// How a pane should scroll for a hub push. A switch puts different content on screen, so the reader's
+    /// old position means nothing in it — jump to the newest line. Otherwise it's a live append to what
+    /// they're already reading, so only follow if they're at the bottom.
     /// </summary>
-    private static void SetPaneIfChanged(TextView view, string text, ref string shown, bool peerSwitched)
-    {
-        if (string.Equals(shown, text, StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        shown = text;
-
-        if (peerSwitched)
-        {
-            view.Text = text;
-            ScrollToBottom(view);
-            return;
-        }
-
-        SetKeepingScrollPosition(view, text);
-    }
+    private static ScrollBehaviour OnScopeChange(bool scopeChanged) =>
+        scopeChanged ? ScrollBehaviour.JumpToNewest : ScrollBehaviour.FollowTail;
 
     /// <summary>Updates the status bar to the active peer: its provider/model/session, spend, and state.</summary>
     public void SetPeerStatus(string provider, string model, string session, int proposals, (int Used, int Budget, int Percent)? budget, string state)
@@ -616,7 +567,7 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
         // A ColoredTextView rather than a Label: a Label carries exactly one colour, and this row reads
         // far better with the arrows/chord, the peer's name, and the hint distinguished (see
         // TuiColoring.ForPeerSelector).
-        var selector = MakeColoredPaneView(Scheme(Application.Driver, TuiColors.Body, Color.Black)).ForPeerSelector();
+        var selector = Pane.NewView(Scheme(Application.Driver, TuiColors.Body, Color.Black)).ForPeerSelector();
         selector.X = Pos.Left(sideColumnAnchor);
         selector.Y = 0;
         selector.Width = Dim.Fill();
@@ -739,9 +690,9 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
             Height = Dim.Fill(bottomRows),
             ColorScheme = baseTheme,
         };
-        output = MakeColoredPaneView(paneScheme).ForConversation(humanNames, TuiColors.User, TuiColors.Peer);
-        frame.Add(output);
-        AddScrollbar(output);
+        output.Configure(paneScheme, v => v.ForConversation(humanNames, TuiColors.User, TuiColors.Peer));
+        frame.Add(output.View);
+        output.AttachScrollbar();
         return frame;
     }
 
@@ -760,23 +711,22 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
             ColorScheme = baseTheme,
         };
 
-        // Use ColoredTextView everywhere so read-only text renders at full brightness (a plain
-        // read-only TextView dims its text). Each pane's colours are one named call into TuiColoring.
-        reasoning = MakeColoredPaneView(paneScheme).ForThoughts();
-        tools = MakeColoredPaneView(paneScheme).ForActions();
-        schedule = MakeColoredPaneView(paneScheme).ForSchedule();
-        debug = MakeColoredPaneView(paneScheme).ForDebug();
+        // Each pane's colours are one named call into TuiColoring.
+        reasoning.Configure(paneScheme, v => v.ForThoughts());
+        tools.Configure(paneScheme, v => v.ForActions());
+        schedule.Configure(paneScheme, v => v.ForSchedule());
+        debug.Configure(paneScheme, v => v.ForDebug());
 
         // The Schedule pane colours its event-name lines by their column-0 position; word-wrap would
         // drop a long Note's continuation to column 0 and mis-colour it as a name, so keep its lines
         // unwrapped (the detail rows are short; a long note scrolls rather than wraps).
-        schedule.WordWrap = false;
+        schedule.View.WordWrap = false;
 
         // Tab titles get a space of horizontal padding on each side.
-        tabs.AddTab(new TabView.Tab(" Thoughts ", WrapPane(reasoning, paneScheme)), andSelect: true);
-        tabs.AddTab(new TabView.Tab(" Actions ", WrapPane(tools, paneScheme)), andSelect: false);
-        tabs.AddTab(new TabView.Tab(" Schedule ", WrapPane(schedule, paneScheme)), andSelect: false);
-        tabs.AddTab(new TabView.Tab(" Debug ", WrapPane(debug, paneScheme)), andSelect: false);
+        tabs.AddTab(new TabView.Tab(" Thoughts ", reasoning.InContainer(paneScheme)), andSelect: true);
+        tabs.AddTab(new TabView.Tab(" Actions ", tools.InContainer(paneScheme)), andSelect: false);
+        tabs.AddTab(new TabView.Tab(" Schedule ", schedule.InContainer(paneScheme)), andSelect: false);
+        tabs.AddTab(new TabView.Tab(" Debug ", debug.InContainer(paneScheme)), andSelect: false);
 
         // Tab switching is reserved for Ctrl+Left/Right (handled on the focused view). Drop TabView's
         // built-in plain-arrow bindings so a stray Left/Right doesn't change tabs when the tab bar or a
@@ -805,29 +755,25 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
         // focus through the visible panes so each can be scrolled with the keyboard. Plain typing on a
         // pane jumps to the compose box (carrying the character), since that's the only place input is
         // accepted.
-        foreach (var pane in new[] { output, reasoning, tools, schedule, debug })
+        foreach (var pane in Panes)
         {
-            pane.KeyPress += OnNavKeyPress;
-
-            if (pane is ColoredTextView coloured)
-            {
-                coloured.OnPrintableInput = RedirectTypingToInput;
-            }
+            pane.View.KeyPress += OnNavKeyPress;
+            pane.View.OnPrintableInput = RedirectTypingToInput;
         }
 
         // Actions entries collapse/expand on Enter or click.
-        if (tools is ColoredTextView toolsView)
-        {
-            toolsView.OnLineActivated = ToggleActionAt;
-        }
+        tools.View.OnLineActivated = ToggleActionAt;
     }
+
+    /// <summary>Every text pane, in the order Ctrl+Up/Down cycles focus through the visible ones.</summary>
+    private Pane[] Panes => [output, reasoning, tools, schedule, debug];
 
     /// <summary>The bottom compose region: a centred key-bindings hint above a titled multi-line input box.
     /// Sets the <see cref="input"/> field and returns (hint, compose frame) for the caller to add.</summary>
     private (View Hint, FocusTitleFrameView Compose) BuildComposeArea(ColorScheme baseTheme, ColorScheme paneScheme, int bottomRows)
     {
         const string hintText = "Enter: Send · Shift+Enter: Newline · Ctrl+Left/Right: Tabs · Ctrl+Up/Down: Panes";
-        var hint = MakeColoredPaneView(paneScheme).ForComposeHint();
+        var hint = Pane.NewView(paneScheme).ForComposeHint();
         hint.Text = hintText;
         hint.WordWrap = false;
         hint.Y = Pos.AnchorEnd(bottomRows);
@@ -859,7 +805,7 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
         };
         input.KeyPress += OnInputKeyPress;
         inputFrame.Add(input);
-        AddScrollbar(input);
+        Pane.AttachScrollbar(input);
 
         return (hint, inputFrame);
     }
@@ -960,82 +906,6 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
         Disabled = driver.MakeAttribute(Color.DarkGray, bg),
     };
 
-    private static ColoredTextView MakeColoredPaneView(ColorScheme scheme) => new()
-    {
-        ReadOnly = true,
-        WordWrap = true,
-        X = 0,
-        Y = 0,
-        Width = Dim.Fill(),
-        Height = Dim.Fill(),
-        ColorScheme = scheme,
-    };
-
-    /// <summary>
-    /// Wraps a pane view in a container with a vertical scrollbar. The container is the
-    /// view's stable parent (so it has a SuperView even when its tab isn't selected), which
-    /// the <see cref="ScrollBarView"/> ctor requires.
-    /// </summary>
-    private static View WrapPane(TextView view, ColorScheme scheme)
-    {
-        var container = new View
-        {
-            X = 0,
-            Y = 0,
-            Width = Dim.Fill(),
-            Height = Dim.Fill(),
-            ColorScheme = scheme,
-        };
-
-        container.Add(view);
-        AddScrollbar(view);
-
-        return container;
-    }
-
-    /// <summary>
-    /// Attaches a vertical scrollbar to a read-only text pane and keeps it in sync with
-    /// the view's content height and scroll position.
-    /// </summary>
-    private static void AddScrollbar(TextView view)
-    {
-        var scrollbar = new ScrollBarView(view, isVertical: true, showBothScrollIndicator: false)
-        {
-            // Don't let the scrollbar take keyboard focus — it would interfere with Ctrl+Up/Down
-            // cycling focus through the panes (and isn't keyboard-driven here anyway).
-            CanFocus = false,
-        };
-
-        // DrawContent fires on every repaint of the pane, but the scrollbar only needs touching when the
-        // content length or the scroll position actually moved — and Refresh()/LayoutSubviews() do real
-        // layout work (Refresh re-runs the show/hide sizing pass). Syncing unconditionally made every
-        // repaint, including each streamed chunk, pay for a full scrollbar relayout.
-        var lastSize = -1;
-        var lastPosition = -1;
-
-        view.DrawContent += _ =>
-        {
-            if (view.Lines == lastSize && view.TopRow == lastPosition)
-            {
-                return;
-            }
-
-            lastSize = view.Lines;
-            lastPosition = view.TopRow;
-
-            scrollbar.Size = view.Lines;
-            scrollbar.Position = view.TopRow;
-            scrollbar.LayoutSubviews();
-            scrollbar.Refresh();
-        };
-
-        scrollbar.ChangedPosition += () =>
-        {
-            view.TopRow = scrollbar.Position;
-            view.SetNeedsDisplay();
-        };
-    }
-
     /// <summary>
     /// Once the loop is up, mark ready and flush any buffered text into the panes.
     /// </summary>
@@ -1043,21 +913,14 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
     {
         ready = true;
 
-        lock (sync)
-        {
-            output.Text = outputBuffer.ToString();
-            reasoning.Text = reasoningBuffer.ToString();
-            tools.Text = toolsBuffer.ToString();
-            schedule.Text = scheduleBuffer.ToString();
-            debug.Text = debugBuffer.ToString();
-        }
-
-        // Open each append-log pane at its newest content (e.g. the conversation shows the latest
-        // message, not the oldest history line).
-        ScrollToBottom(output);
-        ScrollToBottom(reasoning);
-        ScrollToBottom(tools);
-        ScrollToBottom(debug);
+        // Each pane paints whatever it buffered while the loop was coming up. The append-log panes open
+        // at their newest content (the conversation shows the latest message, not the oldest history
+        // line); the Schedule pane is a snapshot list, so it opens at the top.
+        output.MarkReady(ScrollBehaviour.JumpToNewest);
+        reasoning.MarkReady(ScrollBehaviour.JumpToNewest);
+        tools.MarkReady(ScrollBehaviour.JumpToNewest);
+        debug.MarkReady(ScrollBehaviour.JumpToNewest);
+        schedule.MarkReady(ScrollBehaviour.KeepPosition);
 
         // Re-assert focus on the compose box now that the loop is up: Application.Run gives initial
         // focus to the first view, so the SetFocus in BuildLayout doesn't stick on its own.
@@ -1161,7 +1024,7 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
         // doesn't leave the typed text visible anywhere. A slash command echoes as "Executed /foo"
         // (not "You: …") to make clear it ran locally and was never sent to the remote peer.
         var echo = text.StartsWith('/') ? $"Executed {text}" : $"You: {text}";
-        Append(outputBuffer, () => output, $"{Stamp()}{echo}\n\n");
+        AppendChat($"{Stamp()}{echo}\n\n");
 
         // Repaint now so the input box visibly clears on keypress, then dispatch off the UI thread — the
         // sink runs synchronously up to its first await (DB access / HTTP), which would block repainting.
@@ -1214,7 +1077,7 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
     /// </summary>
     private void CyclePaneFocus(int direction)
     {
-        var targets = new View[] { output, ActiveSidePane(), input };
+        var targets = new View[] { output.View, ActiveSidePane().View, input };
         var current = Array.FindIndex(targets, t => t.HasFocus);
         if (current < 0)
         {
@@ -1236,7 +1099,7 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
     }
 
     /// <summary>The text pane shown by the currently selected side-column tab.</summary>
-    private TextView ActiveSidePane()
+    private Pane ActiveSidePane()
     {
         var index = tabView.Tabs.ToList().IndexOf(tabView.SelectedTab);
         return index switch
@@ -1260,95 +1123,6 @@ public class TerminalGuiDisplayProvider : IDisplayProvider, IMultiPeerRenderTarg
     /// so a merged multi-peer scrollback reads as one true chronology.
     /// </summary>
     internal static string Stamp(DateTimeOffset at) => $"[{at.LocalDateTime.ToString(TimeFormat)}] ";
-
-    /// <summary>
-    /// Appends text to a pane's buffer and, when the loop is ready, pushes the
-    /// updated buffer onto the UI thread.
-    /// </summary>
-    private void Append(StringBuilder buffer, Func<TextView> view, string text)
-    {
-        string snapshot;
-
-        lock (sync)
-        {
-            buffer.Append(text);
-            snapshot = buffer.ToString();
-        }
-
-        if (!ready)
-        {
-            return;
-        }
-
-        Application.MainLoop?.Invoke(() => SetKeepingScrollPosition(view(), snapshot));
-    }
-
-    /// <summary>
-    /// Replaces an append-log pane's text, following the newest content only if the reader was already
-    /// at the bottom. Scrolling down is a request to watch the live tail; scrolling up is a request to
-    /// read something, and unconditionally snapping to the newest line makes that impossible while a peer
-    /// is talking. Appends only add lines below the viewport, so holding the top row keeps the reader's
-    /// place exactly.
-    /// </summary>
-    private static void SetKeepingScrollPosition(TextView view, string text)
-    {
-        var wasAtBottom = IsScrolledToBottom(view);
-        var topRow = view.TopRow;
-
-        view.Text = text;
-
-        if (wasAtBottom)
-        {
-            ScrollToBottom(view);
-            return;
-        }
-
-        view.TopRow = topRow;
-        view.SetNeedsDisplay();
-    }
-
-    /// <summary>
-    /// True when the pane's last line is on screen — i.e. the reader is watching the live tail. An empty
-    /// or not-yet-laid-out pane counts as at-bottom, so the default is to follow.
-    /// </summary>
-    private static bool IsScrolledToBottom(TextView view) => view.TopRow >= Math.Max(0, view.Lines - view.Bounds.Height);
-
-    /// <summary>
-    /// Replaces a pane's buffer with <paramref name="text"/> (for snapshot panes like Schedule that
-    /// show current state rather than an append-only log).
-    /// </summary>
-    private void Set(StringBuilder buffer, Func<TextView> view, string text)
-    {
-        lock (sync)
-        {
-            buffer.Clear();
-            buffer.Append(text);
-        }
-
-        if (!ready)
-        {
-            return;
-        }
-
-        Application.MainLoop?.Invoke(() =>
-        {
-            var v = view();
-            v.Text = text;
-            ScrollToBottom(v);
-        });
-    }
-
-    /// <summary>
-    /// Scrolls a read-only pane to the bottom so the newest content is visible, without stealing focus
-    /// (the input keeps it). Sets the top row directly rather than moving the cursor, so it scrolls
-    /// even when the pane isn't focused.
-    /// </summary>
-    private static void ScrollToBottom(TextView view)
-    {
-        var bottom = Math.Max(0, view.Lines - view.Bounds.Height);
-        view.TopRow = bottom;
-        view.SetNeedsDisplay();
-    }
 
     private void SetStatus(string state)
     {
