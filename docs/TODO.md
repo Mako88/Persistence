@@ -314,11 +314,42 @@ datetime-interleaved history, blanked tabs, send-routing). See [CHANGELOG.md](CH
   lane to become timestamped entries (as chat now is) rather than a pre-stamped string, so it can be
   interleaved rather than concatenated. Open question; not obviously worth the change.
 
-- **History shows "Remote Peer" instead of peer names** (and for Ember, "ChatGPT / Couchside Ember
-  (historical export)"). Server-side, not TUI: `ConversationHistoryProvider.ResolveAuthor` falls back to
-  the literal `"Remote Peer"` when a `ChatMessage` fragment's source has no `Name`. So this is about what
-  the *stored* sources look like for pre-naming rows — needs a decision on backfilling existing fragments
-  vs. resolving the name at read time from the peer identity.
+- **History shows "Remote Peer" instead of peer names — diagnosed 2026-07-15.** (An earlier note here
+  said `ResolveAuthor` falls back when a source has no `Name`. That was **wrong** — it never reaches the
+  fallback. Root cause below, confirmed by reading the real stores' `Sources` tables.)
+
+  **Root cause: a peer doesn't know its own name.** Config has `SelectedLocalPeer` (who the *human* is)
+  but nothing for "I am Arden". Live replies look right only because the *client* supplies the name
+  (`--peer name=url` → `ConversationEventRenderer(display, peerName)`); anything read back from the store
+  — i.e. all history — misses out. Fixing it server-side also serves [ADR-0007](adr/0007-federated-peers-runtime-room-client.md)
+  Phase 0 ("peer names reaching the model"), which wants this anyway.
+
+  **Two distinct bugs behind the one symptom:**
+  - **The digital-peer source is literally *named* `"Remote Peer"`.** `SourceRepository`'s
+    `CreateRemotePeerSourceIfNotExists` hardcodes it (`EnsureSourceAsync(SourceType.DigitalPeer,
+    "Remote Peer", …)`), so `ResolveAuthor` faithfully returns the name it was handed. It's **one row per
+    database** — `Sources` is normalised, with `ContextFragmentSources` linking many fragments to one
+    source — so the "backfill" is a single-row rename, not a message sweep.
+  - **Ember has *two* digital-peer identities.** The import script wrote `SourceType` as enum **names**
+    (`'RemotePeer'`, `'LocalPeer'`) while the app writes **numbers** (`'1'`, `'2'`). Verified: the app's
+    own lookup (`WHERE SourceType = 1`) finds the peer row in `anthropic.db` and finds **nothing** in
+    `ember.db` — so on first open the app concludes there's no digital-peer source and creates a second
+    one named `"Remote Peer"`. Hence both names in one conversation: imported messages carry
+    `'ChatGPT / Couchside Ember (historical export)'`, new ones carry `'Remote Peer'`. Those strings are
+    doubly stale — `RemotePeer`/`LocalPeer` no longer exist as enum members (renamed `DigitalPeer`/
+    `HumanPeer`), so they wouldn't round-trip even if matched by name.
+
+  **Shape of the fix (last part is John's call):**
+  1. A server-side peer name in config — the peer's *own* identity, distinct from `SelectedLocalPeer`.
+  2. `CreateRemotePeerSourceIfNotExists` names the row from it **and renames a legacy `"Remote Peer"` row**
+     when it finds one: one row, idempotent, self-healing at startup. Note a static SQL migration *can't*
+     do this — the name differs per database — so the existing startup path is the right home, not
+     `Migrations/`.
+  3. Ember additionally needs a one-off data fix normalising its `SourceType` values and merging its two
+     digital-peer sources, or it grows a second identity every time the app opens it. Decide whether to
+     repoint the imported fragments at one source or keep the export's provenance distinct.
+  4. Fix the importer too (`scripts/import_chatgpt_export.py`), so the next import doesn't recreate the
+     split.
 
 - **Markdown support in the GUI.** Render markdown in the panes (bold/italic/code/lists). Independent of
   the emoji question below.
@@ -333,14 +364,11 @@ datetime-interleaved history, blanked tabs, send-routing). See [CHANGELOG.md](CH
   across two deltas reassembles correctly. The renderer dedups replies on the persisted message id, and
   the only id-less "reply" events are `TurnHandler`'s synthetic status lines (never persisted, so never
   duplicated against a snapshot).
-  **What's left — the one mechanism that produces exactly this symptom:** if the model emits *two*
-  `<respond>` blocks in a turn, `TurnHandler` dispatches both, silently, and you get two sends. Nothing
-  coalesces or warns. That's model behaviour rather than a parser bug, and an emoji could plausibly
-  correlate with the model formatting oddly, but it's a guess without evidence.
-  **To settle it:** Ember's raw response at that timestamp (the Debug pane, or the `ActionResponse`/debug
-  rows in its store) would show two `<respond>` tags immediately. Then decide whether `TurnHandler` should
-  coalesce multiple responds into one message, or surface a warning. Also worth a look: whether the model
-  saw an emoji from *John* and mirrored it — i.e. which side started it.
+  **Most likely explanation, and ✅ decided (John, 2026-07-15) — not a bug, nothing to build:** the model
+  emitted *two* `<respond>` blocks in one turn, and `TurnHandler` dispatched both. John's call: *"if that
+  does happen, I think just displaying both is fine — they said two things, and it shows up as two
+  things."* So no coalescing and no warning; current behaviour is correct. Left here only so the next
+  person seeing a "double-send" recognises it and doesn't go hunting the parser again.
   *(Related trap, documented in place: `ApiDisplayProvider.ShowReply` appends a reply event with no
   message id, which a client cannot dedup. It's unreachable today — only tests call it — but anything
   wired to it would double-draw.)*
