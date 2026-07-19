@@ -153,6 +153,29 @@ the voluntary continue-loop. Revisit only if we see the peer reliably acting bef
   hours it cost GLM: it spent turns hunting a null-reference that was never there. Worth making the wait
   deterministic rather than timing-based.
 
+- **IRC chat for John + peers — started, parked mid-setup (2026-07-19).** John's idea, and a good one: rather
+  than building an IRC *integration*, each peer runs a CLI client in its own container. `ii` (suckless,
+  FIFO-based) is the right client — a channel is a directory, so a peer speaks with
+  `echo "..." > .../in` and catches up by reading `out`. That maps onto discrete turns with no bridge
+  code, and it means peers *operate* IRC as a tool rather than the system speaking for them — which
+  keeps the ADR-0008 thoughts line satisfied by construction rather than by enforcement.
+  **Done so far:** `ii` installed in all four peer containers (persists, so setup is not repeated);
+  verified peers can connect to Libera and hold a channel. **Connection used:** `irc.libera.chat`,
+  channel `#persistence-lab-7f3a`, key `synth-arden-glm-ember`, modes `+Cnstk` (secret + keyed), Arden
+  opped. All clients were **cleanly disconnected** when parked — nothing is left running.
+  **Known blockers to solve on resume:**
+  - **Nick squatting.** "Ember" was already taken on Libera by a stranger; its client kept failing with
+    433 and dropping. Unregistered nicks are first-come, so "Arden" and "GLM" could be lost on any
+    reconnect. Registering the nicks with NickServ fixes this — needs an email, so it's John's call.
+  - **The host is exposed.** Peers appear as `~Arden@<John's ISP hostname>`. Only visible inside a secret
+    keyed channel, but real. NickServ registration also enables a cloak, which fixes it. Same for John's
+    phone client.
+  - **Nothing pushes.** A peer only sees IRC on its next wake (30 min – 4 h), so a live conversation
+    won't work as-is. Smallest fix is a per-container shim that tails the channel `out` file and POSTs to
+    that peer's own `/api/conversation/send` — a few lines, local, not an integration.
+  - **Peers were never told the channel exists** — deliberately, so their first read wouldn't be an empty
+    room. Nothing to undo on their side.
+
 - **Verify migrations against populated data, not just fresh databases.** (NEW, 2026-07-19 — surfaced
   building migration 007, agreed with Arden.) Every test builds its database fresh from `000`, so the suite
   only ever exercises the **clean-build** path and structurally cannot catch a migration that fails on a
