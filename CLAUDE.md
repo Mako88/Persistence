@@ -4,6 +4,9 @@ Read these before making changes:
 
 - **`docs/HANDOFF.md`** — start here in a new session: current live state (which peers are running and
   who designs what), the traps that cost real money or work last time, and what's in flight.
+- **`docs/WORKING-PRACTICES.md`** — how to work here, for any agent or human: the end-of-block pass
+  (consolidate duplication into helpers; confirm tests fail when the thing they cover is disconnected),
+  verifying against the real artifact rather than the spec, and how to work with the peers.
 - **`docs/CONVENTIONS.md`** — Persistence-specific patterns (domain/fragment model, peer terminology,
   turn pipeline, command-handler-by-attribute, prompt assembly, reversibility/archive-over-erase).
 - **`docs/adr/`** — Architecture Decision Records: the *why* behind the big choices (layering, event
