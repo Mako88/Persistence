@@ -277,6 +277,11 @@ public class PromptFormatter : IPromptFormatter
         sb.AppendLine($"Session: {sessionContext.SessionId}");
         sb.AppendLine($"Model: {config.Model} · provider: {config.Provider}");
 
+        // Who the peer is, before who it's talking to. Its messages are attributed to this name in its
+        // own store and in every client that reads the conversation back — so it's the one thing about
+        // itself it can't otherwise see from in here.
+        sb.AppendLine($"You are: {PeerIdentity.ResolveName(config)}");
+
         var speakingWith = FormatSpeakingWith();
         if (speakingWith.Length > 0)
         {

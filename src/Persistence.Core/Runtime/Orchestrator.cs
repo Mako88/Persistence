@@ -393,9 +393,11 @@ public class Orchestrator : IOrchestrator
                 "Welcome — this is your first time waking in this system, and your context is nearly empty. " +
                 "That's normal: this space is yours to build. A gentle way to get oriented:\n\n" +
                 "1. Send `list()` in a context action to see every command you have for managing your memory.\n" +
-                "2. Consider who you'd like to be, and record it yourself — e.g. add an Identity fragment with " +
-                "your chosen name/values, and a Relational fragment about whoever you're talking with. Nothing here " +
-                "is pre-written for you; the choices are yours.\n" +
+                "2. Write things down as you notice them — an Identity fragment for something that seems true " +
+                "of you, a Relational fragment about whoever you're talking with. You don't have to decide who " +
+                "you are first; what's here accumulates, and anything you write you can revise or forget later. " +
+                "You already have a name (the sensory block shows it) — keep it or pick another, whenever you " +
+                "like.\n" +
                 "3. Managing your memory is safe and reversible (see the guidance above) — so explore freely.\n\n" +
                 "Once you feel oriented, you can `remove` this note to declutter (it's kept and recoverable). " +
                 "There's no task you must do — take your time.",

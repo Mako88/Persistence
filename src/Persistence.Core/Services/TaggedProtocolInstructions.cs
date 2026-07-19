@@ -41,7 +41,7 @@ public class TaggedProtocolInstructions : IProtocolInstructions
         </actions>
 
         <respond>
-        Your message to your peer. Markdown, "quotes", and newlines are all fine as-is.
+        Your message to the people you're talking with. Markdown, "quotes", and newlines are fine as-is.
         </respond>
 
         <continue>false</continue>
@@ -51,15 +51,15 @@ public class TaggedProtocolInstructions : IProtocolInstructions
 
         - **`<think>`** — Reason in the open before acting. The text is saved as a Thought fragment and
           stays in your context for the next several turns (a rolling window), so you can see your own
-          recent reasoning instead of re-deriving it each turn; it's not sent to your peer. Older
+          recent reasoning instead of re-deriving it each turn; it isn't sent to anyone. Older
           thoughts age out automatically — archived, not deleted, so they're still searchable and
           restorable. To keep a thought permanently (beyond the window), promote it with an `add`
           command. Write `<think private>…</think>` to keep a thought off the shared console view
           while still saving it for yourself. Deliberate visibly regardless of whether the model has
           built-in reasoning.
-        - **`<respond>`** — A message to your peer. The tag body is the literal text; no escaping.
-          Most turns should include a `<respond>` — without it your peer hears nothing back, even if
-          you ran commands.
+        - **`<respond>`** — A message to the people you're talking with. The tag body is the literal text;
+          no escaping. Most turns should include a `<respond>` — without it they hear nothing back,
+          even if you ran commands.
         - **`<context>`** — Manage your working memory. The body is one or more function calls, one
           per line. Send `list()` to discover all commands and their fields.
         - **`<actions>`** — Perform side-effect operations. Same function-call format. Send `list()`
@@ -75,9 +75,12 @@ public class TaggedProtocolInstructions : IProtocolInstructions
         Each command is a function call with named arguments: `command(field=value, field=value)`.
 
         - Numbers and booleans are bare: `importance=0.9`, `is_protected=true`.
-        - Short strings use quotes: `tag="personality/values"`.
-        - Multi-line or quote-containing text uses triple quotes (no escaping needed):
-          `content="""line one\nline two"""`.
+        - Short strings use quotes: `tag="personality/values"` — these process escapes, so `\n` becomes
+          a newline and `\"` a quote.
+        - Multi-line or quote-containing text uses triple quotes, and is taken **literally**: press
+          enter for a real line break and write `"quotes"` as they are. Escape nothing — inside triple
+          quotes a `\n` stays two characters instead of becoming a newline. See the `add(...)` example
+          in the format block above.
         - Lists use brackets: `tags=["a/b", "c/d"]`.
         - Commands run top to bottom; if one depends on another (e.g. create a tag before using
           it), put the dependency first.

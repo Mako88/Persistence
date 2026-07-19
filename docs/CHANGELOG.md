@@ -9,6 +9,52 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-07-19 — prompt audit: what a peer is told vs. what's true
+
+A pass over everything a peer actually reads — the onboarding seed, the protocol instructions, the
+first-wake note — checking each claim against behaviour. Several had drifted.
+
+### Fixed — the terminology section taught names the system had dropped
+It told every peer *"you are the **remote peer**… the person at the keyboard is the **local peer**"*,
+renamed by [ADR-0007](adr/0007-federated-peers-runtime-room-client.md) to **digital peer / human peer**.
+It also assumed a single human ("the person at the keyboard") when conversations can now have several,
+each named. Rewritten: peers have names rather than roles, the sensory block says who you're speaking
+with, a human's messages are prefixed with their name — and the old terms are noted as still-valid
+aliases, since `ParseSourceType` accepts them.
+
+### Fixed — the protocol instructions demonstrated the mistake they warned against
+The command-syntax section said triple-quoted text needs no escaping, then illustrated it with
+`content="""line one\nline two"""` — a literal `\n`. `ReadTripleQuoted` takes its content **literally**,
+so a peer copying that pattern wrote two characters into its memory instead of a newline. Now it says
+triple quotes are literal (press enter for a real break) and that only single-quoted strings process
+escapes, with a test pinning both halves so the prompt can't quietly become a lie.
+
+### Added — a peer can see its own name
+`PeerName` shipped without ever telling the peer: the sensory block reported who it was *speaking to*,
+never who it *was*. It now opens with `You are: <name>` — the name its messages are attributed to in its
+own store and in every client, and the one thing about itself it couldn't otherwise see from inside.
+(Caught while writing onboarding text that pointed at the sensory block for it — the claim was false
+until this landed.)
+
+### Changed — memory guidance covers the commands that exist
+The "managing your memory without fear" list predated `forget`/`unforget`/`list_forgotten`, so a whole
+recoverable-forget surface went untaught while the sensory block referenced `list_forgotten` in its
+"set aside, still recoverable" line. Added, including the distinction that actually matters: `remove`
+is for clutter (the fragment stays active elsewhere), `forget` is for content that's wrong or outdated
+(stops surfacing anywhere, still recoverable). Curation guidance now names `list_largest` and
+`prune_candidates` too, and the archive-recovery search is spelled as the command it is.
+
+### Changed — the first-wake note stopped asking for a decision
+It said *"Consider who you'd like to be, and record it yourself"* — the same homework the opening line
+was just rewritten to remove. Now: write things down as you notice them, identity accumulates, and you
+already have a name you can keep or change.
+
+### Fixed — `peer.ps1 -Down` took the whole lab offline
+It ran `docker compose down`, which is scoped to the **project** — and every peer shares the one
+`persistence` project. Asking for one peer stopped all four plus the shared infra (computer, searxng).
+Volumes survive, so it's recoverable, but it's a nasty surprise. Now stops the single container by name.
+Found by doing it.
+
 ## 2026-07-15 — the first line of the system prompt
 
 ### Changed — a peer's opening self-description

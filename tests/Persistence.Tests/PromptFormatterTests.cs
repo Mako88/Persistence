@@ -210,6 +210,30 @@ public class PromptFormatterTests
         });
 
     [Fact]
+    public void SensoryTellsThePeerItsOwnName()
+    {
+        // A peer's messages are attributed to this name in its store and in every client that reads the
+        // conversation back, so it's the one thing about itself it can't otherwise see from in here.
+        // The onboarding note points at the sensory block for it, so this keeps that promise honest.
+        var (formatter, _) = CreateFormatterWithSession(new AppConfig { PeerName = "Arden" });
+
+        var sensory = formatter.Format(ContextWithFragment("hi"), [])[^1].Content;
+
+        Assert.Contains("You are: Arden", sensory);
+    }
+
+    [Fact]
+    public void SensoryFallsBackToTheProviderDefaultNameWhenUnset()
+    {
+        var (formatter, _) = CreateFormatterWithSession(
+            new AppConfig { PeerName = "", Provider = "Anthropic", Model = "claude-opus-4-8" });
+
+        var sensory = formatter.Format(ContextWithFragment("hi"), [])[^1].Content;
+
+        Assert.Contains("You are: Claude", sensory);
+    }
+
+    [Fact]
     public void SensoryAnnouncesTheActiveLocalPeerWithDescription()
     {
         var config = new AppConfig { LocalPeers = [new LocalPeerProfile { Name = "John", Description = "the steward" }] };

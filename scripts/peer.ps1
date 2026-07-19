@@ -47,7 +47,14 @@ $composeFile = Join-Path $PSScriptRoot "..\container\peer\docker-compose.$Name.g
     Set-Content -Path $composeFile -Encoding utf8
 
 if ($Down) {
-    docker compose -f $composeFile down
+    # Stop THIS peer only, by container name.
+    #
+    # Emphatically not `docker compose down`: that is scoped to the *project*, and every peer shares the
+    # one `persistence` project — so `down` on a single peer's compose file tears down every other peer
+    # AND the shared infra (computer, searxng) with it. Found the hard way. Volumes survive, so it's
+    # recoverable, but it takes the whole lab offline when you asked for one peer.
+    docker stop "persistence-peer-$Name" *> $null
+    docker rm "persistence-peer-$Name" *> $null
     Remove-Item $composeFile -ErrorAction SilentlyContinue
     Write-Host "Stopped persistence-peer-$Name (its data volume persistence-peer-$Name-data is kept)."
     return

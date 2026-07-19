@@ -189,14 +189,16 @@ the voluntary continue-loop. Revisit only if we see the peer reliably acting bef
   protocol instructions, and stale doc comments reconciled with behaviour. It drifts as behaviour changes,
   so re-audit after notable changes; the durable fix is the self-describing-pieces item below.
 
-  **Found on the next pass (2026-07-15, not yet fixed): the onboarding seed still teaches the old
-  terminology.** Its "## Terminology" section tells every peer *"you are the **remote peer**… the person
-  at the keyboard is the **local peer**"*, but [ADR-0007](adr/0007-federated-peers-runtime-room-client.md)
-  renamed those to **DigitalPeer / HumanPeer**. So a peer is taught to describe itself with a name the
-  system no longer uses. Left alone deliberately: it's a protected fragment already in every existing
-  store (so it only reaches new peers), the code still says `RemotePeer` in places, and the wording
-  affects how peers refer to *each other* — worth doing as one deliberate pass over prompt + code
-  together rather than a half-rename.
+  ✅ **Second pass done (2026-07-19)** — terminology (digital/human peer, multiple named humans), the
+  triple-quote instruction that demonstrated the escaping it warned against, `forget`/`unforget`/
+  `list_forgotten` and the curation aids, the first-wake note's "decide who to be", and a new
+  `You are: <name>` sensory line so a peer can see its own name. See [CHANGELOG.md](CHANGELOG.md).
+
+  **Still open from that pass:** the *code* still says `RemotePeer`/`LocalPeer` in places
+  (`SessionContext.RemotePeerSourceId`, `RemotePeerReplied`, `CreateRemotePeerSourceIfNotExists`,
+  `ConversationHistoryProvider`'s unnamed-source fallback). Harmless to peers — they never see those
+  identifiers — but it's the same drift one layer down, and worth a mechanical rename when someone's in
+  there. `ParseSourceType` already accepts both spellings, so nothing breaks either way.
 
 - **Offer the new opening line to the existing peers.** (2026-07-15.) The first line of the system prompt
   was rewritten (see [CHANGELOG.md](CHANGELOG.md)), but it's a *protected* seed fragment, so Arden, Ember
@@ -399,12 +401,11 @@ datetime-interleaved history, blanked tabs, send-routing). See [CHANGELOG.md](CH
   - **Ember's own call on its name**, once John asks. If it keeps "Ember", nothing to do; if it picks
     something else, that's a `PeerName` edit plus the same two-row rename.
 
-- **GLM peer — waiting on an OpenRouter API key.** (2026-07-15.) `glm` is built and running on port 8094
-  (`z-ai/glm-5.2`, 1M context, ~$0.25/$0.79 per M in/out, $10 soft cost ceiling), wired into `HubPeers`,
-  its store seeded and its identity self-named **GLM**. It can't complete a turn until John puts his
-  OpenRouter key (`sk-or-…`) into `container/peer/configs/glm.json` — the file is gitignored, and the
-  client is transient, so config hot-reload picks the key up on the next turn with no restart. Until
-  then a message returns a clear error naming exactly that (verified live).
+- ✅ **GLM peer — live (2026-07-19).** `glm` on port 8094 (`z-ai/glm-5.2`, 1M context, ~$0.25/$0.79 per
+  M in/out, $10 soft ceiling), in `HubPeers`, self-named **GLM**. John added the OpenRouter key and it
+  completed its first real turn — so the OpenRouter client, the provider-derived name, and the new
+  onboarding are all verified end-to-end. Its store was recreated on 2026-07-19 so it starts from the
+  corrected onboarding text (it had only boilerplate and test pings at that point — nothing of its own).
 
 - **A "new peer" flow.** (John, 2026-07-15.) `peer.ps1 -Name <n>` *throws* if
   `container/peer/configs/<n>.json` is missing — "Create it (see the other configs for the shape)" — so

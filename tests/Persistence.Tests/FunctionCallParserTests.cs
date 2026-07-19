@@ -71,8 +71,23 @@ public class FunctionCallParserTests
     }
 
     [Fact]
+    public void TripleQuotedTakesBackslashNLiterally()
+    {
+        // The trap the protocol instructions now warn about: triple-quoted content is literal, so a
+        // peer that writes "\n" expecting a newline gets two characters stored in its memory instead.
+        // Pinned because the instructions promise exactly this, and a change here would silently make
+        // the prompt a lie.
+        var (_, fields) = Unwrap(SingleCall("add(content=\"\"\"line one\\nline two\"\"\")"));
+
+        Assert.Equal(@"line one\nline two", fields["content"]!.GetValue<string>());
+        Assert.DoesNotContain('\n', fields["content"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void QuotedStringHonorsEscapes()
     {
+        // ...whereas a single-quoted string does process them — the other half of what the
+        // instructions tell a peer.
         var (_, fields) = Unwrap(SingleCall("""x(s="line1\nline2 \"q\" \\ end")"""));
 
         Assert.Equal("line1\nline2 \"q\" \\ end", fields["s"]!.GetValue<string>());
