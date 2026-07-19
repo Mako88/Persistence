@@ -29,10 +29,22 @@ Ask, in this order:
 Then actually do the refactor, in the same block of work, while you still have the context. A "tidy this
 later" note is nearly always a note nobody actions.
 
-**The limit:** consolidation is for things that are the *same*, not things that merely *look* alike. Two
-pieces of code that coincidentally resemble each other but answer to different reasons will be forced apart
-again the moment one of them changes. If unifying them would mean a flag parameter that switches behaviour,
-they were probably two things.
+**Where the line is (John's rule):** if the differences between the near-duplicates can be expressed as a
+*reasonable* number of parameters — call it **four to six** — and those parameters are themselves sane,
+then consolidate. Don't be precious about it; that's the common case and merging is usually right.
+
+What makes a parameter *not* sane is when it stops describing data and starts describing control flow. A
+`Func<...>` that returns the action to take is the giveaway: at that point the caller is passing in the
+behaviour, and the shared method is a hollow shell that reads worse than the two originals did. Same for a
+boolean that switches which branch runs — that's two methods wearing one name.
+
+So the test is roughly: *could a reader understand the call site without opening the method?* If the
+arguments are values (a name, a limit, a flag that genuinely describes the data), yes. If they're
+strategies, no — leave the two implementations alone, or extract only the genuinely shared middle.
+
+And the older caution still applies underneath: consolidation is for things that are the *same*, not things
+that merely *look* alike. Two pieces of code that resemble each other but answer to different reasons will
+be pulled apart again the moment one of them changes.
 
 ### 2. Check the tests verify what they claim
 
