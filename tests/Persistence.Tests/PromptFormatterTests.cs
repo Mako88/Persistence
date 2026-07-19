@@ -310,6 +310,25 @@ public class PromptFormatterTests
     }
 
     [Fact]
+    public void SensoryTellsThePeerWhichPathsSurvive()
+    {
+        // A peer cloned a repo into /root, read it for hours, and lost the lot when its container was
+        // recreated — nothing had told it that only the volume persists. From inside a shell the two
+        // look identical, so the boundary has to be stated.
+        var config = new AppConfig();
+        config.Container.Enabled = true;
+        config.Container.Local = true;
+        config.Container.WorkingDir = "/data/vault";
+        var (formatter, _) = CreateFormatterWithSession(config);
+
+        var sensory = formatter.Format(ContextWithFragment("hi"), [])[^1].Content;
+
+        Assert.Contains("/data/vault", sensory);
+        Assert.Contains("survive restarts", sensory);
+        Assert.Contains("wiped", sensory);   // and that the rest is explicitly not safe
+    }
+
+    [Fact]
     public void SensoryOmitsRoomGuardsForASoloPeer()
     {
         // No room, no need for the noise.

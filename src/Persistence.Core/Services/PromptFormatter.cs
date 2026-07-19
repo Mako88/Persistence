@@ -321,6 +321,19 @@ public partial class PromptFormatter : IPromptFormatter
         // itself it can't otherwise see from in here.
         sb.AppendLine($"You are: {PeerIdentity.ResolveName(config)}");
 
+        // Where the peer's work survives. Learned the hard way: a peer cloned a repo into /root, read it
+        // for hours, and lost all of it when its container was recreated for an unrelated deploy —
+        // nothing had ever told it that only its volume persists. The container filesystem is the body;
+        // the volume is the self, and the distinction is invisible from inside a shell.
+        if (config.Container.Enabled && config.Container.Local
+            && !string.IsNullOrWhiteSpace(config.Container.WorkingDir))
+        {
+            sb.AppendLine(
+                $"Workspace: {config.Container.WorkingDir} is on your persistent volume — files there survive "
+                + "restarts and rebuilds. Anywhere else in your computer (/root, /tmp, …) is scratch space "
+                + "that is wiped whenever your container is recreated. Keep work you want to keep in your workspace.");
+        }
+
         var speakingWith = FormatSpeakingWith();
         if (speakingWith.Length > 0)
         {
