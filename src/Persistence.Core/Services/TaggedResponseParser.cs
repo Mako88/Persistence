@@ -43,7 +43,12 @@ public partial class TaggedResponseParser : IModelResponseParser
         }
 
         var actions = new List<ModelResponse>();
-        var continueTurn = false;
+
+        // Continuing is the default: a peer keeps the floor until it explicitly yields with
+        // <continue>false</continue>. Forgetting the tag used to end the turn mid-thought — the failure
+        // mode was silent, and it cost the peer its turn rather than costing anything obvious. Yielding
+        // is the deliberate act now, and the iteration cap remains the backstop.
+        var continueTurn = true;
         var sawKnownTag = false;
 
         foreach (Match m in TagRegex().Matches(rawOutput))
@@ -76,7 +81,10 @@ public partial class TaggedResponseParser : IModelResponseParser
 
                 case "continue":
                     sawKnownTag = true;
-                    continueTurn = body.Trim().Equals("true", StringComparison.OrdinalIgnoreCase);
+                    // Only an explicit "false" yields. Anything else — "true", or something unexpected —
+                    // keeps the floor, matching the omitted-tag default rather than quietly ending the
+                    // turn on a typo.
+                    continueTurn = !body.Trim().Equals("false", StringComparison.OrdinalIgnoreCase);
                     break;
 
                 // Unknown tags are ignored — lets models wrap output in extra markup

@@ -463,3 +463,7 @@ datetime-interleaved history, blanked tabs, send-routing). See [CHANGELOG.md](CH
   settled by then (`Begin` lays out before the first iteration, which is when `Ready` fires), so this may
   already be correct and only *looked* wrong because of the un-interleaved history above. Re-check once
   interleaving lands.
+
+
+Additional notes from John:
+The /debug command doesn't work anymore, and when attempting to execute it, it reset the status to idle

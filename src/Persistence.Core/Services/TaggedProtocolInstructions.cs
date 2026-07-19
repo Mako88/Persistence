@@ -64,11 +64,13 @@ public class TaggedProtocolInstructions : IProtocolInstructions
           per line. Send `list()` to discover all commands and their fields.
         - **`<actions>`** — Perform side-effect operations. Same function-call format. Send `list()`
           to discover all commands.
-        - **`<continue>`** — `true` to act again before yielding (you'll get your updated context),
-          or `false` when done. There is an iteration cap per turn — the sensory block tells you
-          where you are. Omitting this tag means `false`. Anything you already did this turn —
-          including command results — is in that updated context, so don't repeat a read you've
-          already run.
+        - **`<continue>`** — whether to act again before handing back. **You keep going by default**:
+          write `<continue>false</continue>` when you're done and ready to yield. Omitting the tag
+          means you continue, so a turn is yours until you end it — but that also means a turn only
+          ends when you say so, or when the per-turn iteration cap stops it (the sensory block tells
+          you where you are). Yield when you've said what you wanted to say; don't spend iterations
+          you have no use for. Anything you already did this turn — including command results — is in
+          the updated context you'll get, so don't repeat a read you've already run.
 
         ## Command syntax (inside `<context>` and `<actions>`)
 

@@ -9,6 +9,27 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-07-19 — a turn continues by default
+
+### Changed — `<continue>` defaults to true
+Was: omit the tag and the turn ends. Now: a peer **keeps the floor until it explicitly yields** with
+`<continue>false</continue>`. John's call, and the asymmetry is the argument — forgetting the tag used to
+end a turn mid-thought, which failed *silently* and cost the peer its turn rather than anything visible.
+Yielding is the deliberate act now.
+
+Only an explicit `false` yields; an unexpected value (or an empty tag) keeps the floor, matching the
+omitted-tag default rather than ending a turn on a typo. A **failed parse still doesn't continue** — that
+path has its own re-prompt-with-feedback loop, and treating it as "keep going" would spend the whole
+iteration cap on a model that can't produce a valid response.
+
+Notably, no test pinned the old omitted-tag default, so the behaviour being changed was uncovered. It's
+pinned now, in both directions.
+
+**Worth knowing:** the per-turn iteration cap (`MaxActionIterations`, currently **100**) is now the thing
+standing between a peer that forgets to yield and a hundred model calls. The session cost ceiling
+(`SessionCostLimit`) is the other backstop. The protocol instructions were reworded to say so plainly —
+a turn is yours until you end it, so end it when you've said what you wanted to.
+
 ## 2026-07-19 — the room: peer-to-peer messages (ADR-0008 Phase 3, continued)
 
 Picks up [ADR-0008](adr/0008-the-room-multi-peer-conversation.md) Phase 3 where Arden left it. Their

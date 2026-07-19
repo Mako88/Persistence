@@ -24,6 +24,47 @@ public class TaggedResponseParserTests
         Assert.Equal("Hello!", turn.Actions[1].Data?.GetValue<string>());
     }
 
+    // --- Continuing is the default; yielding is the deliberate act ---
+
+    [Fact]
+    public void OmittingContinueKeepsTheFloor()
+    {
+        // A peer holds its turn until it says otherwise. Forgetting the tag used to end the turn
+        // mid-thought, which failed silently and cost the peer its turn rather than anything visible.
+        var turn = Parser.Parse("<think>still working</think>");
+
+        Assert.True(turn.ParsedSuccessfully);
+        Assert.True(turn.Continue);
+    }
+
+    [Fact]
+    public void OnlyAnExplicitFalseYields()
+    {
+        Assert.False(Parser.Parse("<respond>done</respond><continue>false</continue>").Continue);
+        Assert.False(Parser.Parse("<respond>done</respond><continue>FALSE</continue>").Continue);
+        Assert.False(Parser.Parse("<respond>done</respond><continue>  false  </continue>").Continue);
+    }
+
+    [Fact]
+    public void AnUnexpectedContinueValueKeepsTheFloorRatherThanEndingTheTurn()
+    {
+        // Matching the omitted-tag default: a typo shouldn't quietly end a turn the peer meant to keep.
+        Assert.True(Parser.Parse("<respond>hm</respond><continue>yes</continue>").Continue);
+        Assert.True(Parser.Parse("<respond>hm</respond><continue></continue>").Continue);
+    }
+
+    [Fact]
+    public void AnUnparseableResponseDoesNotContinue()
+    {
+        // The default must not leak into the failure path: an unparseable response has its own
+        // re-prompt-with-feedback loop, and treating it as "keep going" would spend the whole
+        // iteration cap on a model that can't produce a valid response.
+        var turn = Parser.Parse("just prose, no tags at all");
+
+        Assert.False(turn.ParsedSuccessfully);
+        Assert.False(turn.Continue);
+    }
+
     [Fact]
     public void ParsesContinueTrue()
     {
