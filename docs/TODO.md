@@ -134,6 +134,14 @@ the voluntary continue-loop. Revisit only if we see the peer reliably acting bef
 
 - **Peer/infra network split.** ✅ **FIXED (2026-07-19).** The shared-infra compose declared its network as `lab` with no explicit name, so Compose prefixed it to `persistence_lab`, while peers attached to the external `persistence-lab` — two different networks that merely looked alike, so the "peers can reach shared infra" intent silently didn't hold (a peer couldn't resolve `persistence-searxng` at all). Both sides now use the one external `persistence-lab`. Verified live: GLM resolves and reaches SearXNG (HTTP 200).
 
+- **`SnapshotChatHistoryTests` is flaky.** (Found by GLM, 2026-07-19, while rebasing the OpenRouter cost
+  work.) It failed once with the assistant reply missing from the snapshot, then did not reproduce — not in
+  isolation, not in the full suite, on either its branch or `c443134` (three consecutive clean runs here).
+  So it isn't the cost change. Suspected the test's async polling racing the background turn's append.
+  Recorded rather than shrugged off because a test that cries wolf costs whoever meets it next exactly the
+  hours it cost GLM: it spent turns hunting a null-reference that was never there. Worth making the wait
+  deterministic rather than timing-based.
+
 - **Verify migrations against populated data, not just fresh databases.** (NEW, 2026-07-19 — surfaced
   building migration 007, agreed with Arden.) Every test builds its database fresh from `000`, so the suite
   only ever exercises the **clean-build** path and structurally cannot catch a migration that fails on a
