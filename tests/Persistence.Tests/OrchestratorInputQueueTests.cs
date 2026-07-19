@@ -174,7 +174,7 @@ public sealed class OrchestratorInputQueueTests : IAsyncLifetime
 
         public async Task ExecuteTurnAsync(string? input = null, string? peerName = null, string? wakeNote = null,
             Persistence.Data.Entities.SourceType senderType = Persistence.Data.Entities.SourceType.HumanPeer,
-            string? addressedTo = null, int relayDepth = 0, CancellationToken ct = default)
+            string? addressedTo = null, int relayDepth = 0, string? messageId = null, CancellationToken ct = default)
         {
             var message = input;
 
@@ -201,7 +201,7 @@ public sealed class OrchestratorInputQueueTests : IAsyncLifetime
 
         public void EnqueueInput(string input, string? peerName = null,
             Persistence.Data.Entities.SourceType senderType = Persistence.Data.Entities.SourceType.HumanPeer,
-            string? addressedTo = null) => pending.Enqueue(input);
+            string? addressedTo = null, string? messageId = null, int relayDepth = 0) => pending.Enqueue(input);
 
         public void EnqueueSystemNote(string note) { }
 

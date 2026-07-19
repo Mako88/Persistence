@@ -17,9 +17,13 @@ public interface ITurnHandler
     /// <param name="senderType">Whether a person or another digital peer is speaking (ADR-0008 §2).</param>
     /// <param name="addressedTo">Who the message is directed at; null is a broadcast to the room.</param>
     /// <param name="relayDepth">Peer-to-peer hops taken so far without a human speaking (ADR-0008 §4).</param>
+    /// <param name="messageId">
+    /// The utterance's cross-peer id, passed through unchanged when this is a relay of something already
+    /// said. Null mints a new one — a fresh utterance.
+    /// </param>
     Task ExecuteTurnAsync(string? input = null, string? peerName = null, string? wakeNote = null,
         SourceType senderType = SourceType.HumanPeer, string? addressedTo = null, int relayDepth = 0,
-        CancellationToken ct = default);
+        string? messageId = null, CancellationToken ct = default);
 
     /// <summary>
     /// Queues input from a human peer (with the sender's name, so attribution survives the wait until
@@ -27,7 +31,8 @@ public interface ITurnHandler
     /// current turn's iteration loop.
     /// </summary>
     void EnqueueInput(string input, string? peerName = null,
-        SourceType senderType = SourceType.HumanPeer, string? addressedTo = null);
+        SourceType senderType = SourceType.HumanPeer, string? addressedTo = null,
+        string? messageId = null, int relayDepth = 0);
 
     /// <summary>
     /// Queues a system note (e.g. the local peer accepted/rejected a proposal) to surface to the

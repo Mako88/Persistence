@@ -26,7 +26,14 @@ namespace Persistence.Api.Controllers;
 /// How many peer-to-peer hops this has already taken without a human speaking. A relaying client passes
 /// the incoming depth + 1; the turn pipeline refuses to go beyond the configured limit.
 /// </param>
-public record SendRequest(string Input, string? FromPeer = null, string? AddressedTo = null, int RelayDepth = 0);
+/// <param name="MessageId">
+/// The utterance's cross-peer identity, minted by the peer that originally said it. A relaying client
+/// passes the <em>original</em> id through unchanged, so the same utterance carries the same id in every
+/// store; omitting it means this is a new utterance and the receiving peer mints one. Deliberately not
+/// derived from <c>RelayDepth</c> or the row id — those describe a copy, this names the thing said.
+/// </param>
+public record SendRequest(string Input, string? FromPeer = null, string? AddressedTo = null, int RelayDepth = 0,
+    string? MessageId = null);
 
 /// <summary>
 /// The local-peer side of the conversation: submit input, then poll for what the system emits.
@@ -98,7 +105,8 @@ public class ConversationController : ControllerBase
         // nothing in the log either. Surfacing it as a conversation error is how the human finds out.
         eventBus.FireAndForget(
             this,
-            new DisplayInputReceived(request.Input, senderName, senderType, request.AddressedTo, request.RelayDepth),
+            new DisplayInputReceived(request.Input, senderName, senderType, request.AddressedTo, request.RelayDepth,
+                request.MessageId),
             ex => display.ShowError(RootCause(ex).Message));
         return Accepted();
     }

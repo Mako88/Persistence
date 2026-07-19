@@ -129,7 +129,7 @@ public class Orchestrator : IOrchestrator
 
         if (!turnLock.Wait(0))
         {
-            turnHandler.EnqueueInput(input, peerName, e.SenderType, e.AddressedTo);
+            turnHandler.EnqueueInput(input, peerName, e.SenderType, e.AddressedTo, e.MessageId, e.RelayDepth);
             display.ShowMessageQueued(input);
 
             // The turn holding the lock may already be past its drain loop (mid-refresh, about to
@@ -143,7 +143,8 @@ public class Orchestrator : IOrchestrator
         try
         {
             display.ShowThinking();
-            await turnHandler.ExecuteTurnAsync(input, peerName, wakeNote: null, e.SenderType, e.AddressedTo, e.RelayDepth);
+            await turnHandler.ExecuteTurnAsync(input, peerName, wakeNote: null, e.SenderType, e.AddressedTo,
+                e.RelayDepth, e.MessageId);
             await DrainPendingTurnsThenRefreshAsync();
         }
         finally

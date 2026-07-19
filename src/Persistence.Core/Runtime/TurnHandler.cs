@@ -94,7 +94,7 @@ public class TurnHandler : ITurnHandler
     /// </summary>
     public async Task ExecuteTurnAsync(string? input = null, string? peerName = null, string? wakeNote = null,
         SourceType senderType = SourceType.HumanPeer, string? addressedTo = null, int relayDepth = 0,
-        CancellationToken ct = default)
+        string? messageId = null, CancellationToken ct = default)
     {
         // Hot-reload config edits before the turn reads any settings, so tweaks apply without a restart
         // (cheap — a stat, re-parsing only when the file changed). Turn-start granularity keeps the whole
@@ -139,7 +139,7 @@ public class TurnHandler : ITurnHandler
 
         if (input != null)
         {
-            await PersistUserMessageAsync(context, input, peerName, senderType, addressedTo);
+            await PersistUserMessageAsync(context, input, peerName, senderType, addressedTo, messageId, relayDepth);
         }
 
         await DrainPendingInput(context, annotate: input != null);
@@ -446,8 +446,9 @@ public class TurnHandler : ITurnHandler
     /// context before the next model call within the current turn's iteration loop.
     /// </summary>
     public void EnqueueInput(string input, string? peerName = null,
-        SourceType senderType = SourceType.HumanPeer, string? addressedTo = null) =>
-        pendingInput.Enqueue(new PendingInput(input, peerName, senderType, addressedTo));
+        SourceType senderType = SourceType.HumanPeer, string? addressedTo = null,
+        string? messageId = null, int relayDepth = 0) =>
+        pendingInput.Enqueue(new PendingInput(input, peerName, senderType, addressedTo, messageId, relayDepth));
 
     /// <summary>
     /// Queues a system note to surface to the peer at the start of its next turn.
@@ -548,7 +549,8 @@ public class TurnHandler : ITurnHandler
         // was running is still attributed to John — not to whoever most recently touched the session.
         foreach (var message in injected)
         {
-            await AddIncomingMessageAsync(context, message.Content, message.PeerName, message.SenderType, message.AddressedTo);
+            await AddIncomingMessageAsync(context, message.Content, message.PeerName, message.SenderType,
+                message.AddressedTo, message.MessageId, message.RelayDepth);
         }
     }
 
@@ -590,9 +592,9 @@ public class TurnHandler : ITurnHandler
     /// fragment and junction table).
     /// </summary>
     private async Task PersistUserMessageAsync(WorkingContextEntity context, string input, string? peerName,
-        SourceType senderType, string? addressedTo)
+        SourceType senderType, string? addressedTo, string? messageId, int relayDepth)
     {
-        await AddIncomingMessageAsync(context, input, peerName, senderType, addressedTo);
+        await AddIncomingMessageAsync(context, input, peerName, senderType, addressedTo, messageId, relayDepth);
         await workingContextRepo.SaveAsync(context);
     }
 
@@ -604,7 +606,8 @@ public class TurnHandler : ITurnHandler
     /// another. The fragment carries low raw-transcript weights so the peer's own authored notes outrank it.
     /// </summary>
     private async Task AddHumanMessageAsync(WorkingContextEntity context, string content, string? peerName) =>
-        await AddIncomingMessageAsync(context, content, peerName, SourceType.HumanPeer, addressedTo: null);
+        await AddIncomingMessageAsync(context, content, peerName, SourceType.HumanPeer, addressedTo: null,
+            messageId: null, relayDepth: 0);
 
     /// <summary>
     /// Adds an incoming message as a ChatMessage fragment, sourced to whoever sent it.
@@ -614,9 +617,15 @@ public class TurnHandler : ITurnHandler
     /// <see cref="SourceType.DigitalPeer"/> so the receiving peer can weigh a peer's voice differently
     /// from a person's. Only a human sender updates <c>ActiveLocalPeerName</c> — the "you are speaking
     /// with" line means the person in the conversation, and an overheard peer shouldn't displace them.</para>
+    ///
+    /// <para>The utterance's cross-peer id is <em>minted here only if the sender didn't bring one</em>. A
+    /// relay passes the original id through, so the same utterance keeps one identity across every store
+    /// it lands in; a message said fresh gets a new GUID. That's what makes the id name the thing said
+    /// rather than this copy of it — see ADR-0008 and migration 007.</para>
     /// </summary>
     private async Task AddIncomingMessageAsync(
-        WorkingContextEntity context, string content, string? senderName, SourceType senderType, string? addressedTo)
+        WorkingContextEntity context, string content, string? senderName, SourceType senderType, string? addressedTo,
+        string? messageId, int relayDepth)
     {
         var resolvedName = senderType == SourceType.HumanPeer
             ? ResolveHumanPeerName(senderName)
@@ -637,6 +646,8 @@ public class TurnHandler : ITurnHandler
             Status = ContextFragmentStatus.Active,
             Content = content,
             AddressedTo = addressedTo,
+            MessageId = string.IsNullOrWhiteSpace(messageId) ? Guid.NewGuid().ToString() : messageId.Trim(),
+            RelayDepth = relayDepth,
             Importance = 0.3f,
             Confidence = 0.5f,
             Relevance = 0.5f,

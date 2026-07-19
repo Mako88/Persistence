@@ -41,7 +41,9 @@ public class ConversationHistoryProvider(IWorkingContextRepository contexts, ISe
                 f.Sources.Any(s => s.SourceType == SourceType.DigitalPeer) ? "assistant" : "user",
                 ResolveAuthor(f),
                 f.Content,
-                f.CreatedUtc))
+                f.CreatedUtc,
+                f.MessageId,
+                f.RelayDepth))
             .ToList();
     }
 

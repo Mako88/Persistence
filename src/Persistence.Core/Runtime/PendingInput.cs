@@ -9,8 +9,16 @@ namespace Persistence.Runtime;
 /// name on the item itself keeps each message's author correct no matter when it drains. A null or
 /// empty <see cref="PeerName"/> falls back to the configured default at persist time. See ADR-0007.
 /// </summary>
+/// <remarks>
+/// <see cref="MessageId"/> and <see cref="RelayDepth"/> travel on the item for the same reason the name
+/// does: a queued message keeps its own identity and its own hop count regardless of what arrives after
+/// it. Reading the depth off shared session state at drain time would give a queued message whatever
+/// depth the *latest* arrival had.
+/// </remarks>
 public record PendingInput(
     string Content,
     string? PeerName,
     Data.Entities.SourceType SenderType = Data.Entities.SourceType.HumanPeer,
-    string? AddressedTo = null);
+    string? AddressedTo = null,
+    string? MessageId = null,
+    int RelayDepth = 0);

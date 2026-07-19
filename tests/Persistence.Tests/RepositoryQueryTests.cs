@@ -299,4 +299,52 @@ public sealed class RepositoryQueryTests : IAsyncLifetime
         Assert.Equal("Synth", directed.AddressedTo);
         Assert.Null(broadcast.AddressedTo);
     }
+
+    [Fact]
+    public async Task CrossPeerMessageIdAndRelayDepthRoundTrip()
+    {
+        var ctx = await contexts.GetByIdAsync(session.WorkingContextId);
+        var utteranceId = Guid.NewGuid().ToString();
+
+        // A relayed room message (migration 007) and an ordinary fragment that is not a room message.
+        ctx!.AddFragment(new WeightedContextFragment
+        {
+            FragmentType = ContextFragmentType.ChatMessage,
+            Status = ContextFragmentStatus.Active,
+            Content = "Relayed from two hops away.",
+            MessageId = utteranceId,
+            RelayDepth = 2,
+            Importance = 0.3f,
+            Confidence = 0.5f,
+            Relevance = 0.5f,
+            CreatedUtc = DateTimeOffset.UtcNow,
+            LastModifiedUtc = DateTimeOffset.UtcNow,
+        });
+        ctx.AddFragment(new WeightedContextFragment
+        {
+            FragmentType = ContextFragmentType.Personal,
+            Status = ContextFragmentStatus.Active,
+            Content = "Not a room message at all.",
+            Importance = 0.6f,
+            Confidence = 0.8f,
+            Relevance = 0.5f,
+            CreatedUtc = DateTimeOffset.UtcNow,
+            LastModifiedUtc = DateTimeOffset.UtcNow,
+        });
+        await contexts.SaveAsync(ctx);
+
+        var reloaded = await contexts.GetByIdAsync(ctx.Id);
+        var relayed = reloaded!.ContextFragments.Values.Single(f => f.Content == "Relayed from two hops away.");
+        var notARoomMessage = reloaded.ContextFragments.Values.Single(f => f.Content == "Not a room message at all.");
+
+        // The consequence that matters: a message *at rest* knows its own identity and how far it came.
+        // Before this, depth existed only on the live request, so a stored message couldn't answer either.
+        Assert.Equal(utteranceId, relayed.MessageId);
+        Assert.Equal(2, relayed.RelayDepth);
+
+        // Null rather than 0 off the room path — "not a room message" must stay distinguishable from
+        // "a room message at its origin", which is exactly what a depth of 0 means.
+        Assert.Null(notARoomMessage.MessageId);
+        Assert.Null(notARoomMessage.RelayDepth);
+    }
 }

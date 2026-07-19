@@ -58,7 +58,7 @@ public sealed class OrchestratorProposalCommandsTests : IAsyncLifetime
         turnHandler = new Mock<ITurnHandler>();
         turnHandler
             .Setup(t => t.ExecuteTurnAsync(It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(),
-                It.IsAny<Persistence.Data.Entities.SourceType>(), It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+                It.IsAny<Persistence.Data.Entities.SourceType>(), It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
         var wakeUpMonitor = new Mock<IWakeUpMonitor>();
         var scheduledEventRepo = new ScheduledEventRepository(config, session, entityTagRepo);
@@ -112,7 +112,7 @@ public sealed class OrchestratorProposalCommandsTests : IAsyncLifetime
         turnHandler.Verify(
             t => t.ExecuteTurnAsync(It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(),
                 It.IsAny<Persistence.Data.Entities.SourceType>(), It.IsAny<string?>(), It.IsAny<int>(),
-                It.IsAny<CancellationToken>()),
+                It.IsAny<string?>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 
@@ -223,7 +223,7 @@ public sealed class OrchestratorProposalCommandsTests : IAsyncLifetime
             null,
             It.IsAny<string?>(), // peerName — a wake has no human sender
             It.Is<string?>(n => n != null && n.Contains("reflect on values") && n.Contains("reconsider whether I still value X")),
-            It.IsAny<Persistence.Data.Entities.SourceType>(), It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            It.IsAny<Persistence.Data.Entities.SourceType>(), It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()),
             Times.Once);
     }
 }

@@ -52,6 +52,12 @@ public class RespondToUserHandler : IActionHandler
             FragmentType = ContextFragmentType.ChatMessage,
             Status = ContextFragmentStatus.Active,
             Content = reply,
+            // The peer is the originator of its own reply, so it mints the utterance's id here and the
+            // hop count starts at zero. This is the id a relay carries onward (ADR-0008 §4): without it
+            // a peer's words would have no identity to be forwarded *as*, only a per-store row id that
+            // means nothing in the store it's forwarded to.
+            MessageId = Guid.NewGuid().ToString(),
+            RelayDepth = 0,
             // Raw transcript — low defaults so it's deprioritised vs. the peer's authored notes.
             Importance = 0.3f,
             Confidence = 0.5f,

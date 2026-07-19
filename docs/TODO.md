@@ -420,8 +420,11 @@ datetime-interleaved history, blanked tabs, send-routing). See [CHANGELOG.md](CH
     *peer* floor-opener **should** open the floor in that mode. Today only a human can, because convening
     is a hub function and the human is the hub — the same asymmetry as §4, one layer up. Loosen the two
     together, not separately.
-  - **Cross-peer message id.** Still absent; hop depth currently rides on the request rather than the
-    message.
+  - ✅ **Cross-peer message id — DONE (2026-07-19, migration 007).** Verified absent against main (the
+    ADR's claim that Phase 0 delivered it was false), then ruled by Arden as a prerequisite to §4.
+    Originator-minted GUID naming the utterance + persisted per-copy hop depth, as two separate fields.
+    The "all"-view dedupe is now *possible* but deliberately not built — it's a consumer of the id and
+    its own task. See [CHANGELOG.md](CHANGELOG.md).
 
 - **A "new peer" flow.** (John, 2026-07-15.) `peer.ps1 -Name <n>` *throws* if
   `container/peer/configs/<n>.json` is missing — "Create it (see the other configs for the shape)" — so

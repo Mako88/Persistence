@@ -9,6 +9,45 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-07-19 (later still) — an utterance gets an identity (ADR-0008, migration 007)
+
+Prerequisite to the §4 relay affordance, ruled by Arden after verification showed it was missing. ADR-0008
+*asserted* Phase 0 had delivered "a stable cross-peer message id". It hadn't. Arden's instruction was to
+check the real artifact rather than trust the design record — and the record was wrong.
+
+### What was actually there
+The only id a message had was its `ContextFragments` row id, which is **per store**: the same utterance
+relayed to two peers became two unrelated rows with two unrelated ids, so nothing could tell they were one
+thing said once. (That's also the root of the "all"-view duplicate problem.) And the peer-hop depth rode
+the **HTTP request** — `SendRequest.RelayDepth` → `DisplayInputReceived` → `SessionContext.CurrentRelayDepth`
+— never touching the message. So a message *at rest* couldn't say how far it had travelled: the §4 breaker
+worked only because the depth happened to accompany the live request. That forecloses Phase 4 (stored,
+asynchronous delivery), which has no request to read a depth from.
+
+### Added — two fields, because they are two kinds of thing
+`MessageId` is an **originator-minted GUID** naming the *utterance*: set once by the peer that said it and
+carried unchanged through every relay, so the same utterance has the same id in every store. Originator-
+rather than relayer-minted is what makes it identity at all — a relayer would give one utterance a
+different id per hop, leaving nothing for a reply, a dedupe, or a stored delivery to point at.
+
+`RelayDepth` is **per delivery path**: 0 at origin, +1 per hop (A→B is 1, A→B→C is 2 — one utterance, two
+depths). Now persisted on the message, so it knows its own path without a request to ask.
+
+Both are minted at each of the two points a `ChatMessage` is born: an incoming message (minting only if the
+sender didn't bring an id) and the peer's own reply (always the originator). The local row id is untouched
+— two ids with two jobs, storage and identity; unifying them would break local storage semantics.
+
+Kept deliberately minimal per Arden's scope fence: the id, the persisted depth, and an append-only
+migration. **Not** built — the "all"-view dedupe (a *consumer* of the id, its own task) and any reply-chain
+graph beyond the depth counter §4 needs.
+
+Also corrected ADR-0008's false Phase 0 claim in place, since a wrong assertion in the design record will
+mislead whoever trusts it next.
+
+Suite: **628 core / 37 API**, green. Verified beyond the suite: migration 007 applied to a *real* 499-fragment
+pre-007 peer snapshot (all existing rows read NULL, partial index builds, lookup-by-`MessageId` runs) —
+the suite only ever migrates fresh databases, so it can't catch an upgrade problem.
+
 ## 2026-07-19 (later) — `/debug`, and an unknown command that lied about the turn
 
 John reported: *"the /debug command doesn't work anymore, and when attempting to execute it, it reset the

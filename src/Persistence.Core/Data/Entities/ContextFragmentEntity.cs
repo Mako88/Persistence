@@ -23,6 +23,26 @@ public record ContextFragmentEntity : BaseEntity
     /// </summary>
     public string? AddressedTo { get; set; }
 
+    /// <summary>
+    /// For a <see cref="ContextFragmentType.ChatMessage"/> in a multi-peer room: the identity of the
+    /// <em>utterance</em>, as opposed to <see cref="BaseEntity.Id"/>, which identifies this store's row.
+    /// Minted once as a GUID by the peer that said it and carried unchanged through every relay, so the
+    /// same thing said once has the same id in every peer's store — the referent a reply, a dedupe, or a
+    /// stored delivery can point at. Originator-minted rather than relayer-minted: a relayer would give
+    /// one utterance a different id per hop, which is exactly what makes it unusable as identity.
+    /// <c>null</c> for anything that isn't a room message. See ADR-0008.
+    /// </summary>
+    public string? MessageId { get; set; }
+
+    /// <summary>
+    /// How far <em>this copy</em> has travelled: 0 as said, +1 for each peer-to-peer relay hop without a
+    /// human speaking. Distinct in kind from <see cref="MessageId"/> — the id is constant per utterance,
+    /// while the depth is per delivery path (A→B is 1 and A→B→C is 2 for the one utterance). Persisted
+    /// on the message rather than carried on the request so a message at rest knows its own path, which
+    /// is what ADR-0008 Phase 4's stored, asynchronous delivery needs. <c>null</c> off the room path.
+    /// </summary>
+    public int? RelayDepth { get; set; }
+
     public required float Importance { get; set; }
 
     public required float Confidence { get; set; }

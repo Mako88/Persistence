@@ -275,6 +275,41 @@ public class TurnHandlerTests
     }
 
     [Fact]
+    public async Task AFreshUtteranceIsMintedACrossPeerId()
+    {
+        var h = new Harness();
+        h.RegisterHandler(ModelAction.RespondToUser);
+        h.ParseReturns(Harness.Turn(ModelAction.RespondToUser));
+
+        await h.Build().ExecuteTurnAsync("morning", peerName: "John");
+
+        var msg = Assert.Single(h.Context.ContextFragments.Values, f => f.FragmentType == ContextFragmentType.ChatMessage);
+        // The id exists from the moment a message is persisted, not only once it crosses a peer boundary:
+        // an utterance that turns out to be worth relaying can't retroactively acquire an identity.
+        Assert.True(Guid.TryParse(msg.MessageId, out _));
+        Assert.Equal(0, msg.RelayDepth);
+    }
+
+    [Fact]
+    public async Task ARelayedUtteranceKeepsTheOriginalIdAndCarriesItsOwnDepth()
+    {
+        var h = new Harness();
+        h.RegisterHandler(ModelAction.RespondToUser);
+        h.ParseReturns(Harness.Turn(ModelAction.RespondToUser));
+        var originalId = Guid.NewGuid().ToString();
+
+        await h.Build().ExecuteTurnAsync("what Arden said", peerName: "Arden",
+            senderType: SourceType.DigitalPeer, addressedTo: "Ember", relayDepth: 1, messageId: originalId);
+
+        var msg = Assert.Single(h.Context.ContextFragments.Values, f => f.FragmentType == ContextFragmentType.ChatMessage);
+        // The whole point of originator-minted: the same utterance is the same id in every store, so it
+        // stays dedupable and referenceable. A relayer minting its own would give one utterance N ids.
+        Assert.Equal(originalId, msg.MessageId);
+        // The depth is the other kind of thing — per delivery path, so this copy records how far it came.
+        Assert.Equal(1, msg.RelayDepth);
+    }
+
+    [Fact]
     public async Task ANullPeerNameFallsBackToTheConfiguredDefault()
     {
         var h = new Harness();

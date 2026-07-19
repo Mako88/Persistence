@@ -106,12 +106,12 @@ public sealed class PeerSeedingIntegrationTests : IAsyncLifetime
     {
         public Task ExecuteTurnAsync(string? input = null, string? peerName = null, string? wakeNote = null,
             Persistence.Data.Entities.SourceType senderType = Persistence.Data.Entities.SourceType.HumanPeer,
-            string? addressedTo = null, int relayDepth = 0, CancellationToken ct = default) =>
+            string? addressedTo = null, int relayDepth = 0, string? messageId = null, CancellationToken ct = default) =>
             Task.CompletedTask;
 
         public void EnqueueInput(string input, string? peerName = null,
             Persistence.Data.Entities.SourceType senderType = Persistence.Data.Entities.SourceType.HumanPeer,
-            string? addressedTo = null) { }
+            string? addressedTo = null, string? messageId = null, int relayDepth = 0) { }
         public void EnqueueSystemNote(string note) { }
         public bool HasPendingInput => false;
     }

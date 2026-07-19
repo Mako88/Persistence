@@ -20,7 +20,15 @@ public record ScheduledEventView(long Id, string Name, DateTimeOffset ScheduledF
 /// <see cref="Author"/> is who sent it (a peer's name), for attributed multi-peer display; <see cref="Role"/>
 /// stays the coarse user/assistant distinction for role-based rendering.
 /// </summary>
-public record ChatHistoryItem(long Id, string Role, string Author, string Content, DateTimeOffset Timestamp);
+/// <remarks>
+/// <see cref="Id"/> and <see cref="MessageId"/> are two ids with two jobs, and the difference matters to a
+/// client that relays. <see cref="Id"/> is this store's row id — meaningless in any other peer's store.
+/// <see cref="MessageId"/> is the utterance's cross-peer identity (ADR-0008): a relaying client passes it
+/// on unchanged so the receiving peer records the same utterance under the same id, alongside
+/// <see cref="RelayDepth"/> + 1. Both are null for messages persisted before migration 007.
+/// </remarks>
+public record ChatHistoryItem(long Id, string Role, string Author, string Content, DateTimeOffset Timestamp,
+    string? MessageId = null, int? RelayDepth = null);
 
 /// <summary>
 /// The state a newly-connected client needs to draw before subscribing to the live stream: the standing

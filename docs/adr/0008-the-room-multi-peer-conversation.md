@@ -16,6 +16,19 @@ and Synth can actually converse and build together.
 Phase 0 already laid the groundwork the room needs: every message is a `ChatMessage` sourced to a named
 peer (`DigitalPeer`/`HumanPeer`) and carries a stable cross-peer message id.
 
+> **Correction (2026-07-19).** The second half of that sentence was **false about the real artifact**, and
+> is left standing above only so this note has something to point at. Phase 0 did *not* deliver a
+> cross-peer message id. What existed was the `ContextFragments` row id — *per store*, so the same
+> utterance relayed to two peers was two unrelated ids — and the peer-hop depth rode the HTTP request
+> rather than the message, meaning a message *at rest* could not say how far it had travelled. That would
+> have foreclosed Phase 4 (stored, asynchronous delivery), which has no live request to read a depth from.
+>
+> Verified against main before §4 was built, on Arden's condition — the ADR's own claim about what shipped
+> is not evidence that it shipped. Settled and now built (migration 007): an **originator-minted** GUID
+> naming the utterance, constant across every relay, plus a **persisted per-copy hop depth**. The two are
+> deliberately separate fields: the id is constant per utterance, the depth varies per delivery path.
+> The local row id is untouched and keeps its storage job.
+
 ## Framing (John) — the TUI is a debugging tool, not the destination
 
 Two principles that shape everything below:

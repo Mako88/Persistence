@@ -33,13 +33,21 @@ namespace Persistence.Notifications;
 /// straight from a person. The circuit breaker in <c>TurnHandler</c> stops the chain once it passes the
 /// configured limit, so two peers can't talk each other into an unbounded loop (ADR-0008 §4).
 /// </param>
+/// <param name="messageId">
+/// The utterance's cross-peer identity, minted by whoever originally said it and passed through
+/// unchanged by every relay. Null means this is a new utterance and the turn mints one — so the id
+/// exists from the moment a message is persisted, whether or not it ever crosses a peer boundary.
+/// </param>
 public class DisplayInputReceived(
     string? input,
     string? senderName = null,
     SourceType senderType = SourceType.HumanPeer,
     string? addressedTo = null,
-    int relayDepth = 0) : BaseEvent
+    int relayDepth = 0,
+    string? messageId = null) : BaseEvent
 {
+    public string? MessageId { get; } = messageId;
+
     public string? Input { get; } = input;
 
     public string? SenderName { get; } = senderName;

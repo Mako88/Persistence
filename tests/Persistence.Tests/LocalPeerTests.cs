@@ -104,7 +104,7 @@ public sealed class LocalPeerTests : IAsyncLifetime
 
         public Task ExecuteTurnAsync(string? input = null, string? peerName = null, string? wakeNote = null,
             Persistence.Data.Entities.SourceType senderType = Persistence.Data.Entities.SourceType.HumanPeer,
-            string? addressedTo = null, int relayDepth = 0, CancellationToken ct = default)
+            string? addressedTo = null, int relayDepth = 0, string? messageId = null, CancellationToken ct = default)
         {
             Executed.Add((input, peerName));
             return Task.CompletedTask;
@@ -112,7 +112,7 @@ public sealed class LocalPeerTests : IAsyncLifetime
 
         public void EnqueueInput(string input, string? peerName = null,
             Persistence.Data.Entities.SourceType senderType = Persistence.Data.Entities.SourceType.HumanPeer,
-            string? addressedTo = null) => Executed.Add((input, peerName));
+            string? addressedTo = null, string? messageId = null, int relayDepth = 0) => Executed.Add((input, peerName));
         public void EnqueueSystemNote(string note) { }
         public bool HasPendingInput => false;
     }
