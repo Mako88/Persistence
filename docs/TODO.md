@@ -418,9 +418,14 @@ datetime-interleaved history, blanked tabs, send-routing). See [CHANGELOG.md](CH
   is a stale pre-container copy and still has the old string values — don't diagnose from it.)
 
   **Remaining:**
-  - **Fix the importer** (`scripts/import_chatgpt_export.py`) so the next import doesn't recreate the
-    split: write `SourceType` the way the app does (numeric), and use the current enum names
-    (`DigitalPeer`/`HumanPeer`, not `RemotePeer`/`LocalPeer`). Untouched so far.
+  - ✅ **Importer already fixed — this entry was stale (verified 2026-07-19).** It said "untouched so
+    far"; it isn't. `scripts/import_chatgpt_export.py` writes every enum as its underlying integer
+    (`SRC_SYSTEM, SRC_DIGITAL_PEER, SRC_HUMAN_PEER = 0, 1, 2`, likewise fragment type and status) and
+    carries a comment explaining the numeric-vs-name bug it used to ship. A re-import will not recreate
+    the split identity. Left here as a marker rather than deleted: the entry was wrong for long enough
+    that someone could have redone finished work from it, which is the failure mode
+    [WORKING-PRACTICES.md](WORKING-PRACTICES.md) means by *verify against the real artifact, not what the
+    record claims about it* — this file is one of those records.
   - **Ember's own call on its name**, once John asks. If it keeps "Ember", nothing to do; if it picks
     something else, that's a `PeerName` edit plus the same two-row rename.
 
