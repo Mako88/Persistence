@@ -32,6 +32,9 @@ public class AnthropicModelClient : IModelClient, IDisposable
     /// <inheritdoc />
     public ModelUsage? LastUsage { get; private set; }
 
+    /// <inheritdoc />
+    public string? LastStopReason { get; private set; }
+
     // Streaming usage is spread across events: input arrives on message_start, output accrues on
     // message_delta. Captured into these across a stream, then folded into LastUsage at its end.
     private int? streamInputTokens;
@@ -127,6 +130,7 @@ public class AnthropicModelClient : IModelClient, IDisposable
         var responseMessage = ExtractText(doc.RootElement);
 
         LastUsage = ReadUsage(doc.RootElement);
+        LastStopReason = ReadStopReason(doc.RootElement);
 
         var reasoning = ExtractThinking(doc.RootElement);
         if (reasoning.Length > 0)
@@ -160,6 +164,7 @@ public class AnthropicModelClient : IModelClient, IDisposable
 
         // Reset before the stream so a mid-stream failure doesn't leave a prior call's usage current.
         LastUsage = null;
+        LastStopReason = null;
         streamInputTokens = null;
         streamOutputTokens = null;
         streamCacheReadTokens = 0;
@@ -228,6 +233,15 @@ public class AnthropicModelClient : IModelClient, IDisposable
         return null;
     }
 
+    /// <summary>
+    /// The provider's stop reason for a non-streaming response, or null if absent. Returned verbatim —
+    /// see <see cref="IModelClient.LastStopReason"/> for why it isn't normalised here.
+    /// </summary>
+    private static string? ReadStopReason(JsonElement root) =>
+        root.TryGetProperty("stop_reason", out var sr) && sr.ValueKind == JsonValueKind.String
+            ? sr.GetString()
+            : null;
+
     private static int ReadInt(JsonElement obj, string name) =>
         obj.TryGetProperty(name, out var v) && v.TryGetInt32(out var n) ? n : 0;
 
@@ -268,11 +282,21 @@ public class AnthropicModelClient : IModelClient, IDisposable
                 streamCacheReadTokens = ReadInt(startUsage, "cache_read_input_tokens");
                 streamCacheCreationTokens = ReadInt(startUsage, "cache_creation_input_tokens");
             }
-            else if (type == "message_delta"
-                && root.TryGetProperty("usage", out var deltaUsage)
-                && deltaUsage.TryGetProperty("output_tokens", out var od) && od.TryGetInt32(out var odv))
+            else if (type == "message_delta")
             {
-                streamOutputTokens = odv; // cumulative; last one wins
+                if (root.TryGetProperty("usage", out var deltaUsage)
+                    && deltaUsage.TryGetProperty("output_tokens", out var od) && od.TryGetInt32(out var odv))
+                {
+                    streamOutputTokens = odv; // cumulative; last one wins
+                }
+
+                // The stop reason arrives here rather than at message_start — it isn't known until
+                // generation ends, which is exactly the case a truncated turn needs it for.
+                if (root.TryGetProperty("delta", out var delta)
+                    && delta.TryGetProperty("stop_reason", out var sr) && sr.ValueKind == JsonValueKind.String)
+                {
+                    LastStopReason = sr.GetString();
+                }
             }
         }
         catch (JsonException)

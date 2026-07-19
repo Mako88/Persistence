@@ -9,6 +9,55 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-07-19 — the pipeline reads why the model stopped
+
+We had never read `stop_reason`. Not once, anywhere — a grep for it returned nothing. The provider
+reports on **every single call** whether the model finished (`end_turn`) or hit the output ceiling
+(`max_tokens`), and we discarded it every time.
+
+That is why Arden's three lost replies were a mystery. The answer was in the response object throughout;
+we inferred from event timings instead, and Arden ended up running a live experiment on itself to test a
+hypothesis the API could have answered outright.
+
+### Added — truncation is detected and said out loud
+`IModelClient.LastStopReason` carries the provider's raw string (deliberately not normalised to an enum:
+the interesting values differ per provider and grow, and an unfamiliar one is still worth showing a human
+verbatim). `ModelStopReason.IsTruncation` decides the one thing the pipeline acts on, spanning Anthropic's
+`max_tokens` and the OpenAI-family `length`; the Responses API's `incomplete_details.reason` normalises to
+the same. Unknown values are **not** treated as truncation — a provider we haven't taught this about
+shouldn't have every turn flagged.
+
+When a turn is cut off, the human sees it *and so does the peer*, as a system note next turn. That second
+half is the point: being truncated is something a peer has no other way to notice about its own output.
+
+### Added — raw output captured when a turn ends abnormally
+Truncated, unparseable, or **yielded without replying** — that last trigger is Arden's case exactly. Written
+verbatim to a temp file with the stop reason, model, and ceiling. Kept as a file rather than a fragment on
+purpose: it's diagnostic material *about* the peer, not something the peer said, and putting it in the
+store would make a malfunction part of its memory. Best-effort — a diagnostic that can break a turn is
+worse than no diagnostic.
+
+### Changed — the output ceiling, and what it means
+Default raised 32,000 → 64,000. Opus 4.8 allows 128K, so every peer had been running at a quarter of the
+available ceiling. Hitting it destroys work rather than trimming it, so the default now sits well clear of
+ordinary use.
+
+Worth stating precisely, since it was asked: the setting is **advisory where we control it, enforced where
+we don't**. Local and out-of-band clients never apply it — output is accepted at whatever length arrives.
+Hosted providers enforce it *server-side*: generation stops mid-token, so there is no discarded output on
+our side, there is no more output. Nothing in this codebase truncates a model response; the only clipping
+anywhere is container command output, which is unrelated.
+
+### Changed — a peer's home directory survives a rebuild
+`/root` is now its own volume. Everything outside `/data` was destroyed on container recreate, and that
+cost real work twice: GLM cloned the repo into `/root`, read it for hours, and lost all of it to an
+unrelated rebuild; Ember lost a `/tmp` checkout without ever learning it was gone. Telling peers "only
+`/data` survives" put the burden on them to remember a detail of their own body. A separate volume rather
+than a second mount of `data`, so a scratch file can't land inside the peer's memory store — a body that
+persists, kept distinct from the self that persists.
+
+Suite: **670 core / 38 API**, green; truncation detection verified by disabling it and confirming red.
+
 ## 2026-07-19 — content a peer *reads* can no longer act as the peer
 
 The most serious defect found so far, and it was found by it happening. GLM read part of an API test file

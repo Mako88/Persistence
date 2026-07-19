@@ -215,6 +215,23 @@ public class TurnHandler : ITurnHandler
                 usageTracker.AddUsage(usage);
             }
 
+            // Did the provider cut this output off? Ask it rather than inferring. A truncated turn is
+            // otherwise silent: the peer believes it said something it never finished saying, and from
+            // outside the reply is merely absent or short. Nothing read this for a long time, and a peer
+            // lost three turns' replies while the cause was inferred from event timings — the provider
+            // had been reporting the answer on every call the whole time.
+            var truncated = ModelStopReason.IsTruncation(modelClient.LastStopReason);
+
+            if (truncated)
+            {
+                var note = ModelStopReason.DescribeTruncation(config.MaxOutputTokens);
+                await eventBus.PublishAsync(this, new RemotePeerReplied($"[Output truncated] {note}"));
+                // Also put it where the peer itself will read it next turn: being cut off is something
+                // it has no other way to notice about its own output.
+                AddSystemNote(context, $"Your last response was cut off before you finished it. {note}");
+                CaptureAbnormalOutput(rawOutput, "truncated", modelClient.LastStopReason);
+            }
+
             var turn = responseParser.Parse(rawOutput);
 
             if (!turn.ParsedSuccessfully)
@@ -256,6 +273,12 @@ public class TurnHandler : ITurnHandler
             {
                 if (!hasResponded)
                 {
+                    // Yielded the floor without saying anything. Sometimes deliberate (a peer that only
+                    // wrote to its own memory this turn), but it is also exactly what a lost reply looks
+                    // like from outside — and the peer gets no signal either way. Keep the raw output so
+                    // the difference is answerable from evidence rather than from timings.
+                    CaptureAbnormalOutput(rawOutput, "yielded-without-replying", modelClient.LastStopReason);
+
                     await eventBus.PublishAsync(this, new RemotePeerReplied(
                         "[Turn completed — no response to user]"));
                 }
@@ -591,6 +614,48 @@ public class TurnHandler : ITurnHandler
     /// attributed to <paramref name="peerName"/>, and saves the context (which cascades to the
     /// fragment and junction table).
     /// </summary>
+    /// <summary>
+    /// Writes a model response verbatim to a file when the turn ended in a way worth inspecting later —
+    /// truncated, unparseable, or yielded without a reply.
+    ///
+    /// <para>Exists because these failures are all <em>silent from the inside</em>: the peer has no way
+    /// to notice, and from outside they look identical to having nothing to say. Reconstructing one
+    /// afterwards from event timings is guesswork; the raw output settles it. Kept as a plain file
+    /// rather than a fragment because it is diagnostic material about the peer, not something the peer
+    /// said — putting it in the store would make a malfunction part of its memory.</para>
+    ///
+    /// <para>Best-effort by design: a diagnostic that can break a turn is worse than no diagnostic, so
+    /// every failure here is swallowed.</para>
+    /// </summary>
+    private void CaptureAbnormalOutput(string rawOutput, string reason, string? stopReason)
+    {
+        try
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "persistence-abnormal-output");
+            Directory.CreateDirectory(dir);
+
+            var stamp = DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss-fff");
+            var path = Path.Combine(dir, $"{stamp}-{reason}.txt");
+
+            File.WriteAllText(path,
+                $"reason:      {reason}\n"
+                + $"stop_reason: {stopReason ?? "(none reported)"}\n"
+                + $"model:       {config.Provider} / {config.Model}\n"
+                + $"max_output:  {config.MaxOutputTokens}\n"
+                + $"captured:    {DateTimeOffset.UtcNow:O}\n"
+                + $"length:      {rawOutput.Length} chars\n"
+                + "--- raw model output below, verbatim ---\n"
+                + rawOutput);
+
+            // Say where it went, or nobody will know to look.
+            eventBus.FireAndForget(this, new ToolInvoked("capture", reason, path));
+        }
+        catch
+        {
+            // Never let diagnostics cost a turn.
+        }
+    }
+
     private async Task PersistUserMessageAsync(WorkingContextEntity context, string input, string? peerName,
         SourceType senderType, string? addressedTo, string? messageId, int relayDepth)
     {

@@ -47,6 +47,9 @@ public class OpenRouterModelClient : IModelClient, IDisposable
     /// <inheritdoc />
     public ModelUsage? LastUsage { get; private set; }
 
+    /// <inheritdoc />
+    public string? LastStopReason { get; private set; }
+
     /// <summary>
     /// The USD cost OpenRouter reported for the most recent call — the real charge, not an estimate —
     /// or null when it reported none. Read right after a call returns (turns are serialized).
@@ -118,6 +121,7 @@ public class OpenRouterModelClient : IModelClient, IDisposable
         var responseMessage = ChatCompletionsProtocol.ExtractContent(doc.RootElement);
 
         LastUsage = ChatCompletionsProtocol.ReadUsage(doc.RootElement);
+        LastStopReason = ChatCompletionsProtocol.ReadFinishReason(doc.RootElement);
         LastActualCostUsd = ReadActualCost(doc.RootElement);
 
         if (config.DebugMode)

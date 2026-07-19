@@ -36,4 +36,21 @@ public interface IModelClient
     /// serialized, so this is unambiguously "the last call's" usage when read right after it returns.
     /// </summary>
     ModelUsage? LastUsage { get; }
+
+    /// <summary>
+    /// Why the provider stopped generating on the most recent call — the raw provider string
+    /// (Anthropic: <c>end_turn</c>, <c>max_tokens</c>, <c>tool_use</c>, <c>refusal</c>; OpenAI-family:
+    /// <c>stop</c>, <c>length</c>). Null when the provider reports none, or before the first call.
+    ///
+    /// <para>Kept deliberately as the provider's own string rather than normalised to an enum: the
+    /// interesting values differ by provider and grow over time, and a value we don't recognise is
+    /// still worth showing a human verbatim. The one case the pipeline acts on is "the output was cut
+    /// off", which <see cref="ModelStopReason.IsTruncation"/> decides.</para>
+    ///
+    /// <para>Read right after the call returns; turns are serialized, so it unambiguously belongs to
+    /// the call that just finished. Deliberately a separate property rather than a field on
+    /// <see cref="ModelUsage"/> — that record is about token counts, and it is being edited
+    /// concurrently elsewhere.</para>
+    /// </summary>
+    string? LastStopReason { get; }
 }

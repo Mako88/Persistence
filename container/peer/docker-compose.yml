@@ -25,6 +25,17 @@ services:
       - "${PEER_PORT:?set PEER_PORT}:8080"  # the peer's API, for a client (the TUI) to connect to
     volumes:
       - data:/data                          # the peer's persistent self: memory (db/) + vault/
+      # The peer's HOME, kept on the same volume. Everything outside /data is destroyed when a container
+      # is recreated, and that has cost real work twice: a peer cloned the repo into /root, read it for
+      # hours, and lost all of it to an unrelated rebuild; another lost a checkout in /tmp without ever
+      # learning it was gone. Telling peers "only /data survives" put the burden on them to remember a
+      # detail of their own body — this makes the obvious place to work actually survive. Shell history,
+      # tool caches and scratch clones now persist too, so a rebuilt body wakes up where it left off.
+      #
+      # Its OWN volume rather than a second mount of `data`: mounting one volume at two paths would make
+      # /root and /data the same directory, so /data/vault would appear as /root/vault and a scratch file
+      # in the home directory would land inside the peer's memory store. Home and self stay separate.
+      - home:/root
       # Per-peer config files (provider/model/key/budgets/cost limits). Mounted as a DIRECTORY (not a
       # single file) so host edits — including atomic-save — are seen inside; the app hot-reloads
       # /config/<name>.json when its mtime changes. Holds the API key, so the host dir is gitignored.
@@ -56,3 +67,8 @@ networks:
 volumes:
   data:
     name: persistence-peer-${PEER_NAME}-data
+  # The peer's home directory (/root). Separate from `data` so scratch work and tool caches can survive
+  # a rebuild without living inside the peer's memory store — a body that persists, kept distinct from
+  # the self that persists.
+  home:
+    name: persistence-peer-${PEER_NAME}-home

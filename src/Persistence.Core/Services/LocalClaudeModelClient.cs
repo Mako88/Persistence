@@ -29,6 +29,14 @@ public class LocalClaudeModelClient : IModelClient
     /// <summary>An out-of-band agent reports no token usage.</summary>
     public ModelUsage? LastUsage => null;
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// Always null: the output comes from a human or an out-of-band broker rather than a provider that
+    /// reports why it stopped. The configured output ceiling is likewise never applied here — for these
+    /// clients it is advisory only, so output is accepted at whatever length it arrives.
+    /// </remarks>
+    public string? LastStopReason => null;
+
     /// <summary>
     /// Parks the flattened prompt on the broker and returns the completion supplied out-of-band
     /// by the external agent

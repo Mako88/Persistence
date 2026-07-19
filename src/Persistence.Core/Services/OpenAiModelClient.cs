@@ -33,6 +33,9 @@ public class OpenAiModelClient : IModelClient, IDisposable
     /// <inheritdoc />
     public ModelUsage? LastUsage { get; private set; }
 
+    /// <inheritdoc />
+    public string? LastStopReason { get; private set; }
+
     /// <summary>
     /// Constructor that builds the HTTP client from config
     /// </summary>
@@ -109,6 +112,13 @@ public class OpenAiModelClient : IModelClient, IDisposable
         var responseMessage = ExtractOutputText(doc.RootElement);
 
         LastUsage = ReadUsage(doc.RootElement);
+        // The Responses API reports truncation as incomplete_details.reason = "max_output_tokens"
+        // rather than a finish_reason; normalise to the shared spelling so IsTruncation sees it.
+        LastStopReason = doc.RootElement.TryGetProperty("incomplete_details", out var incomplete)
+            && incomplete.TryGetProperty("reason", out var reason) && reason.ValueKind == JsonValueKind.String
+            && reason.GetString() == "max_output_tokens"
+                ? ModelStopReason.Length
+                : null;
 
         var reasoning = ExtractReasoningSummary(doc.RootElement);
         if (reasoning.Length > 0)

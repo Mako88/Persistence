@@ -91,7 +91,22 @@ public class ModelProfile
     /// <summary>
     /// Maximum tokens the model may generate per completion.
     /// </summary>
-    public int MaxOutputTokens { get; set; } = 32000;
+    /// <summary>
+    /// The output ceiling sent to the provider as its max-tokens parameter.
+    ///
+    /// <para><b>Advisory where we control it, enforced where we don't.</b> For local and out-of-band
+    /// clients this value is never applied — output is accepted at whatever length it arrives, which is
+    /// the point: the setting exists to keep a small local model from running away, not to clip a good
+    /// answer. For hosted providers it is sent with the request and enforced <em>server-side</em>:
+    /// generation stops mid-token, so there is no longer output being discarded on our side — there is
+    /// no more output. Nothing in this codebase truncates a model response.</para>
+    ///
+    /// <para>Because hitting it destroys work rather than trimming it, the default is set well clear of
+    /// ordinary use rather than close to it. Claude Opus 4.8 allows 128K output; this leaves headroom
+    /// under that while staying sane for smaller models, and any profile can raise it. When it does
+    /// bite, the turn now says so instead of failing silently (<see cref="Services.ModelStopReason"/>).</para>
+    /// </summary>
+    public int MaxOutputTokens { get; set; } = 64000;
 
     /// <summary>
     /// Native reasoning effort for reasoning-capable models. <c>"off"</c> (the default) or <c>"none"</c>

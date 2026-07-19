@@ -94,6 +94,19 @@ internal static class ChatCompletionsProtocol
     }
 
     /// <summary>
+    /// Reads why generation stopped from <c>choices[0].finish_reason</c> — the chat-completions
+    /// spelling of a stop reason (<c>stop</c>, <c>length</c>, <c>tool_calls</c>). Null when absent.
+    /// Returned verbatim; interpretation is <see cref="ModelStopReason"/>'s job.
+    /// </summary>
+    public static string? ReadFinishReason(JsonElement root) =>
+        root.TryGetProperty("choices", out var choices)
+        && choices.ValueKind == JsonValueKind.Array && choices.GetArrayLength() > 0
+        && choices[0].TryGetProperty("finish_reason", out var finish)
+        && finish.ValueKind == JsonValueKind.String
+            ? finish.GetString()
+            : null;
+
+    /// <summary>
     /// Reads the usage block (<c>usage.prompt_tokens</c> / <c>completion_tokens</c>), splitting out the
     /// cached prefix (<c>prompt_tokens_details.cached_tokens</c>) so cached input can be billed at the
     /// discounted rate: <see cref="ModelUsage.InputTokens"/> is the uncached remainder and

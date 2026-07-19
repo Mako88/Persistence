@@ -32,6 +32,9 @@ public class OpenAiChatModelClient : IModelClient, IDisposable
     /// <inheritdoc />
     public ModelUsage? LastUsage { get; private set; }
 
+    /// <inheritdoc />
+    public string? LastStopReason { get; private set; }
+
     /// <summary>
     /// Constructor that builds the HTTP client from config
     /// </summary>
@@ -98,6 +101,7 @@ public class OpenAiChatModelClient : IModelClient, IDisposable
         var responseMessage = ChatCompletionsProtocol.ExtractContent(doc.RootElement);
 
         LastUsage = ChatCompletionsProtocol.ReadUsage(doc.RootElement);
+        LastStopReason = ChatCompletionsProtocol.ReadFinishReason(doc.RootElement);
 
         if (config.DebugMode)
         {
