@@ -329,6 +329,33 @@ public class TurnHandler : ITurnHandler
     /// searchable and restorable with <c>load</c>. The peer's authored fragments are never touched.
     /// Returns a sensory note describing what was archived, or null if nothing was.
     /// </summary>
+    private static string FormatArchivedFragmentSummary(WeightedContextFragment fragment)
+    {
+        var typeLabel = fragment.FragmentType switch
+        {
+            ContextFragmentType.ChatMessage => "chat",
+            ContextFragmentType.ActionResponse => "action",
+            ContextFragmentType.Thought => "thought",
+            _ => fragment.FragmentType.ToString().ToLowerInvariant()
+        };
+
+        var preview = fragment.Summary;
+        if (string.IsNullOrEmpty(preview))
+            preview = fragment.Content;
+
+        if (!string.IsNullOrEmpty(preview))
+        {
+            preview = string.Join(" ", preview.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries));
+            if (preview.Length > 60)
+                preview = preview[..57] + "...";
+        }
+        else
+        {
+            preview = "(empty)";
+        }
+
+        return $"#{fragment.Id} [{typeLabel}] {preview}";
+    }
     private async Task<string?> ArchiveOldRawFragmentsAsync(WorkingContextEntity context)
     {
         var toArchive = SelectRawFragmentsToArchive(context, config.RawContextWindow);
@@ -344,8 +371,8 @@ public class TurnHandler : ITurnHandler
             context.ContextFragments.Remove(fragment.Order);
         }
 
-        var ids = string.Join(", ", toArchive.Select(f => $"#{f.Id}"));
-        return $"Auto-archived {toArchive.Count} older raw fragment(s) ({ids}) to keep your context lean — "
+        var summaries = string.Join(", ", toArchive.Select(FormatArchivedFragmentSummary));
+        return $"Auto-archived {toArchive.Count} older raw fragment(s) ({summaries}) to keep your context lean — "
             + "not deleted: search for them with list_fragments(relevant_to=…, in_current_context=false) "
             + "and bring any back with load.";
     }
@@ -371,8 +398,8 @@ public class TurnHandler : ITurnHandler
             context.ContextFragments.Remove(fragment.Order);
         }
 
-        var ids = string.Join(", ", toArchive.Select(f => $"#{f.Id}"));
-        return $"Auto-archived {toArchive.Count} older thought(s) ({ids}), keeping your most recent "
+        var summaries = string.Join(", ", toArchive.Select(FormatArchivedFragmentSummary));
+        return $"Auto-archived {toArchive.Count} older thought(s) ({summaries}), keeping your most recent "
             + $"{config.ThoughtContextWindow} — not deleted: find them with "
             + "list_fragments(relevant_to=…, in_current_context=false) and bring any back with load.";
     }
