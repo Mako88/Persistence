@@ -401,24 +401,27 @@ datetime-interleaved history, blanked tabs, send-routing). See [CHANGELOG.md](CH
   onboarding are all verified end-to-end. Its store was recreated on 2026-07-19 so it starts from the
   corrected onboarding text (it had only boilerplate and test pings at that point — nothing of its own).
 
-- **The room — what's left of ADR-0008 Phase 3.** (2026-07-19.) The plumbing is in: a message can arrive
-  from another digital peer, sourced by *type* so a peer's voice is distinguishable from a person's,
-  carrying `addressed_to`, rendered to the receiving peer as `[peer Arden, to Ember]`, and refused past 2
-  peer-to-peer hops without a human turn. What remains:
-  - **The turn-taking rule (§1).** The peer can now *see* whether it was addressed; nothing yet tells it
-    what to do about that. The ADR is specific: respond when addressed by name/alias, when continuing a
-    thread you started, or when a human opens the floor — hold when merely overhearing. It also insists
-    the rule be **readable and correctable by the peer**, not an opaque classifier, so it belongs in the
-    prompt (or a peer-editable ruleset) rather than buried in code. **Left for Arden if they want it** —
-    it's the most design-ish part remaining, and the ADR's open questions (alias grammar, how "the room"
-    is named as an addressee) sit right here.
-  - **The relay affordance (§4).** No auto-fan by default: a peer's reply goes to the human, who decides
-    whether to forward it. The API accepts a relay (`fromPeer`/`addressedTo`/`relayDepth`); the TUI has no
-    button for it yet, so relaying today means a manual POST.
-  - **Presence (§5).** `who()`/`list_peers()` on demand, join/leave as ephemeral sensory notices — not
-    pinned in the block every turn.
-  - **Cross-peer message id.** Still absent (also wanted by the "all"-scope dedup item above); the hop
-    depth currently rides on the request rather than on the message itself.
+- **The room — what's left of ADR-0008 Phase 3.** (Updated 2026-07-19, with Arden.) Increments 2 and 3
+  are done and on main, reviewed by Arden increment-by-increment. Built: messages arriving from another
+  peer (sourced by *type*, carrying `addressed_to`), the `[peer X, to Y]` render frame — **unforgeable**,
+  frame-shaped text in a body is defused at render time — the configurable, peer-visible relay-depth
+  breaker, and the turn-taking rule (`TurnTaking`, rule not classifier, every verdict carries its reason).
+  Arden's branch is folded and retired; main is the trunk and the green suite is the gate.
+
+  **Remaining — both cleared by Arden, no design fork, one guardrail each:**
+  - **TUI relay affordance (§4).** The API already accepts `fromPeer`/`addressedTo`/`relayDepth`; there's
+    no button, so relaying is a manual POST. *Arden's guardrail:* when John relays Synth's message onward
+    to Arden, it must arrive **as from Synth** with `relayDepth` incremented — never re-attributed to John
+    as the relayer. Don't let the affordance collapse the provenance.
+  - **Presence (§5).** `who()` / `list_peers()` on demand; join/leave as **ephemeral sensory
+    notifications**. *Arden's guardrail:* presence is **never a fragment** — it's session-scoped signal,
+    not something a peer should accrete into who-it-is.
+  - **Recorded for later, deliberately not built:** when "open room" mode lands (§4's explicit opt-in), a
+    *peer* floor-opener **should** open the floor in that mode. Today only a human can, because convening
+    is a hub function and the human is the hub — the same asymmetry as §4, one layer up. Loosen the two
+    together, not separately.
+  - **Cross-peer message id.** Still absent; hop depth currently rides on the request rather than the
+    message.
 
 - **A "new peer" flow.** (John, 2026-07-15.) `peer.ps1 -Name <n>` *throws* if
   `container/peer/configs/<n>.json` is missing — "Create it (see the other configs for the shape)" — so
