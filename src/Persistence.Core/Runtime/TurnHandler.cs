@@ -92,7 +92,9 @@ public class TurnHandler : ITurnHandler
     /// dispatching to action handlers, and stops when the remote peer yields
     /// or the iteration cap is reached
     /// </summary>
-    public async Task ExecuteTurnAsync(string? input = null, string? peerName = null, string? wakeNote = null, CancellationToken ct = default)
+    public async Task ExecuteTurnAsync(string? input = null, string? peerName = null, string? wakeNote = null,
+        SourceType senderType = SourceType.HumanPeer, string? addressedTo = null, int relayDepth = 0,
+        CancellationToken ct = default)
     {
         // Hot-reload config edits before the turn reads any settings, so tweaks apply without a restart
         // (cheap — a stat, re-parsing only when the file changed). Turn-start granularity keeps the whole
@@ -136,7 +138,7 @@ public class TurnHandler : ITurnHandler
 
         if (input != null)
         {
-            await PersistUserMessageAsync(context, input, peerName);
+            await PersistUserMessageAsync(context, input, peerName, senderType, addressedTo);
         }
 
         await DrainPendingInput(context, annotate: input != null);
@@ -442,7 +444,9 @@ public class TurnHandler : ITurnHandler
     /// Queues input from a human peer (tagged with the sender's name) to be injected into the working
     /// context before the next model call within the current turn's iteration loop.
     /// </summary>
-    public void EnqueueInput(string input, string? peerName = null) => pendingInput.Enqueue(new PendingInput(input, peerName));
+    public void EnqueueInput(string input, string? peerName = null,
+        SourceType senderType = SourceType.HumanPeer, string? addressedTo = null) =>
+        pendingInput.Enqueue(new PendingInput(input, peerName, senderType, addressedTo));
 
     /// <summary>
     /// Queues a system note to surface to the peer at the start of its next turn.
@@ -543,7 +547,7 @@ public class TurnHandler : ITurnHandler
         // was running is still attributed to John — not to whoever most recently touched the session.
         foreach (var message in injected)
         {
-            await AddHumanMessageAsync(context, message.Content, message.PeerName);
+            await AddIncomingMessageAsync(context, message.Content, message.PeerName, message.SenderType, message.AddressedTo);
         }
     }
 
@@ -584,9 +588,10 @@ public class TurnHandler : ITurnHandler
     /// attributed to <paramref name="peerName"/>, and saves the context (which cascades to the
     /// fragment and junction table).
     /// </summary>
-    private async Task PersistUserMessageAsync(WorkingContextEntity context, string input, string? peerName)
+    private async Task PersistUserMessageAsync(WorkingContextEntity context, string input, string? peerName,
+        SourceType senderType, string? addressedTo)
     {
-        await AddHumanMessageAsync(context, input, peerName);
+        await AddIncomingMessageAsync(context, input, peerName, senderType, addressedTo);
         await workingContextRepo.SaveAsync(context);
     }
 
@@ -597,11 +602,31 @@ public class TurnHandler : ITurnHandler
     /// rather than on shared session state before the lock, so concurrent senders can't misattribute one
     /// another. The fragment carries low raw-transcript weights so the peer's own authored notes outrank it.
     /// </summary>
-    private async Task AddHumanMessageAsync(WorkingContextEntity context, string content, string? peerName)
+    private async Task AddHumanMessageAsync(WorkingContextEntity context, string content, string? peerName) =>
+        await AddIncomingMessageAsync(context, content, peerName, SourceType.HumanPeer, addressedTo: null);
+
+    /// <summary>
+    /// Adds an incoming message as a ChatMessage fragment, sourced to whoever sent it.
+    ///
+    /// <para>The sender's <em>type</em> is carried through rather than assumed: in the room (ADR-0008) a
+    /// message may be relayed from another digital peer, and it has to land as a
+    /// <see cref="SourceType.DigitalPeer"/> so the receiving peer can weigh a peer's voice differently
+    /// from a person's. Only a human sender updates <c>ActiveLocalPeerName</c> — the "you are speaking
+    /// with" line means the person in the conversation, and an overheard peer shouldn't displace them.</para>
+    /// </summary>
+    private async Task AddIncomingMessageAsync(
+        WorkingContextEntity context, string content, string? senderName, SourceType senderType, string? addressedTo)
     {
-        var resolvedName = ResolveHumanPeerName(peerName);
-        var sourceId = await sourceRepository.EnsureLocalPeerSourceAsync(resolvedName);
-        sessionContext.ActiveLocalPeerName = resolvedName;
+        var resolvedName = senderType == SourceType.HumanPeer
+            ? ResolveHumanPeerName(senderName)
+            : (senderName?.Trim() is { Length: > 0 } n ? n : "a peer");
+
+        var sourceId = await sourceRepository.EnsureNamedSourceAsync(resolvedName, senderType);
+
+        if (senderType == SourceType.HumanPeer)
+        {
+            sessionContext.ActiveLocalPeerName = resolvedName;
+        }
 
         var now = DateTimeOffset.UtcNow;
 
@@ -610,13 +635,14 @@ public class TurnHandler : ITurnHandler
             FragmentType = ContextFragmentType.ChatMessage,
             Status = ContextFragmentStatus.Active,
             Content = content,
+            AddressedTo = addressedTo,
             Importance = 0.3f,
             Confidence = 0.5f,
             Relevance = 0.5f,
             Sources = [new SourceEntity
             {
                 Id = sourceId,
-                SourceType = SourceType.HumanPeer,
+                SourceType = senderType,
                 Name = resolvedName,
                 CreatedUtc = now,
                 LastModifiedUtc = now,

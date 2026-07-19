@@ -9,4 +9,8 @@ namespace Persistence.Runtime;
 /// name on the item itself keeps each message's author correct no matter when it drains. A null or
 /// empty <see cref="PeerName"/> falls back to the configured default at persist time. See ADR-0007.
 /// </summary>
-public record PendingInput(string Content, string? PeerName);
+public record PendingInput(
+    string Content,
+    string? PeerName,
+    Data.Entities.SourceType SenderType = Data.Entities.SourceType.HumanPeer,
+    string? AddressedTo = null);

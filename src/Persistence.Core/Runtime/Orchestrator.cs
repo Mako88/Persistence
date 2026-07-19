@@ -119,7 +119,7 @@ public class Orchestrator : IOrchestrator
         // Who's speaking travels *with* the message (header-supplied name, else the configured default),
         // not via shared session state set here — several peers can have input in flight at once, and the
         // turn attributes each message to its own sender when it processes it, under the lock.
-        var peerName = e.LocalPeerName;
+        var peerName = e.SenderName;
 
         if (input.StartsWith('/'))
         {
@@ -129,7 +129,7 @@ public class Orchestrator : IOrchestrator
 
         if (!turnLock.Wait(0))
         {
-            turnHandler.EnqueueInput(input, peerName);
+            turnHandler.EnqueueInput(input, peerName, e.SenderType, e.AddressedTo);
             display.ShowMessageQueued(input);
 
             // The turn holding the lock may already be past its drain loop (mid-refresh, about to
@@ -143,7 +143,7 @@ public class Orchestrator : IOrchestrator
         try
         {
             display.ShowThinking();
-            await turnHandler.ExecuteTurnAsync(input, peerName);
+            await turnHandler.ExecuteTurnAsync(input, peerName, wakeNote: null, e.SenderType, e.AddressedTo, e.RelayDepth);
             await DrainPendingTurnsThenRefreshAsync();
         }
         finally

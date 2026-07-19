@@ -1,3 +1,4 @@
+using Persistence.Data.Entities;
 namespace Persistence.Runtime;
 
 /// <summary>
@@ -13,14 +14,20 @@ public interface ITurnHandler
     /// instead. When <paramref name="wakeNote"/> is provided (an autonomous wake-up), it is injected
     /// as a transient system note so the turn runs with that framing but without a human-peer message.
     /// </summary>
-    Task ExecuteTurnAsync(string? input = null, string? peerName = null, string? wakeNote = null, CancellationToken ct = default);
+    /// <param name="senderType">Whether a person or another digital peer is speaking (ADR-0008 §2).</param>
+    /// <param name="addressedTo">Who the message is directed at; null is a broadcast to the room.</param>
+    /// <param name="relayDepth">Peer-to-peer hops taken so far without a human speaking (ADR-0008 §4).</param>
+    Task ExecuteTurnAsync(string? input = null, string? peerName = null, string? wakeNote = null,
+        SourceType senderType = SourceType.HumanPeer, string? addressedTo = null, int relayDepth = 0,
+        CancellationToken ct = default);
 
     /// <summary>
     /// Queues input from a human peer (with the sender's name, so attribution survives the wait until
     /// it's drained) to be injected into the working context before the next model call within the
     /// current turn's iteration loop.
     /// </summary>
-    void EnqueueInput(string input, string? peerName = null);
+    void EnqueueInput(string input, string? peerName = null,
+        SourceType senderType = SourceType.HumanPeer, string? addressedTo = null);
 
     /// <summary>
     /// Queues a system note (e.g. the local peer accepted/rejected a proposal) to surface to the

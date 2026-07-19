@@ -588,6 +588,46 @@ public class ConversationFlowTests : IClassFixture<ApiTestFixture>
         Assert.Contains("protected", Detail(await api.WaitForTurnAsync(client, since), "tool"));
     }
 
+    // --- The room's circuit breaker (ADR-0008 §4) ---
+
+    [Fact]
+    public async Task RelayedPeerMessage_IsAcceptedWithinTheHopLimit()
+    {
+        var client = api.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/api/conversation/send",
+            new { input = "Arden asked me to pass this on", fromPeer = "Arden", addressedTo = "Ember", relayDepth = 1 });
+
+        Assert.Equal(System.Net.HttpStatusCode.Accepted, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task RelayedPeerMessage_IsRefusedBeyondTheHopLimit()
+    {
+        var client = api.CreateClient();
+
+        // Two peers answering each other with no human in between: the chain stops rather than running
+        // until something else notices. Not a lock — a human message resets the depth.
+        var response = await client.PostAsJsonAsync("/api/conversation/send",
+            new { input = "and another thing", fromPeer = "Arden", relayDepth = 99 });
+
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("without a human speaking", await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task AHumanMessage_IsNeverRefusedByTheHopLimit()
+    {
+        var client = api.CreateClient();
+
+        // The depth only governs peer-to-peer relays; a person speaking is what *resets* the chain, so
+        // it must never be blocked by it however deep the preceding relay got.
+        var response = await client.PostAsJsonAsync("/api/conversation/send",
+            new { input = "alright, stopping there", relayDepth = 99 });
+
+        Assert.Equal(System.Net.HttpStatusCode.Accepted, response.StatusCode);
+    }
+
     [Fact]
     public async Task UnparseableResponse_DoesNotCrash_AndCanRecover()
     {

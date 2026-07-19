@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Persistence.Data.Entities;
 using Persistence.Events;
 using Persistence.Notifications;
 using System.Text.Json;
@@ -6,9 +7,26 @@ using System.Text.Json;
 namespace Persistence.Api.Controllers;
 
 /// <summary>
-/// Request body for submitting local-peer input: the text to send to the conversation.
+/// Request body for submitting input: the text, plus (for the room, ADR-0008) who is speaking and who
+/// they're speaking to. The room fields are optional — omitting them is a plain human message, which is
+/// what every existing client sends.
 /// </summary>
-public record SendRequest(string Input);
+/// <param name="Input">The message text.</param>
+/// <param name="FromPeer">
+/// The name of the <em>digital peer</em> this message is relayed from. Set only when one peer's words
+/// are being carried to another; absent means a person is speaking, and the sender is resolved from the
+/// <c>X-Local-Peer</c> header as before. It's a separate field rather than an overload of the header
+/// because sender <em>kind</em> is the thing the receiving peer weighs differently, and conflating a
+/// peer named "Ember" with a person named "Ember" would misattribute one as the other.
+/// </param>
+/// <param name="AddressedTo">
+/// Who the message is directed at — a participant name, or null for a broadcast to the room.
+/// </param>
+/// <param name="RelayDepth">
+/// How many peer-to-peer hops this has already taken without a human speaking. A relaying client passes
+/// the incoming depth + 1; the turn pipeline refuses to go beyond the configured limit.
+/// </param>
+public record SendRequest(string Input, string? FromPeer = null, string? AddressedTo = null, int RelayDepth = 0);
 
 /// <summary>
 /// The local-peer side of the conversation: submit input, then poll for what the system emits.
@@ -21,6 +39,14 @@ public record SendRequest(string Input);
 public class ConversationController : ControllerBase
 {
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
+
+    /// <summary>
+    /// How many peer-to-peer hops a message may take before a human has to speak again (ADR-0008 §4
+    /// starts at 2). Deliberately small and deliberately a constant for now: it's a training wheel, and
+    /// the ADR is explicit that these guards should be loosened by negotiation with the peers rather
+    /// than quietly raised — so making it configurable is a conversation, not a default.
+    /// </summary>
+    private const int MaxRelayDepth = 2;
 
     private readonly IEventBus eventBus;
     private readonly ApiDisplayProvider display;
@@ -53,11 +79,29 @@ public class ConversationController : ControllerBase
         var localPeer = Request.Headers["X-Local-Peer"].ToString();
         localPeer = string.IsNullOrWhiteSpace(localPeer) ? null : localPeer.Trim();
 
+        // A relayed peer message (the room, ADR-0008) names its sending peer instead, and lands as a
+        // DigitalPeer source so the receiving peer can tell a peer's voice from a person's.
+        var fromPeer = string.IsNullOrWhiteSpace(request.FromPeer) ? null : request.FromPeer.Trim();
+        var senderType = fromPeer is null ? SourceType.HumanPeer : SourceType.DigitalPeer;
+        var senderName = fromPeer ?? localPeer;
+
+        // The circuit breaker: a chain of peers answering each other, with no human turn in between,
+        // stops here rather than running until something else notices. Not a lock — a human message
+        // resets the depth, so the conversation can always be restarted.
+        if (senderType == SourceType.DigitalPeer && request.RelayDepth > MaxRelayDepth)
+        {
+            return BadRequest(
+                $"Relay refused: this message has already passed through {request.RelayDepth} peer-to-peer hops "
+                + $"without a human speaking (limit {MaxRelayDepth}). Say something yourself to restart the chain.");
+        }
+
         // Report a turn that fails outright. The turn runs detached, so without an error callback
         // FireAndForget drops the exception on the floor and the client sits on "thinking…" forever —
         // a misconfigured peer (a missing or wrong API key, say) looks hung rather than broken, with
         // nothing in the log either. Surfacing it as a conversation error is how the human finds out.
-        eventBus.FireAndForget(this, new DisplayInputReceived(request.Input, localPeer),
+        eventBus.FireAndForget(
+            this,
+            new DisplayInputReceived(request.Input, senderName, senderType, request.AddressedTo, request.RelayDepth),
             ex => display.ShowError(RootCause(ex).Message));
         return Accepted();
     }

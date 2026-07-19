@@ -29,6 +29,16 @@ public interface ISourceRepository : IEntityRepository<SourceEntity>
     Task<long> EnsureLocalPeerSourceAsync(string name, CancellationToken ct = default);
 
     /// <summary>
+    /// Returns the id of the source with the given name <em>and</em> type, creating it if absent.
+    ///
+    /// <para>The type is part of the identity, not decoration: in the room (ADR-0008) a message can
+    /// arrive from another digital peer, and it must be sourced as a <see cref="SourceType.DigitalPeer"/>
+    /// so the receiving peer can tell a peer's voice from a person's. Matching on name alone would let
+    /// a peer called "Ember" collide with a person called "Ember" and quietly relabel one as the other.</para>
+    /// </summary>
+    Task<long> EnsureNamedSourceAsync(string name, SourceType type, CancellationToken ct = default);
+
+    /// <summary>
     /// Returns all non-deleted sources
     /// </summary>
     Task<IEnumerable<SourceEntity>> GetAllAsync(CancellationToken ct = default);

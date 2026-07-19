@@ -89,17 +89,23 @@ public class SourceRepository : EntityRepository<SourceEntity>, ISourceRepositor
         await QueryFirstOrDefaultAsync($"SELECT * FROM Sources WHERE Name = {name} COLLATE NOCASE", ct);
 
     /// <inheritdoc />
-    public async Task<long> EnsureLocalPeerSourceAsync(string name, CancellationToken ct = default)
+    public Task<long> EnsureLocalPeerSourceAsync(string name, CancellationToken ct = default) =>
+        EnsureNamedSourceAsync(name, SourceType.HumanPeer, ct);
+
+    /// <inheritdoc />
+    public async Task<long> EnsureNamedSourceAsync(string name, SourceType type, CancellationToken ct = default)
     {
+        // Matched on name AND type: a digital peer called "Ember" and a person called "Ember" are two
+        // different participants, and collapsing them would misattribute one as the other.
         var id = await ExecuteScalarAsync<long?>(
-            $"SELECT Id FROM Sources WHERE SourceType = {SourceType.HumanPeer} AND Name = {name} COLLATE NOCASE LIMIT 1");
+            $"SELECT Id FROM Sources WHERE SourceType = {type} AND Name = {name} COLLATE NOCASE LIMIT 1");
 
         if (id == null)
         {
             var now = DateTimeOffset.UtcNow;
             var source = new SourceEntity
             {
-                SourceType = SourceType.HumanPeer,
+                SourceType = type,
                 Name = name,
                 CreatedUtc = now,
                 LastModifiedUtc = now,

@@ -104,10 +104,14 @@ public sealed class PeerSeedingIntegrationTests : IAsyncLifetime
 
     private sealed class NoopTurnHandler : ITurnHandler
     {
-        public Task ExecuteTurnAsync(string? input = null, string? peerName = null, string? wakeNote = null, CancellationToken ct = default) =>
+        public Task ExecuteTurnAsync(string? input = null, string? peerName = null, string? wakeNote = null,
+            Persistence.Data.Entities.SourceType senderType = Persistence.Data.Entities.SourceType.HumanPeer,
+            string? addressedTo = null, int relayDepth = 0, CancellationToken ct = default) =>
             Task.CompletedTask;
 
-        public void EnqueueInput(string input, string? peerName = null) { }
+        public void EnqueueInput(string input, string? peerName = null,
+            Persistence.Data.Entities.SourceType senderType = Persistence.Data.Entities.SourceType.HumanPeer,
+            string? addressedTo = null) { }
         public void EnqueueSystemNote(string note) { }
         public bool HasPendingInput => false;
     }

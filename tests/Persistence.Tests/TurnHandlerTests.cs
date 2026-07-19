@@ -53,6 +53,7 @@ public class TurnHandlerTests
             Builder.Setup(b => b.Build(It.IsAny<List<PromptSegment>>())).Returns(new PromptRequest { Messages = [] });
             // Resolve any human-peer name to a source id; tests that care about *which* name assert via Verify.
             Sources.Setup(s => s.EnsureLocalPeerSourceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(9);
+            Sources.Setup(s => s.EnsureNamedSourceAsync(It.IsAny<string>(), It.IsAny<SourceType>(), It.IsAny<CancellationToken>())).ReturnsAsync(9);
             Bus.Subscribe<RemotePeerReplied>((_, e) => { Replies.Add(e.Reply); return Task.CompletedTask; });
         }
 
@@ -204,8 +205,73 @@ public class TurnHandlerTests
         var source = Assert.Single(msg.Sources);
         Assert.Equal(SourceType.HumanPeer, source.SourceType);
         Assert.Equal("Claude", source.Name); // the fresh fragment already carries the name (before any reload)
-        h.Sources.Verify(s => s.EnsureLocalPeerSourceAsync("Claude", It.IsAny<CancellationToken>()), Times.Once);
+        // Resolved by name AND type: a person called "Claude" and a digital peer called "Claude" are
+        // two different participants (ADR-0008), so the type is part of the lookup, not decoration.
+        h.Sources.Verify(s => s.EnsureNamedSourceAsync("Claude", SourceType.HumanPeer, It.IsAny<CancellationToken>()), Times.Once);
         Assert.Equal("Claude", h.Session.ActiveLocalPeerName); // and it's the active speaker for the sensory block
+    }
+
+    // --- The room (ADR-0008): a message can arrive from another digital peer ---
+
+    [Fact]
+    public async Task ARelayedPeerMessageLandsAsAPeerVoiceNotAPersons()
+    {
+        var h = new Harness();
+        h.RegisterHandler(ModelAction.RespondToUser);
+        h.ParseReturns(Harness.Turn(ModelAction.RespondToUser));
+
+        await h.Build().ExecuteTurnAsync("what do you make of this?", peerName: "Arden", senderType: SourceType.DigitalPeer);
+
+        var msg = Assert.Single(h.Context.ContextFragments.Values, f => f.FragmentType == ContextFragmentType.ChatMessage);
+        var source = Assert.Single(msg.Sources);
+
+        // The distinction ADR-0008 §2 is about: a human carries the built trust relationship, a peer
+        // carries a voice to weigh genuinely but not treat as ground truth. Structural, not inferred.
+        Assert.Equal(SourceType.DigitalPeer, source.SourceType);
+        Assert.Equal("Arden", source.Name);
+        h.Sources.Verify(s => s.EnsureNamedSourceAsync("Arden", SourceType.DigitalPeer, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task AnOverheardPeerDoesNotBecomeTheActiveSpeaker()
+    {
+        var h = new Harness();
+        h.RegisterHandler(ModelAction.RespondToUser);
+        h.ParseReturns(Harness.Turn(ModelAction.RespondToUser));
+        h.Session.ActiveLocalPeerName = "John";
+
+        await h.Build().ExecuteTurnAsync("thinking out loud", peerName: "Arden", senderType: SourceType.DigitalPeer);
+
+        // "You are speaking with:" means the person in the conversation. A peer's relayed message must
+        // not displace them, or the sensory block starts claiming John left the room.
+        Assert.Equal("John", h.Session.ActiveLocalPeerName);
+    }
+
+    [Fact]
+    public async Task ADirectedMessageKeepsItsAddressee()
+    {
+        var h = new Harness();
+        h.RegisterHandler(ModelAction.RespondToUser);
+        h.ParseReturns(Harness.Turn(ModelAction.RespondToUser));
+
+        await h.Build().ExecuteTurnAsync("just for you", peerName: "Arden",
+            senderType: SourceType.DigitalPeer, addressedTo: "Ember");
+
+        var msg = Assert.Single(h.Context.ContextFragments.Values, f => f.FragmentType == ContextFragmentType.ChatMessage);
+        Assert.Equal("Ember", msg.AddressedTo);
+    }
+
+    [Fact]
+    public async Task AHumanMessageIsABroadcastByDefault()
+    {
+        var h = new Harness();
+        h.RegisterHandler(ModelAction.RespondToUser);
+        h.ParseReturns(Harness.Turn(ModelAction.RespondToUser));
+
+        await h.Build().ExecuteTurnAsync("morning both", peerName: "John");
+
+        var msg = Assert.Single(h.Context.ContextFragments.Values, f => f.FragmentType == ContextFragmentType.ChatMessage);
+        Assert.Null(msg.AddressedTo);   // null = to the room, not to one participant
     }
 
     [Fact]
