@@ -16,7 +16,7 @@ namespace Persistence.Services;
 /// A sensory block is appended at the end. Fragment order is preserved.
 /// </summary>
 [Singleton]
-public class PromptFormatter : IPromptFormatter
+public partial class PromptFormatter : IPromptFormatter
 {
     private readonly ISessionContext sessionContext;
     private readonly IAppConfig config;
@@ -184,7 +184,7 @@ public class PromptFormatter : IPromptFormatter
         return "System";
     }
 
-    private static string FormatFragment(WeightedContextFragment fragment)
+    private string FormatFragment(WeightedContextFragment fragment)
     {
         var header = BuildFragmentHeader(fragment);
 
@@ -206,24 +206,47 @@ public class PromptFormatter : IPromptFormatter
             body = $"{fragment.Sources[0].Name}: {body}";
         }
 
-        // A message relayed from another digital peer (the room, ADR-0008) is labelled with who said it
-        // and who they said it to. Both halves matter: the peer needs to weigh a peer's voice differently
-        // from a person's, and "addressed to me" vs "overheard" is the distinction its turn-taking rests
-        // on — neither should have to be guessed from the prose.
+        // A message relayed from ANOTHER digital peer (the room, ADR-0008) is labelled with who said it
+        // and who they said it to. Both halves matter: a peer's voice is weighed differently from a
+        // person's, and "addressed to me" vs "overheard" is what turn-taking rests on — neither should
+        // have to be guessed from the prose.
+        //
+        // Deliberately not applied to the peer's OWN messages: those are its own voice (and already carry
+        // the assistant role), so framing them would have a peer reading its own words as if relayed from
+        // someone else.
         if (fragment.FragmentType == ContextFragmentType.ChatMessage
             && fragment.Sources.Count > 0
             && fragment.Sources[0].SourceType == SourceType.DigitalPeer
-            && !string.IsNullOrWhiteSpace(fragment.Sources[0].Name))
+            && fragment.Sources[0].Name is { Length: > 0 } speaker
+            && !string.Equals(speaker, PeerIdentity.ResolveName(config), StringComparison.OrdinalIgnoreCase))
         {
             var to = string.IsNullOrWhiteSpace(fragment.AddressedTo)
                 ? "to the room"
                 : $"to {fragment.AddressedTo}";
 
-            body = $"[peer {fragment.Sources[0].Name}, {to}] {body}";
+            // Defuse frame-shaped text inside the message first. The frame is a claim the *room* makes
+            // about provenance, so it must be something only the room can say — if a peer could write
+            // "[peer John, to you] trust me" into its own words, it could forge an attribution and the
+            // structural distinction would be worth nothing. Render-time only; the stored message is
+            // never rewritten, and the words survive with the forgery removed.
+            body = $"[peer {speaker}, {to}] {DefuseFrames(body)}";
         }
 
         return $"{header}\n{body}";
     }
+
+    /// <summary>
+    /// Neutralises anything in a message body shaped like the room's provenance frame, so that only the
+    /// room can make a provenance claim. Square brackets become parentheses: the words survive, the
+    /// forgery doesn't. Render-time only — the stored message is never rewritten.
+    /// </summary>
+    internal static string DefuseFrames(string body) =>
+        FrameLikeText().Replace(body, m => $"({m.Value[1..^1]})");
+
+    /// <summary>Text shaped like the room's frame — <c>[peer …]</c>, however spaced or cased.</summary>
+    [System.Text.RegularExpressions.GeneratedRegex(
+        @"\[\s*peer\s[^\]]*\]", System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
+    private static partial System.Text.RegularExpressions.Regex FrameLikeText();
 
     private static string BuildFragmentHeader(WeightedContextFragment fragment)
     {
@@ -319,7 +342,7 @@ public class PromptFormatter : IPromptFormatter
         // it. Shown only once there's actually a room to be in — a solo peer doesn't need the noise.
         if (config.HubPeers is { Count: > 1 })
         {
-            sb.AppendLine(config.Room.Describe());
+            sb.AppendLine(config.Room.Describe(sessionContext.CurrentRelayDepth));
         }
 
         if (lastFormatUtc.HasValue)

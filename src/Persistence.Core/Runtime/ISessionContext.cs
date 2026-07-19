@@ -61,4 +61,11 @@ public interface ISessionContext
     /// line. Last-writer-wins when a turn drains messages from several peers.
     /// </summary>
     string ActiveLocalPeerName { get; set; }
+
+    /// <summary>
+    /// How many peer-to-peer hops the message that opened this turn had already taken (ADR-0008 §4).
+    /// 0 for a human message — which is what resets the chain. Surfaced in the sensory block so the peer
+    /// can watch the circuit breaker approach rather than only discover it by being refused.
+    /// </summary>
+    int CurrentRelayDepth { get; set; }
 }

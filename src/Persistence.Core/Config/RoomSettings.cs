@@ -37,11 +37,17 @@ public class RoomSettings
     /// How the guards read in the sensory block, so the peer can see the limits it's operating under
     /// rather than discovering them by hitting one.
     /// </summary>
-    public string Describe()
+    /// <param name="currentDepth">
+    /// Hops the message that opened this turn had already taken. Shown alongside the limit so the peer
+    /// can watch the breaker approach rather than only meeting it as a refusal.
+    /// </param>
+    public string Describe(int currentDepth = 0)
     {
+        var at = currentDepth > 0 ? $" (this message is at {currentDepth})" : "";
+
         var relay = RelayDepthEnforced
-            ? $"peer→peer relay stops after {MaxRelayDepth} hop(s) without a human turn"
-            : "peer→peer relay depth unlimited";
+            ? $"peer→peer relay stops after {MaxRelayDepth} hop(s) without a human turn{at}"
+            : $"peer→peer relay depth unlimited{at}";
 
         var fan = AutoFan
             ? "open room (peers hear each other automatically)"

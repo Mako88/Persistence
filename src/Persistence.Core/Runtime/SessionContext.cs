@@ -54,4 +54,7 @@ public class SessionContext : ISessionContext
     /// The name of the local peer the remote peer is currently talking with. Set per input.
     /// </summary>
     public string ActiveLocalPeerName { get; set; } = string.Empty;
+
+    /// <inheritdoc />
+    public int CurrentRelayDepth { get; set; }
 }

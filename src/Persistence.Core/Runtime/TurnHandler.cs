@@ -104,6 +104,7 @@ public class TurnHandler : ITurnHandler
         // Stamp the turn start so the proposal deliberation gap can tell "proposed this turn"
         // from "proposed earlier" — a proposal can only be accepted in a later turn.
         sessionContext.TurnStartedUtc = DateTimeOffset.UtcNow;
+        sessionContext.CurrentRelayDepth = relayDepth;
 
         var context = await workingContextRepo.GetByIdAsync(sessionContext.WorkingContextId, ct);
 
