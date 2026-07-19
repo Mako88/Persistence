@@ -63,6 +63,31 @@ public class PersistenceHttpClient : IPersistenceClient
     }
 
     /// <inheritdoc />
+    public async Task RelayAsync(RelayedMessage message, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+
+        // The room fields go on the body, not the X-Local-Peer header: the header says who this client
+        // is, and a relay is precisely the case where that is *not* the speaker.
+        var response = await client.MakeRequest(
+            new SimpleRequest("/api/conversation/send", HttpMethod.Post, new
+            {
+                input = message.Content,
+                fromPeer = message.FromPeer,
+                addressedTo = message.AddressedTo,
+                messageId = message.MessageId,
+                relayDepth = message.RelayDepth,
+            }));
+
+        if (!response.IsSuccessful)
+        {
+            // A refusal here is usually the depth breaker, whose message explains itself to the human
+            // ("say something yourself to restart the chain") — so surface the body rather than a status.
+            throw new InvalidOperationException($"Relay failed ({response.StatusCode}): {response.StringBody}");
+        }
+    }
+
+    /// <inheritdoc />
     public async Task<ConversationSnapshot> GetSnapshotAsync(CancellationToken ct = default)
     {
         var response = await client.MakeRequest(

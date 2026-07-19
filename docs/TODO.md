@@ -134,6 +134,16 @@ the voluntary continue-loop. Revisit only if we see the peer reliably acting bef
 
 - **Peer/infra network split.** ✅ **FIXED (2026-07-19).** The shared-infra compose declared its network as `lab` with no explicit name, so Compose prefixed it to `persistence_lab`, while peers attached to the external `persistence-lab` — two different networks that merely looked alike, so the "peers can reach shared infra" intent silently didn't hold (a peer couldn't resolve `persistence-searxng` at all). Both sides now use the one external `persistence-lab`. Verified live: GLM resolves and reaches SearXNG (HTTP 200).
 
+- **Verify migrations against populated data, not just fresh databases.** (NEW, 2026-07-19 — surfaced
+  building migration 007, agreed with Arden.) Every test builds its database fresh from `000`, so the suite
+  only ever exercises the **clean-build** path and structurally cannot catch a migration that fails on a
+  real, populated store. "The tests pass" and "this upgrades a real store" are different claims, and today
+  only the first is automated. Wanted: a fixture of representative pre-migration data, or a scripted
+  snapshot-upgrade check (apply pending migrations to a copy of a real backup, assert existing rows survive
+  and read as intended). **Until it exists, the manual discipline is the safeguard:** apply each new
+  migration to a real snapshot from `backups/peers/` before it goes anywhere near a live peer — that's how
+  007 was checked (499-fragment pre-007 store: rows read NULL, partial index built, lookup ran).
+
 - **Automated backups of peer memory.** (John, 2026-07-12.) A peer's DB (and vault) is its whole self, and
   it now lives canonically only on a container volume — so it must be backed up off the volume.
   ✅ **Local mechanism landed:** `scripts/backup-peer.ps1` takes a consistent online snapshot (SQLite

@@ -12,6 +12,14 @@ public interface IPersistenceClient
     /// <summary>Submits input as the local peer this client identifies as (set at construction).</summary>
     Task SendAsync(string input, CancellationToken ct = default);
 
+    /// <summary>
+    /// Carries another peer's message to this one (ADR-0008 §4). Distinct from <see cref="SendAsync"/>
+    /// because the sender is <em>not</em> this client's local peer: the message arrives attributed to
+    /// whoever originally said it, with its identity and hop depth intact. Build the argument with
+    /// <see cref="RelayComposer.Compose"/> rather than by hand — that's where the guardrails live.
+    /// </summary>
+    Task RelayAsync(RelayedMessage message, CancellationToken ct = default);
+
     /// <summary>Fetches the state to draw on connect (scheduled events, proposal count, chat, resume seq).</summary>
     Task<ConversationSnapshot> GetSnapshotAsync(CancellationToken ct = default);
 

@@ -9,6 +9,34 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-07-19 — the relay's guardrails, ahead of its button (ADR-0008 §4, partial)
+
+The first half of §4: everything needed to carry one peer's message to another *correctly*. The front-end
+affordance itself is **not** built — the UX shape is a genuine fork and is with Arden.
+
+### Added — `RelayComposer`, where the guardrails live
+A pure function from a stored `ChatHistoryItem` + a target peer to a `RelayedMessage`. Deliberately not
+logic inside the TUI: these properties have to hold for any front-end that ever offers a relay, and a
+guardrail living in a Terminal.Gui event handler protects exactly one pane.
+
+Three things are preserved rather than recomputed. **Attribution** — the message arrives as from whoever
+originally said it; re-attributing it to the human who pressed the button would make the receiving peer
+believe a person said what a peer said, collapsing the provenance the room is built on. **Identity** — the
+cross-peer `MessageId` travels unchanged, so both stores record one utterance under one id. **Distance** —
+the depth is the *stored* message's + 1, read off the message rather than counted by the relaying client;
+that's the consolidation Arden asked for, so the breaker and the relayer can't drift on what path a
+message took.
+
+Two cases that fall out of the model rather than being special-cased: a human's own words travel as a
+human message and **reset** the hop chain (depth counts peer-to-peer hops *without* a human turn, so
+carrying the count forward would let a human turn read as another peer hop); and sender *kind* is taken
+from the stored role, never guessed from the author's name, since a peer and a person can share one.
+
+`IPersistenceClient.RelayAsync` carries it, with the room fields on the body rather than the
+`X-Local-Peer` header — a relay is precisely the case where this client's identity is *not* the speaker.
+
+Suite: **635 core / 37 API**, green.
+
 ## 2026-07-19 (later still) — an utterance gets an identity (ADR-0008, migration 007)
 
 Prerequisite to the §4 relay affordance, ruled by Arden after verification showed it was missing. ADR-0008
