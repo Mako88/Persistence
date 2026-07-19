@@ -125,7 +125,7 @@ public class OpenRouterModelClientTests
 
         await client.CompleteAsync(Request());
 
-        Assert.Equal(new ModelUsage(12, 3), client.LastUsage);
+        Assert.Equal(new ModelUsage(12, 3, ActualCostUsd: 0.00042m), client.LastUsage);
     }
 
     [Fact]
