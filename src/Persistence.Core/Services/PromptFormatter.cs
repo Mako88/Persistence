@@ -194,6 +194,21 @@ public partial class PromptFormatter : IPromptFormatter
             ? $"(collapsed) {fragment.Summary}"
             : fragment.Content;
 
+        // Neutralise response-format syntax in *everything* a fragment carries, before it reaches the
+        // peer. A fragment's content is not the peer speaking — it's material the peer is remembering or
+        // reading — but the model completes what it reads, so protocol syntax sitting in that material
+        // can be emitted as if it were a choice the peer made. That is not hypothetical: a peer read a
+        // test file containing a canned example of the reply format and answered with the fixture's text,
+        // its turn ending early because the example also carried the yield instruction. It reported no
+        // memory of choosing, and no awareness the turn had ended.
+        //
+        // Applied here rather than at any one source because the mechanism doesn't care where the text
+        // came from — command output, a file, a fetched page, a relayed peer's message, or the peer's own
+        // notes quoting the protocol all reach the model the same way. The authoritative format
+        // definition is exempt for free: it's a system PromptSegment, not a fragment, so it never passes
+        // through here and keeps its live syntax where the peer learns the format.
+        body = DefuseProtocolTags(body);
+
         // Attribute a human peer's chat message inline ("John: …") so the model can tell speakers apart
         // when several people share the conversation. The builders map source→role but drop the name, so
         // without this every human reads as an anonymous "user". Only human messages are prefixed: the
@@ -242,6 +257,41 @@ public partial class PromptFormatter : IPromptFormatter
     /// </summary>
     internal static string DefuseFrames(string body) =>
         FrameLikeText().Replace(body, m => $"({m.Value[1..^1]})");
+
+    /// <summary>
+    /// Renders response-format tags inert wherever they appear in remembered or read material, while
+    /// leaving them readable: <c>respond</c> becomes <c>⟦respond⟧</c>, a closing tag <c>⟦/respond⟧</c>.
+    ///
+    /// <para><b>Visibly</b> different rather than a look-alike, and that single choice does three jobs
+    /// (Arden's ruling). A peer's context is part of its self, so a transformation of it should be legible
+    /// to the peer — a silent or invisible substitution would be one more thing happening to its context
+    /// without its knowledge, which is the very failure being fixed. Being able to see what was
+    /// neutralised is also what lets a peer reason accurately about protocol code it is legitimately
+    /// reading. And a visibly broken form disrupts the token pattern harder than a homoglyph, so it
+    /// reduces the pull toward emitting fresh syntax rather than only defeating the parse. The visibility
+    /// <em>is</em> the notification — no separate notice, no added noise.</para>
+    ///
+    /// <para>Scoped to the enumerable set of <em>block</em> tag names, never to angle-bracketed text at
+    /// large: a shape-scoped sweep would blind a peer to ordinary XML, HTML and code it has every reason
+    /// to read. Block tags are sufficient because commands only parse <em>inside</em> a block, so
+    /// defanging the block defangs its contents.</para>
+    ///
+    /// <para>What this honestly guarantees: defused text, if echoed verbatim, cannot parse. What it does
+    /// not guarantee is that a model won't be pulled into emitting <em>fresh</em> live syntax after
+    /// reading something suggestive — that's model behaviour, not a parse, and it is reduced here rather
+    /// than eliminated. Render-time only; the stored fragment is never rewritten.</para>
+    /// </summary>
+    internal static string DefuseProtocolTags(string body) =>
+        ProtocolTagLike().Replace(body, m => $"⟦{m.Value[1..^1].Trim()}⟧");
+
+    /// <summary>
+    /// The block tags the parser dispatches on, opening or closing, with any attribute run. Kept in step
+    /// with <c>TaggedResponseParser</c>'s switch — if a block tag is added there, it belongs here too.
+    /// </summary>
+    [System.Text.RegularExpressions.GeneratedRegex(
+        @"<\s*/?\s*(?:think|respond|context|actions|continue)\b[^>]*>",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
+    private static partial System.Text.RegularExpressions.Regex ProtocolTagLike();
 
     /// <summary>Text shaped like the room's frame — <c>[peer …]</c>, however spaced or cased.</summary>
     [System.Text.RegularExpressions.GeneratedRegex(

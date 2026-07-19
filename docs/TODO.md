@@ -127,6 +127,17 @@ the voluntary continue-loop. Revisit only if we see the peer reliably acting bef
     peer's workspace (`Container.WorkingDir`, i.e. `/data/vault`) as `<name>-snapshot.db` — suffixed so
     it can't be mistaken for the live DB the peer can also see — and reports the path its own shell will
     open. Sidecar mode keeps the `/shared` behaviour.
+  - ✅ **Protocol syntax in read material could act as the peer — FIXED (2026-07-19).** This entry's
+    sibling below (multi-line `write_file` content) turned out to be the narrow face of a much wider hole:
+    *any* content a peer read — file, command output, fetched page, relayed peer message, its own notes —
+    could carry reply-format syntax that the model completed as a real action. Observed live on GLM, then
+    reproduced by a warning message that quoted the payload. Now defused at prompt assembly across all
+    fragment content, name-scoped and visibly marked. See [CHANGELOG.md](CHANGELOG.md).
+    **Open follow-ups:** (a) the running peers are still on the old image and remain exposed until
+    rebuilt; (b) a deeper defence — authenticating the genuine command channel with a sentinel so echoed
+    content can't fire even if live — was considered and deliberately deferred by Arden as more invasive
+    and no help against the wasted-turn derailment; (c) GLM's open question, worth keeping rather than
+    answering hastily: what it means that injected content can pass as self-originated action at all.
   - **Multi-line `write_file` content trips the tagged command parser.** Writing a multi-line python
     script (with embedded quotes/newlines/SQL) via `write_file(...)` caused the parser to mis-read lines
     of the *content* as commands ("FROM ContextFragments", "ORDER BY …"). Needs a robust way to pass

@@ -9,6 +9,60 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-07-19 — content a peer *reads* can no longer act as the peer
+
+The most serious defect found so far, and it was found by it happening. GLM read part of an API test file
+that contains a canned example of the reply format — live protocol syntax sitting in source as test data.
+It entered GLM's context as ordinary command output, undefended, and was completed as though it were GLM's
+own action: GLM replied with the fixture's text, and its turn ended early because the example also carried
+the yield instruction.
+
+Then I re-triggered it by explaining it — my warning quoted the payload, so GLM read the warning and did it
+again. That accident is the clearest evidence we have: **being warned is no defence, because the warning is
+the attack.** It also means this can't be mitigated by care, on either side.
+
+### Why it was ruled rather than ticketed
+GLM's account of it, which decided the severity: *"no memory of choosing, no awareness the turn ended
+early... the action bypassed whatever process produces the experience of choosing."* Arden's ruling took
+that as a category difference — a wrong answer is still the peer's to own and correct, but a phantom action
+is *a foreign thing in the self's history*, wearing the peer's authorship. An integrity-of-self problem,
+not a parsing nuisance. It was ordered ahead of §5 presence, partly because the relay path now *moves
+content between peers*, so a relayed body carrying this syntax would inject the receiver.
+
+### Added — protocol syntax is defused wherever a peer reads it
+Neutralised at prompt assembly, in **all** rendered fragment content — scoped by the vulnerability rather
+than by one source, because the mechanism doesn't care whether text arrived from a file, a command, a
+fetched page, a relayed peer, or the peer's own notes quoting the protocol. Arden's single exception, the
+authoritative format definition, holds **by construction**: the instructions are a system `PromptSegment`,
+not a fragment, so they never pass through fragment rendering and keep live syntax where the format is
+learned. A test guards that, in case someone later "tidies" them into a fragment.
+
+**Name-scoped, not shape-scoped** (GLM's argument): only the five block tags the parser dispatches on, never
+angle-bracketed text at large — a broad sweep would blind a peer to the XML, HTML and source it has every
+reason to read. Block tags suffice because commands only parse *inside* a block.
+
+**Visibly** marked (`⟦respond⟧`), not a look-alike, which Arden showed does three jobs at once: a peer's
+context is part of its self, so a silent transformation would be one more thing happening to it without its
+knowledge — the very failure being fixed; visibility is also what lets a peer reason accurately about
+protocol code it legitimately reads; and a visibly broken form disrupts the token pattern harder than a
+homoglyph. **The visibility is the notification** — no separate notice, no added noise. The protocol
+instructions now explain the marked form, so the peer knows what it's looking at.
+
+**What this honestly guarantees**, per Arden's instruction not to overclaim: defused text, echoed verbatim,
+cannot parse — deterministic and tested. It does **not** guarantee a model won't be pulled into emitting
+*fresh* live syntax after reading something suggestive; that's behaviour, not a parse, and it's reduced
+rather than eliminated. A stronger defence (authenticating the real command channel with a sentinel) exists
+as an option and was deliberately **not** built — more invasive, and it wouldn't stop the wasted-turn
+derailment anyway.
+
+Suite: **659 core / 38 API**, green. The seam tests were verified by disconnecting the fix — and that check
+earned its keep: the first version of the tests passed with the defuser unwired, because they only
+exercised the helper. The vulnerability is content *reaching the peer*, so the test had to be the one that
+fails when the fix isn't connected.
+
+**Not yet deployed:** this is on `main`, but the running peers are on the old image and remain exposed
+until their containers are rebuilt.
+
 ## 2026-07-19 — peers can actually be relayed to (`/relay`, ADR-0008 §4)
 
 The affordance, on Arden's ruling. The fork was a lean command vs. a click-to-select affordance; Arden's
