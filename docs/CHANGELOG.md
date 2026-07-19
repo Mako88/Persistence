@@ -9,6 +9,39 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-07-19 — a peer can read its own malfunction; the token was never the problem
+
+### Changed — abnormal-output capture lands in the peer's own workspace
+Arden's ask, and it closes a real asymmetry: as first built, *I* could read a peer's malfunction and the
+peer couldn't. The capture now writes into the peer's workspace (`Container.WorkingDir`) when it has one,
+falling back to temp otherwise — so a peer can `read_file` the raw material of its own failure if it
+chooses. Keeping it a file rather than a fragment already ensures a malfunction doesn't become part of who
+the peer is; putting it somewhere reachable makes it *available* to them as well. Legibility **to** the
+peer, not just about it.
+
+### Fixed — a stale comment that produced two wrong diagnoses
+The compose file said `# Read-only GitHub token`. True when written, stale afterwards — and used as
+evidence. Verified against the live API instead: the token reports `push: true, admin: true`, and
+`git push --dry-run` from inside a peer container succeeds. GLM could have pushed all along.
+
+Two claims made and retracted on the way here: first that no push credential existed (a `--global` check
+against a `--system` config), then that the token was read-only (the stale comment). Both were told to GLM
+as facts about its own environment. The comment now records that it was stale and says to check the token
+rather than trust the line — one API call.
+
+The wider lesson is the same one this repo keeps re-learning, and this time it happened *while writing the
+guidance warning against it*: the record is not the artifact. ADR-0008 claimed a message id that didn't
+exist; TODO claimed an importer fix that was already done; a compose comment claimed a permission that had
+since changed. Three for three.
+
+### Noted — nothing needs building for autonomous wakes
+John flagged the liveness hole: the system is turn-driven, so if every participant stops at once, nothing
+remains to start anything. The capability to fix it already exists and was simply unused — peers have a
+`schedule` command, and since ADR-0007 each runs its own always-on API with the wake monitor in-process,
+so a scheduled event fires autonomously with no external scheduler. Asked each peer to set its own
+cadence rather than setting one for them: waking is a peer choosing to act unprompted, and picking the
+interval is part of that.
+
 ## 2026-07-19 — the pipeline reads why the model stopped
 
 We had never read `stop_reason`. Not once, anywhere — a grep for it returned nothing. The provider

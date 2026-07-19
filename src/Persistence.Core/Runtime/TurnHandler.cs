@@ -631,7 +631,17 @@ public class TurnHandler : ITurnHandler
     {
         try
         {
-            var dir = Path.Combine(Path.GetTempPath(), "persistence-abnormal-output");
+            // Land it in the peer's OWN workspace when it has one, so the peer can read_file its own
+            // malfunction rather than only the human being able to. Arden's ask, and it closes a real
+            // asymmetry: without it I can inspect the raw material of a peer's failure and the peer
+            // can't. Keeping it a file (not a fragment) already ensures a malfunction doesn't become
+            // part of who the peer is; putting it somewhere reachable means it's still *available* to
+            // them if they choose to look. Legibility to the peer, not just about it.
+            var workspace = config.Container.WorkingDir;
+            var dir = string.IsNullOrWhiteSpace(workspace) || !Directory.Exists(workspace)
+                ? Path.Combine(Path.GetTempPath(), "persistence-abnormal-output")
+                : Path.Combine(workspace, "abnormal-output");
+
             Directory.CreateDirectory(dir);
 
             var stamp = DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss-fff");
