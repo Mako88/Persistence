@@ -238,12 +238,24 @@ public class ExecuteActionsHandler : CommandHandler
         return firstLine.Length <= 200 ? firstLine : firstLine[..200];
     }
 
-    [Command("snapshot_db", "Write a read-only snapshot of your database into your computer's /shared folder so you can query your own data directly (e.g. with python3's sqlite3). Overwrites the previous snapshot each time; it's a consistent copy, not the live file.")]
+    [Command("snapshot_db", "Write a consistent read-only snapshot of your database into your workspace so you can query your own data directly (e.g. with python3's sqlite3). Overwrites the previous snapshot each time; it's a copy, not the live file.")]
     private async Task<string> ExecuteSnapshotDbAsync(WorkingContextEntity context, JsonNode? command, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(config.SharedDirectory))
+        // Where the peer will be able to *read* the snapshot from depends on where it lives.
+        //
+        // Local mode (ADR-0007): the peer's runtime runs inside its own container, so its shell and its
+        // database share a filesystem — the snapshot goes into its workspace and it just opens the file.
+        // The old sidecar model had the peer reaching into a separate container, so the only common
+        // ground was the /shared host bridge; that folder does NOT exist inside a peer's own container,
+        // which is why this used to refuse outright for every containerised peer.
+        var local = config.Container.Local;
+        var directory = local ? config.Container.WorkingDir : config.SharedDirectory;
+
+        if (string.IsNullOrWhiteSpace(directory))
         {
-            return "snapshot_db isn't available — no shared folder is configured (the /shared bridge to your computer isn't set up).";
+            return local
+                ? "snapshot_db isn't available — no workspace directory is configured for your computer."
+                : "snapshot_db isn't available — no shared folder is configured (the /shared bridge to your computer isn't set up).";
         }
 
         var sourcePath = config.DatabasePath;
@@ -253,15 +265,19 @@ public class ExecuteActionsHandler : CommandHandler
             return $"snapshot_db failed: your database wasn't found at {sourcePath}.";
         }
 
-        var fileName = Path.GetFileName(sourcePath);
-        var destPath = Path.Combine(config.SharedDirectory, fileName);
+        // Distinguish the copy from the live database, which in local mode is a real file the peer can
+        // also see — without the suffix, "glm.db" in the workspace and "glm.db" in /data/db are easy to
+        // confuse, and only one of them is safe to poke at.
+        var fileName = local
+            ? $"{Path.GetFileNameWithoutExtension(sourcePath)}-snapshot{Path.GetExtension(sourcePath)}"
+            : Path.GetFileName(sourcePath);
+        var destPath = Path.Combine(directory, fileName);
 
         try
         {
-            Directory.CreateDirectory(config.SharedDirectory);
+            Directory.CreateDirectory(directory);
 
-            // Read-only source connection (no write lock on the live DB) → a consistent online-backup
-            // copy into the shared folder, which the container sees at /shared.
+            // Read-only source connection (no write lock on the live DB) → a consistent online-backup copy.
             await using var source = new SqliteConnection($"Data Source={sourcePath};Mode=ReadOnly");
             await using var dest = new SqliteConnection($"Data Source={destPath}");
             await source.OpenAsync(ct);
@@ -276,8 +292,11 @@ public class ExecuteActionsHandler : CommandHandler
         var kb = new FileInfo(destPath).Length / 1024;
         await actionLogRepo.LogAsync("snapshot_db", fileName, $"{kb} KB");
 
-        return $"Wrote a snapshot of your database to /shared/{fileName} ({kb} KB). Query it read-only "
-            + $"in your computer with python3's sqlite3 (open \"/shared/{fileName}\").";
+        // Report the path the peer's own shell will see.
+        var shownPath = local ? destPath.Replace('\\', '/') : $"/shared/{fileName}";
+
+        return $"Wrote a snapshot of your database to {shownPath} ({kb} KB). Query it read-only "
+            + $"in your computer with python3's sqlite3 (open \"{shownPath}\").";
     }
 
     [Command("container_logs", "View recent logs from your computer's containers, to troubleshoot it yourself. 'computer' is your box; 'search' is the search service (useful when web_search misbehaves).")]

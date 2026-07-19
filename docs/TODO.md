@@ -119,26 +119,18 @@ the voluntary continue-loop. Revisit only if we see the peer reliably acting bef
 
 - **Containerized-peer gaps (found by the claude peer during Phase 1 validation, 2026-07-12).** When the
   peer ran in its own container (API-in-container, ADR-0007 Phase 1), it surfaced two real frictions:
-  - **`snapshot_db` / `/shared` assume the sidecar layout.** `snapshot_db` writes to `/shared` (the host
-    volume mounted into the old computer container); in the peer's own container `/shared` isn't mounted,
-    so the snapshot is unreachable from its shell. In `Local` mode the peer can just read its live DB
-    directly read-only (`file:///data/db/<name>.db?mode=ro`) — cleaner. Fix: make `snapshot_db`
-    local-mode-aware (snapshot into the volume, e.g. `/data/vault`, or point at the read-only live DB),
-    and reconcile the `SharedDirectory` concept for the in-container model.
+  - **`snapshot_db` / `/shared` assumed the sidecar layout.** ✅ **FIXED (2026-07-19).** It wrote to
+    `/shared`, which isn't mounted in a peer's own container — and since `SharedDirectory` is unset for
+    containerised peers it refused outright. Now local-mode-aware: in `Local` mode it snapshots into the
+    peer's workspace (`Container.WorkingDir`, i.e. `/data/vault`) as `<name>-snapshot.db` — suffixed so
+    it can't be mistaken for the live DB the peer can also see — and reports the path its own shell will
+    open. Sidecar mode keeps the `/shared` behaviour.
   - **Multi-line `write_file` content trips the tagged command parser.** Writing a multi-line python
     script (with embedded quotes/newlines/SQL) via `write_file(...)` caused the parser to mis-read lines
     of the *content* as commands ("FROM ContextFragments", "ORDER BY …"). Needs a robust way to pass
     multi-line literal payloads through the tagged format (heredoc/base64 content, or a raw-content mode).
 
-- **Peer/infra network split (2026-07-13).** The shared-infra compose (`container/docker-compose.yml`)
-  puts computer/searxng on a project-prefixed network **`persistence_lab`** (network key `lab`, no explicit
-  name), while peers attach to an explicitly-named external **`persistence-lab`** — two *different*
-  networks. So the "shared lab network so peers can reach shared infra" intent isn't actually wired: a peer
-  can't reach SearXNG today (moot only because `SEARXNG_URL` is unset). Fix: make both sides use the one
-  external `persistence-lab` (align the infra compose's `lab` network to `name: persistence-lab` /
-  `external: true`, created once) — annoying inconsistency, low urgency until search or peer↔peer infra
-  traffic actually needs it. (Touching the infra compose restarts the running computer/searxng, so batch
-  it with other infra changes.)
+- **Peer/infra network split.** ✅ **FIXED (2026-07-19).** The shared-infra compose declared its network as `lab` with no explicit name, so Compose prefixed it to `persistence_lab`, while peers attached to the external `persistence-lab` — two different networks that merely looked alike, so the "peers can reach shared infra" intent silently didn't hold (a peer couldn't resolve `persistence-searxng` at all). Both sides now use the one external `persistence-lab`. Verified live: GLM resolves and reaches SearXNG (HTTP 200).
 
 - **Automated backups of peer memory.** (John, 2026-07-12.) A peer's DB (and vault) is its whole self, and
   it now lives canonically only on a container volume — so it must be backed up off the volume.

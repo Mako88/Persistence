@@ -61,8 +61,14 @@ services:
     depends_on: [searxng]
 
 networks:
+  # The SAME external network the peers attach to (container/peer/docker-compose.yml). Without the
+  # explicit name, Compose prefixes it with the project — creating `persistence_lab` here while every
+  # peer sat on `persistence-lab`, two different networks that merely looked alike. The shared-infra
+  # intent ("peers can reach searxng/computer by name") silently didn't hold: a peer couldn't resolve
+  # persistence-searxng at all. Attach-only on both sides; scripts/peer.ps1 creates it if absent.
   lab:
-    driver: bridge
+    name: persistence-lab
+    external: true
 
 volumes:
   work:
