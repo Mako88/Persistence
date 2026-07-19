@@ -28,6 +28,10 @@ public class ContextWindowProvider : IContextWindowProvider
         ["claude-sonnet-5"] = 1000000,
         ["claude"] = 200000,
         ["local"] = 128000,
+
+        // OpenRouter routes are namespaced ("z-ai/glm-5.2"), so they need their own keys — a bare
+        // "glm"/"gpt" prefix never matches one. Verified against openrouter.ai/api/v1/models, 2026-07-15.
+        ["z-ai/glm-5.2"] = 1048576,
     };
 
     private readonly Dictionary<string, int> map;

@@ -11,14 +11,22 @@ namespace Persistence.Services;
 /// into a single message.
 ///
 /// Also serves the <see cref="ModelProvider.LocalClaude"/> peer, which consumes the same
-/// role-labelled message structure, and the <see cref="ModelProvider.Anthropic"/> client, which
+/// role-labelled message structure, the <see cref="ModelProvider.Anthropic"/> client, which
 /// re-maps these roles to the Claude Messages API shape (system/developer segments become
-/// user-role messages, keeping the end-positioned format instructions where they belong).
+/// user-role messages, keeping the end-positioned format instructions where they belong), and
+/// <see cref="ModelProvider.OpenRouter"/>, whose client re-flattens them for whichever model the
+/// route lands on.
+///
+/// <para><b>Every provider needs a builder registered here.</b> This is keyed by
+/// <see cref="ModelProvider"/>, so a provider with no entry fails at <em>startup</em> with an opaque
+/// "service has not been registered" — not at first use. Adding a provider means two registrations:
+/// its <see cref="IModelClient"/> and a row here.</para>
 /// </summary>
 [Service(registerAsType: typeof(IPromptBuilder), key: ModelProvider.OpenAI)]
 [Service(registerAsType: typeof(IPromptBuilder), key: ModelProvider.LocalClaude)]
 [Service(registerAsType: typeof(IPromptBuilder), key: ModelProvider.OpenAiChat)]
 [Service(registerAsType: typeof(IPromptBuilder), key: ModelProvider.Anthropic)]
+[Service(registerAsType: typeof(IPromptBuilder), key: ModelProvider.OpenRouter)]
 public class OpenAiPromptBuilder : IPromptBuilder
 {
     /// <summary>

@@ -53,8 +53,31 @@ public class ConversationController : ControllerBase
         var localPeer = Request.Headers["X-Local-Peer"].ToString();
         localPeer = string.IsNullOrWhiteSpace(localPeer) ? null : localPeer.Trim();
 
-        eventBus.FireAndForget(this, new DisplayInputReceived(request.Input, localPeer));
+        // Report a turn that fails outright. The turn runs detached, so without an error callback
+        // FireAndForget drops the exception on the floor and the client sits on "thinking…" forever —
+        // a misconfigured peer (a missing or wrong API key, say) looks hung rather than broken, with
+        // nothing in the log either. Surfacing it as a conversation error is how the human finds out.
+        eventBus.FireAndForget(this, new DisplayInputReceived(request.Input, localPeer),
+            ex => display.ShowError(RootCause(ex).Message));
         return Accepted();
+    }
+
+    /// <summary>
+    /// The innermost exception in a chain — the one that actually says what went wrong.
+    ///
+    /// Worth the unwrap: a turn failure usually surfaces through a DI activation, and the outer message
+    /// is "An exception was thrown while activating Persistence.Services.SomeModelClient", which tells
+    /// the human nothing they can act on. The cause underneath is the useful part ("no API key is set;
+    /// add your OpenRouter key…").
+    /// </summary>
+    private static Exception RootCause(Exception ex)
+    {
+        while (ex.InnerException is { } inner)
+        {
+            ex = inner;
+        }
+
+        return ex;
     }
 
     /// <summary>

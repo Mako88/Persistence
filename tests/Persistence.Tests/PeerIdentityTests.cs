@@ -20,11 +20,28 @@ public class PeerIdentityTests
     [Theory]
     [InlineData("Local")]
     [InlineData("OpenAiChat")]
-    public void AProviderThatCouldBeAnyoneFallsBackToTheModelId(string provider) =>
+    public void AProviderThatCouldBeAnyoneIsNamedFromItsModel(string provider) =>
         // OpenAiChat is OpenAI's endpoint *or* llama.cpp/Ollama behind an ApiBaseUrl, and Local is
-        // whatever you're running — so the family isn't knowable from the provider. The model id is the
-        // most informative thing we actually have, and beats guessing "ChatGPT" for a Gemma.
-        Assert.Equal("gemma4-12b-q4", PeerIdentity.DefaultName(provider, model: "gemma4-12b-q4"));
+        // whatever you're running — so the family isn't knowable from the *provider*, only from the
+        // model. (This used to return the raw id, "gemma4-12b-q4"; naming the family reads far better
+        // and is the same rule routed models get.)
+        Assert.Equal("Gemma", PeerIdentity.DefaultName(provider, model: "gemma4-12b-q4"));
+
+    [Theory]
+    [InlineData("z-ai/glm-5.2", "GLM")]
+    [InlineData("anthropic/claude-opus-4.8", "Claude")]
+    [InlineData("openai/gpt-5.4", "ChatGPT")]
+    [InlineData("deepseek/deepseek-chat", "DeepSeek")]
+    [InlineData("qwen/qwen3-32b", "Qwen")]
+    public void ARoutedModelIsNamedForItsFamilyNotItsRoute(string route, string expected) =>
+        // An OpenRouter model id is a route ("who hosts it / what it is"), and the vendor half is
+        // routing detail rather than identity — a peer shouldn't introduce itself as "z-ai/glm-5.2".
+        Assert.Equal(expected, PeerIdentity.DefaultName("OpenRouter", route));
+
+    [Fact]
+    public void AnUnrecognisedFamilyKeepsItsModelIdRatherThanGuessing() =>
+        // Better a precise identifier than a confidently wrong name. (Vendor prefix still dropped.)
+        Assert.Equal("some-new-model-9", PeerIdentity.DefaultName("OpenRouter", "newco/some-new-model-9"));
 
     [Fact]
     public void AnUnrecognisedProviderStillFallsBackRatherThanThrowing() =>

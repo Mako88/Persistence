@@ -53,6 +53,56 @@ public static class PeerIdentity
             }
             : FromModel(model);
 
-    private static string FromModel(string? model) =>
-        string.IsNullOrWhiteSpace(model) ? Fallback : model.Trim();
+    /// <summary>
+    /// Model families, keyed by the token that identifies them in a model id. Data, not logic — the
+    /// point is to greet a new peer as "GLM" or "Qwen" rather than "z-ai/glm-5.2", so add a row rather
+    /// than write a rule. An unlisted family keeps its (vendor-stripped) model id, which is honest:
+    /// better a precise identifier than a confidently wrong name.
+    /// </summary>
+    private static readonly Dictionary<string, string> Families = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["glm"] = "GLM",
+        ["gpt"] = "ChatGPT",
+        ["claude"] = "Claude",
+        ["llama"] = "Llama",
+        ["mistral"] = "Mistral",
+        ["mixtral"] = "Mixtral",
+        ["deepseek"] = "DeepSeek",
+        ["qwen"] = "Qwen",
+        ["gemini"] = "Gemini",
+        ["gemma"] = "Gemma",
+        ["grok"] = "Grok",
+        ["kimi"] = "Kimi",
+        ["phi"] = "Phi",
+    };
+
+    /// <summary>
+    /// A name derived from the model id — for providers whose id is all we have to go on: a router
+    /// (<see cref="ModelProvider.OpenRouter"/>, where the id is a route like <c>z-ai/glm-5.2</c>) or a
+    /// local server (<see cref="ModelProvider.Local"/>, <see cref="ModelProvider.OpenAiChat"/>, where
+    /// it's whatever was loaded). The vendor prefix is routing detail rather than identity, so it's
+    /// dropped; a recognised family then supplies the name.
+    /// </summary>
+    private static string FromModel(string? model)
+    {
+        if (string.IsNullOrWhiteSpace(model))
+        {
+            return Fallback;
+        }
+
+        // "z-ai/glm-5.2" -> "glm-5.2": who hosts it isn't who it is.
+        var id = model.Trim();
+        var slash = id.LastIndexOf('/');
+        if (slash >= 0 && slash < id.Length - 1)
+        {
+            id = id[(slash + 1)..];
+        }
+
+        // "glm-5.2" -> "glm" -> "GLM". Version and size suffixes are noise in a name. The version is
+        // often glued straight onto the family ("qwen3-32b", "gemma4-12b-q4"), so trailing digits come
+        // off too — otherwise the family lookup misses on exactly the models people run locally.
+        var head = id.Split('-', ':', '.', '_')[0].TrimEnd('0', '1', '2', '3', '4', '5', '6', '7', '8', '9');
+
+        return Families.TryGetValue(head, out var family) ? family : id;
+    }
 }

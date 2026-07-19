@@ -9,6 +9,47 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-07-15 — OpenRouter provider, and a GLM 5.2 peer
+
+### Added — `OpenRouter` provider
+`OpenRouterModelClient` talks to [OpenRouter](https://openrouter.ai): one key in front of many vendors,
+with the `Model` a namespaced route (`z-ai/glm-5.2`). It speaks Chat Completions, so the wire shape is
+shared with `OpenAiChatModelClient` through a new `ChatCompletionsProtocol` (message flattening, content
+extraction, cached/uncached usage split) — a fix to the shape now lands for both at once. What's genuinely
+OpenRouter-specific stays in its client: an always-required key (a router has no keyless mode), an
+`X-Title` attribution header, and **usage accounting**.
+
+That last one is worth noting: OpenRouter reports each call's **actual USD cost**, not just tokens.
+Every other provider leaves us multiplying tokens by a hand-maintained rate table that drifts as prices
+change — which is exactly what the deferred "actual-cost reconciliation" item in [TODO.md](TODO.md)
+wants to fix, and OpenRouter gives it per-request rather than org-wide and daily-bucketed. Surfaced in
+the debug pane for now (`LastActualCostUsd`); feeding it into the session cost readout is a follow-up.
+
+Verified rates and the 1M-token context window for `z-ai/glm-5.2` are in the pricing/context maps, read
+from `openrouter.ai/api/v1/models` rather than guessed. Only that model is listed — a wrong rate is worse
+than none, since an unmatched model reports tokens without a dollar figure instead of a fabricated one.
+
+### Fixed — a failed turn left the client hanging on "thinking…"
+Pre-existing, found by running a deliberately unconfigured peer. `FireAndForget`'s error callback is
+optional and the API's send path passed none, so any exception during a turn was dropped on the floor:
+a peer with a missing or wrong API key looked *hung* rather than broken, with nothing in the log either.
+It now surfaces as a conversation error, unwrapped to the root cause — the outer message is usually a DI
+activation wrapper ("An exception was thrown while activating …ModelClient"), and the useful sentence is
+underneath it.
+
+### Added — `ProviderRegistrationCompletenessTests`
+Adding a provider means *two* registrations — an `IModelClient` and an `IPromptBuilder` — and missing the
+second fails at **startup**, not first use, with an opaque Autofac error several frames deep in a
+container's boot loop. (Which is how it went: OpenRouter shipped with a client and no builder.) A test
+now asserts both exist for every `ModelProvider`, naming the gap.
+
+### Changed — peer default names read as families
+`PeerIdentity` now derives a name from the model family rather than the raw id: `z-ai/glm-5.2` → **GLM**,
+`qwen/qwen3-32b` → **Qwen**, `gemma4-12b-q4` → **Gemma** (it used to return the whole id). The vendor
+half of a route is routing detail, not identity, and version digits glue to the family name, so both are
+stripped before the lookup. An unrecognised family still keeps its id — better a precise identifier than
+a confidently wrong name.
+
 ## 2026-07-15 — a peer knows its own name
 
 ### Added — `PeerName`, and a provider-derived default

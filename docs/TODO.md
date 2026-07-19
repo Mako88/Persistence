@@ -217,6 +217,16 @@ the voluntary continue-loop. Revisit only if we see the peer reliably acting bef
   **org-wide** (coarse attribution once multiple peers/keys exist) and **daily-bucketed/lagged** (can't
   improve per-turn granularity). Scope when picked up: admin-key config + a periodic reconciler that feeds
   effective $/token back into `IModelPricingProvider`.
+
+  **Update (2026-07-15): OpenRouter already gives this, per request.** Its response carries
+  `usage.cost` — the call's actual USD charge — when the request asks for usage accounting, which
+  `OpenRouterModelClient` does. No admin key, no org-wide blur, no daily lag: it's exact, per turn, for
+  the peer that spent it. Currently exposed as `LastActualCostUsd` and shown in the debug pane only.
+  **To finish it:** carry an optional actual cost on `ModelUsage` → `ITokenUsageTracker` →
+  `ISessionCostEstimator`, preferring a reported cost over `tokens × rate` when one exists, and falling
+  back to the estimate otherwise (every other provider). That also makes the cost *ceiling* exact rather
+  than estimated for OpenRouter peers. Deliberately left out of the provider commit to keep the cost
+  system's change separate and reviewable.
 - **Graceful state flush on close.** (Scratch — "save session information on close.") Ensure in-flight
   context/state is reliably persisted on shutdown so nothing is lost.
 - **Right-click dialog position (TUI).** ✅ **DONE (2026-07-14).** The menu was positioned from
@@ -372,6 +382,13 @@ datetime-interleaved history, blanked tabs, send-routing). See [CHANGELOG.md](CH
     (`DigitalPeer`/`HumanPeer`, not `RemotePeer`/`LocalPeer`). Untouched so far.
   - **Ember's own call on its name**, once John asks. If it keeps "Ember", nothing to do; if it picks
     something else, that's a `PeerName` edit plus the same two-row rename.
+
+- **GLM peer — waiting on an OpenRouter API key.** (2026-07-15.) `glm` is built and running on port 8094
+  (`z-ai/glm-5.2`, 1M context, ~$0.25/$0.79 per M in/out, $10 soft cost ceiling), wired into `HubPeers`,
+  its store seeded and its identity self-named **GLM**. It can't complete a turn until John puts his
+  OpenRouter key (`sk-or-…`) into `container/peer/configs/glm.json` — the file is gitignored, and the
+  client is transient, so config hot-reload picks the key up on the next turn with no restart. Until
+  then a message returns a clear error naming exactly that (verified live).
 
 - **A "new peer" flow.** (John, 2026-07-15.) `peer.ps1 -Name <n>` *throws* if
   `container/peer/configs/<n>.json` is missing — "Create it (see the other configs for the shape)" — so

@@ -65,11 +65,16 @@ The `[Sensory]` section gives the peer eyes on its own state ([ADR-0005](../adr/
 Segments are provider-neutral; a keyed `IPromptBuilder` maps them to a `PromptRequest` (a list of
 role-tagged `PromptMessage`s):
 
-- **`OpenAiPromptBuilder`** (used for `OpenAI`, `OpenAiChat`, `LocalClaude`) maps each segment's
-  `Source` to a role — System→`developer`, Remote Peer→`assistant`, everything else→`user` — and
-  collapses adjacent same-role messages.
+- **`OpenAiPromptBuilder`** (used for `OpenAI`, `OpenAiChat`, `LocalClaude`, `Anthropic`,
+  `OpenRouter`) maps each segment's `Source` to a role — System→`developer`, Remote
+  Peer→`assistant`, everything else→`user` — and collapses adjacent same-role messages.
 - **`LocalPromptBuilder`** (used for `Local`) collapses to a single system message + a single user
   message — the simplest shape, for the console testing client.
+
+> **Every provider needs a builder.** The index is keyed by `ModelProvider`, so a provider registered
+> as an `IModelClient` but missing here fails at *startup* with an opaque Autofac "service has not been
+> registered" — for a containerised peer, a boot loop. `ProviderRegistrationCompletenessTests` asserts
+> both registrations exist for every enum value, so the gap shows up as a named test failure instead.
 
 ## Model providers (`IModelClient`)
 
@@ -81,6 +86,8 @@ flowchart TD
     CFG["config.Provider"] --> SEL{ModelProvider}
     SEL -->|OpenAI| O["OpenAiModelClient<br/>POST /responses (reasoning, streaming)"]
     SEL -->|OpenAiChat| OC["OpenAiChatModelClient<br/>POST /chat/completions (llama.cpp, Ollama, …)"]
+    SEL -->|Anthropic| A["AnthropicModelClient<br/>POST /v1/messages"]
+    SEL -->|OpenRouter| OR["OpenRouterModelClient<br/>POST /chat/completions (routed, many vendors)"]
     SEL -->|LocalClaude| LC["LocalClaudeModelClient<br/>parks on RemotePeerBroker (out-of-band)"]
     SEL -->|Local| L["LocalModelClient<br/>console stdin (testing)"]
 ```
@@ -89,8 +96,14 @@ flowchart TD
 |---|---|---|
 | `OpenAI` | `OpenAiModelClient` | OpenAI Responses API (`/responses`); reasoning effort; live streaming of output + reasoning summary; records real token usage for budget calibration |
 | `OpenAiChat` | `OpenAiChatModelClient` | OpenAI-compatible Chat Completions (`/chat/completions`) for local servers; flattens to a template-safe system + single user message |
+| `Anthropic` | `AnthropicModelClient` | Claude Messages API (`/v1/messages`); cache-aware token usage |
+| `OpenRouter` | `OpenRouterModelClient` | [OpenRouter](https://openrouter.ai) — one key in front of many vendors; `Model` is a namespaced route (`z-ai/glm-5.2`). Always requires a key. Reports each call's **actual** USD cost, not just tokens |
 | `LocalClaude` | `LocalClaudeModelClient` | no HTTP model — parks the prompt on the [broker](remote-peer-and-surfaces.md) for an external agent to answer out-of-band |
 | `Local` | `LocalModelClient` | prints the prompt and reads a reply from the console; for infrastructure testing without a model |
+
+`OpenAiChat` and `OpenRouter` share their wire shape through `ChatCompletionsProtocol` (message
+flattening, content extraction, the cached/uncached usage split) — what differs is the endpoint, auth,
+and OpenRouter's usage-accounting request. A fix to the shape lands for both at once.
 
 All implement `CompleteAsync` (→ raw string) and `StreamAsync` (→ `IAsyncEnumerable<ModelStreamEvent>`
 of `OutputTextDelta` / `ReasoningSummaryDelta` / `Completed`). The non-streaming and streaming turn

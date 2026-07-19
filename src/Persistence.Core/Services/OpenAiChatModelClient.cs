@@ -95,9 +95,9 @@ public class OpenAiChatModelClient : IModelClient, IDisposable
         }
 
         using var doc = JsonDocument.Parse(response.StringBody);
-        var responseMessage = ExtractContent(doc.RootElement);
+        var responseMessage = ChatCompletionsProtocol.ExtractContent(doc.RootElement);
 
-        LastUsage = ReadUsage(doc.RootElement);
+        LastUsage = ChatCompletionsProtocol.ReadUsage(doc.RootElement);
 
         if (config.DebugMode)
         {
@@ -122,49 +122,15 @@ public class OpenAiChatModelClient : IModelClient, IDisposable
     }
 
     /// <summary>
-    /// Reads the Chat Completions usage block (<c>usage.prompt_tokens</c> / <c>completion_tokens</c>),
-    /// splitting out the cached prefix (<c>prompt_tokens_details.cached_tokens</c>) so cached input is
-    /// billed at the discounted rate. Null when the provider omitted usage.
-    /// </summary>
-    private static ModelUsage? ReadUsage(JsonElement root)
-    {
-        if (root.TryGetProperty("usage", out var usage)
-            && usage.TryGetProperty("prompt_tokens", out var input) && input.TryGetInt32(out var inTok))
-        {
-            var outTok = usage.TryGetProperty("completion_tokens", out var o) && o.TryGetInt32(out var ot) ? ot : 0;
-
-            // prompt_tokens is the TOTAL (cached + uncached); cached is the auto-cached prefix. Split so
-            // InputTokens is uncached (full rate) and CacheReadTokens is cached (discounted). No separate
-            // cache-creation charge on OpenAI.
-            var cached = usage.TryGetProperty("prompt_tokens_details", out var details)
-                && details.TryGetProperty("cached_tokens", out var c) && c.TryGetInt32(out var cTok) ? cTok : 0;
-
-            return new ModelUsage(Math.Max(0, inTok - cached), outTok, CacheReadTokens: cached);
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// Builds the Chat Completions request body. Local chat templates (e.g. Qwen via llama.cpp)
-    /// are strict — they require a single system message at the very start and don't tolerate the
-    /// system segments our prompt injects at the END (format instructions + sensory block). So we
-    /// flatten to at most two messages: a leading <c>system</c> message (the persona/identity head)
-    /// and one <c>user</c> message carrying everything else, each part role-labelled inline so
-    /// attribution survives and the end-positioned format instructions stay last.
+    /// Builds the Chat Completions request body. The prompt is flattened to a strict-template-safe
+    /// shape by <see cref="ChatCompletionsProtocol.BuildMessages"/> — see there for why.
     /// </summary>
     private SimpleRequest BuildApiRequest(PromptRequest request)
     {
-        var built = BuildChatMessages(request);
-
-        // Project to anonymous objects so the serializer emits {"role":..,"content":..}
-        // (a ValueTuple would serialize as Item1/Item2).
-        var messages = built.Select(m => new { role = m.role, content = m.content }).ToArray();
-
         var body = new
         {
             model,
-            messages,
+            messages = ChatCompletionsProtocol.ToWireMessages(request),
             max_tokens = maxTokens,
             stream = false,
         };
@@ -180,70 +146,6 @@ public class OpenAiChatModelClient : IModelClient, IDisposable
         }
 
         return new SimpleRequest("/chat/completions", HttpMethod.Post, body);
-    }
-
-    /// <summary>
-    /// Collapses the prompt into a strict-template-safe shape: an optional leading system message
-    /// (only if the first segment is a system/developer one), then a single user message containing
-    /// the remaining segments concatenated with inline role labels.
-    /// </summary>
-    private static (string role, string content)[] BuildChatMessages(PromptRequest request)
-    {
-        var msgs = request.Messages;
-        var result = new List<(string role, string content)>();
-        var start = 0;
-
-        if (msgs.Count > 0 && IsSystem(msgs[0].Role))
-        {
-            result.Add(("system", msgs[0].Content));
-            start = 1;
-        }
-
-        if (start < msgs.Count)
-        {
-            var sb = new System.Text.StringBuilder();
-
-            for (var i = start; i < msgs.Count; i++)
-            {
-                if (sb.Length > 0)
-                {
-                    sb.Append("\n\n");
-                }
-
-                var label = IsSystem(msgs[i].Role) ? "system" : msgs[i].Role;
-                sb.Append($"[{label}]\n{msgs[i].Content}");
-            }
-
-            result.Add(("user", sb.ToString()));
-        }
-
-        return [.. result];
-    }
-
-    private static bool IsSystem(string role) => role is "developer" or "system";
-
-    /// <summary>
-    /// Extracts the assistant text from a Chat Completions result: <c>choices[0].message.content</c>.
-    /// </summary>
-    private static string ExtractContent(JsonElement root)
-    {
-        if (!root.TryGetProperty("choices", out var choices)
-            || choices.ValueKind != JsonValueKind.Array
-            || choices.GetArrayLength() == 0)
-        {
-            throw new InvalidOperationException("API returned no choices.");
-        }
-
-        var first = choices[0];
-
-        if (!first.TryGetProperty("message", out var message)
-            || !message.TryGetProperty("content", out var content)
-            || content.ValueKind != JsonValueKind.String)
-        {
-            throw new InvalidOperationException("API returned no message content.");
-        }
-
-        return content.GetString() ?? string.Empty;
     }
 
     /// <summary>

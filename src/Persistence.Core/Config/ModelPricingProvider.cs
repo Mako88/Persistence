@@ -49,6 +49,13 @@ public class ModelPricingProvider : IModelPricingProvider
         ["gpt-4o-mini"] = new(0.15m, 0.6m),
         ["gpt-4o"] = new(2.5m, 10m),
         ["gpt"] = new(2.5m, 10m),
+
+        // OpenRouter routes are namespaced ("z-ai/glm-5.2"), so the bare families above can never match
+        // one — each needs its own key. Read from openrouter.ai/api/v1/models on 2026-07-15, so these are
+        // real rather than estimates; only models actually verified are listed, because a wrong rate is
+        // worse than none (an unmatched model reports tokens without a dollar figure). OpenRouter also
+        // reports each call's ACTUAL cost — see OpenRouterModelClient.LastActualCostUsd.
+        ["z-ai/glm-5.2"] = new(0.2506m, 0.7876m),
     };
 
     private readonly Dictionary<string, ModelPricing> map;

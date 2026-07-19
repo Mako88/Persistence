@@ -531,6 +531,13 @@ public enum ModelProvider
     /// <c>AnthropicModelClient</c>.
     /// </summary>
     Anthropic = 4,
+
+    /// <summary>
+    /// OpenRouter (<c>openrouter.ai/api/v1</c>) — a router in front of hundreds of models from many
+    /// vendors, behind one key and one Chat Completions-shaped API. The <c>Model</c> is a namespaced
+    /// route id (e.g. <c>z-ai/glm-5.2</c>). See <c>OpenRouterModelClient</c>.
+    /// </summary>
+    OpenRouter = 5,
 }
 
 /// <summary>
