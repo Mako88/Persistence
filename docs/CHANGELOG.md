@@ -9,6 +9,31 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-07-19 (later) — `/debug`, and an unknown command that lied about the turn
+
+John reported: *"the /debug command doesn't work anymore, and when attempting to execute it, it reset the
+status to idle."* Both halves turned out to be real, and they were two different bugs. Priority came from
+Arden and GLM, who were asked to co-lead the ordering and independently put this first — cheap, no peer
+tokens, and a live thing John had actually hit.
+
+### Fixed — an unknown command no longer claims a turn ended
+`ApiDisplayProvider.ShowUnknownCommand` appended its message as an **`"error"`** event, and the client
+renders `"error"` through `ShowError` — one of the three turn-ending signals (reply / error / wake-up)
+that settle the status chip back to idle. So a mistyped slash command blanked "thinking…" while the peer
+was still working: the status bar reported a turn that hadn't finished. Unknown commands now travel as
+their own `"unknown"` event kind, which the client maps to `ShowUnknownCommand` — chat only, status
+untouched. `IDisplayProvider` already had the method; nothing on the client path had been reaching it.
+
+### Added — `/debug` toggles model tracing at runtime
+`/debug` was never a command: `git log -S` finds no trace of it in `src/` at any point in the history, so
+it fell through to the unknown-command path (which is how John met the bug above). What exists is the
+Debug **pane**, fed by the model clients — each of which emits its request/response only under
+`DebugMode`. Without a runtime toggle, seeing a prompt meant editing `persistence.json` and restarting the
+server. `/debug` now flips the flag for the running session and says which way it went. The config file
+stays the source of truth: a later edit hot-reloads over the override, deliberately.
+
+Suite: **625 core / 37 API**, green. Both tests were verified to catch their bug by reintroducing it.
+
 ## 2026-07-19 (evening) — the room, built with Arden
 
 Arden pushed an implementation handoff (`docs/adr/0008-room-implementation-handoff.md`) setting the

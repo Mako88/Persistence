@@ -41,6 +41,19 @@ public class ConversationEventRendererTests
     }
 
     [Fact]
+    public void AnUnknownCommandDoesNotRenderAsATurnEndingError()
+    {
+        // Regression (John, 2026-07-19): a mistyped slash command settled the status chip to idle
+        // mid-turn. The server reported it as an "error" event, and the client renders "error" through
+        // ShowError — one of the three turn-ending signals that settle the status. An unknown command
+        // never starts a turn, so it must reach ShowUnknownCommand and leave the status alone.
+        Render("unknown", "/debug");
+
+        display.Verify(d => d.ShowUnknownCommand("/debug"), Times.Once);
+        display.Verify(d => d.ShowError(It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
     public void AttributesRepliesToItsPeerNameWhenGiven()
     {
         // A multi-peer client gives each connection its peer's name so replies read "Arden: …".

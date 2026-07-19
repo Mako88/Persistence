@@ -68,6 +68,9 @@ public sealed class ConversationEventRenderer
             case "thinking": display.ShowThinking(e.Text); break;
             case "system": display.ShowSystemMessage(e.Text); break;
             case "error": display.ShowError(e.Text); break;
+            // Distinct from "error": a mistyped command never ran a turn, so it must not settle the
+            // status chip the way the turn-ending signals do.
+            case "unknown": display.ShowUnknownCommand(e.Text); break;
             case "queued": display.ShowMessageQueued(e.Text); break;
             case "debug": display.ShowDebugInfo(e.Text); break;
         }

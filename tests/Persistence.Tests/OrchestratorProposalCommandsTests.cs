@@ -91,6 +91,32 @@ public sealed class OrchestratorProposalCommandsTests : IAsyncLifetime
             new ProposalDraft(ProposalKind.AddFragment, "because", ProposedFragmentType: ContextFragmentType.Personal, ProposedContent: content))).Id;
 
     [Fact]
+    public async Task DebugTogglesModelTracingWithoutRunningATurn()
+    {
+        // John, 2026-07-19: "/debug doesn't work anymore." It was never a command — it fell through to
+        // the unknown-command path. The model clients only emit their request/response to the Debug pane
+        // under DebugMode, so the command that makes the pane useful is a runtime toggle.
+        Assert.False(config.DebugMode);
+
+        await SendAsync("/debug");
+
+        Assert.True(config.DebugMode);
+        Assert.Contains(systemMessages, m => m.Contains("Debug tracing ON"));
+
+        await SendAsync("/debug");
+
+        Assert.False(config.DebugMode);
+        Assert.Contains(systemMessages, m => m.Contains("Debug tracing OFF"));
+
+        // A slash command is local: it must never reach the model.
+        turnHandler.Verify(
+            t => t.ExecuteTurnAsync(It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(),
+                It.IsAny<Persistence.Data.Entities.SourceType>(), It.IsAny<string?>(), It.IsAny<int>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
     public async Task AcceptAppliesTheProposalWhenApprovalAllowsParticipant()
     {
         config.ProposalApproval = "Both";

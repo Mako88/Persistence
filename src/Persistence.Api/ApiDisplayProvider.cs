@@ -233,9 +233,15 @@ public class ApiDisplayProvider : IDisplayProvider
     public void ShowSystemMessage(string message) => Append("system", message);
 
     /// <summary>
-    /// Appends an unrecognised slash-command message to the log as an "error" event
+    /// Appends an unrecognised slash-command message as its own "unknown" event.
+    ///
+    /// <para>Deliberately <em>not</em> an "error" event: the client renders "error" through
+    /// <c>ShowError</c>, which is one of the three turn-ending signals that settle the status chip back
+    /// to idle. A mistyped slash command never starts a turn, so reporting it as an error made the
+    /// status bar claim a running turn had finished — it would blank "thinking…" while the peer was
+    /// still working. The client maps this to <c>ShowUnknownCommand</c>, which touches chat only.</para>
     /// </summary>
-    public void ShowUnknownCommand(string command) => Append("error", $"Unknown command: {command}");
+    public void ShowUnknownCommand(string command) => Append("unknown", command);
 
     /// <summary>
     /// Appends a notification that a message has been queued for the next iteration as a "queued" event

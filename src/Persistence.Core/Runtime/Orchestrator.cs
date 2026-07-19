@@ -434,6 +434,10 @@ public class Orchestrator : IOrchestrator
                 display.Stop();
                 break;
 
+            case "/debug":
+                ToggleDebugMode();
+                break;
+
             case "/proposals":
                 await ShowProposalsAsync();
                 break;
@@ -462,6 +466,7 @@ public class Orchestrator : IOrchestrator
         """
         Local commands:
           /help                    Show this help
+          /debug                   Toggle the debug pane's model request/response tracing
           /proposals               List the peer's open proposals
           /accept <id>             Accept a proposal (applies its change)
           /reject <id> [reason]    Reject a proposal
@@ -469,6 +474,23 @@ public class Orchestrator : IOrchestrator
 
         Anything else you type is sent to your peer as a message.
         """);
+
+    /// <summary>
+    /// Turns the debug pane's model tracing on or off for the running session. The pane is fed by the
+    /// model clients, each of which only emits its request/response under <see cref="IAppConfig.DebugMode"/> —
+    /// so without a runtime toggle, seeing a prompt meant editing the config and restarting the server.
+    ///
+    /// <para>The flag lives on the in-memory config, so a later edit to <c>persistence.json</c> reloads
+    /// it back to the file's value (<c>ReloadIfChanged</c> runs at turn start). That's deliberate: the
+    /// file stays the source of truth, and this is a session-scoped override.</para>
+    /// </summary>
+    private void ToggleDebugMode()
+    {
+        config.DebugMode = !config.DebugMode;
+        display.ShowSystemMessage(config.DebugMode
+            ? "Debug tracing ON — model requests and responses will appear in the Debug pane."
+            : "Debug tracing OFF.");
+    }
 
     /// <summary>
     /// Lists the peer's open proposals for the local peer, with the slash commands to act on each.

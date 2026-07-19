@@ -468,5 +468,8 @@ datetime-interleaved history, blanked tabs, send-routing). See [CHANGELOG.md](CH
   interleaving lands.
 
 
-Additional notes from John:
-The /debug command doesn't work anymore, and when attempting to execute it, it reset the status to idle
+- ✅ **`/debug` — FIXED (2026-07-19).** John's report was two bugs. `/debug` had never been a command at
+  all (only the Debug *pane* existed), so it hit the unknown-command path — and that path emitted an
+  `"error"` event, which the client renders as a turn-*ending* signal, settling the status chip to idle
+  mid-turn. Unknown commands now have their own event kind, and `/debug` toggles `DebugMode` at runtime.
+  See [CHANGELOG.md](CHANGELOG.md).
