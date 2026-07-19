@@ -343,6 +343,7 @@ public partial class PromptFormatter : IPromptFormatter
         if (config.HubPeers is { Count: > 1 })
         {
             sb.AppendLine(config.Room.Describe(sessionContext.CurrentRelayDepth));
+            sb.AppendLine(config.Room.DescribeTurnTaking(PeerIdentity.ResolveName(config)));
         }
 
         if (lastFormatUtc.HasValue)

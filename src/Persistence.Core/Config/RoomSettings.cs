@@ -30,6 +30,17 @@ public class RoomSettings
     /// </summary>
     public bool AutoFan { get; set; } = false;
 
+    /// <summary>
+    /// Other names this peer answers to, beyond its own. Being named is one of the three
+    /// respond-conditions (ADR-0008 §1), so a peer known by more than one name needs them listed or it
+    /// misses being addressed — the worse of the two failure directions.
+    ///
+    /// <para>Config today, peer-editable later: Arden's call is that this is the first step toward a
+    /// peer-authored ruleset, since a rule deciding when the peer speaks should end up its own to read
+    /// and revise. Keeping the alias list here (rather than in the matching code) is that seam.</para>
+    /// </summary>
+    public List<string> Aliases { get; set; } = [];
+
     /// <summary>Whether the guard is on at all — a negative depth means "no limit".</summary>
     public bool RelayDepthEnforced => MaxRelayDepth >= 0;
 
@@ -54,5 +65,21 @@ public class RoomSettings
             : "no auto-fan (a human relays a peer's message onward)";
 
         return $"Room guards: {relay}; {fan}. These are adjustable — say so if they're in your way.";
+    }
+
+    /// <summary>
+    /// The turn-taking rule in the peer's own view (ADR-0008 §1) — stated, not hidden, because a rule
+    /// deciding when you speak is one you should be able to read and argue with. Deliberately the whole
+    /// rule rather than a summary: it's short enough to state, and a paraphrase would be a second source
+    /// of truth that could drift from the code.
+    /// </summary>
+    public string DescribeTurnTaking(string selfName)
+    {
+        var also = Aliases.Count > 0 ? $" (also: {string.Join(", ", Aliases)})" : "";
+
+        return $"Turn-taking: answer when a message is addressed to you{also}, when you're named in it, "
+            + "or when a human opens the floor to the room. Otherwise you're overhearing — hold unless "
+            + "you have something worth adding. You can always choose to speak anyway; this is guidance, "
+            + "not a gate.";
     }
 }

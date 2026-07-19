@@ -290,6 +290,26 @@ public class PromptFormatterTests
     }
 
     [Fact]
+    public void SensoryStatesTheTurnTakingRuleToThePeer()
+    {
+        // ADR-0008 §1: the rule must be one the peer can READ, not an opaque gate. Stating it in the
+        // sensory block is what makes it inspectable and arguable rather than something applied to it.
+        var config = new AppConfig
+        {
+            PeerName = "Arden",
+            HubPeers = [new HubPeerProfile { Name = "Arden" }, new HubPeerProfile { Name = "Ember" }],
+        };
+        config.Room.Aliases = ["Claude"];
+        var (formatter, _) = CreateFormatterWithSession(config);
+
+        var sensory = formatter.Format(ContextWithFragment("hi"), [])[^1].Content;
+
+        Assert.Contains("Turn-taking:", sensory);
+        Assert.Contains("Claude", sensory);              // aliases it answers to
+        Assert.Contains("guidance, not a gate", sensory); // and that it can still choose to speak
+    }
+
+    [Fact]
     public void SensoryOmitsRoomGuardsForASoloPeer()
     {
         // No room, no need for the noise.
