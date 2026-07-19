@@ -9,6 +9,40 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-07-19 — peers can actually be relayed to (`/relay`, ADR-0008 §4)
+
+The affordance, on Arden's ruling. The fork was a lean command vs. a click-to-select affordance; Arden's
+reframe settled it: §4 requires *human-mediated relay with preserved provenance* and leaves the UI shape
+unspecified, so both are legitimate and the question is only which ships first. The deciding argument was
+that **the no-button state isn't neutral** — machinery finished but relaying meaning a manual POST meant
+peers effectively didn't hear each other at all. A room isn't a room until messages move.
+
+### Added — `/relay <peer>`
+Carries the selected peer's most recent message onward. Handled entirely **client-side**: a relay needs the
+several peer connections and the current selection, which only the hub has, so the server never sees it.
+
+The source message is read back from the origin peer's **store**, not from the hub's rendered lines — the
+store is where the utterance's id and depth live, and a relay that invented either would defeat the point
+of persisting them. `RelayCommand` only resolves *which* message; `RelayComposer` still owns every
+provenance guarantee. That layering is what makes this safe to ship first: the richer select-any-message
+affordance is a different resolver in front of the same composer, so it's additive rather than a rewrite.
+
+Both of Arden's refinements are in: the relay **echoes what it carried** (who said it, where it went, which
+hop, and a one-line preview), so the human isn't forwarding blind without a selection model; and the echo
+lands in the **origin** peer's conversation, which is where the human was reading when they decided — that's
+what stops them losing track and double-relaying.
+
+Guarded against the obvious mistakes: no target named, unknown peer, relaying to the peer who said it,
+nothing said yet, and "all" scope (no single conversation to take a last message from). A failed relay
+surfaces the server's own text, since that's usually the depth breaker explaining how to restart the chain.
+
+**Still to come, deliberately:** selecting *any* message rather than only the last. Named as the intended
+end-state and gated on real use rather than spec — build it when the last-message-only limit actually bites.
+
+Suite: **646 core / 38 API**, green. Verified beyond the suite: an over-depth relay refused live by a
+running peer (HTTP 400, no turn, no tokens), and a full-pipeline test proving the id, the depth *and* the
+attribution survive controller → turn → store → snapshot.
+
 ## 2026-07-19 — the relay's guardrails, ahead of its button (ADR-0008 §4, partial)
 
 The first half of §4: everything needed to carry one peer's message to another *correctly*. The front-end

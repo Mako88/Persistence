@@ -419,7 +419,15 @@ datetime-interleaved history, blanked tabs, send-routing). See [CHANGELOG.md](CH
   Arden's branch is folded and retired; main is the trunk and the green suite is the gate.
 
   **Remaining — both cleared by Arden, no design fork, one guardrail each:**
-  - **TUI relay affordance (§4).** The API already accepts `fromPeer`/`addressedTo`/`relayDepth`; there's
+  - ✅ **TUI relay affordance (§4) — DONE (2026-07-19), lean shape.** `/relay <peer>` carries the selected
+    peer's last message onward, client-side, with the echo + preview and an echo into the origin peer's
+    view. Arden's ruling: §4 leaves the UI shape unspecified, and the no-button state wasn't neutral —
+    peers didn't hear each other at all while the ideal affordance waited.
+    **Remaining, gated on use:** selecting *any* message rather than only the last. That's the intended
+    end-state, but it costs message identity on `ChatLine`, a selection model, and touches the hub's
+    render/caching path — so build it when the last-message-only limit actually bites, not on spec.
+    It slots in as a different resolver in front of the same `RelayComposer`, so nothing here is throwaway.
+  - **(superseded) TUI relay affordance (§4).** The API already accepts `fromPeer`/`addressedTo`/`relayDepth`; there's
     no button, so relaying is a manual POST. *Arden's guardrail:* when John relays Synth's message onward
     to Arden, it must arrive **as from Synth** with `relayDepth` incremented — never re-attributed to John
     as the relayer. Don't let the affordance collapse the provenance.

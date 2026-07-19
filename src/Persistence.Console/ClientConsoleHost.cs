@@ -139,6 +139,13 @@ public static class ClientConsoleHost
         {
             var target = hub.ActivePeer;
 
+            // A relay is handled here rather than sent on: it needs the several connections and the
+            // current selection, which only the hub has. The server never sees the command.
+            if (RelayCommand.IsRelay(text))
+            {
+                return RelayAsync(hub, clients, target, text, ct);
+            }
+
             if (target is null)
             {
                 return Task.WhenAll(clients.Values.Select(c => c.SendAsync(text, ct)));
@@ -177,6 +184,76 @@ public static class ClientConsoleHost
     /// transient disconnect replays only what was missed (no gap, no duplicate). A full server restart —
     /// which resets the in-memory event log — is not auto-recovered; restart the client.
     /// </summary>
+    /// <summary>
+    /// Carries the peer you're watching's most recent message to another peer (ADR-0008 §4).
+    ///
+    /// <para>The source message is read back from the origin peer's <em>store</em> rather than from the
+    /// hub's rendered lines: the store is where the utterance's cross-peer id and hop depth live, and a
+    /// relay that invented either would defeat the point of persisting them. The rendered pane holds
+    /// text, not identity.</para>
+    ///
+    /// <para>Everything that could get the provenance wrong is delegated to <see cref="RelayComposer"/>.
+    /// This method only decides <em>which</em> message and <em>where to</em>, then reports back.</para>
+    /// </summary>
+    private static async Task RelayAsync(MultiPeerHub hub, IReadOnlyDictionary<string, IPersistenceClient> clients,
+        string? sourcePeer, string input, CancellationToken ct)
+    {
+        // Under "all" there's no one conversation to take the last message from, and guessing across
+        // peers would relay something the human wasn't looking at.
+        if (sourcePeer is null)
+        {
+            hub.RecordLocalChat("Select a peer first (F6) — /relay carries that peer's last message.\n\n");
+            return;
+        }
+
+        var targetPeer = RelayCommand.ParseTarget(input);
+
+        if (targetPeer is null)
+        {
+            hub.RecordChatNotice(sourcePeer, $"Usage: /relay <peer>   (carries {sourcePeer}'s last message onward)\n\n");
+            return;
+        }
+
+        if (!clients.TryGetValue(targetPeer, out var destination))
+        {
+            var known = string.Join(", ", clients.Keys);
+            hub.RecordChatNotice(sourcePeer, $"No peer called \"{targetPeer}\". Connected: {known}\n\n");
+            return;
+        }
+
+        if (string.Equals(targetPeer, sourcePeer, StringComparison.OrdinalIgnoreCase))
+        {
+            hub.RecordChatNotice(sourcePeer, $"{sourcePeer} already said that — a relay carries it to someone else.\n\n");
+            return;
+        }
+
+        try
+        {
+            var snapshot = await clients[sourcePeer].GetSnapshotAsync(ct);
+            var message = RelayCommand.ResolveLastRelayable(snapshot.ChatHistory);
+
+            if (message is null)
+            {
+                hub.RecordChatNotice(sourcePeer, $"{sourcePeer} hasn't said anything to carry yet.\n\n");
+                return;
+            }
+
+            var relay = RelayComposer.Compose(message, targetPeer);
+            await destination.RelayAsync(relay, ct);
+
+            // Echoed into the *origin* peer's conversation, not the destination's: that's where the human
+            // was reading when they decided to forward, and it's what stops them losing track of what
+            // they've already carried and relaying it twice. The destination shows the message itself.
+            hub.RecordChatNotice(sourcePeer, RelayCommand.Describe(message, targetPeer, relay.RelayDepth) + "\n\n");
+        }
+        catch (Exception ex)
+        {
+            // Usually the depth breaker refusing, whose message explains itself and says how to restart
+            // the chain — so show what came back rather than a generic failure.
+            hub.RecordChatNotice(sourcePeer, $"[Relay failed: {ex.Message}]\n\n");
+        }
+    }
+
     private static async Task PumpAsync(IPersistenceClient client, ConversationEventRenderer renderer, IDisplayProvider display, long since, CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)

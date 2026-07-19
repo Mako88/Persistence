@@ -91,6 +91,26 @@ public sealed class ApiTestFixture : WebApplicationFactory<Program>
     }
 
     /// <summary>
+    /// As <see cref="DriveTurnAsync"/>, but the input arrives <em>relayed from another peer</em> — the
+    /// room's send shape (ADR-0008 §4), carrying the original speaker, the utterance's cross-peer id and
+    /// its hop depth. Lets a test drive the relay path end-to-end without reaching into the private
+    /// stepping helpers.
+    /// </summary>
+    public async Task DriveRelayedTurnAsync(string input, string peerResponse,
+        string fromPeer, string? addressedTo, string messageId, int relayDepth)
+    {
+        var client = CreateClient();
+        await EnsureReadyAsync(client);
+
+        var since = await LatestSeqAsync(client);
+        await client.PostAsJsonAsync("/api/conversation/send",
+            new { input, fromPeer, addressedTo, messageId, relayDepth });
+        var pending = await WaitForPendingAsync(client);
+        await client.PostAsJsonAsync("/api/peer/respond", new { id = pending!.Id, response = peerResponse });
+        await WaitForTurnAsync(client, since);
+    }
+
+    /// <summary>
     /// Runs a full turn with an <c>X-Local-Peer</c> header identifying who's speaking, and returns the
     /// prompt the remote peer saw (so a test can assert the peer was announced). Completes the turn so
     /// the shared fixture is left clean.
