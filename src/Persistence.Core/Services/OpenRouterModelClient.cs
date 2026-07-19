@@ -117,8 +117,8 @@ public class OpenRouterModelClient : IModelClient, IDisposable
         using var doc = JsonDocument.Parse(response.StringBody);
         var responseMessage = ChatCompletionsProtocol.ExtractContent(doc.RootElement);
 
-        LastUsage = ChatCompletionsProtocol.ReadUsage(doc.RootElement);
         LastActualCostUsd = ReadActualCost(doc.RootElement);
+        LastUsage = ChatCompletionsProtocol.ReadUsage(doc.RootElement) is { } u ? u with { ActualCostUsd = LastActualCostUsd } : null;
 
         if (config.DebugMode)
         {

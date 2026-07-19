@@ -47,6 +47,13 @@ public interface ITokenUsageTracker
     /// <summary>How many model calls have been accounted for this session.</summary>
     int CallCount { get; }
 
+    /// <summary>
+    /// Cumulative actual cost in USD reported by the provider (e.g. OpenRouter's <c>usage.cost</c>),
+    /// or null when no provider has reported one. When non-null, the session-cost readout and ceiling
+    /// use this figure directly instead of the token-based estimate.
+    /// </summary>
+    decimal? TotalActualCostUsd { get; }
+
     /// <summary>Adds one completed call's real token usage (input/output + cache portions) to the session totals.</summary>
     void AddUsage(ModelUsage usage);
 }

@@ -26,6 +26,7 @@ public partial class PromptFormatter : IPromptFormatter
     private readonly IContextWindowProvider contextWindows;
     private readonly IModelPricingProvider pricing;
     private readonly IEventBus eventBus;
+    private readonly ISessionCostEstimator costEstimator;
 
     private DateTimeOffset? lastFormatUtc;
 
@@ -53,7 +54,8 @@ public partial class PromptFormatter : IPromptFormatter
         ITokenUsageTracker usageTracker,
         IContextWindowProvider contextWindows,
         IModelPricingProvider pricing,
-        IEventBus eventBus)
+        IEventBus eventBus,
+        ISessionCostEstimator costEstimator)
     {
         this.sessionContext = sessionContext;
         this.config = config;
@@ -63,6 +65,7 @@ public partial class PromptFormatter : IPromptFormatter
         this.contextWindows = contextWindows;
         this.pricing = pricing;
         this.eventBus = eventBus;
+        this.costEstimator = costEstimator;
     }
 
     /// <summary>
@@ -685,18 +688,6 @@ public partial class PromptFormatter : IPromptFormatter
     /// first model call, or when there's nothing to show. Fires <see cref="SessionCostUpdated"/> for any
     /// UI. Cost knowledge is entirely in <see cref="IModelPricingProvider"/> — this method is model-agnostic.
     /// </summary>
-    /// <summary>
-    /// Prompt-cache pricing relative to base input price, by provider — the two families cache
-    /// differently: Anthropic charges cache READS at ~10% of input and cache WRITES at ~125% (a one-time
-    /// premium to populate the cache), while OpenAI auto-caches long prefixes with reads at ~50% and no
-    /// separate cache-creation charge. Using Anthropic's 10% for an OpenAI read would badly under-count.
-    /// </summary>
-    private (decimal Read, decimal Write) CacheMultipliers() =>
-        Enum.TryParse<ModelProvider>(config.Provider, ignoreCase: true, out var p)
-            && p is ModelProvider.OpenAI or ModelProvider.OpenAiChat
-            ? (0.5m, 1.0m)
-            : (0.1m, 1.25m);
-
     private string FormatSessionCost()
     {
         var input = usageTracker.TotalInputTokens;
@@ -715,17 +706,16 @@ public partial class PromptFormatter : IPromptFormatter
         var processedInput = input + cacheRead + cacheCreate;
         var cached = cacheRead > 0 ? $" ({cacheRead:N0} cached)" : "";
         var usage = $"{processedInput:N0} in{cached} + {output:N0} out tokens · {calls} call{(calls == 1 ? "" : "s")}";
-        var rate = pricing.GetPricing(config.Model);
 
-        if (rate is { } r)
+        // The estimator prefers the provider's actual reported cost (e.g. OpenRouter's usage.cost)
+        // when available, falling back to an estimate from token counts × the model's price.
+        var cost = costEstimator.CurrentCost();
+
+        if (cost is { } c)
         {
-            var (cacheReadMult, cacheWriteMult) = CacheMultipliers();
-            var cost = (input * r.InputPerMillion
-                        + cacheRead * r.InputPerMillion * cacheReadMult
-                        + cacheCreate * r.InputPerMillion * cacheWriteMult
-                        + output * r.OutputPerMillion) / 1_000_000m;
-            eventBus.FireAndForget(this, new SessionCostUpdated(cost, processedInput, output, calls));
-            return $"Session cost (est.): ~{FormatUsd(cost)} · {usage}{CostCeiling(cost)}";
+            var label = costEstimator.IsActual ? "(actual)" : "(est.)";
+            eventBus.FireAndForget(this, new SessionCostUpdated(c, processedInput, output, calls, costEstimator.IsActual));
+            return $"Session cost {label}: ~{FormatUsd(c)} · {usage}{CostCeiling(c)}";
         }
 
         eventBus.FireAndForget(this, new SessionCostUpdated(null, processedInput, output, calls));

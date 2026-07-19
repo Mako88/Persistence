@@ -34,9 +34,11 @@ public class PromptFormatterTests
         // Default: no pricing (cost line shows tokens only / is omitted before any call).
         var pricingProvider = pricing ?? new Mock<IModelPricingProvider>().Object;
 
+        var actualTracker = tracker ?? new TokenUsageTracker();
         return new PromptFormatter(
-            session.Object, config, protocol.Object, catalog.Object, tracker ?? new TokenUsageTracker(),
-            windows.Object, pricingProvider, new Mock<IEventBus>().Object);
+            session.Object, config, protocol.Object, catalog.Object, actualTracker,
+            windows.Object, pricingProvider, new Mock<IEventBus>().Object,
+            new SessionCostEstimator(actualTracker, pricingProvider, config));
     }
 
     private static WorkingContextEntity ContextWithFragment(string content)
@@ -143,9 +145,12 @@ public class PromptFormatterTests
         var windows = new Mock<IContextWindowProvider>();
         windows.Setup(w => w.GetContextWindow(It.IsAny<string>())).Returns(200000);
 
+        var sessionTracker = new TokenUsageTracker();
+        var sessionPricing = new Mock<IModelPricingProvider>().Object;
         var formatter = new PromptFormatter(session, config, protocol.Object, catalog.Object,
-            new TokenUsageTracker(), windows.Object, new Mock<IModelPricingProvider>().Object,
-            new Mock<IEventBus>().Object);
+            sessionTracker, windows.Object, sessionPricing,
+            new Mock<IEventBus>().Object,
+            new SessionCostEstimator(sessionTracker, sessionPricing, config));
         return (formatter, session);
     }
 

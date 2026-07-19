@@ -7,10 +7,13 @@ namespace Persistence.Services;
 /// in each <see cref="IModelClient"/>; consumers read it uniformly via <see cref="IModelClient.LastUsage"/>.
 /// <see cref="InputTokens"/> is the uncached (full-price) input; the cache fields are the prompt-cache
 /// portions (read = billed cheap, creation = billed at a write premium) and are 0 for providers without
-/// caching.
+/// caching. <see cref="ActualCostUsd"/> carries the provider-reported real dollar cost when available
+/// (e.g. OpenRouter's <c>usage.cost</c>), and is null for providers that don't report one — in which
+/// case the session-cost readout falls back to an estimate from token counts × the pricing table.
 /// </summary>
 public readonly record struct ModelUsage(
-    int InputTokens, int OutputTokens, int CacheReadTokens = 0, int CacheCreationTokens = 0);
+    int InputTokens, int OutputTokens, int CacheReadTokens = 0, int CacheCreationTokens = 0,
+    decimal? ActualCostUsd = null);
 
 /// <summary>
 /// Sends a structured prompt to the model provider and returns the raw completion text

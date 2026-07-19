@@ -55,12 +55,17 @@ public class TokenUsageTracker : ITokenUsageTracker
     public int CallCount { get; private set; }
 
     /// <inheritdoc />
+    public decimal? TotalActualCostUsd { get; private set; }
+
+    /// <inheritdoc />
     public void AddUsage(ModelUsage usage)
     {
         TotalInputTokens += Math.Max(0, usage.InputTokens);
         TotalOutputTokens += Math.Max(0, usage.OutputTokens);
         TotalCacheReadTokens += Math.Max(0, usage.CacheReadTokens);
         TotalCacheCreationTokens += Math.Max(0, usage.CacheCreationTokens);
+        if (usage.ActualCostUsd is { } actual)
+            TotalActualCostUsd = (TotalActualCostUsd ?? 0m) + actual;
         CallCount++;
     }
 }
