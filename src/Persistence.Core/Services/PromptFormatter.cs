@@ -313,6 +313,15 @@ public class PromptFormatter : IPromptFormatter
             sb.AppendLine(cost);
         }
 
+        // The room's guards, stated plainly. ADR-0008's Framing section requires these be visible to the
+        // peer they constrain rather than enforced silently: they're training wheels to be loosened by
+        // negotiation as trust builds, and a limit you can't see is one you can only discover by hitting
+        // it. Shown only once there's actually a room to be in — a solo peer doesn't need the noise.
+        if (config.HubPeers is { Count: > 1 })
+        {
+            sb.AppendLine(config.Room.Describe());
+        }
+
         if (lastFormatUtc.HasValue)
         {
             var elapsed = now - lastFormatUtc.Value;

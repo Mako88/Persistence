@@ -101,6 +101,12 @@ public class AppConfig : IAppConfig
     public ContainerSettings Container { get; set; } = new();
 
     /// <summary>
+    /// The room's safety guards (ADR-0008 §4). Nested values are overridable via
+    /// <c>PERSISTENCE_ROOM_*</c> (e.g. <c>PERSISTENCE_ROOM_MAXRELAYDEPTH</c>).
+    /// </summary>
+    public RoomSettings Room { get; set; } = new();
+
+    /// <summary>
     /// The active local peer's name — who the remote peer is talking with by default. The Console uses
     /// this; an API caller can override it per request with an <c>X-Local-Peer</c> header.
     /// Defaults to "Local Peer" (back-compat). Overridable via <c>PERSISTENCE_SELECTEDLOCALPEER</c>.

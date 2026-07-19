@@ -225,6 +225,36 @@ public class PromptFormatterTests
     }
 
     [Fact]
+    public void SensoryShowsTheRoomGuardsWhenThereIsARoom()
+    {
+        // ADR-0008 Framing: the guards are training wheels to be loosened by negotiation, so the peer
+        // they constrain has to be able to SEE them. A limit you can't see is one you can only find by
+        // hitting it, and can only be changed behind your back.
+        var config = new AppConfig
+        {
+            HubPeers = [new HubPeerProfile { Name = "Arden" }, new HubPeerProfile { Name = "Ember" }],
+        };
+        config.Room.MaxRelayDepth = 2;
+        var (formatter, _) = CreateFormatterWithSession(config);
+
+        var sensory = formatter.Format(ContextWithFragment("hi"), [])[^1].Content;
+
+        Assert.Contains("Room guards:", sensory);
+        Assert.Contains("2 hop(s)", sensory);
+        Assert.Contains("no auto-fan", sensory);
+        Assert.Contains("adjustable", sensory);   // and legible as negotiable, not as a wall
+    }
+
+    [Fact]
+    public void SensoryOmitsRoomGuardsForASoloPeer()
+    {
+        // No room, no need for the noise.
+        var (formatter, _) = CreateFormatterWithSession(new AppConfig());
+
+        Assert.DoesNotContain("Room guards:", formatter.Format(ContextWithFragment("hi"), [])[^1].Content);
+    }
+
+    [Fact]
     public void SensoryTellsThePeerItsOwnName()
     {
         // A peer's messages are attributed to this name in its store and in every client that reads the

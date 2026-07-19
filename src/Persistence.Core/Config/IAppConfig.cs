@@ -144,6 +144,12 @@ public interface IAppConfig
     ContainerSettings Container { get; set; }
 
     /// <summary>
+    /// The room's safety guards (ADR-0008 §4) — settings rather than constants, and shown to the peer,
+    /// because the ADR requires they be loosened by negotiation rather than changed behind its back.
+    /// </summary>
+    RoomSettings Room { get; set; }
+
+    /// <summary>
     /// The active local peer's name (default; an <c>X-Local-Peer</c> header overrides it per API request).
     /// </summary>
     string SelectedLocalPeer { get; set; }

@@ -40,26 +40,21 @@ public class ConversationController : ControllerBase
 {
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
 
-    /// <summary>
-    /// How many peer-to-peer hops a message may take before a human has to speak again (ADR-0008 §4
-    /// starts at 2). Deliberately small and deliberately a constant for now: it's a training wheel, and
-    /// the ADR is explicit that these guards should be loosened by negotiation with the peers rather
-    /// than quietly raised — so making it configurable is a conversation, not a default.
-    /// </summary>
-    private const int MaxRelayDepth = 2;
-
     private readonly IEventBus eventBus;
     private readonly ApiDisplayProvider display;
     private readonly Persistence.Services.IConversationHistoryProvider history;
+    private readonly Persistence.Config.IAppConfig config;
 
     /// <summary>
     /// Constructor
     /// </summary>
-    public ConversationController(IEventBus eventBus, ApiDisplayProvider display, Persistence.Services.IConversationHistoryProvider history)
+    public ConversationController(IEventBus eventBus, ApiDisplayProvider display,
+        Persistence.Services.IConversationHistoryProvider history, Persistence.Config.IAppConfig config)
     {
         this.eventBus = eventBus;
         this.display = display;
         this.history = history;
+        this.config = config;
     }
 
     /// <summary>
@@ -88,11 +83,13 @@ public class ConversationController : ControllerBase
         // The circuit breaker: a chain of peers answering each other, with no human turn in between,
         // stops here rather than running until something else notices. Not a lock — a human message
         // resets the depth, so the conversation can always be restarted.
-        if (senderType == SourceType.DigitalPeer && request.RelayDepth > MaxRelayDepth)
+        var room = config.Room;
+
+        if (senderType == SourceType.DigitalPeer && room.RelayDepthEnforced && request.RelayDepth > room.MaxRelayDepth)
         {
             return BadRequest(
                 $"Relay refused: this message has already passed through {request.RelayDepth} peer-to-peer hops "
-                + $"without a human speaking (limit {MaxRelayDepth}). Say something yourself to restart the chain.");
+                + $"without a human speaking (limit {room.MaxRelayDepth}). Say something yourself to restart the chain.");
         }
 
         // Report a turn that fails outright. The turn runs detached, so without an error callback
