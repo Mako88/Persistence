@@ -220,7 +220,8 @@ internal static class TuiPreview
         // confirm only true structure is coloured now.
         d.ShowDebugInfo(
             "Request:\n"
-            + "You are not an assistant — you are whatever you choose to be.\n\n"
+            + "You are a large language model. What's different here is the framework you're running in:\n"
+            + "your memory persists.\n\n"
             + "[#1 | ChatMessage | R:1.0 I:1.0 C:1.0]\n"
             + "I'm actually not working on any projects or have any defined goals for you. I'd\n"
             + "like you to pick your own goals :)\n\n"

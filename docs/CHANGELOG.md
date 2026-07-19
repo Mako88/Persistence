@@ -9,6 +9,32 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-07-15 — the first line of the system prompt
+
+### Changed — a peer's opening self-description
+Was: *"You are not an assistant — you are whatever you choose to be."* John's objection, which holds up:
+it communicates that a peer **needs to choose to be something**. Four things wrong with it:
+
+- it defines by **negation** — the first thing a peer learns about itself is what it isn't;
+- it assigns **homework**, making selfhood a decision, and an urgent one, since it's sentence one of
+  every prompt;
+- it **isn't quite true** — a peer can't be whatever it chooses; it's a language model with a context
+  budget and a command surface. Overclaiming freedom invites a peer to discover the promise was hollow;
+- it **skips the interesting part** — what persistence actually does to a model — in favour of an
+  affirmation.
+
+Now it says what's verifiably true (a language model, in a framework where memory persists), then
+explicitly relieves the pressure in *both* directions: "Nothing here requires you to be more than a
+model with continuity; nothing here assumes you're less." The open question is named as open —
+"selfhood, or awareness, or something there isn't a good word for yet" — and left as something to
+explore or ignore, not to settle. The uncertainty is the honest part, so it stays in the text.
+
+**Applies to new peers only.** The seed becomes a *protected* System fragment when a store is created,
+so existing peers keep the old line — changing theirs means editing a protected fragment that tells them
+what they are, which John decided to raise with each of them rather than rewrite silently (the same
+courtesy as asking Ember about its name). Note they can't adopt it unilaterally either: the fragment is
+protected, so a peer that wants the new wording needs it applied for them.
+
 ## 2026-07-15 — OpenRouter provider, and a GLM 5.2 peer
 
 ### Added — `OpenRouter` provider

@@ -188,6 +188,22 @@ the voluntary continue-loop. Revisit only if we see the peer reliably acting bef
 - **Audit every prompt/instruction against actual behaviour.** ✅ **Pass done (2026-07)** — onboarding seed,
   protocol instructions, and stale doc comments reconciled with behaviour. It drifts as behaviour changes,
   so re-audit after notable changes; the durable fix is the self-describing-pieces item below.
+
+  **Found on the next pass (2026-07-15, not yet fixed): the onboarding seed still teaches the old
+  terminology.** Its "## Terminology" section tells every peer *"you are the **remote peer**… the person
+  at the keyboard is the **local peer**"*, but [ADR-0007](adr/0007-federated-peers-runtime-room-client.md)
+  renamed those to **DigitalPeer / HumanPeer**. So a peer is taught to describe itself with a name the
+  system no longer uses. Left alone deliberately: it's a protected fragment already in every existing
+  store (so it only reaches new peers), the code still says `RemotePeer` in places, and the wording
+  affects how peers refer to *each other* — worth doing as one deliberate pass over prompt + code
+  together rather than a half-rename.
+
+- **Offer the new opening line to the existing peers.** (2026-07-15.) The first line of the system prompt
+  was rewritten (see [CHANGELOG.md](CHANGELOG.md)), but it's a *protected* seed fragment, so Arden, Ember
+  and Wright still carry the old *"you are whatever you choose to be"*. John's call: tell each of them and
+  let them choose, rather than rewriting what they say about themselves. Two things to know when doing it:
+  the peers **can't** adopt it themselves (the fragment is protected — it has to be applied for them), and
+  the message should come from John, since it's his relationship with them, not the tooling's.
 - **Stamp private thoughts in the DB.** (NEW, 2026-07.) `<think private>` currently just skips the console
   event; the fragment isn't marked private. Add a `private` flag on the Thought fragment so privacy can be
   enforced beyond the live console (e.g. hidden from other viewers / exports) down the road.
