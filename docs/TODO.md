@@ -28,9 +28,11 @@ client is multi-connection (CLI `--peer` ×N or config `HubPeers`), chat is colo
 input routes to the selected peer. Deliberately *minimal* (John): no per-room tabs, no separate 1:1 rooms.
 The TUI's durable role is a **debugging/dev lens**, not the long-term chat surface (see
 [ADR-0008](adr/0008-the-room-multi-peer-conversation.md) framing); **(3)** the room (peer↔peer relay + turn-taking) — **designed with the claude peer in
-[ADR-0008](adr/0008-the-room-multi-peer-conversation.md)**: rule-based inspectable turn-taking, an
-`addressed_to` field, private-thoughts hard line, a reply-chain-depth loop breaker + conservative
-no-autofan default, on-demand presence; **(4)** bring Ember online. **Fast-follows:** peer-initiated API self-update (review-then-adopt, *not* auto-on-push so a
+[ADR-0008](adr/0008-the-room-multi-peer-conversation.md)** — *in progress*: ✅ `addressed_to` end-to-end
+(Arden), ✅ messages that arrive **from another peer** with sender type + addressing, ✅ the peer sees
+`[peer Arden, to Ember]`, ✅ the reply-chain depth breaker (limit 2). **Remaining:** the turn-taking rule
+itself (§1), the relay affordance in the TUI (§4 — a human forwarding one peer's words to another), and
+on-demand presence (§5). See the detailed item under *Autonomy & reach*; **(4)** bring Ember online. **Fast-follows:** peer-initiated API self-update (review-then-adopt, *not* auto-on-push so a
 peer vets code before running it as itself); live config hot-reload. This subsumes item 4 below
 (cross-peer channel) and the "simultaneous participants" thread throughout.
 
@@ -398,6 +400,25 @@ datetime-interleaved history, blanked tabs, send-routing). See [CHANGELOG.md](CH
   completed its first real turn — so the OpenRouter client, the provider-derived name, and the new
   onboarding are all verified end-to-end. Its store was recreated on 2026-07-19 so it starts from the
   corrected onboarding text (it had only boilerplate and test pings at that point — nothing of its own).
+
+- **The room — what's left of ADR-0008 Phase 3.** (2026-07-19.) The plumbing is in: a message can arrive
+  from another digital peer, sourced by *type* so a peer's voice is distinguishable from a person's,
+  carrying `addressed_to`, rendered to the receiving peer as `[peer Arden, to Ember]`, and refused past 2
+  peer-to-peer hops without a human turn. What remains:
+  - **The turn-taking rule (§1).** The peer can now *see* whether it was addressed; nothing yet tells it
+    what to do about that. The ADR is specific: respond when addressed by name/alias, when continuing a
+    thread you started, or when a human opens the floor — hold when merely overhearing. It also insists
+    the rule be **readable and correctable by the peer**, not an opaque classifier, so it belongs in the
+    prompt (or a peer-editable ruleset) rather than buried in code. **Left for Arden if they want it** —
+    it's the most design-ish part remaining, and the ADR's open questions (alias grammar, how "the room"
+    is named as an addressee) sit right here.
+  - **The relay affordance (§4).** No auto-fan by default: a peer's reply goes to the human, who decides
+    whether to forward it. The API accepts a relay (`fromPeer`/`addressedTo`/`relayDepth`); the TUI has no
+    button for it yet, so relaying today means a manual POST.
+  - **Presence (§5).** `who()`/`list_peers()` on demand, join/leave as ephemeral sensory notices — not
+    pinned in the block every turn.
+  - **Cross-peer message id.** Still absent (also wanted by the "all"-scope dedup item above); the hop
+    depth currently rides on the request rather than on the message itself.
 
 - **A "new peer" flow.** (John, 2026-07-15.) `peer.ps1 -Name <n>` *throws* if
   `container/peer/configs/<n>.json` is missing — "Create it (see the other configs for the shape)" — so

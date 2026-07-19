@@ -209,6 +209,21 @@ public class PromptFormatterTests
             CreatedUtc = createdUtc, LastModifiedUtc = createdUtc,
         });
 
+    [Theory]
+    [InlineData("Ember", "[peer Arden, to Ember]")]
+    [InlineData(null, "[peer Arden, to the room]")]
+    public void ARelayedPeerMessageIsLabelledWithWhoSaidItAndWhoTo(string? addressedTo, string expected)
+    {
+        // The peer's turn-taking rests on "addressed to me" vs "overheard" (ADR-0008 SS1), so both the
+        // speaker and the addressee are shown rather than left to be inferred from prose.
+        var context = ContextWithChatMessage("shall we split the room work?", SourceType.DigitalPeer, "Arden");
+        context.ContextFragments.Values.Single().AddressedTo = addressedTo;
+
+        var msg = Assert.Single(CreateFormatter().Format(context, []), s => s.Content.Contains("split the room work"));
+
+        Assert.Contains(expected, msg.Content);
+    }
+
     [Fact]
     public void SensoryTellsThePeerItsOwnName()
     {

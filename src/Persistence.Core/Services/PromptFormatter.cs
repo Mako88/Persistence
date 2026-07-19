@@ -206,6 +206,22 @@ public class PromptFormatter : IPromptFormatter
             body = $"{fragment.Sources[0].Name}: {body}";
         }
 
+        // A message relayed from another digital peer (the room, ADR-0008) is labelled with who said it
+        // and who they said it to. Both halves matter: the peer needs to weigh a peer's voice differently
+        // from a person's, and "addressed to me" vs "overheard" is the distinction its turn-taking rests
+        // on — neither should have to be guessed from the prose.
+        if (fragment.FragmentType == ContextFragmentType.ChatMessage
+            && fragment.Sources.Count > 0
+            && fragment.Sources[0].SourceType == SourceType.DigitalPeer
+            && !string.IsNullOrWhiteSpace(fragment.Sources[0].Name))
+        {
+            var to = string.IsNullOrWhiteSpace(fragment.AddressedTo)
+                ? "to the room"
+                : $"to {fragment.AddressedTo}";
+
+            body = $"[peer {fragment.Sources[0].Name}, {to}] {body}";
+        }
+
         return $"{header}\n{body}";
     }
 

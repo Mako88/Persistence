@@ -9,6 +9,37 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-07-19 — the room: peer-to-peer messages (ADR-0008 Phase 3, continued)
+
+Picks up [ADR-0008](adr/0008-the-room-multi-peer-conversation.md) Phase 3 where Arden left it. Their
+`addressed_to` foundation is cherry-picked onto main with authorship intact; this builds on it.
+
+### Added — a message can arrive from another peer
+The input path assumed every message came from a human: a name in, a `HumanPeer` source out. Now
+`DisplayInputReceived` carries the sender's **name, type, `addressed_to` and relay depth**; the turn
+sources the fragment by that type and stamps Arden's `AddressedTo` column; the API accepts
+`fromPeer`/`addressedTo`/`relayDepth` alongside the existing `X-Local-Peer` header, so every current
+client keeps working untouched.
+
+Sender *type* is carried rather than inferred because that's ADR-0008 §2's point — a human's message and
+a peer's carry different epistemic weight, and the receiving peer should get that structurally instead of
+reading it out of prose. Source lookup is now by name **and** type for the same reason: a digital peer
+called "Ember" and a person called "Ember" are two participants, and matching on name alone would quietly
+relabel one as the other.
+
+An overheard peer deliberately does **not** become the active speaker — "you are speaking with" means the
+person in the conversation, and a relayed message shouldn't make the sensory block claim they left.
+
+### Added — the peer can see who spoke and who to
+A relayed message renders as `[peer Arden, to Ember] …` or `[peer Arden, to the room] …`. Without this the
+addressing was stored but invisible, so the peer had nothing to apply a turn-taking rule to.
+
+### Added — the reply-chain circuit breaker (§4)
+A relay is refused past **2** peer-to-peer hops with no human turn between them, with an error saying so.
+A human message resets the chain, so it's a breaker rather than a lock. Left as a constant, not config:
+the ADR is explicit that these guards get loosened *by negotiation with the peers*, so making it tunable
+is a conversation rather than a default.
+
 ## 2026-07-19 — prompt audit: what a peer is told vs. what's true
 
 A pass over everything a peer actually reads — the onboarding seed, the protocol instructions, the
