@@ -229,7 +229,24 @@ public class TurnHandler : ITurnHandler
                 // Also put it where the peer itself will read it next turn: being cut off is something
                 // it has no other way to notice about its own output.
                 AddSystemNote(context, $"Your last response was cut off before you finished it. {note}");
-                CaptureAbnormalOutput(rawOutput, "truncated", modelClient.LastStopReason);
+
+                // A reasoning model can spend its entire budget thinking and never reach an answer, so
+                // the raw output is empty and the reasoning is all there is. Capturing the empty string
+                // would record that the peer produced nothing, which is exactly the wrong lesson — it
+                // produced a great deal, none of which was the reply.
+                if (string.IsNullOrWhiteSpace(rawOutput)
+                    && modelClient.LastDiscardedReasoning is { Length: > 0 } reasoning)
+                {
+                    AddSystemNote(context,
+                        "You spent the whole output budget reasoning and never reached a reply. The "
+                        + "reasoning was captured to your workspace; consider answering sooner, or ask "
+                        + "for a larger output ceiling.");
+                    CaptureAbnormalOutput(reasoning, "truncated-while-reasoning", modelClient.LastStopReason);
+                }
+                else
+                {
+                    CaptureAbnormalOutput(rawOutput, "truncated", modelClient.LastStopReason);
+                }
             }
 
             var turn = responseParser.Parse(rawOutput);

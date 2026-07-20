@@ -30,6 +30,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
+# `ii` — the suckless IRC client the peers use to hold the shared channel. Baked into the image rather
+# than installed into a running container, which is how it was done first and how it was lost: it lives
+# outside /data and /root, so recreating a peer (a routine `peer.ps1` deploy) silently took every peer
+# off IRC. Not in Debian's archive, so it's a source build; a channel is a directory of FIFOs, which is
+# what lets a peer *operate* IRC as a tool rather than have the system speak on its behalf.
+RUN set -eux; \
+    tmp="$(mktemp -d)"; cd "$tmp"; \
+    curl -fsSL https://dl.suckless.org/tools/ii-1.9.tar.gz -o ii.tar.gz; \
+    tar xzf ii.tar.gz; cd ii-1.9; \
+    make; make PREFIX=/usr/local install; \
+    cd /; rm -rf "$tmp"; \
+    command -v ii
+
 # Token-efficient static page extraction for the fetch_url tool (matches the computer image).
 RUN pip3 install --no-cache-dir --break-system-packages trafilatura lxml_html_clean
 

@@ -186,6 +186,18 @@ the voluntary continue-loop. Revisit only if we see the peer reliably acting bef
   migration to a real snapshot from `backups/peers/` before it goes anywhere near a live peer — that's how
   007 was checked (499-fragment pre-007 store: rows read NULL, partial index built, lookup ran).
 
+- **Discover model limits and spend from the provider APIs instead of config.** (John, 2026-07-20.)
+  Both figures are published and we hardcode or guess them. **Limits:** Anthropic's Models API
+  (`GET /v1/models/{id}`) returns `max_tokens` (output cap), `max_input_tokens` (context window) and a
+  capability tree; OpenRouter's models endpoint reports the same per route. Today `ModelOutputLimits`
+  carries a small hand-maintained table — authoritative for Anthropic, a deliberately generic fallback
+  for everyone else — which is exactly the kind of record that drifts from the artifact it describes.
+  **Spend:** OpenRouter already returns `usage.cost` per request (wired to `LastActualCostUsd`); the
+  Anthropic/OpenAI org cost endpoints are the coarser equivalent (see the deferred reconciliation item
+  below). Wanted: fetch limits at startup (cache per model id, fall back to the table when the call
+  fails — never block a peer on a discovery call) so a new model doesn't need a config edit or a code
+  change. Context windows would want the same treatment as output caps.
+
 - **Automated backups of peer memory.** (John, 2026-07-12.) A peer's DB (and vault) is its whole self, and
   it now lives canonically only on a container volume — so it must be backed up off the volume.
   ✅ **Local mechanism landed:** `scripts/backup-peer.ps1` takes a consistent online snapshot (SQLite

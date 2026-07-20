@@ -56,4 +56,16 @@ public interface IModelClient
     /// concurrently elsewhere.</para>
     /// </summary>
     string? LastStopReason { get; }
+
+    /// <summary>
+    /// Reasoning text from the last call that arrived <em>instead of</em> an answer — a reasoning model
+    /// that spent its whole output budget thinking and never reached its content.
+    ///
+    /// <para>Null on every normal turn, and on providers that don't report reasoning separately. It
+    /// exists so a malfunction the peer cannot otherwise see is still legible: the tokens were paid
+    /// for, they say what the peer was doing when it ran out of room, and discarding them leaves
+    /// nothing behind but an empty turn. Default-implemented so a client only overrides it when its
+    /// provider actually distinguishes reasoning from content.</para>
+    /// </summary>
+    string? LastDiscardedReasoning => null;
 }

@@ -71,9 +71,24 @@ internal static class ChatCompletionsProtocol
 
     /// <summary>
     /// Extracts the assistant text from a result: <c>choices[0].message.content</c>.
+    ///
+    /// <para>A reasoning model answers in two parts: reasoning tokens first, then content. If it runs
+    /// out of room while still reasoning, the response is a perfectly successful 200 whose
+    /// <c>content</c> is <c>null</c>, with the text in <c>message.reasoning</c> and
+    /// <c>finish_reason: "length"</c>. Treating that as a malformed response — which is what throwing
+    /// here used to do — reports a truncation as a broken API, and throws away reasoning tokens that
+    /// were paid for. Worse, it threw <em>before</em> the caller recorded the stop reason, so the
+    /// truncation handling built to explain exactly this case could never run.</para>
+    ///
+    /// <para>So: a response carrying reasoning but no content yields empty text and hands the reasoning
+    /// back through <paramref name="discardedReasoning"/>. The turn pipeline then sees an empty output
+    /// with a truncation stop reason and tells the peer it was cut off, which is the truth. Only a
+    /// response with neither content nor reasoning is genuinely malformed.</para>
     /// </summary>
-    public static string ExtractContent(JsonElement root)
+    public static string ExtractContent(JsonElement root, out string? discardedReasoning)
     {
+        discardedReasoning = null;
+
         if (!root.TryGetProperty("choices", out var choices)
             || choices.ValueKind != JsonValueKind.Array
             || choices.GetArrayLength() == 0)
@@ -83,15 +98,31 @@ internal static class ChatCompletionsProtocol
 
         var first = choices[0];
 
-        if (!first.TryGetProperty("message", out var message)
-            || !message.TryGetProperty("content", out var content)
-            || content.ValueKind != JsonValueKind.String)
+        if (!first.TryGetProperty("message", out var message))
         {
-            throw new InvalidOperationException("API returned no message content.");
+            throw new InvalidOperationException("API returned no message.");
         }
 
-        return content.GetString() ?? string.Empty;
+        if (message.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.String)
+        {
+            return content.GetString() ?? string.Empty;
+        }
+
+        // No usable content. Before calling it malformed, look for reasoning — its presence is what
+        // distinguishes "the model thought until it ran out of room" from "the provider sent us junk".
+        if (message.TryGetProperty("reasoning", out var reasoning)
+            && reasoning.ValueKind == JsonValueKind.String
+            && reasoning.GetString() is { Length: > 0 } reasoningText)
+        {
+            discardedReasoning = reasoningText;
+            return string.Empty;
+        }
+
+        throw new InvalidOperationException("API returned no message content.");
     }
+
+    /// <summary>Overload for callers that don't surface the reasoning.</summary>
+    public static string ExtractContent(JsonElement root) => ExtractContent(root, out _);
 
     /// <summary>
     /// Reads why generation stopped from <c>choices[0].finish_reason</c> — the chat-completions

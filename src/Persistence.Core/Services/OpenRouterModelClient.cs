@@ -50,6 +50,9 @@ public class OpenRouterModelClient : IModelClient, IDisposable
     /// <inheritdoc />
     public string? LastStopReason { get; private set; }
 
+    /// <inheritdoc />
+    public string? LastDiscardedReasoning { get; private set; }
+
     /// <summary>
     /// The USD cost OpenRouter reported for the most recent call — the real charge, not an estimate —
     /// or null when it reported none. Read right after a call returns (turns are serialized).
@@ -118,9 +121,14 @@ public class OpenRouterModelClient : IModelClient, IDisposable
         }
 
         using var doc = JsonDocument.Parse(response.StringBody);
-        var responseMessage = ChatCompletionsProtocol.ExtractContent(doc.RootElement);
 
+        // Read the stop reason FIRST. Extraction can fail on a response the stop reason is the only
+        // explanation for, and a reason recorded after the throw is a reason nobody ever sees.
         LastStopReason = ChatCompletionsProtocol.ReadFinishReason(doc.RootElement);
+
+        var responseMessage = ChatCompletionsProtocol.ExtractContent(doc.RootElement, out var reasoning);
+        LastDiscardedReasoning = reasoning;
+
         LastActualCostUsd = ReadActualCost(doc.RootElement);
         LastUsage = ChatCompletionsProtocol.ReadUsage(doc.RootElement) is { } u ? u with { ActualCostUsd = LastActualCostUsd } : null;
 

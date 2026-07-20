@@ -9,6 +9,54 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-07-20 (later still) — a truncation misreported as a broken API
+
+### Fixed — a reasoning-only response is a truncation, not a malformed one
+GLM's turns were ending in `API returned no message content` while OpenRouter's dashboard showed the
+calls succeeding. Both were right. `z-ai/glm-5.2` is a reasoning model: it emits reasoning tokens first,
+then content. When it runs out of room mid-reasoning the response is a **successful 200** with
+`content: null`, the text in `message.reasoning`, and `finish_reason: "length"` — and
+`ChatCompletionsProtocol.ExtractContent` required `content` to be a string, so it threw.
+
+Two consequences, both worse than the error text suggests:
+
+- **The truncation handling that shipped this morning was unreachable.** `ExtractContent` ran *before*
+  `LastStopReason` was recorded, so the throw pre-empted the very feature built to explain this case.
+  The peer got an opaque error instead of "you were cut off". The stop reason is now read first — the
+  ordering is the fix, not a tidy-up.
+- **Reasoning tokens were paid for and discarded.** A reasoning-only response now yields empty text and
+  hands the reasoning back, which the turn pipeline captures into the peer's own workspace as
+  `truncated-while-reasoning` — so a peer can read what it was thinking when it ran out of room, rather
+  than finding an empty turn it has no account of. Only a response with neither content nor reasoning is
+  still treated as malformed.
+
+Verified against the live API: two probes against `z-ai/glm-5.2` — one capped at 40 tokens (all 40 spent
+on reasoning, `content: null`, `finish_reason: length` — the exact failure), one at 2000 (`stop`,
+content present). Then live in-channel: GLM completed a clean turn and its reply reached the room.
+
+### Changed — the 32k output ceiling belongs to local models only
+Every peer config pinned `MaxOutputTokens` to 32,000 — a figure chosen for a 12B local model and copied
+into every profile, including Opus 4.8 (128K) and a reasoning model that can spend a whole budget
+thinking. That copied number is *why* the failure above was reachable at all. `MaxOutputTokens` is now
+an override rather than a default: unset, it resolves per model (`ModelOutputLimits`) — published caps
+for hosted Claude, a deliberately small one for a local endpoint.
+
+Two judgement calls worth recording. The "is this local" test reads the **endpoint**, not the provider
+enum: `OpenAiChat` serves both llama.cpp and OpenAI's own API, so the enum would have handed Synth a
+hosted ceiling with no server-side cap behind it. And the non-Anthropic figures are deliberately *not*
+invented per-model precision — they fall back to a general default, because a confidently wrong ceiling
+is worse than an honestly generic one. The durable fix is discovery rather than a table: Anthropic's
+Models API reports `max_tokens`/`max_input_tokens` per model and OpenRouter reports the same, so this
+could be fetched at startup. Recorded in TODO.md.
+
+### Fixed — `ii` is baked into the peer image
+Redeploying the peers (`peer.ps1`, which recreates the container) took all four off IRC: `ii` had been
+installed into the running containers, so it lives outside `/data` and `/root` and does not survive a
+recreate. It's now built from source in the Dockerfile. Three peers additionally lost their `/root`
+contents — the `/root`-as-a-volume change landed *today*, so only Synth (recreated after it) had the
+volume already; the other three predated it and their home directories went with the old container. DBs
+and vaults are on `/data` and were untouched; what was lost was IRC plumbing, all of it restored.
+
 ## 2026-07-20 (later) — the wake filter, and the duplicate that was running all along
 
 ### Fixed — the bridge filters wakes before paying for them

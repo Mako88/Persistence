@@ -106,7 +106,10 @@ public class ModelProfile
     /// under that while staying sane for smaller models, and any profile can raise it. When it does
     /// bite, the turn now says so instead of failing silently (<see cref="Services.ModelStopReason"/>).</para>
     /// </summary>
-    public int MaxOutputTokens { get; set; } = 64000;
+    /// <para><b>Zero means "unset"</b> — the ceiling is then resolved per model by
+    /// <see cref="Services.ModelOutputLimits"/> (published caps for hosted Claude, a deliberately small
+    /// one for a local endpoint). Set it explicitly only to override that.</para>
+    public int MaxOutputTokens { get; set; }
 
     /// <summary>
     /// Native reasoning effort for reasoning-capable models. <c>"off"</c> (the default) or <c>"none"</c>

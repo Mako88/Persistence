@@ -35,6 +35,9 @@ public class OpenAiChatModelClient : IModelClient, IDisposable
     /// <inheritdoc />
     public string? LastStopReason { get; private set; }
 
+    /// <inheritdoc />
+    public string? LastDiscardedReasoning { get; private set; }
+
     /// <summary>
     /// Constructor that builds the HTTP client from config
     /// </summary>
@@ -98,10 +101,14 @@ public class OpenAiChatModelClient : IModelClient, IDisposable
         }
 
         using var doc = JsonDocument.Parse(response.StringBody);
-        var responseMessage = ChatCompletionsProtocol.ExtractContent(doc.RootElement);
+
+        // Stop reason before extraction — see OpenRouterModelClient for why the order is load-bearing.
+        LastStopReason = ChatCompletionsProtocol.ReadFinishReason(doc.RootElement);
+
+        var responseMessage = ChatCompletionsProtocol.ExtractContent(doc.RootElement, out var reasoning);
+        LastDiscardedReasoning = reasoning;
 
         LastUsage = ChatCompletionsProtocol.ReadUsage(doc.RootElement);
-        LastStopReason = ChatCompletionsProtocol.ReadFinishReason(doc.RootElement);
 
         if (config.DebugMode)
         {

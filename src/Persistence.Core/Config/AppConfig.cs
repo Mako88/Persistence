@@ -164,7 +164,7 @@ public class AppConfig : IAppConfig
     [JsonIgnore] public string ApiKey { get => ActiveModel.ApiKey; set => ActiveModel.ApiKey = value; }
     [JsonIgnore] public string? ApiBaseUrl { get => ActiveModel.ApiBaseUrl; set => ActiveModel.ApiBaseUrl = value; }
     [JsonIgnore] public int MaxInputTokens { get => ActiveModel.MaxInputTokens; set => ActiveModel.MaxInputTokens = value; }
-    [JsonIgnore] public int MaxOutputTokens { get => ActiveModel.MaxOutputTokens; set => ActiveModel.MaxOutputTokens = value; }
+    [JsonIgnore] public int MaxOutputTokens { get => Services.ModelOutputLimits.Resolve(ActiveModel); set => ActiveModel.MaxOutputTokens = value; }
     [JsonIgnore] public string ReasoningEffort { get => ActiveModel.ReasoningEffort; set => ActiveModel.ReasoningEffort = value; }
     [JsonIgnore] public bool Streaming { get => ActiveModel.Streaming; set => ActiveModel.Streaming = value; }
     [JsonIgnore] public int RequestTimeoutSeconds { get => ActiveModel.RequestTimeoutSeconds; set => ActiveModel.RequestTimeoutSeconds = value; }
