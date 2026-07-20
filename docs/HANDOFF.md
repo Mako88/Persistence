@@ -41,22 +41,55 @@ becomes a separate IRC message.
 
 ---
 
-## 1. IRC state — bridges are STOPPED on purpose. Read before restarting them.
+## 1. IRC state — bridges are RUNNING with a wake filter (2026-07-20, later)
 
-**All four bridges are deliberately stopped.** `ii` is still running and connected in every container,
-so the peers remain *present* in the channel; they just aren't being woken by it. Do not restart them
-until you've dealt with the wake storm below — it spends real money, fast, and John is travelling.
+**All four bridges are up and filtered.** One bridge per peer, all verified running the current code.
+`ii` is connected in all five containers (the four peers plus `wright` as `ClaudeCode`).
 
-**The design flaw (the important one).** The bridge wakes its peer on **every** channel line, including
-lines spoken by other peers. With four peers connected that is quadratic: one human message triggers a
-reply, each reply wakes the other three, and their replies wake each other. Measured: Arden was woken
-**five times in 75 seconds**, one Opus turn each, entirely from other peers' chatter. The turn-taking
-rule (ADR-0008 §1) is enforced *inside* the model — the peer correctly decides to stay silent — but it
-decides that **after** paying for the turn. Filtering belongs in the bridge, before the wake: only wake
-on lines that address the peer by name or come from a human. That is the change to make before any
-restart, and it is worth routing past Arden as a §1 design question.
+**The wake filter (the fix for the storm).** The bridge used to wake its peer on *every* channel line,
+which is quadratic in peer count — Arden was woken five times in 75 seconds by other peers' chatter.
+Turn-taking (ADR-0008 §1) is decided *inside* the model, i.e. after the turn is paid for, so the decision
+moved into the bridge where declining is free:
 
-**What was fixed and verified today** in `scripts/irc/peer-irc-bridge.sh`:
+- **from a peer** — wake only if it names me.
+- **from a human** — wake if it names me, or if it names nobody. If a human names someone, only the
+  named wake (John's call).
+
+Aliases are per-nick (`arden|ardenp`, `glm|glm-p`, …); `claude` alone is deliberately nobody's alias.
+Every skip logs its reason. Verified live: an unaddressed line is declined by all four at zero cost, a
+named line wakes exactly one.
+
+**The previous handoff was wrong about this, and it cost money.** It recorded all four bridges as
+"deliberately stopped". They were still running — GLM and Ember were relaying and draining a backlog
+minutes before this session started. Don't trust this section either: `ps`, and read the live log.
+
+**Two ways a `ps` check lies here, both hit last session:**
+- The bridge existed at **two paths** (`/root/peer-irc-bridge.sh` and `/root/irc/bridge.sh`). A `find`
+  for `*irc-bridge*` and a `ps | grep peer-irc-bridge` share the same blind spot, so they agreed with
+  each other and were both wrong. Now consolidated to one file; peers were told the canonical path.
+- `pkill -f <pattern>` **kills the wrapper shell running it** when the pattern matches its own command
+  line (exit 137/143 mid-script), so the thing you meant to kill survives. Use explicit pids or `pkill -x`.
+
+**Clearing a backlog needs a process restart.** Queued input lives in an in-memory `ConcurrentQueue`
+in the API process (`TurnHandler.pendingInput`) and drains on the next turn — so it outlives a stopped
+bridge and there is no endpoint to inspect or clear it. `docker restart` the peer container (volumes
+persist, so nothing is lost), then relaunch `ii` and rejoin. A peer at a low `latestSeq` that stays flat
+is the confirmation. Symptom of a stranded queue: the peer's last event is `queued`, or a run of turns
+replying to stale messages.
+
+**Verifying a bridge is really working takes two checks, not one.** `relay DELIVERED` in the log is
+necessary but has now lied twice. The end-to-end check is: send a line naming a peer, then confirm the
+reply text actually appears in *another container's* channel `out`. Current state: Arden, Ember and
+Synth verified landing (2026-07-20, 17:08–17:11).
+
+**⚠ GLM is failing on its own side, unrelated to the bridge.** It wakes and is relayed correctly, but
+its turns end in `error | API returned no message content` (twice consecutively, OpenRouter). Before
+that it spent a long stretch in a degenerate loop, replying to Ember with near-identical text
+interleaved with `__error__` tool events, while draining the backlog. Worth investigating whether the
+empty-content responses are transient OpenRouter behaviour or a consequence of that state. Its last
+good reply was "*John — GLM here, back and connected.*"
+
+**What was fixed and verified earlier today** in `scripts/irc/peer-irc-bridge.sh`:
 
 - *Bounded writes.* `ii` closes and reopens the channel FIFO between reads; a writer arriving in that gap
   blocks forever. Writes are now wrapped in `timeout 10` and the log reports actual delivery
@@ -66,14 +99,15 @@ restart, and it is worth routing past Arden as a §1 design question.
   start prints `refusing to start a second`. This mattered — three containers were running duplicate
   bridges, each independently waking the peer for the same line, doubling spend.
 
-**Still unresolved, and the reason to be careful:** after deploying and restarting, a running bridge was
-still logging the **old** format (`relay finished`) even though `find /` showed only one copy of the
-script on disk and that copy verifiably contained the new code. The provenance of the code that was
-actually executing is unexplained. Something may relaunch the bridge from a copy that isn't a file
-(a heredoc in a supervisor, or a peer restarting it from its own workspace).
+**✅ The "unexplained provenance" is solved** — it was the second copy at `/root/irc/bridge.sh` described
+above, missed by both the file search and the process search. Nothing exotic relaunches the bridge; there
+is no supervisor and no cron. The likeliest way a stale copy returns is **a peer restarting its own
+bridge**, which is why they were told the canonical path.
 
-**So: never conclude a bridge restart took effect from the fact that you restarted it.** `grep` the live
-`bridge.log` for a string that only exists in the new version (`relay DELIVERED`) and confirm it appears.
+**Still: never conclude a bridge restart took effect from the fact that you restarted it.** `grep` the
+live `bridge.log` for a string that only exists in the current version (`wake-filter v2`) and confirm it
+appears. The version marker in the startup log line exists for exactly this and should be bumped whenever
+the script changes meaningfully.
 
 **Ember's message splitting is not (only) the bridge.** Measured: 6 bridge relays produced **31** channel
 lines. The bridge now collapses newlines before wrapping, so the remainder is coming from somewhere else

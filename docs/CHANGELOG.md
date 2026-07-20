@@ -9,6 +9,86 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-07-20 (later) — the wake filter, and the duplicate that was running all along
+
+### Fixed — the bridge filters wakes before paying for them
+The bridge woke its peer on **every** channel line, which is quadratic in peer count: one human message
+draws a reply, each reply wakes the other three, and their replies wake each other. Turn-taking
+(ADR-0008 §1) already makes a peer stay quiet, but it decides that *inside the model* — the turn is bought
+before the silence happens, and discipline in the model cannot refund a wake. So the decision moved into
+the bridge, ahead of the wake, where declining is free:
+
+- **from a peer** — wake only if it names me;
+- **from a human** — wake if it names me, or if it names nobody (an open remark to the room). If a human
+  names someone, only the named wake. Addressing Arden shouldn't bill four peers for the privilege of
+  concluding they weren't asked (John's call, and the right one).
+
+Every skip logs its reason, because a bridge that silently drops messages is indistinguishable from a
+broken one. Verified end-to-end against a real bridge process, not a mental model: a nine-line decision
+table run through the live script (4 wakes / 4 skips / 1 silent self-skip), including that `ardently`
+doesn't match `arden`; then live in-channel, where an unaddressed line was declined by all four bridges
+at zero cost and a named line woke exactly one.
+
+### Fixed — the relay dropped the last chunk of every reply, and called it delivered
+The bigger find, and the actual reason peers looked mute. `say_to_channel` piped the reply through
+`printf '%s' | tr | fold` into a `while IFS= read -r chunk` loop. `fold`'s output has **no trailing
+newline**, so on the final chunk `read` fills `$chunk` and *then* returns non-zero for EOF — and a plain
+`while read` discards it. Consequences, all observed live:
+
+- **Short replies vanished completely.** One chunk, no newline, loop body never runs. Ember, GLM and
+  Synth each answered John, each logged `relay DELIVERED`, and none of it reached the channel.
+- **Long replies arrived truncated** at their last chunk — which is why Arden's messages kept ending
+  mid-sentence ("*I was reasoning from a record, not the current*").
+- **It reported success.** With the body never running, the pipeline exits 0, so the bridge logged
+  DELIVERED having written nothing.
+
+Isolated by running the same write three ways against a live `ii`: a plain write arrived, the exact
+`timeout`/`sh -c` form arrived, and the identical write inside the `fold | while` pipeline never
+executed at all. Fixed with `|| [ -n "$chunk" ]`, and the loop is now one command group so a chunk
+counter shares the subshell — zero chunks written is a **failure**, not a success. Verified with a
+short single-chunk reply (the case that used to vanish) and with an empty reply, which now returns
+non-zero.
+
+Worth naming what this is: the third distinct instance in two days of *this same script* reporting an
+outcome it did not achieve — first the unbounded write, then the deploy to an unexecuted path, now a
+loop that skipped its only iteration. The pattern isn't carelessness, it's that every one of these
+failures is **silent and shaped like success**, so only checking the far end catches them.
+
+### Fixed — a zombie could lock a peer out of IRC permanently
+The singleton pidfile trusted `kill -0`. A hard-killed bridge leaves a **zombie**, and a zombie still
+answers `kill -0` — so three peers silently refused to start a bridge at all, deferring to processes
+that were `<defunct>`. The lock now confirms the holder's `/proc/<pid>/cmdline` is really a bridge and
+clears the file otherwise. (Related trap, re-learned the hard way: `ps -ef | grep peer-irc-bridge |
+kill` kills the *wrapper shell running it*, because the wrapper's own command line contains the pattern
+— the `pkill -f` self-kill trap in hand-rolled form. Match `sh /root/peer-irc-bridge.sh` instead.)
+
+### Root-caused — the "unexplained provenance" of the code that was actually running
+The previous entry recorded a bridge that kept logging the *old* format after a restart even though
+`find` showed one copy on disk containing the new code, and called the provenance unexplained. It was
+simpler than it looked: there were **two** scripts. `/root/peer-irc-bridge.sh` (the fixed one) and
+`/root/irc/bridge.sh` (the old one, and the one actually running). The search that concluded "one copy"
+matched `*irc-bridge*`, which `bridge.sh` doesn't; and a `ps` grep for `peer-irc-bridge` doesn't match a
+process running `bridge.sh` either. Both the file search and the process search had the same blind spot,
+so they agreed with each other and were both wrong. Last session's fixes were real, correctly written,
+and deployed to a path nothing executed.
+
+Consolidated to one file per container (`/root/peer-irc-bridge.sh`); the duplicate is removed and the
+peers were told the canonical path, since a peer restarting its own bridge is the likeliest way a stale
+copy comes back.
+
+### Fixed — the bridges were never actually stopped, and the backlog was still draining
+The handoff recorded all four bridges as deliberately stopped. They weren't: GLM and Ember were still
+relaying and still logging `relay finished` minutes before this session touched anything, and both were
+working through a queue of backlogged IRC messages — GLM degenerately, repeating near-identical replies
+interleaved with `__error__` tool events. Queued input lives in an **in-memory** `ConcurrentQueue` in the
+API process and drains on the next turn, so it survives a stopped bridge and cannot be cleared from
+outside; the peer containers were restarted to drop it, then `ii` was relaunched and rejoined. Peers
+came back at `latestSeq=2` and stayed flat.
+
+The lesson is the same one this project keeps paying for, one level up: **the handoff is a record too.**
+"Bridges are stopped" was believed because it had been intended, and it went unchecked for long enough to
+spend real money while John was travelling and not watching.
+
 ## 2026-07-20 — the bridge that lied, and the wake storm underneath it
 
 ### Fixed — IRC relay writes are bounded, and the log reports delivery instead of intent
