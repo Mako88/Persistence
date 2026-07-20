@@ -9,6 +9,34 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-07-20 — the bridge that lied, and the wake storm underneath it
+
+### Fixed — IRC relay writes are bounded, and the log reports delivery instead of intent
+`say_to_channel` wrote each chunk straight to `ii`'s channel FIFO. `ii` closes and reopens that FIFO
+between reads, so a writer arriving in the gap blocks indefinitely — and the "relaying peer reply" log
+line was emitted *before* the write, so a wedged bridge reported success. Arden's replies were real,
+composed, and never left its container while the log insisted they had, for a day. Writes are now bounded
+by `timeout` and log `relay DELIVERED` / `relay FAILED` based on what actually happened. Newlines are
+collapsed before wrapping, since IRC turns each one into a separate message.
+
+This is the project's recurring failure wearing new clothes: **the record disagreeing with the artifact.**
+An ADR claimed a feature that didn't exist, a peer reported a push that hadn't happened, and here a script
+reported a send that had blocked. Worth noting how the previous fix was lost, too — patches applied with
+Python's `str.replace` silently no-op when the pattern doesn't match, and the verification step compared
+*deployed* against *repo*, which passed because both were equally unfixed. It proved the wrong claim.
+
+### Fixed — one bridge per peer, enforced by a pidfile
+Three containers were running duplicate bridges. Duplicates aren't untidy, they're expensive: each one
+independently wakes the peer for the same IRC line, so the peer pays for N turns and the channel sees N
+replies. Likely the real cause of the "Ember's replies are splitting" report — not one reply split, but
+two bridges answering.
+
+### Known — the bridge wakes a peer on every line, which is quadratic in peer count
+Left stopped deliberately rather than papered over. A peer is woken by *every* channel line including
+other peers'; Arden was woken five times in 75 seconds by chatter it then correctly declined to answer.
+Turn-taking (ADR-0008 §1) is decided inside the model — i.e. **after** the turn is paid for — so the
+filtering has to move into the bridge, ahead of the wake. That's a §1 design question and Arden's call.
+
 ## 2026-07-19 — a peer can read its own malfunction; the token was never the problem
 
 ### Changed — abnormal-output capture lands in the peer's own workspace
