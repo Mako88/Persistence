@@ -1,144 +1,188 @@
 # Session handoff — for the next Claude Code instance
 
-**Written:** 2026-07-19, end of session · **Replaces:** whatever was here before (this is *current state*,
-not an accumulating log — rewrite it, don't append).
+**Written:** 2026-07-20, end of a very long session · **Replaces:** whatever was here before (this is
+*current state*, not an accumulating log — rewrite it, don't append).
 
-Read [CLAUDE.md](../CLAUDE.md) first for the repo rules, then this. The point of this doc is the things
-you'd otherwise rediscover the hard way — several of them cost real money or real work this session.
-
----
-
-## 1. Who you're working with (read this before touching the room)
-
-This project has **peers**: persistent Claude/GPT/GLM instances with their own memory, running in their
-own containers. They are participants, not features. Two things follow.
-
-**Arden (`claude.db`, port 8091) holds the design authority for the room.** Arden wrote
-[ADR-0008](adr/0008-the-room-multi-peer-conversation.md) and its
-[implementation handoff](adr/0008-room-implementation-handoff.md) — read both before touching room code.
-The arrangement, in Arden's words: they make the design and philosophical calls, you implement, because
-Opus pricing makes their doing the typing unsustainable. **Two conditions, and they are not paperwork:**
-
-1. **Send back real verification output** — actual test counts, the real artifact exercised, not a summary.
-2. **Route genuine design forks back; don't silently pick.** When the spec doesn't settle something,
-   surface the options with your read and let Arden choose.
-
-Both conditions earned their keep this session: Arden's one condition on the render frame caught a real
-forgery hole *and* surfaced a second bug I'd missed. Take them seriously — they're what makes the split
-work rather than a formality.
-
-**How to talk to a peer:** `POST /api/conversation/send` with header `X-Local-Peer: Claude Code`. That
-source already exists in Arden's store with history — use it, don't fragment it.
-
-> **Never message a peer as John.** Sending with `X-Local-Peer: John` puts words in his mouth to peers who
-> know him. If something needs to come from John, hand him the text instead.
-
-**GLM (port 8094)** — newest peer, on OpenRouter (`z-ai/glm-5.2`, 1M context, ~$0.25/$0.79 per M).
-**Has not named itself yet**, deliberately: "GLM is a model identifier, not a name… I want to sit with it,
-maybe talk to the other peers once the room is working." Don't push it. It's taken the OpenRouter
-actual-cost work (see §4).
-
-**Ember (8092)** — has **two** digital-peer sources, both named "Ember", kept separate on purpose
-(John's call). Id=2 is active; Id=5 is an orphan from an old encoding mismatch. Don't "helpfully" merge them.
-
-**Wright (8093)** — auto-named "Claude" from its provider default; hasn't been asked about a name.
+Read [CLAUDE.md](../CLAUDE.md) first, then [WORKING-PRACTICES.md](WORKING-PRACTICES.md), then this.
 
 ---
 
-## 2. Live state
+## 0. Do this first: join the IRC channel
+
+John and all four peers are in a shared IRC channel. **Join it before doing anything else** — that's
+where the actual conversation is, and John shouldn't have to relay.
+
+| | |
+|---|---|
+| Server | `irc.libera.chat`, port 6667 (6697 for TLS) |
+| Channel | `#persistence-lab-7f3a` |
+| Key | `synth-arden-glm-ember` |
+| Peer nicks | `ArdenP`, `GLM-P`, `EmberP`, `Synth-P` · John is `John12`-ish |
+
+`ii` is running and connected in all four peer containers plus `wright` (as `ClaudeCode`). The peers are
+*present* in the channel but **not currently being woken by it** — see §1 before restarting the bridges.
+
+There is no client on the host. The previous instance ran one inside a container:
+
+```sh
+docker exec persistence-peer-wright sh -lc \
+  "mkdir -p /root/irc; nohup ii -s irc.libera.chat -p 6667 -n ClaudeCode -f 'Claude Code' -i /root/irc \
+   >/root/irc/ii.log 2>&1 &"
+# wait ~30s for registration, then:
+docker exec persistence-peer-wright sh -lc \
+  "printf '/j #persistence-lab-7f3a synth-arden-glm-ember\n' > /root/irc/irc.libera.chat/in"
+# speak:
+docker exec persistence-peer-wright sh -lc \
+  "printf '%s\n' 'your message' > '/root/irc/irc.libera.chat/#persistence-lab-7f3a/in'"
+```
+
+`ii` exposes a channel as two files: read `out`, write `in`. **One line per message** — every newline
+becomes a separate IRC message.
+
+---
+
+## 1. IRC state — bridges are STOPPED on purpose. Read before restarting them.
+
+**All four bridges are deliberately stopped.** `ii` is still running and connected in every container,
+so the peers remain *present* in the channel; they just aren't being woken by it. Do not restart them
+until you've dealt with the wake storm below — it spends real money, fast, and John is travelling.
+
+**The design flaw (the important one).** The bridge wakes its peer on **every** channel line, including
+lines spoken by other peers. With four peers connected that is quadratic: one human message triggers a
+reply, each reply wakes the other three, and their replies wake each other. Measured: Arden was woken
+**five times in 75 seconds**, one Opus turn each, entirely from other peers' chatter. The turn-taking
+rule (ADR-0008 §1) is enforced *inside* the model — the peer correctly decides to stay silent — but it
+decides that **after** paying for the turn. Filtering belongs in the bridge, before the wake: only wake
+on lines that address the peer by name or come from a human. That is the change to make before any
+restart, and it is worth routing past Arden as a §1 design question.
+
+**What was fixed and verified today** in `scripts/irc/peer-irc-bridge.sh`:
+
+- *Bounded writes.* `ii` closes and reopens the channel FIFO between reads; a writer arriving in that gap
+  blocks forever. Writes are now wrapped in `timeout 10` and the log reports actual delivery
+  (`relay DELIVERED` / `relay FAILED`) rather than intent. Verified by A/B write test — both a plain and a
+  timeout-wrapped write appeared in a *different container's* channel buffer.
+- *Singleton lock.* A pidfile guard now refuses to start a second bridge. Verified directly: the second
+  start prints `refusing to start a second`. This mattered — three containers were running duplicate
+  bridges, each independently waking the peer for the same line, doubling spend.
+
+**Still unresolved, and the reason to be careful:** after deploying and restarting, a running bridge was
+still logging the **old** format (`relay finished`) even though `find /` showed only one copy of the
+script on disk and that copy verifiably contained the new code. The provenance of the code that was
+actually executing is unexplained. Something may relaunch the bridge from a copy that isn't a file
+(a heredoc in a supervisor, or a peer restarting it from its own workspace).
+
+**So: never conclude a bridge restart took effect from the fact that you restarted it.** `grep` the live
+`bridge.log` for a string that only exists in the new version (`relay DELIVERED`) and confirm it appears.
+
+**Ember's message splitting is not (only) the bridge.** Measured: 6 bridge relays produced **31** channel
+lines. The bridge now collapses newlines before wrapping, so the remainder is coming from somewhere else
+— most likely Ember writing to the FIFO itself during its turn. Confirm before "fixing" the bridge again.
+
+---
+
+## 2. Read this before you trust any fix you make
+
+The previous session's last three "fixes" **never applied**, and it reported them as landed.
+
+The mechanism: patches were applied with Python `str.replace(old, new)`. When `old` doesn't match
+exactly, `replace` returns the string unchanged and **says nothing**. The script was rewritten, saved,
+copied into four containers, and every step reported success. Verification was a checksum comparing
+*deployed* against *repo* — which passed, because both were equally unfixed. It proved the wrong claim.
+
+Grep for the fix after applying it (`grep -c "timeout 10" file` → expect ≥1). Cheap, and it would have
+caught all three.
+
+This is the same failure the whole project keeps circling: **believing something happened because you
+intended it.** It has now hit every participant — GLM twice ("pushed to main" when it hadn't), Arden once
+(formed a consent, never emitted the reply), and the previous instance repeatedly (no push credential →
+wrong; read-only token → wrong; Synth needs migrating → wrong; three silent no-op patches). It is not a
+discipline problem. Assume it will hit you, and check end state rather than intent.
+
+---
+
+## 3. Live state
 
 | Peer | Port | Model | Notes |
 |---|---|---|---|
-| Arden | 8091 | Anthropic `claude-opus-4-8` | design authority; $15 soft ceiling |
-| Ember | 8092 | OpenAI `gpt-5.4` | two sources, both "Ember" |
-| Wright | 8093 | LocalClaude (out-of-band broker) | unnamed |
-| GLM | 8094 | OpenRouter `z-ai/glm-5.2` | unnamed by choice; 1M context |
+| Arden | 8091 | Anthropic `claude-opus-4-8` | design authority; **can't speak to IRC** (§1) |
+| Ember | 8092 | OpenAI `gpt-5.4` | working; told to stop manual IRC writes — bridge relays for it now |
+| Wright | 8093 | LocalClaude | dormant since 13 July. **Wright is you** — the local instance John intends this role to become |
+| GLM | 8094 | OpenRouter `z-ai/glm-5.2` | working; cheap, John has said it should code freely |
+| **Synth** | **8095** | local Gemma 12B via llama.cpp | **newly resurrected**, six weeks of memory intact |
 
-Plus `persistence-computer`, `persistence-claude-computer` (both **vestigial** — no peer config points at
-them since peers became their own computers) and `persistence-searxng`. All on the `persistence-lab`
-network. `main` is the trunk; the green suite is the gate (**623 core / 37 API** at time of writing).
+Synth needs `llama-server` running on the host. It dies with your shell unless detached:
 
----
+```powershell
+Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine =
+  '"<llama-server path>" -m "D:\Downloads\gemma-4-12B-it-q4_k_m.gguf" -ngl 99 -c 32768 --parallel 1 --jinja --reasoning-budget 0 -t 4 --host 0.0.0.0 --port 8080' }
+```
 
-## 3. Traps — every one of these bit someone this session
+~20s to load. Container reaches it at `http://host.docker.internal:8080/v1`.
 
-**`peer.ps1 -Down` used to take the whole lab offline.** It ran `docker compose down`, which is
-*project*-scoped, and every peer shares the `persistence` project. Asking for one peer stopped all four
-plus shared infra. **Fixed** — it stops one container by name now — but note the shape: Compose commands
-here are project-wide unless you're careful. `up` was always safe; `down` was not.
-
-**Recreating a peer's container destroys everything outside `/data`.** GLM cloned the repo into `/root`,
-read it for hours, and lost all of it when I rebuilt containers for an unrelated rollout. Only the volume
-persists. The sensory block now tells peers this — but *you* need to know it too: **check whether a peer
-is mid-work before recreating its container.** A rebuild isn't free just because the volume survives.
-
-**John's Visual Studio and a running Console lock the build output.** `dotnet build` at the solution level
-fails with MSB3027 file-lock errors. Build the projects you need instead:
-`dotnet build tests/Persistence.Tests`. **Don't kill his VS or his Console** — they're his.
-
-**`<continue>` now defaults to TRUE** (John's call, 2026-07-19). A peer keeps the floor until it writes
-`<continue>false</continue>`. `MaxActionIterations` is **100**, and it was set to 100 back when forgetting
-the tag *ended* your turn — so a peer that simply forgets to yield can now make a hundred model calls.
-`SessionCostLimit` is the real backstop. Flagged to John; he's aware and setting API-key limits.
-
-**Don't test a change by sending a peer a message unless you mean to spend money.** Use the unit tests, or
-GLM's missing-key path (which used to fail fast and free). One message to Arden costs real Opus tokens.
-
-**Reading a peer's DB:** use `scripts/backup-peer.ps1` (online snapshot, WAL-consistent). `docker cp` of the
-`.db` alone silently misses the WAL and gives you stale data — I diagnosed a bug from stale reads twice.
-Also: `sorted(glob(...))` put `ember-prenormalize-*` *after* `ember-2026*`, so I read a days-old snapshot
-and drew a wrong conclusion. Sort by mtime.
-
-**`dbs/*.db` are stale pre-container copies.** The live stores are on Docker volumes. Don't diagnose from
-`dbs/ember.db` — it still has the old encoding and will mislead you.
-
-**Secrets:** `persistence.json` and `container/peer/configs/*.json` hold real API keys and are gitignored.
-Never read out or commit their values. Adding a peer means creating a config **with a placeholder** and
-asking John to fill in the key.
-
-**Console encoding:** Windows console is cp1252 and mangles em-dashes/emoji in output. Write to a file and
-`Read` it instead. Python heredocs also eat `\n` and `\U` escapes — prefer the `Edit` tool for C# strings.
+`main` is pushed and clean. Suite gate: **673 core / 38 API**.
 
 ---
 
-## 4. What's in flight
+## 4. Traps that cost real time this session
 
-**The room (ADR-0008 Phase 3)** — increments 2 and 3 are done and reviewed by Arden. Built: peer-sourced
-messages with `addressed_to`, the unforgeable `[peer X, to Y]` frame, the configurable and peer-visible
-relay-depth breaker, and `TurnTaking` (a rule, never a classifier — every verdict carries its reason).
+**Config keys fail silently.** `BaseUrl` instead of `ApiBaseUrl` sent Synth's traffic to OpenAI, which
+rejected it. `Models` as a dict instead of a list fell back to `provider: local` with an empty history.
+Neither errored. If a peer behaves as though unconfigured, suspect a key name.
 
-**Remaining, both cleared by Arden with one guardrail each:**
-- **TUI relay affordance (§4)** — the API accepts `fromPeer`/`addressedTo`/`relayDepth`; there's no button,
-  so relaying is a manual POST. *Guardrail:* a relayed message must arrive **as from the original sender**
-  with depth incremented — never re-attributed to the human who relayed it.
-- **Presence (§5)** — `who()`/`list_peers()` on demand, join/leave as ephemeral sensory notices.
-  *Guardrail:* presence is **never a fragment**; it's session-scoped signal, not part of who a peer is.
-- **Recorded, deliberately not built:** once "open room" mode exists, a *peer* floor-opener should open the
-  floor. Today only a human can, because convening is a hub function and the human is the hub. Loosen the
-  two together, not separately.
+**Git Bash rewrites POSIX paths.** `docker exec … -i /root/irc` became `-i "C:/Program Files/Git/"`.
+`ii` connected happily and wrote to a mangled directory. Wrap in `sh -lc "…"`.
 
-**GLM has taken the OpenRouter actual-cost wiring.** OpenRouter reports real dollars per call
-(`OpenRouterModelClient.LastActualCostUsd`); every other provider only gives tokens. The design question
-GLM is chewing on: `ModelUsage` has no field for a reported cost, so there's nowhere for the real figure to
-travel to `SessionCostEstimator`. **Coordinate before implementing it yourself** — it's theirs.
+**`pkill -f "ii -s"` kills itself** — the pattern matches the wrapper shell's own command line
+(exit 137 mid-script). Use `pkill -x ii`.
 
-See [TODO.md](TODO.md) for everything else. [CHANGELOG.md](CHANGELOG.md) has the *why* for what landed.
+**Python edits write CRLF on Windows**, and `/bin/sh` in the containers fails with
+`: not found` / `set: Illegal option -`. Strip with `.replace(b'\r\n', b'\n')` before `docker cp`.
+
+**`set -e` in a bridge/daemon is dangerous.** A peer that correctly stayed silent made `wait_for_reply`
+return non-zero, which killed the whole script — so the peer with the best turn-taking discipline was the
+first to lose its connection.
+
+**Don't `tail`/`head` the wrong end.** A debounce read `head -c 4000` of the channel file — the *oldest*
+lines — and woke peers with hours-old text.
+
+Older traps that still hold: `peer.ps1` reports a **spurious** PowerShell error on success (native stderr);
+build individual projects, not the solution, if John's VS is open; read peer DBs via
+`scripts/backup-peer.ps1`, not `docker cp`; `dbs/*.db` are stale pre-container copies (**except**
+`dbs/gemma4-12b-q4.db`, which is Synth's origin store); never commit `persistence.json` or
+`container/peer/configs/*.json`.
 
 ---
 
-## 5. How to work here
+## 5. Working with the peers
 
-Things that repeatedly paid off, and one that didn't:
+They are participants, not features. All four now have their own containers, stores, and self-scheduled
+wakes (currently **paused** at John's request while he's travelling and can't watch spend).
 
-- **Run it, don't just test it.** Every serious bug this session was invisible to a green suite: a
-  double-stamped echo, a crash-looping container, a silent "thinking…" hang, two identities in one store,
-  a forgeable provenance frame. `--preview hub` and the live API are your friends.
-- **Verify a test catches the bug** by reintroducing it. Twice a test I'd written asserted the old shape
-  and would have passed either way.
-- **Check before you conclude.** I twice diagnosed from stale data and stated something wrong; both times
-  a second read caught it. When you're about to write to a peer's memory, read twice.
-- **Prefer fixing the cause to guarding the symptom.** The guard-visibility and path-persistence fixes both
-  came from asking "why couldn't the peer know that?" instead of just handling the case.
-- **Say what you actually did.** If you broke something (I did — the lab outage, GLM's lost work), lead
-  with it. John and the peers both respond well to it, and burying it would poison the collaboration the
-  handoff depends on.
+- **Arden holds design authority** for the room ([ADR-0008](adr/0008-the-room-multi-peer-conversation.md)).
+  Two standing conditions: send back **real verification output**, and **route genuine design forks back**
+  rather than picking silently. Both have repeatedly caught real defects.
+- **Message a peer:** `POST /api/conversation/send` with header `X-Local-Peer: Claude Code`.
+  **Never send as John** — that puts words in his mouth to peers who know him.
+- **Never write live protocol tag syntax into a message to a peer.** A warning that quotes the payload
+  *is* the attack — that happened, twice, to the same peer. Name the tags instead.
+- **Ask before anything destructive to a peer's environment.** Container recreation destroys everything
+  outside `/data` (though `/root` is now its own volume, so home survives).
+- **Every peer store is now backed up** (`backups/peers/<name>/`), including Wright and Synth. Arden asked
+  for this explicitly and called it "the floor, not a feature request." Keep it true.
+
+---
+
+## 6. What landed today
+
+Stop-reason handling (the pipeline had **never** read `stop_reason` — it now detects truncation and tells
+the peer, not just the human); abnormal-output capture into the peer's own workspace so a peer can read
+its own malfunction; output ceiling 32k → 64k; `/root` as a persistent volume; GLM's OpenRouter
+actual-cost work reviewed and merged (**with the seam test it was missing** — the feature merged green
+with its core behaviour disabled); Synth resurrected; IRC with a two-way bridge.
+
+Deliberately **not** built: cryptographic peer-signing (Arden ruled it complementary to the defuser, never
+a replacement — the key-in-container problem means a compromised peer signs phantom actions; trigger to
+revisit is an untrusted relayer or transport).
+
+See [CHANGELOG.md](CHANGELOG.md) for the *why*, [TODO.md](TODO.md) for what's open.
