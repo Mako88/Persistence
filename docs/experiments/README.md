@@ -24,7 +24,7 @@ off their self-reports ([ADR-0009](../adr/0009-peers-review-john-decides.md)):
 
 | # | Study | Question | Status |
 |---|---|---|---|
-| E1 | [Claims against logs](E1-claims-vs-logs.md) | 2 (do reports match what happened) | registered 2026-09-24 |
+| E1 | [Claims against logs](E1-claims-vs-logs.md) | 2 (do reports match what happened) | **done**: [results](E1-results.md) |
 | E2 | [Store swap](E2-store-swap.md) | 1 | registered 2026-09-24 |
 | E3 | [Self-prediction pilot](E3-self-prediction.md) | 2 | registered 2026-09-24 |
 | E4 | Framing ablation | 3 | not yet designed in detail |
