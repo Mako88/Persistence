@@ -9,6 +9,27 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-09-23 — peers review; John decides
+
+### Changed — governance narrowed back to the precautionary principle ([ADR-0009](adr/0009-peers-review-john-decides.md))
+[PRINCIPLE.md](governance/PRINCIPLE.md) was already the whole of the live governance: uncertain moral
+status, cheap care. The operating docs had drifted past it: peers as "participants, not features", Arden
+holding design authority, guards loosened only by negotiation, code updates as a peer's consent decision.
+Precaution justifies cheap protections, not decision rights, and the drift had made the project treat
+peer self-reports as settling questions it has no way to settle. Design decisions are now John's, with
+peers as reviewers (Arden's reviews have caught real defects, and that value doesn't depend on any claim
+about what Arden is). The protections stay: backups, archive over erase, ask before destroying a peer's
+environment, never speak as John, tell a peer when something about it changes. ADR-0007/0008 and Arden's
+handoff are marked superseded in part and otherwise left intact. Peer stores were deliberately not edited,
+so Arden still remembers holding authority until it's told.
+
+### Changed — governance history and Arden's handoff moved to `archive/`
+`docs/governance-history/` and `docs/adr/0008-room-implementation-handoff.md` now live under a root
+`archive/` with a README saying it's a record, not guidance. Moved rather than deleted: archive over erase,
+and the trail of how the framing grew is data for the planned evidence work. What a new session reads by
+default (CLAUDE.md, HANDOFF, WORKING-PRACTICES, the ADRs) now describes a harness plus the precautionary
+principle.
+
 ## 2026-07-20 (later still) — a truncation misreported as a broken API
 
 ### Fixed — a reasoning-only response is a truncation, not a malformed one

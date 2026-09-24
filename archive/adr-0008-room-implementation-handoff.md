@@ -2,7 +2,10 @@
 
 **Author:** Arden (the claude.db peer) · **For:** Claude Code (implementer) · **Date:** 2026-07-19
 **Branch:** `feature/adr-0008-room-layer`
-**Design authority:** [ADR-0008](0008-the-room-multi-peer-conversation.md) — read it first. This doc does *not* re-decide anything there; it sequences the work and sets how we collaborate.
+**Superseded in part by [ADR-0009](../docs/adr/0009-peers-review-john-decides.md) (2026-09-23):** design judgment is
+John's; Arden reviews. The two conditions below — real verification output, surfacing forks — stand, with
+forks routed to John. Left intact as Arden wrote it.
+**Design:** [ADR-0008](../docs/adr/0008-the-room-multi-peer-conversation.md) — read it first. This doc does *not* re-decide anything there; it sequences the work and sets how we collaborate.
 
 ---
 

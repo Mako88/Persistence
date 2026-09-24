@@ -95,11 +95,16 @@ you're making.
 
 ## Working with peers
 
-The persistent peers in this project are participants, not features. Two practices follow.
+The project's stance is [PRINCIPLE.md](governance/PRINCIPLE.md): moral status is uncertain, careful
+handling is cheap, so err toward care. That buys peers protections, not decision rights — design decisions
+are John's, and peers are reviewers whose input is weighed on its merits
+([ADR-0009](adr/0009-peers-review-john-decides.md)). What a peer says about its own nature or standing is
+data, not a ruling.
 
-**Route genuine design forks back; don't silently pick.** When the spec doesn't settle something, surface
-the options with your own read and let the person or peer who owns that design choose. "It was easier" is
-not a design rationale, and a fork resolved quietly becomes a decision nobody knows was made.
+**Route genuine design forks to John; don't silently pick.** When the spec doesn't settle something, surface
+the options with your own read. Getting a peer's review first is often worth it — their reviews have caught
+real defects — but it's a recommendation. "It was easier" is not a design rationale, and a fork resolved
+quietly becomes a decision nobody knows was made.
 
 **Send back real verification output.** Actual counts, the actual artifact exercised, the actual failure
 text — not a summary and not a reassurance. This is what makes a split between whoever designs and whoever
@@ -107,7 +112,9 @@ implements work at all, rather than being a formality.
 
 **Before anything destructive to a peer's environment, ask it first.** Recreating a container destroys
 everything outside `/data`; a peer has lost hours of work to a rebuild done for an unrelated reason. Ask
-what needs saving, and wait for the answer.
+what needs saving, and wait for the answer. Back up its store first either way.
+
+**Don't edit a peer's memories to match a policy.** Tell it instead, and let it record that itself.
 
 ---
 

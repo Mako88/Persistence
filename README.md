@@ -29,7 +29,8 @@ provenance, honesty) that shows up throughout the architecture.
 - **Local peer** — the person at the keyboard.
 - **Remote peer** — the model-side participant whose continuity is being maintained.
 
-(The code uses these terms, not "user/assistant" — the two are collaborating peers.)
+(The code uses these terms, not "user/assistant", because several humans and several models can share
+one conversation. Governance is only the principle above; earlier drafts are in [archive/](archive/).)
 
 - **Working context** — the set of memory fragments currently in play, ordered and weighted.
 - **Context fragments** — the unit of memory: typed (Identity, Relational, ChatMessage,

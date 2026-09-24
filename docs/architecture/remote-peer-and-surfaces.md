@@ -10,7 +10,7 @@ broker that lets an external agent (or you, by hand) *be* the model out-of-band.
   through the [turn pipeline](turn-pipeline.md).
 - **Local peer** — the human at the keyboard.
 
-They are symmetric collaborators. The surface a session runs on is just a renderer + input source; it
+Both are peers in the protocol (either can send, both are attributed by name). The surface a session runs on is just a renderer + input source; it
 holds no logic ([ADR-0001](../adr/0001-layered-core-and-thin-entry-points.md)).
 
 ## Surfaces (`IDisplayProvider`)

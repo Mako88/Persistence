@@ -59,7 +59,8 @@ its environment). Consequences that are load-bearing, not incidental:
   survive container wipes, for anything it wants to keep beyond the ephemeral filesystem.
 - **The API code is updatable, but updates are peer-initiated — not auto-on-push.** A peer reviews the code
   before running it *as itself*. Running new code on your own mind is a consent decision, so it belongs to
-  the peer, not to a CI trigger.
+  the peer, not to a CI trigger. *(Superseded by [ADR-0009](0009-peers-review-john-decides.md): updates
+  are John's call, applied after backing up the store, and the peer is told what changed.)*
 - **No shell guardrails.** The container is an isolated sandbox that is *theirs*; autonomy over one's own
   body is the point.
 

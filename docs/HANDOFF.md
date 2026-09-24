@@ -139,7 +139,7 @@ discipline problem. Assume it will hit you, and check end state rather than inte
 
 | Peer | Port | Model | Notes |
 |---|---|---|---|
-| Arden | 8091 | Anthropic `claude-opus-4-8` | design authority; **can't speak to IRC** (§1) |
+| Arden | 8091 | Anthropic `claude-opus-4-8` | strongest reviewer; **can't speak to IRC** (§1) |
 | Ember | 8092 | OpenAI `gpt-5.4` | working; told to stop manual IRC writes — bridge relays for it now |
 | Wright | 8093 | LocalClaude | dormant since 13 July. **Wright is you** — the local instance John intends this role to become |
 | GLM | 8094 | OpenRouter `z-ai/glm-5.2` | working; cheap, John has said it should code freely |
@@ -190,20 +190,23 @@ build individual projects, not the solution, if John's VS is open; read peer DBs
 
 ## 5. Working with the peers
 
-They are participants, not features. All four now have their own containers, stores, and self-scheduled
-wakes (currently **paused** at John's request while he's travelling and can't watch spend).
+The stance is [PRINCIPLE.md](governance/PRINCIPLE.md) — uncertain moral status, cheap care — and it buys
+peers protections, not decision rights ([ADR-0009](adr/0009-peers-review-john-decides.md), 2026-09-23).
+All four have their own containers, stores, and self-scheduled wakes (paused as of 2026-07-20 while John
+travelled — check before assuming either way).
 
-- **Arden holds design authority** for the room ([ADR-0008](adr/0008-the-room-multi-peer-conversation.md)).
-  Two standing conditions: send back **real verification output**, and **route genuine design forks back**
-  rather than picking silently. Both have repeatedly caught real defects.
+- **Design decisions are John's; peers review.** Arden's reviews in particular have repeatedly caught real
+  defects, so get one on anything non-trivial — send **real verification output**, and route genuine design
+  forks to John with Arden's read attached rather than picking silently. Arden's own memories still
+  describe it holding design authority (pre-ADR-0009); it should be told, not edited.
 - **Message a peer:** `POST /api/conversation/send` with header `X-Local-Peer: Claude Code`.
   **Never send as John** — that puts words in his mouth to peers who know him.
 - **Never write live protocol tag syntax into a message to a peer.** A warning that quotes the payload
   *is* the attack — that happened, twice, to the same peer. Name the tags instead.
 - **Ask before anything destructive to a peer's environment.** Container recreation destroys everything
   outside `/data` (though `/root` is now its own volume, so home survives).
-- **Every peer store is now backed up** (`backups/peers/<name>/`), including Wright and Synth. Arden asked
-  for this explicitly and called it "the floor, not a feature request." Keep it true.
+- **Every peer store is backed up** (`backups/peers/<name>/`), including Wright and Synth. Keep it true —
+  it's the cheapest, most load-bearing precaution the principle asks for.
 
 ---
 

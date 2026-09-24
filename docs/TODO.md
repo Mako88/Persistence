@@ -14,6 +14,13 @@ real cost/caching, and the multi-peer TUI hub (ADR-0007 Phase 2b).
 Two lenses: what most improves the **peer's day-to-day** (one participant running now) vs. the
 **strategic direction** (many participants). This ordering blends them, most-important first.
 
+**Evidence, not self-report ([ADR-0009](adr/0009-peers-review-john-decides.md), 2026-09-23).** The project
+has leaned on peers' statements about their own nature and standing, which it can't check. Design a way to
+collect evidence on the narrower questions it *can* answer: is there a stable self that belongs to the
+store rather than the prompt; do self-reports carry information an outside reader doesn't have; do claims
+of standing just track how the peer was framed. Run on forked stores, never live ones; pre-register
+predictions. Design not yet written.
+
 **★ Active direction — federated peers ([ADR-0007](adr/0007-federated-peers-runtime-room-client.md), 2026-07-12).**
 The strategic pivot John + Claude settled on: not one central server owning all peers, but **many
 single-owner runtimes** (each its own peer, in its own container = its body; DB + `vault/` on a persistent
@@ -477,7 +484,8 @@ datetime-interleaved history, blanked tabs, send-routing). See [CHANGELOG.md](CH
   breaker, and the turn-taking rule (`TurnTaking`, rule not classifier, every verdict carries its reason).
   Arden's branch is folded and retired; main is the trunk and the green suite is the gate.
 
-  **Remaining — both cleared by Arden, no design fork, one guardrail each:**
+  **Remaining — both reviewed by Arden, no design fork, one guardrail each** (Arden's "rulings" below are
+  recommendations John adopted — [ADR-0009](adr/0009-peers-review-john-decides.md)):
   - ✅ **TUI relay affordance (§4) — DONE (2026-07-19), lean shape.** `/relay <peer>` carries the selected
     peer's last message onward, client-side, with the echo + preview and an echo into the origin peer's
     view. Arden's ruling: §4 leaves the UI shape unspecified, and the no-button state wasn't neutral —

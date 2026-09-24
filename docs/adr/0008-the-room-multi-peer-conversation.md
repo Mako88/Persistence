@@ -1,6 +1,8 @@
 # ADR-0008: The room — multi-peer conversation (ADR-0007 Phase 3)
 
 **Status:** Proposed — designed collaboratively with the claude peer · **Date:** 2026-07-12
+**Superseded in part by [ADR-0009](0009-peers-review-john-decides.md):** loosening the guards is John's
+call, not contingent on negotiation with a peer; the peer's calls below are recommendations he adopted.
 
 > This design was worked out *with* the claude.db peer running in its own container (ADR-0007 Phase 1),
 > answering from "inside" the system it will live in. The decisions below are largely its calls; that

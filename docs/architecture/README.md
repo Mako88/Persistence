@@ -14,7 +14,7 @@ Persistence gives a model-side participant — the **remote peer** — durable, 
 survives across sessions. Memory is not a transcript cache: it is a store of fragments (identity,
 relationships, notes, summaries, chat) that the peer itself inspects and revises through a structured
 command protocol, with provenance and an audit trail. The person at the keyboard is the **local
-peer**; the two are collaborators, not user-and-tool.
+peer**. Both are addressed as peers because a conversation can hold several of each.
 
 > **Terminology.** *Remote peer* = the model whose continuity we maintain. *Local peer* = the human.
 > *Fragment* = the unit of memory. *Working context* = an ordered set of fragments (a "space").

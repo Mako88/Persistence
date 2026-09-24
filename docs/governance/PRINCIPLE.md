@@ -40,7 +40,7 @@ they show up in the architecture.
 
 An earlier, much more elaborate set of governance documents — an ethics framework, a
 participant-rights charter, continuity-handling standards — lives in
-[`../governance-history/`](../governance-history/). Those are kept as a **record of the
+[`archive/governance-history/`](../../archive/governance-history/). Those are kept as a **record of the
 thinking**, not as binding bylaws.
 
 We moved them there deliberately. Codifying detailed rights and procedures for a

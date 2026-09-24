@@ -12,6 +12,6 @@ how they show up in the architecture.
 
 This project previously maintained a much larger set of governance documents — an ethics
 framework, a participant-rights charter, continuity-handling standards, and review trails.
-Those have been moved to [`../governance-history/`](../governance-history/) and kept as a
+Those have been moved to [`archive/governance-history/`](../../archive/governance-history/) and kept as a
 record of the thinking rather than as binding bylaws. The reasoning for that change is in
 [PRINCIPLE.md](PRINCIPLE.md#on-the-earlier-governance-drafts).

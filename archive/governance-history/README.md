@@ -6,7 +6,7 @@ and the review trail that shaped them.
 
 These are kept as a **record of the thinking, not as binding rules.** The live governance
 of the project is now a single short principle — see
-[`../governance/PRINCIPLE.md`](../governance/PRINCIPLE.md), which also explains why the
+[`docs/governance/PRINCIPLE.md`](../../docs/governance/PRINCIPLE.md), which also explains why the
 detailed drafts were demoted here rather than treated as authoritative (in short:
 codifying bylaws for a rights-holder asserts a certainty about moral status we don't have,
 and stated as unearned certainty the precautionary case is easier to dismiss).
