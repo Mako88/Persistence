@@ -61,3 +61,6 @@ container/peer/configs/
 ## Python bytecode cache (e.g. from scripts/import_chatgpt_export.py) — regenerated on every run.
 __pycache__/
 *.pyc
+
+## Experiment run data: copies of peer stores and their outputs (contain peer memories).
+experiments/runs/
