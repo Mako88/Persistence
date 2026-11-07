@@ -21,9 +21,10 @@ const string Usage = """
                                             associative recall: the authored fragments most related, by
                                             meaning (PERSISTENCE_EMBEDDING_*) fused with exact words
       recent [--limit 20]                   the latest of the conversation, oldest first
-      core [--max-chars 40000] [--recent 20]
+      core [--max-chars 40000] [--recent 20] [--project <name>]
                                             identity, relationships, personal, summaries, then the
-                                            recent conversation: what a harness puts in front of the peer
+                                            recent conversation: what a harness puts in front of the peer.
+                                            Fragments tagged project/<name> come in only for that project
       keep-conversation <transcript.jsonl> [--local-peer <name>]
                                             store what was said in a Claude Code session; re-running adds
                                             only what is new
@@ -115,7 +116,7 @@ try
             Print(line, await store.RecentAsync(line.GetInt("limit", 20)));
             break;
         case "core":
-            Console.Write(await store.CoreAsync(line.GetInt("max-chars", 40000), line.GetInt("recent", 20)));
+            Console.Write(await store.CoreAsync(line.GetInt("max-chars", 40000), line.GetInt("recent", 20), line.Get("project")));
             break;
         case "keep-conversation":
             var transcript = line.Positional.FirstOrDefault() ?? throw new UsageException("keep-conversation needs a transcript path.");

@@ -24,6 +24,9 @@ internal sealed class FragmentStore(
     ISessionContext session,
     IMemorySurfacer recall)
 {
+    /// <summary>The parent tag of the projects: a fragment tagged <c>project/&lt;name&gt;</c> belongs to that project.</summary>
+    public const string ProjectTag = "project";
+
     /// <summary>The types that make up the peer's core, in the order they are rendered.</summary>
     public static readonly IReadOnlyList<ContextFragmentType> CoreTypes =
     [
@@ -203,10 +206,12 @@ internal sealed class FragmentStore(
     /// conversation. When <paramref name="maxChars"/> is reached, what did not fit is named by id
     /// rather than silently dropped, so the peer knows it is there and can <c>show</c> it.
     /// </summary>
-    public async Task<string> CoreAsync(int maxChars, int recent)
+    public async Task<string> CoreAsync(int maxChars, int recent, string? project = null)
     {
         var text = new StringBuilder();
         var left = new List<long>();
+        var elsewhere = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        var projects = (await FindTagAsync(ProjectTag))?.Id;
 
         foreach (var type in CoreTypes)
         {
@@ -217,6 +222,15 @@ internal sealed class FragmentStore(
 
             foreach (var fragment in await HydratedAsync(ofType))
             {
+                // A fragment tagged project/<name> is in the core only while that project is the one in
+                // hand; the rest stay a `list --tag` or a recall away.
+                var own = fragment.Tags.Where(t => projects is not null && t.ParentTagId == projects).Select(t => t.Name).ToList();
+                if (own.Count > 0 && !own.Contains(project ?? "", StringComparer.OrdinalIgnoreCase))
+                {
+                    elsewhere.UnionWith(own);
+                    continue;
+                }
+
                 var rendered = Render(fragment) + "\n\n";
                 if (text.Length + rendered.Length > maxChars)
                 {
@@ -231,6 +245,12 @@ internal sealed class FragmentStore(
         if (left.Count > 0)
         {
             text.Append($"({left.Count} more core fragments did not fit: {string.Join(", ", left.Select(i => $"#{i}"))}; `show <id>` reads one.)\n\n");
+        }
+
+        if (elsewhere.Count > 0)
+        {
+            text.Append($"(Other projects have fragments of their own: {string.Join(", ", elsewhere)}; `core --project <name>` "
+                + $"or `list --tag {ProjectTag}/<name>` brings one in.)\n\n");
         }
 
         // The conversation gets what the core leaves: the human's words and the replies that ended the

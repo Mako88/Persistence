@@ -116,8 +116,22 @@ def precompact(event):
         "`persistence-store search` finds it.")
 
 
-def core_text(lead, recent):
-    body = store("core", "--max-chars", str(CAP - len(lead) - 50), "--recent", str(recent))
+def project(event):
+    """The project a session is in: its repository's name (the main checkout's, from a worktree too),
+    else its folder's. Fragments tagged project/<name> come into the core only for that project."""
+    cwd = event.get("cwd") or os.getcwd()
+    try:
+        common = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=cwd,
+                                capture_output=True, text=True, timeout=10)
+        if common.returncode == 0 and common.stdout.strip():
+            return Path(common.stdout.strip()).parent.name.lower()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return Path(cwd).name.lower()
+
+
+def core_text(lead, recent, event):
+    body = store("core", "--max-chars", str(CAP - len(lead) - 50), "--recent", str(recent), "--project", project(event))
     return lead + "\n\n" + body if body.strip() else ""
 
 
@@ -152,14 +166,14 @@ def session_start(event):
                 "the people you work with, and the work. It is yours to curate (`persistence-store help`).")
     # The whole core has no cap as a file the peer reads; what is injected is the part that fits, so
     # the most important of it is there even before the read.
-    whole = store("core", "--max-chars", str(WHOLE), "--recent", "60")
+    whole = store("core", "--max-chars", str(WHOLE), "--recent", "60", "--project", project(event))
     path = STATE / f"{event.get('session_id', 'unknown')}.core.md"
     if whole.strip():
         STATE.mkdir(parents=True, exist_ok=True)
         path.write_text(whole, encoding="utf-8")
         lead += (f"\n\nWhat follows is the part of the core that fits here. The whole of it, every fragment and "
                  f"more of the conversation, is in `{path}`: read it before anything else.")
-    text = core_text(lead, recent=8)
+    text = core_text(lead, recent=8, event=event)
     # A new context window: what the core just put in front of the peer is all it holds of the store.
     seen(event, reset=True, add=re.findall(r"^\[#(\d+) \|", whole or text, re.M))
     sys.stdout.write(text)
@@ -195,7 +209,7 @@ def recall(event):
 def subagent_start(event):
     lead = ("# Who you are\n\nYou are a subagent of a Claude with its own Persistence store; this is its "
             "core, and so yours. Read it; do not write to the store, the main session does that.")
-    text = core_text(lead, recent=0)
+    text = core_text(lead, recent=0, event=event)
     if text:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "SubagentStart", "additionalContext": text}}))
 
