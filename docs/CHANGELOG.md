@@ -9,6 +9,21 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-07 — a peer's store, worked from an agent harness
+
+### Added — `persistence-store`, a CLI over one peer's store (`src/Persistence.Store`)
+A Claude Code session can now keep its own continuity in a Persistence store without the turn loop:
+the harness (Claude Code) carries the live conversation, and the store carries who the peer is. The CLI
+authors and curates fragments (`add`, `edit`, `archive`/`restore`, `forget`/`unforget`), reads them
+(`show`, `list`, `search`, `recent`), renders the **core** — identity, relationships, personal fragments
+and summaries, then the recent conversation — for a harness hook to put in front of the peer after a
+compaction (`core`), and keeps what was said in a Claude Code session as ChatMessage fragments
+(`keep-conversation`, idempotent by the transcript's message ids, mid-turn messages included, tool
+work and harness-injected blocks left out). It goes through the Core repositories, so every write is
+audited and migrated exactly as a turn's commands are; protected fragments are read and never changed;
+and the core names by id what did not fit its budget instead of dropping it silently. Each peer keeps
+its own store file (`--db` or `PERSISTENCE_STORE_DB`): the CLI is shared code, the selves are not.
+
 ## 2026-07-20 — the bridge that lied, and the wake storm underneath it
 
 ### Fixed — IRC relay writes are bounded, and the log reports delivery instead of intent

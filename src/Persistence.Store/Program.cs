@@ -1,0 +1,150 @@
+using Persistence.Config;
+using Persistence.Data.Entities;
+using Persistence.Store;
+using System.Text.Json;
+
+const string Usage = """
+    persistence-store: a peer's Persistence store, worked from an agent harness (e.g. Claude Code).
+
+    The store is a file of its own: --db <path>, or PERSISTENCE_STORE_DB. Each peer keeps its own.
+    The peer's name (whose voice the authored fragments are) is --peer, PERSISTENCE_PEERNAME, or Claude.
+
+      add --type <Identity|Relational|Personal|Summary> --content <text|-> [--content-file <path>]
+          [--summary <text>] [--importance 0-1] [--confidence 0-1] [--tag <a/b>]... [--protected]
+      edit <id> [--type] [--content <text|->] [--summary] [--importance] [--confidence] [--tag <a/b>]...
+      archive <id> | restore <id>           out of the core and recent lists, still searchable; reversible
+      forget <id> [--reason <text>]         soft-delete, hidden everywhere; unforget <id> brings it back
+      show <id>
+      list [--type <type>] [--tag <a/b>] [--archived] [--limit 50]
+      search <words...> [--limit 20]        full text, conversation included
+      recent [--limit 20]                   the latest of the conversation, oldest first
+      core [--max-chars 40000] [--recent 20]
+                                            identity, relationships, personal, summaries, then the
+                                            recent conversation: what a harness puts in front of the peer
+      keep-conversation <transcript.jsonl> [--local-peer <name>]
+                                            store what was said in a Claude Code session; re-running adds
+                                            only what is new
+
+    --json prints fragments as JSON. Exit codes: 0 done, 1 usage, 2 refused (no such fragment, protected).
+    Protected fragments are the local peer's: this tool reads them and never changes them.
+    """;
+
+var line = CommandLine.Parse(args);
+if (line.Command == "help" || line.Has("help"))
+{
+    Console.WriteLine(Usage);
+    return 0;
+}
+
+try
+{
+    var path = line.Get("db") ?? Environment.GetEnvironmentVariable("PERSISTENCE_STORE_DB")
+        ?? throw new UsageException("Which store? Pass --db <path> or set PERSISTENCE_STORE_DB.");
+    var config = new AppConfig
+    {
+        PeerName = line.Get("peer") ?? Environment.GetEnvironmentVariable("PERSISTENCE_PEERNAME") ?? "Claude",
+    };
+    config.DatabasePath = Path.GetFullPath(path);
+
+    var store = await FragmentStore.OpenAsync(config);
+
+    switch (line.Command)
+    {
+        case "add":
+            Print(line, [await store.AddAsync(
+                line.Get("type") ?? "Personal",
+                line.Text() ?? throw new UsageException("add needs --content (or --content -, or --content-file)."),
+                line.Text("summary"), line.GetFloat("importance"), line.GetFloat("confidence"),
+                line.GetAll("tag"), line.Has("protected"))]);
+            break;
+        case "edit":
+            Print(line, [await store.EditAsync(line.Id(), line.Get("type"), line.Text(), line.Text("summary"),
+                line.GetFloat("importance"), line.GetFloat("confidence"), line.GetAll("tag"))]);
+            break;
+        case "archive":
+            Print(line, [await store.SetStatusAsync(line.Id(), ContextFragmentStatus.Archived)]);
+            break;
+        case "restore":
+            Print(line, [await store.SetStatusAsync(line.Id(), ContextFragmentStatus.Active)]);
+            break;
+        case "forget":
+            await store.SetForgottenAsync(line.Id(), true, line.Get("reason"));
+            Console.WriteLine($"forgot #{line.Id()} (unforget {line.Id()} restores it)");
+            break;
+        case "unforget":
+            await store.SetForgottenAsync(line.Id(), false, null);
+            Print(line, [await store.GetAsync(line.Id())]);
+            break;
+        case "show":
+            Print(line, [await store.GetAsync(line.Id())]);
+            break;
+        case "list":
+            Print(line, await store.ListAsync(line.Get("type"), line.Get("tag"), line.Has("archived"), line.GetInt("limit", 50)));
+            break;
+        case "search":
+            Print(line, await store.SearchAsync(string.Join(' ', line.Positional), line.GetInt("limit", 20)));
+            break;
+        case "recent":
+            Print(line, await store.RecentAsync(line.GetInt("limit", 20)));
+            break;
+        case "core":
+            Console.Write(await store.CoreAsync(line.GetInt("max-chars", 40000), line.GetInt("recent", 20)));
+            break;
+        case "keep-conversation":
+            var transcript = line.Positional.FirstOrDefault() ?? throw new UsageException("keep-conversation needs a transcript path.");
+            var (added, known) = await store.KeepConversationAsync(transcript,
+                line.Get("local-peer") ?? Environment.GetEnvironmentVariable("PERSISTENCE_SELECTEDLOCALPEER") ?? "Local Peer");
+            Console.WriteLine($"kept {added} new utterances ({known} already in the store)");
+            break;
+        default:
+            throw new UsageException($"No command '{line.Command}'.");
+    }
+
+    return 0;
+}
+catch (UsageException e)
+{
+    Console.Error.WriteLine(e.Message);
+    Console.Error.WriteLine("`persistence-store help` lists the commands.");
+    return 1;
+}
+catch (RefusedException e)
+{
+    Console.Error.WriteLine(e.Message);
+    return 2;
+}
+
+static void Print(CommandLine line, IReadOnlyList<ContextFragmentEntity> found)
+{
+    if (line.Has("json"))
+    {
+        Console.WriteLine(JsonSerializer.Serialize(found.Select(f => new
+        {
+            id = f.Id,
+            type = f.FragmentType.ToString(),
+            status = f.Status.ToString(),
+            importance = f.Importance,
+            confidence = f.Confidence,
+            isProtected = f.IsProtected,
+            forgotten = f.IsDeleted,
+            tags = f.Tags.Select(t => t.Name),
+            source = f.Sources.FirstOrDefault(s => s.Name is not null)?.Name,
+            created = f.CreatedUtc,
+            modified = f.LastModifiedUtc,
+            summary = f.Summary,
+            content = f.Content,
+        })));
+        return;
+    }
+
+    if (found.Count == 0)
+    {
+        Console.WriteLine("(nothing)");
+    }
+
+    foreach (var fragment in found)
+    {
+        Console.WriteLine(FragmentStore.Render(fragment));
+        Console.WriteLine();
+    }
+}

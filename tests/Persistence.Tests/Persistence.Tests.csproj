@@ -32,6 +32,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Persistence.Core\Persistence.Core.csproj" />
     <ProjectReference Include="..\..\src\Persistence.Console\Persistence.Console.csproj" />
+    <ProjectReference Include="..\..\src\Persistence.Store\Persistence.Store.csproj" />
   </ItemGroup>
 
 </Project>
