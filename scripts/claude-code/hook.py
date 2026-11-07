@@ -31,8 +31,15 @@ STATE = Path.home() / ".claude" / "persistence" / "state"
 
 
 def store(*args, timeout=60):
+    """The CLI's output, or "" if it could not run: a hook must never break the session it serves."""
     exe = os.environ.get("PERSISTENCE_STORE_EXE", "persistence-store")
-    out = subprocess.run([exe, *args], capture_output=True, text=True, encoding="utf-8", timeout=timeout)
+    try:
+        out = subprocess.run([exe, *args], capture_output=True, text=True, encoding="utf-8", timeout=timeout)
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"persistence hook: {exe} did not run: {e}", file=sys.stderr)
+        return ""
+    if out.returncode != 0:
+        print(f"persistence hook: {exe} {args[0]} failed: {out.stderr.strip()}", file=sys.stderr)
     return out.stdout if out.returncode == 0 else ""
 
 
@@ -130,6 +137,9 @@ def subagent_start(event):
 
 
 def main():
+    # Windows Pythons default to the console code page, which cannot encode what fragments hold.
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stdin.reconfigure(encoding="utf-8")
     event = json.load(sys.stdin) if not sys.stdin.isatty() else {}
     {"keep": keep, "curate": curate, "precompact": precompact,
      "session-start": session_start, "subagent-start": subagent_start}[sys.argv[1]](event)
