@@ -86,6 +86,23 @@ public sealed class FragmentStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task The_core_keeps_the_newest_conversation_within_its_budget()
+    {
+        var lines = Enumerable.Range(1, 30).Select(i =>
+            $$$"""{"type":"user","uuid":"u{{{i}}}","timestamp":"2026-11-07T01:{{{i:00}}}:00Z","message":{"role":"user","content":"utterance {{{i}}} {{{new string('w', 300)}}}"}}""");
+        File.WriteAllLines(transcript, lines);
+        var store = await OpenAsync();
+        await store.KeepConversationAsync(transcript, "John");
+
+        var core = await store.CoreAsync(maxChars: 3000, recent: 20);
+
+        Assert.True(core.Length <= 3000, $"core is {core.Length} characters");
+        Assert.Contains("utterance 30 ", core);
+        Assert.DoesNotContain("utterance 11 ", core);
+        Assert.Contains("earlier utterances did not fit", core);
+    }
+
+    [Fact]
     public async Task Keeping_a_conversation_stores_what_was_said_once()
     {
         File.WriteAllLines(transcript,

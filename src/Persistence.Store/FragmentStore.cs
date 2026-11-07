@@ -222,13 +222,35 @@ internal sealed class FragmentStore(
             text.Append($"({left.Count} more core fragments did not fit: {string.Join(", ", left.Select(i => $"#{i}"))}; `show <id>` reads one.)\n\n");
         }
 
+        // The conversation gets what the core leaves, newest kept first; a long utterance is cut with
+        // its id, so the whole of it is one `show` away.
         var conversation = recent > 0 ? await RecentAsync(recent) : [];
         if (conversation.Count > 0)
         {
-            text.Append("## The conversation so far (the most recent of it)\n\n");
-            foreach (var fragment in conversation)
+            const string heading = "## The conversation so far (the most recent of it)\n\n";
+            var room = maxChars - text.Length - heading.Length - 200;
+            var kept = new List<string>();
+            foreach (var fragment in conversation.Reverse())
             {
-                text.Append(Render(fragment)).Append("\n\n");
+                var rendered = Render(fragment, maxContent: 1500) + "\n\n";
+                if (rendered.Length > room)
+                {
+                    break;
+                }
+
+                kept.Insert(0, rendered);
+                room -= rendered.Length;
+            }
+
+            text.Append(heading);
+            if (kept.Count < conversation.Count)
+            {
+                text.Append($"({conversation.Count - kept.Count} earlier utterances did not fit; `recent` or `search` reads them.)\n\n");
+            }
+
+            foreach (var rendered in kept)
+            {
+                text.Append(rendered);
             }
         }
 
@@ -246,7 +268,8 @@ internal sealed class FragmentStore(
             .Select(f => f.MessageId).OfType<string>().ToHashSet();
         var localPeer = await sources.EnsureLocalPeerSourceAsync(localPeerName);
         var remotePeer = await PeerSourceAsync();
-        int added = 0, skipped = 0;
+        var skipped = 0;
+        var fresh = new List<ContextFragmentEntity>();
 
         foreach (var said in Transcript.Read(transcriptPath))
         {
@@ -256,7 +279,7 @@ internal sealed class FragmentStore(
                 continue;
             }
 
-            await fragments.SaveAsync(new ContextFragmentEntity
+            fresh.Add(new ContextFragmentEntity
             {
                 FragmentType = ContextFragmentType.ChatMessage,
                 Status = ContextFragmentStatus.Active,
@@ -270,17 +293,22 @@ internal sealed class FragmentStore(
                     ? new SourceEntity { Id = localPeer, SourceType = SourceType.HumanPeer, Name = localPeerName, CreatedUtc = said.At, LastModifiedUtc = said.At }
                     : remotePeer],
             });
-            added++;
         }
 
-        return (added, skipped);
+        foreach (var fragment in fresh)
+        {
+            await fragments.SaveAsync(fragment);
+        }
+
+        return (fresh.Count, skipped);
     }
 
     /// <summary>
     /// A fragment in Persistence's prompt form: <c>[#id | Type | i: c: | flags]</c>, a byline for
-    /// conversation, then the content.
+    /// conversation, then the content — cut at <paramref name="maxContent"/> characters with the id
+    /// to read the rest by, when a budget asks for it.
     /// </summary>
-    public static string Render(ContextFragmentEntity f)
+    public static string Render(ContextFragmentEntity f, int maxContent = int.MaxValue)
     {
         var flags = new List<string>();
         if (f.IsProtected) flags.Add("protected");
@@ -295,7 +323,10 @@ internal sealed class FragmentStore(
             header += $" {who}, {f.CreatedUtc.ToUniversalTime():yyyy-MM-dd HH:mm}Z:";
         }
 
-        return $"{header}\n{f.Content}";
+        var content = f.Content.Length <= maxContent
+            ? f.Content
+            : f.Content[..maxContent] + $"… [#{f.Id} continues: `show {f.Id}`]";
+        return $"{header}\n{content}";
     }
 
     private async Task<ContextFragmentEntity> WritableAsync(long id)
