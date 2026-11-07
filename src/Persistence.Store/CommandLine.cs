@@ -10,7 +10,7 @@ internal sealed class CommandLine
     /// <summary>The options that are switches rather than carrying a value.</summary>
     public static readonly IReadOnlySet<string> Flags = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
-        "json", "protected", "archived", "help",
+        "json", "protected", "archived", "help", "debug",
     };
 
     public string Command { get; }

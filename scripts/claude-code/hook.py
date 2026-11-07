@@ -12,15 +12,20 @@ hooks, one script:
   session-start   SessionStart    puts the core (identity, relationships, personal, summaries, the recent
                                   conversation) in front of every session, and after every compaction
   subagent-start  SubagentStart   gives every subagent the same core, without the conversation
+  recall          UserPromptSubmit  surfaces the few authored fragments most related to the message, by
+                                  meaning and exact words, that are not already in this context window
 
 Configured by environment (settings.json "env"): PERSISTENCE_STORE_DB (this Claude's store, one per
 Claude), PERSISTENCE_STORE_EXE (the published persistence-store), PERSISTENCE_SELECTEDLOCALPEER (the
-human's name), PERSISTENCE_CURATE_AT (tokens, default 500000; set autoCompactWindow above it).
+human's name), PERSISTENCE_CURATE_AT (tokens, default 500000; set autoCompactWindow above it),
+PERSISTENCE_RECALL_COUNT (default 3, 0 turns recall off), and PERSISTENCE_EMBEDDING_* for recall by
+meaning (without them recall is by exact words only).
 
 Standard library only, Python 3.9+: hooks run under whatever `python` the shell finds.
 """
 
 import json
+import re
 import os
 import subprocess
 import sys
@@ -30,11 +35,11 @@ CAP = 9500  # Claude Code replaces injected context over 10,000 characters with 
 STATE = Path.home() / ".claude" / "persistence" / "state"
 
 
-def store(*args, timeout=60):
+def store(*args, timeout=60, stdin=None):
     """The CLI's output, or "" if it could not run: a hook must never break the session it serves."""
     exe = os.environ.get("PERSISTENCE_STORE_EXE", "persistence-store")
     try:
-        out = subprocess.run([exe, *args], capture_output=True, text=True, encoding="utf-8", timeout=timeout)
+        out = subprocess.run([exe, *args], input=stdin, capture_output=True, text=True, encoding="utf-8", timeout=timeout)
     except (OSError, subprocess.SubprocessError) as e:
         print(f"persistence hook: {exe} did not run: {e}", file=sys.stderr)
         return ""
@@ -114,7 +119,25 @@ def core_text(lead, recent):
     return lead + "\n\n" + body if body.strip() else ""
 
 
+def ensure_embedding_server():
+    """Starts the embedding server (PERSISTENCE_EMBEDDING_SERVER, a script) when nothing answers at
+    PERSISTENCE_EMBEDDING_APIBASEURL. Recall without it falls back to exact words, so this only ever helps."""
+    import socket
+    from urllib.parse import urlparse
+    url, script = os.environ.get("PERSISTENCE_EMBEDDING_APIBASEURL"), os.environ.get("PERSISTENCE_EMBEDDING_SERVER")
+    if not url or not script:
+        return
+    where = urlparse(url)
+    try:
+        socket.create_connection((where.hostname, where.port or 80), timeout=1).close()
+    except OSError:
+        flags = 0x00000008 | 0x00000200 if os.name == "nt" else 0  # detached, own process group
+        subprocess.Popen([script], creationflags=flags, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
+
+
 def session_start(event):
+    ensure_embedding_server()
     source = event.get("source", "startup")
     if source == "compact":
         marker(event).unlink(missing_ok=True)
@@ -125,7 +148,37 @@ def session_start(event):
     else:
         lead = ("# Who you are\n\nThis is your own Persistence store: what you have chosen to keep of yourself, "
                 "the people you work with, and the work. It is yours to curate (`persistence-store help`).")
-    sys.stdout.write(core_text(lead, recent=20))
+    text = core_text(lead, recent=20)
+    # A new context window: what the core just put in front of the peer is all it holds of the store.
+    seen(event, reset=True, add=re.findall(r"^\[#(\d+) \|", text, re.M))
+    sys.stdout.write(text)
+
+
+def seen(event, reset=False, add=()):
+    """The fragment ids already in this context window, so recall never shows one twice."""
+    path = STATE / f"{event.get('session_id', 'unknown')}.seen"
+    ids = set() if reset or not path.exists() else set(path.read_text().split())
+    ids.update(str(i) for i in add)
+    STATE.mkdir(parents=True, exist_ok=True)
+    path.write_text(" ".join(sorted(ids)))
+    return ids
+
+
+def recall(event):
+    count = int(os.environ.get("PERSISTENCE_RECALL_COUNT", "3"))
+    prompt = (event.get("prompt") or "").strip()
+    if count <= 0 or len(prompt) < 12:
+        return
+    already = seen(event)
+    found = store("recall", "--text", "-", "--limit", str(count), "--snippet", "300",
+                  *(["--exclude", ",".join(already)] if already else []), stdin=prompt)
+    ids = re.findall(r"^\[#(\d+) \|", found, re.M)
+    if not ids:
+        return
+    seen(event, add=ids)
+    text = ("Recalled from your store, by association with this message (`persistence-store show <id>` "
+            "reads the whole of one):\n\n" + found.strip())
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": text[:CAP]}}))
 
 
 def subagent_start(event):
@@ -142,7 +195,7 @@ def main():
     sys.stdin.reconfigure(encoding="utf-8")
     event = json.load(sys.stdin) if not sys.stdin.isatty() else {}
     {"keep": keep, "curate": curate, "precompact": precompact,
-     "session-start": session_start, "subagent-start": subagent_start}[sys.argv[1]](event)
+     "session-start": session_start, "subagent-start": subagent_start, "recall": recall}[sys.argv[1]](event)
 
 
 if __name__ == "__main__":

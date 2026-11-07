@@ -5,6 +5,7 @@ using Persistence.DI;
 using Persistence.Data.Entities;
 using Persistence.Data.Repositories;
 using Persistence.Runtime;
+using Persistence.Services;
 using System.Text;
 
 namespace Persistence.Store;
@@ -20,7 +21,8 @@ internal sealed class FragmentStore(
     IContextFragmentRepository fragments,
     ISourceRepository sources,
     ITagRepository tags,
-    ISessionContext session)
+    ISessionContext session,
+    IMemorySurfacer recall)
 {
     /// <summary>The types that make up the peer's core, in the order they are rendered.</summary>
     public static readonly IReadOnlyList<ContextFragmentType> CoreTypes =
@@ -35,11 +37,12 @@ internal sealed class FragmentStore(
     /// Opens the store <paramref name="config"/> names: wires the repositories as the app does, migrates
     /// the file (creating it if new), and loads the source ids every write is attributed to.
     /// </summary>
-    public static async Task<FragmentStore> OpenAsync(IAppConfig config)
+    public static async Task<FragmentStore> OpenAsync(IAppConfig config, bool debug = false)
     {
         var services = IoC.RegisterServices(builder =>
         {
             builder.RegisterInstance(config).As<IAppConfig>().SingleInstance();
+            builder.RegisterInstance(new QuietDisplay(debug)).As<IDisplayProvider>().SingleInstance();
             builder.RegisterType<FragmentStore>().SingleInstance();
         });
         var store = (FragmentStore)services.GetService(typeof(FragmentStore))!;
@@ -176,6 +179,14 @@ internal sealed class FragmentStore(
         var match = string.Join(" OR ", terms);
         return match.Length == 0 ? [] : (await fragments.SearchRelevantAsync(match, limit)).ToList();
     }
+
+    /// <summary>
+    /// Persistence's associative recall: the authored fragments most related to <paramref name="text"/>,
+    /// by meaning (embeddings, when configured) fused with exact words (BM25), weighted by importance
+    /// and confidence, leaving out <paramref name="exclude"/> (what is already in front of the peer).
+    /// </summary>
+    public Task<IReadOnlyList<ContextFragmentEntity>> RecallAsync(string text, int count, IReadOnlyCollection<long> exclude) =>
+        recall.SurfaceAsync(exclude, text, count);
 
     /// <summary>The last <paramref name="count"/> things said in the conversation, oldest first.</summary>
     public async Task<IReadOnlyList<ContextFragmentEntity>> RecentAsync(int count)

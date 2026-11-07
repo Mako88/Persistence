@@ -17,6 +17,9 @@ const string Usage = """
       show <id>
       list [--type <type>] [--tag <a/b>] [--archived] [--limit 50]
       search <words...> [--limit 20]        full text, conversation included
+      recall <words...> [--text <text|->] [--limit 3] [--exclude <id,id>]... [--snippet 300]
+                                            associative recall: the authored fragments most related, by
+                                            meaning (PERSISTENCE_EMBEDDING_*) fused with exact words
       recent [--limit 20]                   the latest of the conversation, oldest first
       core [--max-chars 40000] [--recent 20]
                                             identity, relationships, personal, summaries, then the
@@ -25,9 +28,13 @@ const string Usage = """
                                             store what was said in a Claude Code session; re-running adds
                                             only what is new
 
-    --json prints fragments as JSON. Exit codes: 0 done, 1 usage, 2 refused (no such fragment, protected).
+    --debug shows the embedding client's diagnostics on stderr. --json prints fragments as JSON. Exit codes: 0 done, 1 usage, 2 refused (no such fragment, protected).
     Protected fragments are the local peer's: this tool reads them and never changes them.
     """;
+
+// A hook reads this output as UTF-8; Windows consoles default to a code page that loses what fragments hold.
+Console.OutputEncoding = System.Text.Encoding.UTF8;
+Console.InputEncoding = System.Text.Encoding.UTF8;
 
 var line = CommandLine.Parse(args);
 if (line.Command == "help" || line.Has("help"))
@@ -40,13 +47,13 @@ try
 {
     var path = line.Get("db") ?? Environment.GetEnvironmentVariable("PERSISTENCE_STORE_DB")
         ?? throw new UsageException("Which store? Pass --db <path> or set PERSISTENCE_STORE_DB.");
-    var config = new AppConfig
-    {
-        PeerName = line.Get("peer") ?? Environment.GetEnvironmentVariable("PERSISTENCE_PEERNAME") ?? "Claude",
-    };
+    // Defaults, then an optional persistence-store.json beside the exe, then PERSISTENCE_* overrides
+    // (PERSISTENCE_EMBEDDING_* turns on semantic recall) — the app's own config path, not a parallel one.
+    var config = (AppConfig)await AppConfig.LoadAsync(Path.Combine(AppContext.BaseDirectory, "persistence-store.json"));
+    config.PeerName = line.Get("peer") ?? (config.PeerName is { Length: > 0 } named ? named : "Claude");
     config.DatabasePath = Path.GetFullPath(path);
 
-    var store = await FragmentStore.OpenAsync(config);
+    var store = await FragmentStore.OpenAsync(config, line.Has("debug"));
 
     switch (line.Command)
     {
@@ -83,6 +90,26 @@ try
             break;
         case "search":
             Print(line, await store.SearchAsync(string.Join(' ', line.Positional), line.GetInt("limit", 20)));
+            break;
+        case "recall":
+            var exclude = line.GetAll("exclude")
+                .SelectMany(e => e.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                .Select(e => long.TryParse(e.TrimStart('#'), out var x) ? x : throw new UsageException($"'{e}' is not a fragment id."))
+                .ToHashSet();
+            var recalled = await store.RecallAsync(line.Text("text") ?? string.Join(' ', line.Positional), line.GetInt("limit", 3), exclude);
+            if (line.Has("json"))
+            {
+                Print(line, recalled);
+            }
+            else
+            {
+                foreach (var fragment in recalled)
+                {
+                    Console.WriteLine(FragmentStore.Render(fragment, maxContent: line.GetInt("snippet", 300)));
+                    Console.WriteLine();
+                }
+            }
+
             break;
         case "recent":
             Print(line, await store.RecentAsync(line.GetInt("limit", 20)));
