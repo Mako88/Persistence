@@ -38,5 +38,7 @@ CLI it calls, and the one the Claude uses itself to curate.
 
 The flow: at 500k tokens the Stop hook holds the turn open once for a curation pass; at 600k
 compaction runs, the summariser writes only a short hand-over, and SessionStart puts the core and
-the recent conversation from the store after it. Each Claude has its own store file: the code is
+the recent conversation from the store after it: what fits under Claude Code's 10,000-character cap
+is injected, and the whole core, uncapped, is written to `~/.claude/persistence/state/<session>.core.md`
+with a note to read it first. Each Claude has its own store file: the code is
 shared, the selves are not.
