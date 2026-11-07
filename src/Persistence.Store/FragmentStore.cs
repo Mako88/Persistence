@@ -121,14 +121,22 @@ internal sealed class FragmentStore(
 
     /// <summary>
     /// Replaces <paramref name="ids"/> with one new fragment: a change of mind (one id) or a merge (several).
-    /// The new one takes the type of the first, every tag the old ones had, and their highest importance
-    /// unless told otherwise. The old ones keep their content, are archived, and point at it, with
-    /// <paramref name="reason"/> kept on them so the change can be read later.
+    /// The new one takes the type of the first, every tag the old ones had, and their highest importance,
+    /// unless told otherwise; <paramref name="tagPaths"/>, when given, replace the tags rather than add to
+    /// them, since a merge's view of what it is about is the new one's to say. The old ones keep their
+    /// content, are archived, and point at it, with <paramref name="reason"/> kept on them so the change
+    /// can be read later.
     /// </summary>
     public async Task<ContextFragmentEntity> SupersedeAsync(
         IReadOnlyList<long> ids, string content, string? summary, float? importance, float? confidence,
-        IReadOnlyList<string> tagPaths, string? reason)
+        IReadOnlyList<string> tagPaths, string? reason, string? typeName = null)
     {
+        var type = typeName is null ? (ContextFragmentType?)null : FragmentTypeRules.ParseAuthorable(typeName) switch
+        {
+            (var t, true) => t,
+            _ => throw new UsageException($"'{typeName}' is not a type a peer authors."),
+        };
+
         var old = new List<ContextFragmentEntity>();
         foreach (var id in ids)
         {
@@ -148,7 +156,7 @@ internal sealed class FragmentStore(
 
         var successor = new ContextFragmentEntity
         {
-            FragmentType = old[0].FragmentType,
+            FragmentType = type ?? old[0].FragmentType,
             Status = ContextFragmentStatus.Active,
             Content = content,
             Summary = summary,
@@ -157,7 +165,7 @@ internal sealed class FragmentStore(
             CreatedUtc = DateTimeOffset.UtcNow,
             LastModifiedUtc = DateTimeOffset.UtcNow,
             Sources = [await PeerSourceAsync()],
-            Tags = old.SelectMany(f => f.Tags).Concat(await TagsAsync(tagPaths)).DistinctBy(t => t.Id).ToList(),
+            Tags = tagPaths.Count > 0 ? await TagsAsync(tagPaths) : old.SelectMany(f => f.Tags).DistinctBy(t => t.Id).ToList(),
         };
         await fragments.SaveAsync(successor);
 

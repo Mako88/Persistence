@@ -12,10 +12,11 @@ const string Usage = """
       add --type <Identity|Relational|Personal|Summary> --content <text|-> [--content-file <path>]
           [--summary <text>] [--importance 0-1] [--confidence 0-1] [--tag <a/b>]... [--protected]
       edit <id> [--type] [--content <text|->] [--summary] [--importance] [--confidence] [--tag <a/b>]...
-      supersede <id>[,<id>...] --content <text|-> [--reason <text>] [--summary] [--importance] [--confidence] [--tag <a/b>]...
+      supersede <id>[,<id>...] --content <text|-> [--reason <text>] [--type] [--summary] [--importance] [--confidence] [--tag <a/b>]...
                                             a change of mind (one id) or a merge (several): the new fragment
-                                            takes their type and tags; the old ones are archived, keep their
-                                            content and the reason, and point at it (`show` follows the line)
+                                            takes their type and tags (--tag replaces the tags); the old ones are
+                                            archived, keep their content and the reason, and point at it
+                                            (`show` follows the line)
       archive <id> | restore <id>           out of the core and recent lists, still searchable; reversible
       forget <id> [--reason <text>]         soft-delete, hidden everywhere; unforget <id> brings it back
       show <id>
@@ -85,7 +86,7 @@ try
 
             var successor = await store.SupersedeAsync(replaced,
                 line.Text() ?? throw new UsageException("supersede needs --content (or --content -, or --content-file)."),
-                line.Text("summary"), line.GetFloat("importance"), line.GetFloat("confidence"), line.GetAll("tag"), line.Get("reason"));
+                line.Text("summary"), line.GetFloat("importance"), line.GetFloat("confidence"), line.GetAll("tag"), line.Get("reason"), line.Get("type"));
             if (line.Has("json"))
             {
                 Print(line, [successor]);

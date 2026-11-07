@@ -73,6 +73,10 @@ public sealed class FragmentStoreTests : IDisposable
         Assert.Contains($"Superseded by #{merged.Id}: 500k was too late", await store.ShowAsync(a.Id));
         Assert.Contains($"Supersedes #{b.Id}", await store.ShowAsync(merged.Id));
         await Assert.ThrowsAsync<RefusedException>(() => store.SupersedeAsync([a.Id], "again", null, null, null, [], null));
+
+        var retagged = await store.SupersedeAsync([merged.Id], "Curation runs at Stop.", null, null, null, ["store/curation"], null, "Identity");
+        Assert.Equal(ContextFragmentType.Identity, retagged.FragmentType);
+        Assert.Equal(["curation"], retagged.Tags.Select(t => t.Name));
     }
 
     [Fact]
