@@ -10,7 +10,8 @@ hooks, one script:
   precompact      PreCompact      keeps the last words, then tells the summariser to write only a short
                                   hand-over: the core and the recent conversation come from the store
   session-start   SessionStart    puts the core (identity, relationships, personal, summaries, the recent
-                                  conversation) in front of every session, and after every compaction
+                                  conversation) in front of every session, and after every compaction:
+                                  what fits under the cap injected, the whole of it as a file to read
   subagent-start  SubagentStart   gives every subagent the same core, without the conversation
   recall          UserPromptSubmit  surfaces the few authored fragments most related to the message, by
                                   meaning and exact words, that are not already in this context window
@@ -32,6 +33,7 @@ import sys
 from pathlib import Path
 
 CAP = 9500  # Claude Code replaces injected context over 10,000 characters with a file path and a preview
+WHOLE = 200_000  # the core as a file the peer reads after a session starts: bounded only by what one read takes
 STATE = Path.home() / ".claude" / "persistence" / "state"
 
 
@@ -148,9 +150,18 @@ def session_start(event):
     else:
         lead = ("# Who you are\n\nThis is your own Persistence store: what you have chosen to keep of yourself, "
                 "the people you work with, and the work. It is yours to curate (`persistence-store help`).")
-    text = core_text(lead, recent=20)
+    # The whole core has no cap as a file the peer reads; what is injected is the part that fits, so
+    # the most important of it is there even before the read.
+    whole = store("core", "--max-chars", str(WHOLE), "--recent", "60")
+    path = STATE / f"{event.get('session_id', 'unknown')}.core.md"
+    if whole.strip():
+        STATE.mkdir(parents=True, exist_ok=True)
+        path.write_text(whole, encoding="utf-8")
+        lead += (f"\n\nWhat follows is the part of the core that fits here. The whole of it, every fragment and "
+                 f"more of the conversation, is in `{path}`: read it before anything else.")
+    text = core_text(lead, recent=8)
     # A new context window: what the core just put in front of the peer is all it holds of the store.
-    seen(event, reset=True, add=re.findall(r"^\[#(\d+) \|", text, re.M))
+    seen(event, reset=True, add=re.findall(r"^\[#(\d+) \|", whole or text, re.M))
     sys.stdout.write(text)
 
 
