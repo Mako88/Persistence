@@ -30,6 +30,7 @@ import re
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 CAP = 9500  # Claude Code replaces injected context over 10,000 characters with a file path and a preview
@@ -185,6 +186,9 @@ def seen(event, reset=False, add=()):
     ids = set() if reset or not path.exists() else set(path.read_text().split())
     ids.update(str(i) for i in add)
     STATE.mkdir(parents=True, exist_ok=True)
+    if reset:
+        # When this context window began: what was said since is in front of the peer already.
+        path.with_suffix(".since").write_text(datetime.now(timezone.utc).isoformat())
     path.write_text(" ".join(sorted(ids)))
     return ids
 
@@ -195,7 +199,11 @@ def recall(event):
     if count <= 0 or len(prompt) < 12:
         return
     already = seen(event)
+    since = STATE / f"{event.get('session_id', 'unknown')}.since"
     found = store("recall", "--text", "-", "--limit", str(count), "--snippet", "300", "--project", project(event),
+                  "--wander", os.environ.get("PERSISTENCE_RECALL_WANDER", "1"),
+                  "--said", os.environ.get("PERSISTENCE_RECALL_SAID", "3"),
+                  *(["--before", since.read_text().strip()] if since.exists() else []),
                   *(["--exclude", ",".join(already)] if already else []), stdin=prompt)
     ids = re.findall(r"^\[#(\d+) \|", found, re.M)
     if not ids:

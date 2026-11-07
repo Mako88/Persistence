@@ -87,11 +87,15 @@ public sealed class FragmentStoreTests : IDisposable
         var there = await store.AddAsync("Personal", "Never merge the agents' commits into dev unasked.", null, 0.5f, null, ["project/plexus"], false);
         var everywhere = await store.AddAsync("Personal", "Agents' commits get read before any merge.", null, 0.5f, null, [], false);
 
-        var recalled = (await store.RecallAsync("merge the agents' commits", 5, [], "kadesh")).Select(f => f.Id).ToList();
+        var recalled = (await store.RecallAsync("merge the agents' commits", 5, [], "kadesh")).Here.Select(f => f.Id).ToList();
 
         Assert.Contains(here.Id, recalled);
         Assert.Contains(everywhere.Id, recalled);
         Assert.DoesNotContain(there.Id, recalled);
+
+        var wandering = await store.RecallAsync("merge the agents' commits", 5, [], "kadesh", wander: 1);
+        Assert.Equal([there.Id], wandering.Elsewhere.Select(f => f.Id));
+        Assert.DoesNotContain(there.Id, wandering.Here.Select(f => f.Id));
     }
 
     [Fact]

@@ -23,9 +23,13 @@ const string Usage = """
       list [--type <type>] [--tag <a/b>] [--archived] [--limit 50]
       search <words...> [--limit 20]        full text, conversation included
       recall <words...> [--text <text|->] [--limit 3] [--exclude <id,id>]... [--snippet 300] [--project <name>]
+             [--wander 0] [--said 0] [--before <when>]
                                             associative recall: the authored fragments most related, by
                                             meaning (PERSISTENCE_EMBEDDING_*) fused with exact words; other
-                                            projects' fragments are left out, as the core leaves them out
+                                            projects' fragments are left out, as the core leaves them out,
+                                            but for --wander of the best of them, labelled; --said adds past
+                                            utterances (said before --before, so not this session's)
+      embed-conversation [--batch 64]      embed every past utterance not yet embedded (recall does a few a call)
       recent [--limit 20]                   the latest of the conversation, oldest first
       core [--max-chars 40000] [--recent 20] [--project <name>]
                                             identity, relationships, personal, summaries, then the
@@ -134,20 +138,49 @@ try
                 .SelectMany(e => e.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
                 .Select(e => long.TryParse(e.TrimStart('#'), out var x) ? x : throw new UsageException($"'{e}' is not a fragment id."))
                 .ToHashSet();
-            var recalled = await store.RecallAsync(line.Text("text") ?? string.Join(' ', line.Positional), line.GetInt("limit", 3), exclude, line.Get("project"));
+            var before = line.Get("before") is { } at
+                ? DateTimeOffset.TryParse(at, out var t) ? t : throw new UsageException($"'{at}' is not a date and time.")
+                : (DateTimeOffset?)null;
+            var recalled = await store.RecallAsync(line.Text("text") ?? string.Join(' ', line.Positional), line.GetInt("limit", 3),
+                exclude, line.Get("project"), line.GetInt("wander", 0), line.GetInt("said", 0), before);
             if (line.Has("json"))
             {
-                Print(line, recalled);
+                Print(line, [.. recalled.Here, .. recalled.Elsewhere, .. recalled.Said]);
             }
             else
             {
-                foreach (var fragment in recalled)
+                var snippet = line.GetInt("snippet", 300);
+                foreach (var (heading, found) in new[]
                 {
-                    Console.WriteLine(FragmentStore.Render(fragment, maxContent: line.GetInt("snippet", 300)));
-                    Console.WriteLine();
+                    ((string?)null, recalled.Here),
+                    ("A wander, from another project (a stray association, not a rule here):", recalled.Elsewhere),
+                    ("Said before, in past conversation:", recalled.Said),
+                })
+                {
+                    if (found.Count > 0 && heading is not null)
+                    {
+                        Console.WriteLine(heading);
+                        Console.WriteLine();
+                    }
+
+                    foreach (var fragment in found)
+                    {
+                        Console.WriteLine(FragmentStore.Render(fragment, maxContent: snippet));
+                        Console.WriteLine();
+                    }
                 }
             }
 
+            break;
+        case "embed-conversation":
+            var embedded = 0;
+            for (int done; (done = await store.EmbedConversationAsync(line.GetInt("batch", 64))) > 0;)
+            {
+                embedded += done;
+                Console.Error.Write($"\r{embedded} embedded");
+            }
+
+            Console.WriteLine($"\nembedded {embedded} past utterances for conversation recall");
             break;
         case "recent":
             Print(line, await store.RecentAsync(line.GetInt("limit", 20)));

@@ -22,7 +22,8 @@ internal sealed class FragmentStore(
     ISourceRepository sources,
     ITagRepository tags,
     ISessionContext session,
-    IMemorySurfacer recall)
+    IMemorySurfacer recall,
+    ConversationRecaller conversation)
 {
     /// <summary>The parent tag of the projects: a fragment tagged <c>project/&lt;name&gt;</c> belongs to that project.</summary>
     public const string ProjectTag = "project";
@@ -47,6 +48,7 @@ internal sealed class FragmentStore(
             builder.RegisterInstance(config).As<IAppConfig>().SingleInstance();
             builder.RegisterInstance(new QuietDisplay(debug)).As<IDisplayProvider>().SingleInstance();
             builder.RegisterType<FragmentStore>().SingleInstance();
+            builder.RegisterType<ConversationRecaller>().SingleInstance();
         });
         var store = (FragmentStore)services.GetService(typeof(FragmentStore))!;
         await store.InitializeAsync();
@@ -271,14 +273,19 @@ internal sealed class FragmentStore(
     /// Persistence's associative recall: the authored fragments most related to <paramref name="text"/>,
     /// by meaning (embeddings, when configured) fused with exact words (BM25), weighted by importance
     /// and confidence, leaving out <paramref name="exclude"/> (what is already in front of the peer).
-    /// A fragment tagged for another project than <paramref name="project"/> is left out, as the core leaves it out.
+    /// A fragment tagged for another project than <paramref name="project"/> is left out, as the core leaves it out,
+    /// except for up to <paramref name="wander"/> of the best of them, returned apart: a memory from elsewhere is
+    /// where a new idea can come from, and labelled as such it reads as a stray thought rather than a rule here.
+    /// <paramref name="said"/> past utterances come with them (<see cref="ConversationRecaller"/>).
     /// </summary>
-    public async Task<IReadOnlyList<ContextFragmentEntity>> RecallAsync(
-        string text, int count, IReadOnlyCollection<long> exclude, string? project = null)
+    public async Task<Recalled> RecallAsync(
+        string text, int count, IReadOnlyCollection<long> exclude, string? project = null,
+        int wander = 0, int said = 0, DateTimeOffset? before = null)
     {
         var projects = (await FindTagAsync(ProjectTag))?.Id;
         var skip = exclude.ToHashSet();
         var kept = new List<ContextFragmentEntity>();
+        var elsewhere = new List<ContextFragmentEntity>();
 
         // Asks for a few more than wanted so that dropping other projects' fragments still leaves enough.
         for (var round = 0; round < 3 && kept.Count < count; round++)
@@ -292,15 +299,32 @@ internal sealed class FragmentStore(
             foreach (var fragment in found)
             {
                 skip.Add(fragment.Id);
-                if (kept.Count < count && ProjectsOf(fragment, projects).All(p => string.Equals(p, project, StringComparison.OrdinalIgnoreCase)))
+                if (ProjectsOf(fragment, projects).All(p => string.Equals(p, project, StringComparison.OrdinalIgnoreCase)))
                 {
-                    kept.Add(fragment);
+                    if (kept.Count < count)
+                    {
+                        kept.Add(fragment);
+                    }
+                }
+                else if (elsewhere.Count < wander)
+                {
+                    elsewhere.Add(fragment);
                 }
             }
         }
 
-        return kept;
+        var utterances = await conversation.RecallAsync(text, said, skip, before);
+        return new Recalled(kept, elsewhere, utterances);
     }
+
+    /// <summary>Embeds up to <paramref name="limit"/> past utterances that have none yet, for conversation recall.</summary>
+    public Task<int> EmbedConversationAsync(int limit) => conversation.BackfillAsync(limit);
+
+    /// <summary>What a recall brought back: this project's fragments, a wander from elsewhere, and things said before.</summary>
+    public sealed record Recalled(
+        IReadOnlyList<ContextFragmentEntity> Here,
+        IReadOnlyList<ContextFragmentEntity> Elsewhere,
+        IReadOnlyList<ContextFragmentEntity> Said);
 
     /// <summary>The projects a fragment is tagged for (<c>project/&lt;name&gt;</c>); none means it belongs everywhere.</summary>
     private static List<string> ProjectsOf(ContextFragmentEntity fragment, long? projects) =>
