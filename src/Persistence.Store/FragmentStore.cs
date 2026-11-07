@@ -271,9 +271,40 @@ internal sealed class FragmentStore(
     /// Persistence's associative recall: the authored fragments most related to <paramref name="text"/>,
     /// by meaning (embeddings, when configured) fused with exact words (BM25), weighted by importance
     /// and confidence, leaving out <paramref name="exclude"/> (what is already in front of the peer).
+    /// A fragment tagged for another project than <paramref name="project"/> is left out, as the core leaves it out.
     /// </summary>
-    public Task<IReadOnlyList<ContextFragmentEntity>> RecallAsync(string text, int count, IReadOnlyCollection<long> exclude) =>
-        recall.SurfaceAsync(exclude, text, count);
+    public async Task<IReadOnlyList<ContextFragmentEntity>> RecallAsync(
+        string text, int count, IReadOnlyCollection<long> exclude, string? project = null)
+    {
+        var projects = (await FindTagAsync(ProjectTag))?.Id;
+        var skip = exclude.ToHashSet();
+        var kept = new List<ContextFragmentEntity>();
+
+        // Asks for a few more than wanted so that dropping other projects' fragments still leaves enough.
+        for (var round = 0; round < 3 && kept.Count < count; round++)
+        {
+            var found = await HydratedAsync((await recall.SurfaceAsync(skip, text, count * 3)).Select(f => f.Id).ToList());
+            if (found.Count == 0)
+            {
+                break;
+            }
+
+            foreach (var fragment in found)
+            {
+                skip.Add(fragment.Id);
+                if (kept.Count < count && ProjectsOf(fragment, projects).All(p => string.Equals(p, project, StringComparison.OrdinalIgnoreCase)))
+                {
+                    kept.Add(fragment);
+                }
+            }
+        }
+
+        return kept;
+    }
+
+    /// <summary>The projects a fragment is tagged for (<c>project/&lt;name&gt;</c>); none means it belongs everywhere.</summary>
+    private static List<string> ProjectsOf(ContextFragmentEntity fragment, long? projects) =>
+        fragment.Tags.Where(t => projects is not null && t.ParentTagId == projects).Select(t => t.Name).ToList();
 
     /// <summary>The last <paramref name="count"/> things said in the conversation, oldest first.</summary>
     public async Task<IReadOnlyList<ContextFragmentEntity>> RecentAsync(int count)
@@ -308,7 +339,7 @@ internal sealed class FragmentStore(
             {
                 // A fragment tagged project/<name> is in the core only while that project is the one in
                 // hand; the rest stay a `list --tag` or a recall away.
-                var own = fragment.Tags.Where(t => projects is not null && t.ParentTagId == projects).Select(t => t.Name).ToList();
+                var own = ProjectsOf(fragment, projects);
                 if (own.Count > 0 && !own.Contains(project ?? "", StringComparer.OrdinalIgnoreCase))
                 {
                     elsewhere.UnionWith(own);

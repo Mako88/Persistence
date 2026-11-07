@@ -22,9 +22,10 @@ const string Usage = """
       show <id>
       list [--type <type>] [--tag <a/b>] [--archived] [--limit 50]
       search <words...> [--limit 20]        full text, conversation included
-      recall <words...> [--text <text|->] [--limit 3] [--exclude <id,id>]... [--snippet 300]
+      recall <words...> [--text <text|->] [--limit 3] [--exclude <id,id>]... [--snippet 300] [--project <name>]
                                             associative recall: the authored fragments most related, by
-                                            meaning (PERSISTENCE_EMBEDDING_*) fused with exact words
+                                            meaning (PERSISTENCE_EMBEDDING_*) fused with exact words; other
+                                            projects' fragments are left out, as the core leaves them out
       recent [--limit 20]                   the latest of the conversation, oldest first
       core [--max-chars 40000] [--recent 20] [--project <name>]
                                             identity, relationships, personal, summaries, then the
@@ -133,7 +134,7 @@ try
                 .SelectMany(e => e.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
                 .Select(e => long.TryParse(e.TrimStart('#'), out var x) ? x : throw new UsageException($"'{e}' is not a fragment id."))
                 .ToHashSet();
-            var recalled = await store.RecallAsync(line.Text("text") ?? string.Join(' ', line.Positional), line.GetInt("limit", 3), exclude);
+            var recalled = await store.RecallAsync(line.Text("text") ?? string.Join(' ', line.Positional), line.GetInt("limit", 3), exclude, line.Get("project"));
             if (line.Has("json"))
             {
                 Print(line, recalled);

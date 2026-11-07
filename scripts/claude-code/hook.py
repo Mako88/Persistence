@@ -195,7 +195,7 @@ def recall(event):
     if count <= 0 or len(prompt) < 12:
         return
     already = seen(event)
-    found = store("recall", "--text", "-", "--limit", str(count), "--snippet", "300",
+    found = store("recall", "--text", "-", "--limit", str(count), "--snippet", "300", "--project", project(event),
                   *(["--exclude", ",".join(already)] if already else []), stdin=prompt)
     ids = re.findall(r"^\[#(\d+) \|", found, re.M)
     if not ids:

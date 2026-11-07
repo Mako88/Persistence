@@ -80,6 +80,21 @@ public sealed class FragmentStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task Recall_leaves_out_other_projects_fragments()
+    {
+        var store = await OpenAsync();
+        var here = await store.AddAsync("Personal", "Merge the agents' commits into dev as they land.", null, 0.5f, null, ["project/kadesh"], false);
+        var there = await store.AddAsync("Personal", "Never merge the agents' commits into dev unasked.", null, 0.5f, null, ["project/plexus"], false);
+        var everywhere = await store.AddAsync("Personal", "Agents' commits get read before any merge.", null, 0.5f, null, [], false);
+
+        var recalled = (await store.RecallAsync("merge the agents' commits", 5, [], "kadesh")).Select(f => f.Id).ToList();
+
+        Assert.Contains(here.Id, recalled);
+        Assert.Contains(everywhere.Id, recalled);
+        Assert.DoesNotContain(there.Id, recalled);
+    }
+
+    [Fact]
     public async Task System_managed_types_cannot_be_authored()
     {
         var store = await OpenAsync();
