@@ -131,6 +131,9 @@ def project(event):
     return Path(cwd).name.lower()
 
 
+LEAN = 3000  # the working note and the identity fragments, injected beside the whole core's file
+
+
 def core_text(lead, recent, event):
     body = store("core", "--max-chars", str(CAP - len(lead) - 50), "--recent", str(recent), "--project", project(event))
     return lead + "\n\n" + body if body.strip() else ""
@@ -174,9 +177,13 @@ def session_start(event):
     if whole.strip():
         STATE.mkdir(parents=True, exist_ok=True)
         path.write_text(whole, encoding="utf-8")
-        lead += (f"\n\nWhat follows is the part of the core that fits here. The whole of it, every fragment and "
-                 f"more of the conversation, is in `{path}`: read it before anything else.")
-    text = core_text(lead, recent=8, event=event)
+        lead += (f"\n\nWhat follows is only your working note and who you are, so you are yourself even before the "
+                 f"read. The whole core, every fragment and the conversation, is in `{path}`: read it before anything else.")
+        # Only that much, since the file repeats whatever is injected: a fuller injection was the same
+        # nine thousand characters twice in every new context window.
+        text = lead + "\n\n" + store("core", "--max-chars", str(LEAN), "--recent", "0", "--project", project(event))
+    else:
+        text = core_text(lead, recent=8, event=event)
     # A new context window: what the core just put in front of the peer is all it holds of the store.
     seen(event, reset=True, add=re.findall(r"^\[#(\d+) \|", whole or text, re.M))
     sys.stdout.write(text)

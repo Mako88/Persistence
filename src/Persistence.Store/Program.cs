@@ -107,7 +107,8 @@ try
         case "note":
             var written = line.Text() ?? (line.Positional.Count > 0 ? string.Join(' ', line.Positional) : null);
             var note = await store.NoteAsync(written);
-            Console.WriteLine(note is null ? "(no working note)" : note.Content);
+            // Written, it is acknowledged, not echoed: the writer has it in front of them already.
+            Console.WriteLine(note is null ? "(no working note)" : written is null ? note.Content : $"working note replaced ({note.Content.Length} characters)");
             break;
         case "archive":
             Print(line, [await store.SetStatusAsync(line.Id(), ContextFragmentStatus.Archived)]);
