@@ -198,11 +198,12 @@ def recall(event):
     prompt = (event.get("prompt") or "").strip()
     if count <= 0 or len(prompt) < 12:
         return
+    # A short message ("sounds good") matches past acknowledgements, not what it is about: no past utterances for it.
     already = seen(event)
     since = STATE / f"{event.get('session_id', 'unknown')}.since"
     found = store("recall", "--text", "-", "--limit", str(count), "--snippet", "300", "--project", project(event),
                   "--wander", os.environ.get("PERSISTENCE_RECALL_WANDER", "1"),
-                  "--said", os.environ.get("PERSISTENCE_RECALL_SAID", "3"),
+                  "--said", os.environ.get("PERSISTENCE_RECALL_SAID", "3") if len(prompt) >= 40 else "0",
                   *(["--before", since.read_text().strip()] if since.exists() else []),
                   *(["--exclude", ",".join(already)] if already else []), stdin=prompt)
     ids = re.findall(r"^\[#(\d+) \|", found, re.M)
