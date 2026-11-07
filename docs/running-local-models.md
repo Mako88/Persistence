@@ -110,3 +110,71 @@ llama-server -m gemma-4-12B-it-q4_k_m.gguf ^
 - **Schema-following quirk:** the 12B sometimes wrote `type=`/`tag=` instead of `fragment_type=`/
   `tags=`; the command layer's unknown-field "did you mean?" hints caught it gracefully (fragment still
   added, just untyped/untagged). A sharper model follows the command schema more reliably.
+
+## Running the embedding server (semantic recall)
+
+Semantic associative recall (`Embedding.*` in config) needs an OpenAI-compatible `/embeddings`
+endpoint. That is a **second** `llama-server` with its own small model — not the chat model. Two
+reasons it is separate rather than reusing the peer's model:
+
+- A generation model's hidden states make poor embeddings; a purpose-trained embedding model is far
+  better and ~50× smaller.
+- Every peer can share one embedding server regardless of which provider it thinks with, so an
+  Anthropic peer and a local peer produce comparable vectors.
+
+```
+llama-server -m nomic-embed-text-v2.gguf ^
+  --embedding --pooling mean ^
+  -ngl 0 -c 8192 --parallel 1 ^
+  --host 0.0.0.0 --port 8081
+```
+
+- **`-ngl 0` (CPU) is the right default on this box.** VRAM is the binding constraint — a 12B Q4 chat
+  model plus its KV cache already leaves ~1.7 GB free at 32k context. Embedding a handful of short
+  texts is milliseconds on CPU, so spending VRAM on it buys nothing and risks evicting the chat model.
+- **`--embedding` is required**, and `--pooling mean` matches what most embedding models expect. Without
+  `--embedding`, the endpoint 404s and recall silently stays lexical (which is the designed fallback, so
+  the only symptom is that nothing improves).
+- **A separate port from the chat server** (8081 vs 8080). Both can run at once; only one holds VRAM.
+
+### Verified live (2026-09-03, gemma-4-12B as a stand-in embedder on CPU)
+
+Run against a real `llama-server --embedding --pooling mean` to check the wire format rather than the
+spec, using the chat model because no dedicated embedding model was on the box:
+
+- **Response shape confirmed:** `{data:[{object, index, embedding}], model, usage}`, `embedding` a flat
+  array of floats. 3840 dimensions for the 12B. `index` is present and is what ordering must key on.
+- **`--pooling mean` matters more than it looks.** Without it, `embedding` comes back as one vector
+  *per token* — a nested array. The client mean-pools that case itself rather than rejecting it,
+  because the rejection path is a silent fall back to lexical, i.e. the symptom would be "nothing
+  improved" with nothing in the log to explain it.
+- **A generation model is a poor embedder, measured:** cosine between two deliberately unrelated
+  sentences was **0.785**. The space is anisotropic — everything looks similar to everything. Ranking
+  still functions (rank fusion only needs relative order) but discrimination is weak, which is the
+  concrete argument for a purpose-trained embedding model rather than reusing the chat model.
+- **Cost of the stand-in:** ~7.2 GB resident on CPU, ~2 min to load, ~26 s for a two-text embed call.
+  A real embedding model is ~50× smaller and effectively instant.
+
+Config side:
+
+```jsonc
+"Embedding": {
+  "Enabled": true,
+  "ApiBaseUrl": "http://127.0.0.1:8081/v1",   // containers: http://host.docker.internal:8081/v1
+  "Model": "nomic-embed-text-v2",             // stored with every vector — see below
+  "BackfillPerTurn": 32
+}
+```
+
+Or per-run, without editing the file: `PERSISTENCE_EMBEDDING_ENABLED`, `PERSISTENCE_EMBEDDING_APIBASEURL`,
+`PERSISTENCE_EMBEDDING_MODEL`.
+
+**`Model` is not cosmetic.** It is stored alongside every vector and is part of a vector's identity.
+Cosine similarity between two different models' vectors is meaningless rather than merely noisy, so
+changing this name leaves the old vectors inert and re-embeds from scratch — which is correct, and is
+why switching back reuses what is already there. Changing embedding models therefore costs a warm-up,
+not a corruption.
+
+**Warm-up.** Vectors backfill lazily, up to `BackfillPerTurn` fragments per turn, newest first. A store
+with a few hundred authored memories is fully embedded after a handful of turns; until then recall is
+progressively more semantic and never worse than lexical.

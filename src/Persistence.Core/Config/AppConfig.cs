@@ -107,6 +107,12 @@ public class AppConfig : IAppConfig
     public RoomSettings Room { get; set; } = new();
 
     /// <summary>
+    /// Semantic (vector) associative recall. Off by default; when off, recall stays lexical (BM25).
+    /// Nested values are overridable via <c>PERSISTENCE_EMBEDDING_*</c>.
+    /// </summary>
+    public EmbeddingSettings Embedding { get; set; } = new();
+
+    /// <summary>
     /// The active local peer's name — who the remote peer is talking with by default. The Console uses
     /// this; an API caller can override it per request with an <c>X-Local-Peer</c> header.
     /// Defaults to "Local Peer" (back-compat). Overridable via <c>PERSISTENCE_SELECTEDLOCALPEER</c>.
@@ -357,6 +363,7 @@ public class AppConfig : IAppConfig
         }
 
         ApplyContainerEnvironmentOverrides(config);
+        ApplyEmbeddingEnvironmentOverrides(config);
     }
 
     /// <summary>
@@ -402,6 +409,27 @@ public class AppConfig : IAppConfig
         if (Env("WORKINGDIR") is { Length: > 0 } dir) config.Container.WorkingDir = dir;
         if (Env("TIMEOUTSECONDS") is { } t && int.TryParse(t, out var ts)) config.Container.TimeoutSeconds = ts;
         if (Env("MAXOUTPUTBYTES") is { } m && int.TryParse(m, out var mb)) config.Container.MaxOutputBytes = mb;
+    }
+
+    /// <summary>
+    /// Overrides the nested <see cref="EmbeddingSettings"/> from <c>PERSISTENCE_EMBEDDING_*</c> env
+    /// vars, for the same reason the container knobs are wired here: the generic reflection loop only
+    /// walks scalar properties directly on <see cref="AppConfig"/>. Lets a containerised peer be
+    /// pointed at the host's embedding server without editing its config file.
+    /// </summary>
+    private static void ApplyEmbeddingEnvironmentOverrides(AppConfig config)
+    {
+        string? Env(string suffix) =>
+            Environment.GetEnvironmentVariable($"{EnvPrefix}EMBEDDING_{suffix}");
+
+        if (Env("ENABLED") is { } enabled && bool.TryParse(enabled, out var en)) config.Embedding.Enabled = en;
+        if (Env("APIBASEURL") is { Length: > 0 } url) config.Embedding.ApiBaseUrl = url;
+        if (Env("MODEL") is { Length: > 0 } model) config.Embedding.Model = model;
+        if (Env("APIKEY") is { Length: > 0 } key) config.Embedding.ApiKey = key;
+        if (Env("REQUESTTIMEOUTSECONDS") is { } t && int.TryParse(t, out var ts)) config.Embedding.RequestTimeoutSeconds = ts;
+        if (Env("BATCHSIZE") is { } b && int.TryParse(b, out var bs)) config.Embedding.BatchSize = bs;
+        if (Env("BACKFILLPERTURN") is { } f && int.TryParse(f, out var fp)) config.Embedding.BackfillPerTurn = fp;
+        if (Env("FUSIONK") is { } k && int.TryParse(k, out var fk)) config.Embedding.FusionK = fk;
     }
 
     private static async Task<AppConfig> LoadFromFileAsync(string path) =>

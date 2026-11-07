@@ -23,6 +23,60 @@ work and harness-injected blocks left out). It goes through the Core repositorie
 audited and migrated exactly as a turn's commands are; protected fragments are read and never changed;
 and the core names by id what did not fit its budget instead of dropping it silently. Each peer keeps
 its own store file (`--db` or `PERSISTENCE_STORE_DB`): the CLI is shared code, the selves are not.
+## 2026-09-03 — recall that reaches a memory it doesn't share words with
+
+### Added — semantic (vector) associative recall, fused with the existing lexical ranking
+`IMemorySurfacer` has always described the right idea — surface relevant memories on their own, "the
+way a mind surfaces a related thought, instead of the peer having to search for them." The
+implementation was FTS5/BM25, so a memory was only reachable through words it literally contained. A
+peer's note that it "keeps mistaking intent for outcome" was invisible while it discussed "believing
+something happened because I meant it" — the same thought, no shared vocabulary.
+
+The distinction that makes this worth building: retrieval-as-a-command requires the peer to already
+know what it's looking for, which is exactly what you can't do for something you've forgotten you
+know. Retrieval that runs in the assembly step needs no such decision — the memory is simply *there*
+when the turn starts.
+
+- **`EmbeddingMemorySurfacer` now fills the `IMemorySurfacer` role and composes the lexical one.**
+  Both rankings are kept because they fail in opposite directions: BM25 can't reach a paraphrase,
+  embeddings blur exactly the tokens that must match literally (names, ids, error strings, paths).
+- **Fused with reciprocal rank fusion, not a weighted score blend.** BM25 scores and cosine
+  similarities aren't on comparable scales; normalising them would invent a relationship that isn't
+  there. Rank position is directly comparable and needs no tuning.
+- **The embedding model is deliberately separate from the chat model** (`Embedding.*` config, or
+  `PERSISTENCE_EMBEDDING_*`), so a peer on Anthropic and a peer on local llama.cpp can share one small
+  embedding server and produce comparable vectors. Points at any OpenAI-compatible `/embeddings`
+  endpoint — e.g. a second `llama-server` started with `--embedding`.
+- **Off by default.** Disabled, unreachable, or malformed — every path falls back to the lexical
+  result, which is the behaviour that shipped before this existed. Recall enriches a turn; it must
+  never be able to fail one.
+- **Vectors backfill lazily, bounded per turn.** A large existing store warms up over a few turns
+  instead of needing a migration-time backfill, and a memory written this turn is recallable the next.
+  Staleness is a timestamp prefilter in SQL confirmed by a content hash, so a re-tag or an importance
+  tweak costs nothing.
+- **Migration 008** keys vectors by `(fragment, model)`. Cosine between two models' vectors is
+  meaningless rather than merely noisy, so the model is part of a vector's identity: switching models
+  leaves old rows inert instead of corrupting the ranking, and switching back reuses them.
+
+Verified by disconnection, not by intent (the recurring failure this project keeps circling): with the
+fused result replaced by the lexical one, the test asserting a memory reachable *only* by meaning goes
+red — 1 failed, 13 passed. Restored, all 14 pass. The migration-registration test was checked the same
+way: unregister `008` from the `.csproj` and it fails, which matters because a migration file that
+exists on disk but is missing from the embedded-resource list is silently skipped, and the pre-existing
+migration test would have passed regardless.
+
+**Verified against a real server, not just the spec.** Run end-to-end against a live
+`llama-server --embedding` (the 12B chat model standing in, since no dedicated embedding model was on
+the box): the production constructor, base-url handling, `/embeddings` path, request shape and parse
+all check out — 3840-dim vectors, self-cosine 1.0000. Two findings came out of looking at the real
+artifact rather than the docs: `index` is present and must be what ordering keys on, and a server run
+*without* `--pooling mean` returns one vector per token, which the client now mean-pools itself rather
+than rejecting — the rejection path is a silent fall back to lexical, so the symptom would have been
+"nothing improved" with nothing in the log to explain it. Measurements in
+[running-local-models.md](running-local-models.md).
+
+Suite: 705 core / 38 API, green.
+
 
 ## 2026-07-20 — the bridge that lied, and the wake storm underneath it
 
