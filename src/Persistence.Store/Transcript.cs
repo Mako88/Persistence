@@ -15,8 +15,9 @@ internal sealed record Utterance(string Id, bool ByLocalPeer, DateTimeOffset At,
 /// </summary>
 internal static partial class Transcript
 {
-    /// <summary>Blocks the harness injects into a user turn; they are not the local peer's words.</summary>
-    [GeneratedRegex(@"<(system-reminder|task-notification|local-command-stdout|local-command-caveat)>.*?</\1>", RegexOptions.Singleline)]
+    /// <summary>Blocks the harness injects into a user turn; they are not the local peer's words. A
+    /// subagent's report arrives as one, and so does a slash command's name (its arguments stay).</summary>
+    [GeneratedRegex(@"<(system-reminder|task-notification|local-command-stdout|local-command-caveat|agent-message|command-name|command-message)\b[^>]*>.*?</\1>|<command-args>\s*</command-args>", RegexOptions.Singleline)]
     private static partial Regex InjectedBlock();
 
     public static IEnumerable<Utterance> Read(string path)
