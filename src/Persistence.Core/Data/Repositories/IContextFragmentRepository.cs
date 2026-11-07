@@ -19,6 +19,11 @@ public interface IContextFragmentRepository : IEntityRepository<ContextFragmentE
     Task<IEnumerable<ContextFragmentEntity>> GetByTagAsync(long tagId);
 
     /// <summary>
+    /// Returns the fragments <paramref name="id"/> superseded: the earlier views it replaced
+    /// </summary>
+    Task<IEnumerable<ContextFragmentEntity>> GetSupersededByAsync(long id);
+
+    /// <summary>
     /// Returns up to <paramref name="limit"/> results ordered best-match first.
     /// </summary>
     Task<IEnumerable<ContextFragmentEntity>> SearchRelevantAsync(string query, int limit = 20, CancellationToken ct = default);

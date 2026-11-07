@@ -51,6 +51,31 @@ public sealed class FragmentStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task A_change_of_mind_keeps_the_old_view_and_points_it_at_the_new()
+    {
+        var store = await OpenAsync();
+        var a = await store.AddAsync("Personal", "The trigger should be 500k.", null, 0.4f, null, ["store/hooks"], false);
+        var b = await store.AddAsync("Personal", "Curation runs at the Stop hook.", null, 0.7f, null, ["store/core"], false);
+
+        var merged = await store.SupersedeAsync([a.Id, b.Id], "Curation runs at Stop, at 400k.", null, null, null, [], "500k was too late");
+
+        Assert.Equal(ContextFragmentType.Personal, merged.FragmentType);
+        Assert.Equal(0.7f, merged.Importance);
+        Assert.Equal(["core", "hooks"], merged.Tags.Select(t => t.Name).Order());
+        var old = await store.GetAsync(a.Id);
+        Assert.Equal(merged.Id, old.SupersededById);
+        Assert.Equal(ContextFragmentStatus.Archived, old.Status);
+        Assert.Equal("The trigger should be 500k.", old.Content);
+
+        var core = await store.CoreAsync(40000, 0);
+        Assert.Contains($"[#{merged.Id} |", core);
+        Assert.DoesNotContain($"[#{a.Id} |", core);
+        Assert.Contains($"Superseded by #{merged.Id}: 500k was too late", await store.ShowAsync(a.Id));
+        Assert.Contains($"Supersedes #{b.Id}", await store.ShowAsync(merged.Id));
+        await Assert.ThrowsAsync<RefusedException>(() => store.SupersedeAsync([a.Id], "again", null, null, null, [], null));
+    }
+
+    [Fact]
     public async Task System_managed_types_cannot_be_authored()
     {
         var store = await OpenAsync();
@@ -99,7 +124,7 @@ public sealed class FragmentStoreTests : IDisposable
         Assert.True(core.Length <= 3000, $"core is {core.Length} characters");
         Assert.Contains("utterance 30 ", core);
         Assert.DoesNotContain("utterance 11 ", core);
-        Assert.Contains("earlier utterances did not fit", core);
+        Assert.Contains("earlier exchanges did not fit", core);
     }
 
     [Fact]

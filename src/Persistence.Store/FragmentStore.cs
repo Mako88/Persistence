@@ -119,6 +119,82 @@ internal sealed class FragmentStore(
         return fragment;
     }
 
+    /// <summary>
+    /// Replaces <paramref name="ids"/> with one new fragment: a change of mind (one id) or a merge (several).
+    /// The new one takes the type of the first, every tag the old ones had, and their highest importance
+    /// unless told otherwise. The old ones keep their content, are archived, and point at it, with
+    /// <paramref name="reason"/> kept on them so the change can be read later.
+    /// </summary>
+    public async Task<ContextFragmentEntity> SupersedeAsync(
+        IReadOnlyList<long> ids, string content, string? summary, float? importance, float? confidence,
+        IReadOnlyList<string> tagPaths, string? reason)
+    {
+        var old = new List<ContextFragmentEntity>();
+        foreach (var id in ids)
+        {
+            var fragment = await WritableAsync(id);
+            if (fragment.SupersededById is { } by)
+            {
+                throw new RefusedException($"#{id} was already superseded by #{by}; supersede that one instead.");
+            }
+
+            if (!FragmentTypeRules.ParseAuthorable(fragment.FragmentType.ToString()).wasAuthorable)
+            {
+                throw new UsageException($"#{id} is a {fragment.FragmentType}, which a peer does not author.");
+            }
+
+            old.Add(fragment);
+        }
+
+        var successor = new ContextFragmentEntity
+        {
+            FragmentType = old[0].FragmentType,
+            Status = ContextFragmentStatus.Active,
+            Content = content,
+            Summary = summary,
+            Importance = importance ?? old.Max(f => f.Importance),
+            Confidence = confidence ?? old[0].Confidence,
+            CreatedUtc = DateTimeOffset.UtcNow,
+            LastModifiedUtc = DateTimeOffset.UtcNow,
+            Sources = [await PeerSourceAsync()],
+            Tags = old.SelectMany(f => f.Tags).Concat(await TagsAsync(tagPaths)).DistinctBy(t => t.Id).ToList(),
+        };
+        await fragments.SaveAsync(successor);
+
+        foreach (var fragment in old)
+        {
+            fragment.SupersededById = successor.Id;
+            fragment.Status = ContextFragmentStatus.Archived;
+            fragment.Notes = string.IsNullOrWhiteSpace(reason) ? fragment.Notes : reason.Trim();
+            fragment.LastModifiedUtc = DateTimeOffset.UtcNow;
+            await fragments.SaveAsync(fragment);
+        }
+
+        return successor;
+    }
+
+    /// <summary>
+    /// A fragment with where it stands in its line of views: what it replaced (with why), and what
+    /// replaced it, so an old view found by search leads to the current one.
+    /// </summary>
+    public async Task<string> ShowAsync(long id)
+    {
+        var fragment = await GetAsync(id);
+        var text = new StringBuilder(Render(fragment));
+        if (fragment.SupersededById is { } by)
+        {
+            text.Append($"\n(Superseded by #{by}{(fragment.Notes is { Length: > 0 } why ? $": {why}" : "")}. `show {by}` reads the current view.)");
+        }
+
+        foreach (var earlier in (await fragments.GetSupersededByAsync(id)).OrderBy(f => f.CreatedUtc))
+        {
+            text.Append($"\n(Supersedes #{earlier.Id}, from {earlier.CreatedUtc.ToUniversalTime():yyyy-MM-dd}"
+                + $"{(earlier.Notes is { Length: > 0 } why ? $", because: {why}" : "")}.)");
+        }
+
+        return text.ToString();
+    }
+
     /// <summary>Archives a fragment (out of the core and the recent lists, still searchable) or restores it.</summary>
     public async Task<ContextFragmentEntity> SetStatusAsync(long id, ContextFragmentStatus status)
     {
@@ -369,7 +445,8 @@ internal sealed class FragmentStore(
     {
         var flags = new List<string>();
         if (f.IsProtected) flags.Add("protected");
-        if (f.Status == ContextFragmentStatus.Archived) flags.Add("archived");
+        if (f.SupersededById is { } by) flags.Add($"superseded by #{by}");
+        else if (f.Status == ContextFragmentStatus.Archived) flags.Add("archived");
         if (f.IsDeleted) flags.Add("forgotten");
         if (f.Tags.Count > 0) flags.Add("tags: " + string.Join(", ", f.Tags.Select(t => t.Name)));
 
@@ -378,6 +455,13 @@ internal sealed class FragmentStore(
         {
             var who = f.Sources.FirstOrDefault(s => s.Name is not null)?.Name ?? "?";
             header += $" {who}, {f.CreatedUtc.ToUniversalTime():yyyy-MM-dd HH:mm}Z:";
+        }
+        else
+        {
+            // When a view was written, and last changed, is what tells a current belief from an old one.
+            var written = f.CreatedUtc.ToUniversalTime().ToString("yyyy-MM-dd");
+            var changed = f.LastModifiedUtc.ToUniversalTime().ToString("yyyy-MM-dd");
+            header = header[..^1] + $" | {written}{(changed != written ? $", changed {changed}" : "")}]";
         }
 
         var content = f.Content.Length <= maxContent

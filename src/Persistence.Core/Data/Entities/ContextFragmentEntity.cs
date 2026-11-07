@@ -43,6 +43,13 @@ public record ContextFragmentEntity : BaseEntity
     /// </summary>
     public int? RelayDepth { get; set; }
 
+    /// <summary>
+    /// The fragment that replaced this one, when the peer changed its mind or merged several into one.
+    /// A superseded fragment keeps its content and is archived: out of the core, still searchable, and
+    /// its successor one <c>show</c> away. <c>null</c> while it is the current view. See migration 009.
+    /// </summary>
+    public long? SupersededById { get; set; }
+
     public required float Importance { get; set; }
 
     public required float Confidence { get; set; }

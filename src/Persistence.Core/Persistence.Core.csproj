@@ -47,6 +47,7 @@
     <EmbeddedResource Include="Data\Migrations\006_AddChatMessageAddressing.sql" />
     <EmbeddedResource Include="Data\Migrations\007_AddCrossPeerMessageId.sql" />
     <EmbeddedResource Include="Data\Migrations\008_AddFragmentEmbeddings.sql" />
+    <EmbeddedResource Include="Data\Migrations\009_AddSupersession.sql" />
   </ItemGroup>
 
   <ItemGroup>

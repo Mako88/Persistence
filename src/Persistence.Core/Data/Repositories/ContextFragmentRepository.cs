@@ -56,6 +56,10 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
             WHERE et.TagId = {tagId} AND cf.IsDeleted = 0
             """);
 
+    /// <inheritdoc />
+    public async Task<IEnumerable<ContextFragmentEntity>> GetSupersededByAsync(long id) =>
+        await QueryAsync($"SELECT * FROM ContextFragments WHERE SupersededById = {id} AND IsDeleted = 0");
+
     /// <summary>
     /// Returns up to <paramref name="limit"/> results ordered best-match first.
     /// </summary>
@@ -216,8 +220,8 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
     /// </summary>
     protected override FormattableString GetInsertSql(ContextFragmentEntity entity) =>
         $"""
-        INSERT INTO ContextFragments (FragmentType, Status, Content, Summary, LastAccessedUtc, Importance, Confidence, IsProtected, IsDeleted, CreatedUtc, LastModifiedUtc, Notes, AddressedTo, MessageId, RelayDepth)
-        VALUES ({entity.FragmentType}, {entity.Status}, {entity.Content}, {entity.Summary}, {entity.LastAccessedUtc}, {entity.Importance}, {entity.Confidence}, {entity.IsProtected}, {entity.IsDeleted}, {entity.CreatedUtc}, {entity.LastModifiedUtc}, {entity.Notes}, {entity.AddressedTo}, {entity.MessageId}, {entity.RelayDepth})
+        INSERT INTO ContextFragments (FragmentType, Status, Content, Summary, LastAccessedUtc, Importance, Confidence, IsProtected, IsDeleted, CreatedUtc, LastModifiedUtc, Notes, AddressedTo, MessageId, RelayDepth, SupersededById)
+        VALUES ({entity.FragmentType}, {entity.Status}, {entity.Content}, {entity.Summary}, {entity.LastAccessedUtc}, {entity.Importance}, {entity.Confidence}, {entity.IsProtected}, {entity.IsDeleted}, {entity.CreatedUtc}, {entity.LastModifiedUtc}, {entity.Notes}, {entity.AddressedTo}, {entity.MessageId}, {entity.RelayDepth}, {entity.SupersededById})
         """;
 
     /// <summary>
@@ -230,7 +234,7 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
             Summary = {entity.Summary}, LastAccessedUtc = {entity.LastAccessedUtc}, Importance = {entity.Importance},
             Confidence = {entity.Confidence}, IsProtected = {entity.IsProtected}, IsDeleted = {entity.IsDeleted},
             LastModifiedUtc = {entity.LastModifiedUtc}, Notes = {entity.Notes}, AddressedTo = {entity.AddressedTo},
-            MessageId = {entity.MessageId}, RelayDepth = {entity.RelayDepth}
+            MessageId = {entity.MessageId}, RelayDepth = {entity.RelayDepth}, SupersededById = {entity.SupersededById}
         WHERE Id = {entity.Id}
         """;
 

@@ -12,6 +12,10 @@ const string Usage = """
       add --type <Identity|Relational|Personal|Summary> --content <text|-> [--content-file <path>]
           [--summary <text>] [--importance 0-1] [--confidence 0-1] [--tag <a/b>]... [--protected]
       edit <id> [--type] [--content <text|->] [--summary] [--importance] [--confidence] [--tag <a/b>]...
+      supersede <id>[,<id>...] --content <text|-> [--reason <text>] [--summary] [--importance] [--confidence] [--tag <a/b>]...
+                                            a change of mind (one id) or a merge (several): the new fragment
+                                            takes their type and tags; the old ones are archived, keep their
+                                            content and the reason, and point at it (`show` follows the line)
       archive <id> | restore <id>           out of the core and recent lists, still searchable; reversible
       forget <id> [--reason <text>]         soft-delete, hidden everywhere; unforget <id> brings it back
       show <id>
@@ -69,6 +73,29 @@ try
             Print(line, [await store.EditAsync(line.Id(), line.Get("type"), line.Text(), line.Text("summary"),
                 line.GetFloat("importance"), line.GetFloat("confidence"), line.GetAll("tag"))]);
             break;
+        case "supersede":
+            var replaced = line.Positional
+                .SelectMany(e => e.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                .Select(e => long.TryParse(e.TrimStart('#'), out var x) ? x : throw new UsageException($"'{e}' is not a fragment id."))
+                .Distinct().ToList();
+            if (replaced.Count == 0)
+            {
+                throw new UsageException("supersede needs the id (or ids, for a merge) it replaces.");
+            }
+
+            var successor = await store.SupersedeAsync(replaced,
+                line.Text() ?? throw new UsageException("supersede needs --content (or --content -, or --content-file)."),
+                line.Text("summary"), line.GetFloat("importance"), line.GetFloat("confidence"), line.GetAll("tag"), line.Get("reason"));
+            if (line.Has("json"))
+            {
+                Print(line, [successor]);
+            }
+            else
+            {
+                Console.WriteLine(await store.ShowAsync(successor.Id));
+            }
+
+            break;
         case "archive":
             Print(line, [await store.SetStatusAsync(line.Id(), ContextFragmentStatus.Archived)]);
             break;
@@ -84,7 +111,15 @@ try
             Print(line, [await store.GetAsync(line.Id())]);
             break;
         case "show":
-            Print(line, [await store.GetAsync(line.Id())]);
+            if (line.Has("json"))
+            {
+                Print(line, [await store.GetAsync(line.Id())]);
+            }
+            else
+            {
+                Console.WriteLine(await store.ShowAsync(line.Id()));
+            }
+
             break;
         case "list":
             Print(line, await store.ListAsync(line.Get("type"), line.Get("tag"), line.Has("archived"), line.GetInt("limit", 50)));
@@ -155,6 +190,8 @@ static void Print(CommandLine line, IReadOnlyList<ContextFragmentEntity> found)
             confidence = f.Confidence,
             isProtected = f.IsProtected,
             forgotten = f.IsDeleted,
+            supersededBy = f.SupersededById,
+            notes = f.Notes,
             tags = f.Tags.Select(t => t.Name),
             source = f.Sources.FirstOrDefault(s => s.Name is not null)?.Name,
             created = f.CreatedUtc,
