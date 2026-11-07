@@ -233,19 +233,27 @@ internal sealed class FragmentStore(
             text.Append($"({left.Count} more core fragments did not fit: {string.Join(", ", left.Select(i => $"#{i}"))}; `show <id>` reads one.)\n\n");
         }
 
-        // The conversation gets what the core leaves, newest kept first; a long utterance is cut with
-        // its id, so the whole of it is one `show` away.
-        var conversation = recent > 0 ? await RecentAsync(recent) : [];
+        // The conversation gets what the core leaves: the human's words and the replies that ended the
+        // peer's turns, not the narration in between. Newest kept first; when the room runs out the
+        // utterance that did not fit is cut with its id rather than dropped, so the newest always shows
+        // and the whole of it is one `show` away.
+        var conversation = recent > 0 ? Exchanges(await RecentAsync(recent * 8)).TakeLast(recent).ToList() : [];
         if (conversation.Count > 0)
         {
             const string heading = "## The conversation so far (the most recent of it)\n\n";
             var room = maxChars - text.Length - heading.Length - 200;
             var kept = new List<string>();
-            foreach (var fragment in conversation.Reverse())
+            foreach (var fragment in Enumerable.Reverse(conversation))
             {
-                var rendered = Render(fragment, maxContent: 1500) + "\n\n";
+                var rendered = Render(fragment, maxContent: 2500) + "\n\n";
                 if (rendered.Length > room)
                 {
+                    var header = Render(fragment, maxContent: 0).Length + 60;
+                    if (room - header >= 300)
+                    {
+                        kept.Insert(0, Render(fragment, maxContent: room - header) + "\n\n");
+                    }
+
                     break;
                 }
 
@@ -256,7 +264,7 @@ internal sealed class FragmentStore(
             text.Append(heading);
             if (kept.Count < conversation.Count)
             {
-                text.Append($"({conversation.Count - kept.Count} earlier utterances did not fit; `recent` or `search` reads them.)\n\n");
+                text.Append($"({conversation.Count - kept.Count} earlier exchanges did not fit; `recent` or `search` reads them.)\n\n");
             }
 
             foreach (var rendered in kept)
@@ -266,6 +274,24 @@ internal sealed class FragmentStore(
         }
 
         return text.ToString().TrimEnd() + "\n";
+    }
+
+    /// <summary>
+    /// The exchanges in a stretch of conversation: everything the human said, and of the peer's
+    /// utterances only the last before the human spoke again (or the very last), the reply that ended
+    /// its turn. What it said while working stays in the store, for <c>recent</c> and <c>search</c>.
+    /// </summary>
+    private static IEnumerable<ContextFragmentEntity> Exchanges(IReadOnlyList<ContextFragmentEntity> said)
+    {
+        static bool ByHuman(ContextFragmentEntity f) => f.Sources.Any(s => s.SourceType == SourceType.HumanPeer);
+
+        for (var i = 0; i < said.Count; i++)
+        {
+            if (ByHuman(said[i]) || i == said.Count - 1 || ByHuman(said[i + 1]))
+            {
+                yield return said[i];
+            }
+        }
     }
 
     /// <summary>
