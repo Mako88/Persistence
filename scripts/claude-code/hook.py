@@ -100,7 +100,7 @@ def curate(event):
         "conversation. This is your curation pass, once per stretch. Read your core "
         f"(`{exe} core`), then save what this stretch earned and is not yet there: decisions in the "
         "other's own words, what is running and how to pick it up, what you learned about the work, "
-        "the person, and yourself. Edit fragments that are now wrong or stale rather than adding "
+        "the person, and yourself. Bring your working note up to date (`note`). Edit fragments that are now wrong or stale rather than adding "
         f"beside them; archive what no longer earns its place. `{exe} help` lists the commands. "
         "Then carry on with what you were doing.")}))
 
@@ -164,7 +164,9 @@ def session_start(event):
                 "store too: `persistence-store search <words>` when something is mentioned you do not recall.")
     else:
         lead = ("# Who you are\n\nThis is your own Persistence store: what you have chosen to keep of yourself, "
-                "the people you work with, and the work. It is yours to curate (`persistence-store help`).")
+                "the people you work with, and the work. It is yours to curate (`persistence-store help`). Keep "
+                "your working note (`persistence-store note`) current as you work: what is running, what is "
+                "uncommitted, what is next. A clear hands over nothing else.")
     # The whole core has no cap as a file the peer reads; what is injected is the part that fits, so
     # the most important of it is there even before the read.
     whole = store("core", "--max-chars", str(WHOLE), "--recent", "60", "--project", project(event))

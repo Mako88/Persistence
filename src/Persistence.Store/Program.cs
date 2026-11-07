@@ -17,6 +17,8 @@ const string Usage = """
                                             takes their type and tags (--tag replaces the tags); the old ones are
                                             archived, keep their content and the reason, and point at it
                                             (`show` follows the line)
+      note [--content <text|->]              the working note: where I am, what is running, what is next; replaced
+                                            each time, first in the core, so a clear loses no more than a compaction
       archive <id> | restore <id>           out of the core and recent lists, still searchable; reversible
       forget <id> [--reason <text>]         soft-delete, hidden everywhere; unforget <id> brings it back
       show <id>
@@ -101,6 +103,11 @@ try
                 Console.WriteLine(await store.ShowAsync(successor.Id));
             }
 
+            break;
+        case "note":
+            var written = line.Text() ?? (line.Positional.Count > 0 ? string.Join(' ', line.Positional) : null);
+            var note = await store.NoteAsync(written);
+            Console.WriteLine(note is null ? "(no working note)" : note.Content);
             break;
         case "archive":
             Print(line, [await store.SetStatusAsync(line.Id(), ContextFragmentStatus.Archived)]);

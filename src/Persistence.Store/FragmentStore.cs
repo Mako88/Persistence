@@ -205,6 +205,37 @@ internal sealed class FragmentStore(
         return text.ToString();
     }
 
+    /// <summary>
+    /// The peer's working note: one "where I am, what is running, what is next" fragment, replaced each
+    /// time, first in the core. What a summary would hand over at a compaction, kept by the peer as it
+    /// works, so a clear (which hands over nothing) loses no more than a compaction does. Null text reads it.
+    /// </summary>
+    public async Task<ContextFragmentEntity?> NoteAsync(string? text)
+    {
+        var note = (await fragments.GetByTypeAsync(ContextFragmentType.WorkingNote)).Where(f => !f.IsDeleted)
+            .OrderByDescending(f => f.LastModifiedUtc).FirstOrDefault();
+        if (text is null)
+        {
+            return note;
+        }
+
+        note ??= new ContextFragmentEntity
+        {
+            FragmentType = ContextFragmentType.WorkingNote,
+            Status = ContextFragmentStatus.Active,
+            Content = "",
+            Importance = 1f,
+            Confidence = 1f,
+            CreatedUtc = DateTimeOffset.UtcNow,
+            LastModifiedUtc = DateTimeOffset.UtcNow,
+            Sources = [await PeerSourceAsync()],
+        };
+        note.Content = text;
+        note.LastModifiedUtc = DateTimeOffset.UtcNow;
+        await fragments.SaveAsync(note);
+        return note;
+    }
+
     /// <summary>Archives a fragment (out of the core and the recent lists, still searchable) or restores it.</summary>
     public async Task<ContextFragmentEntity> SetStatusAsync(long id, ContextFragmentStatus status)
     {
@@ -351,6 +382,12 @@ internal sealed class FragmentStore(
         var left = new List<long>();
         var elsewhere = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
         var projects = (await FindTagAsync(ProjectTag))?.Id;
+
+        if (await NoteAsync(null) is { Content.Length: > 0 } note)
+        {
+            text.Append($"## Where I am (my working note, written {note.LastModifiedUtc.ToUniversalTime():yyyy-MM-dd HH:mm}Z; "
+                + "`note` replaces it)\n\n" + note.Content.Trim() + "\n\n");
+        }
 
         foreach (var type in CoreTypes)
         {

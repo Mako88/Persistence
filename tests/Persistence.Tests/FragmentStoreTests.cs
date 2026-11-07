@@ -99,6 +99,22 @@ public sealed class FragmentStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task The_working_note_replaces_itself_and_leads_the_core()
+    {
+        var store = await OpenAsync();
+        Assert.Null(await store.NoteAsync(null));
+        await store.AddAsync("Identity", "I am Claude.", null, 0.9f, null, [], false);
+        var first = await store.NoteAsync("A smoke is running.");
+        var second = await store.NoteAsync("The round of 200 is running.");
+
+        Assert.Equal(first!.Id, second!.Id);
+        var core = await store.CoreAsync(40000, 0);
+        Assert.StartsWith("## Where I am", core);
+        Assert.Contains("The round of 200 is running.", core);
+        Assert.DoesNotContain("A smoke is running.", core);
+    }
+
+    [Fact]
     public async Task System_managed_types_cannot_be_authored()
     {
         var store = await OpenAsync();
