@@ -1,6 +1,6 @@
 """Claude Code hooks that keep a Claude's continuity in its own Persistence store.
 
-The harness (Claude Code) carries the live conversation; the store carries who this Claude is. Five
+The harness (Claude Code) carries the live conversation; the store carries who this Claude is. Seven
 hooks, one script:
 
   keep            Stop (async)    every turn's words go into the store (persistence-store keep-conversation)
@@ -15,6 +15,10 @@ hooks, one script:
   subagent-start  SubagentStart   gives every subagent the same core, without the conversation
   recall          UserPromptSubmit  surfaces the few authored fragments most related to the message, by
                                   meaning and exact words, that are not already in this context window
+  observe         UserPromptSubmit, SessionStart  what is so now, read off the machine rather than written
+                                  down: this project's running processes, logs written in the last hour with
+                                  their last line that says something, git's state, and whatever is watched
+                                  (`hook.py watch <pid|file> [label]`, `unwatch`, `watching`)
 
 Configured by environment (settings.json "env"): PERSISTENCE_STORE_DB (this Claude's store, one per
 Claude), PERSISTENCE_STORE_EXE (the published persistence-store), PERSISTENCE_SELECTEDLOCALPEER (the
@@ -248,16 +252,147 @@ def subagent_start(event):
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "SubagentStart", "additionalContext": text}}))
 
 
+WATCHED = STATE.parent / "watched.json"
+SHELLS = {"bash.exe", "sh.exe", "powershell.exe", "pwsh.exe", "cmd.exe", "conhost.exe", "git.exe", "claude.exe", "node.exe"}
+HEAVY = {"node_modules", "bin", "obj", "data", "models", "__pycache__", "dist", "build"}  # not walked for logs
+NOISE = re.compile(r"^\d+\.\d+\.\d+\.\d+ [IWED] |it/s\]|Loading weights|\bslot\b|\bsrv\b|\| task|LRU|n_tokens|tokens per second|\w = \S")  # a server's per-request lines and key = value chatter, progress bars
+
+
+def watched():
+    try:
+        return json.loads(WATCHED.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+
+
+def watch(args):
+    """`watch <pid|file|command> [label]`, `unwatch <pid|file|command>`, `watching`: what the observer
+    reads besides what it finds on its own (this project's processes and its recently written logs)."""
+    items = watched()
+    if args[0] == "watching":
+        print("\n".join(f"{w['what']}  {w.get('label', '')}" for w in items) or "(nothing watched)")
+        return
+    what = " ".join(args[1:2]) if args[0] == "unwatch" else args[1]
+    items = [w for w in items if w["what"] != what]
+    if args[0] == "watch":
+        items.append({"what": what, "label": " ".join(args[2:]), "since": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+    WATCHED.parent.mkdir(parents=True, exist_ok=True)
+    WATCHED.write_text(json.dumps(items, indent=1), encoding="utf-8")
+    print(f"{'watching' if args[0] == 'watch' else 'no longer watching'} {what}")
+
+
+def last_line(path):
+    """The last line of a log that says something: a server's per-request lines and progress bars skipped."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 400_000))
+            cut = f.tell() > 0
+            lines = f.read().decode("utf-8", "replace").replace("\r", "\n").splitlines()[1 if cut else 0:]
+    except OSError:
+        return ""
+    said = [l for l in lines if l.strip() and not NOISE.search(l)]
+    return said[-1].strip()[:160] if said else ""
+
+
+def age(seconds):
+    return f"{seconds / 3600:.1f}h" if seconds >= 3600 else f"{seconds / 60:.0f}m" if seconds >= 60 else f"{seconds:.0f}s"
+
+
+def run_quiet(cmd, cwd=None, timeout=10):
+    try:
+        out = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
+        return out.stdout if out.returncode == 0 else ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def observe(event):
+    """What is so now, read off the machine every message rather than written down: the processes
+    running from this project, logs written in the last hour with their last line, git's state, and
+    whatever is watched (`hook.py watch`). Written down, it went stale; read, it cannot."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    cwd = Path(event.get("cwd") or os.getcwd())
+    name, now = project(event), datetime.now().timestamp()
+    pids = [w["what"] for w in watched() if w["what"].isdigit()]
+    query = (f"Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -like '*{cwd.name}*' -or "
+             f"@({','.join(pids) or '-1'}) -contains $_.ProcessId }} | Select-Object ProcessId,Name,CreationDate,CommandLine | "
+             "ConvertTo-Json -Compress")
+    with ThreadPoolExecutor(4) as pool:
+        procs = pool.submit(run_quiet, ["powershell", "-NoProfile", "-Command", query], None, 15)
+        status = pool.submit(run_quiet, ["git", "status", "--porcelain", "--branch"], cwd)
+        last = pool.submit(run_quiet, ["git", "log", "-1", "--format=%h %cr: %s"], cwd)
+    lines = [f"## Observed now ({datetime.now().strftime('%H:%M')} local, read off the machine, not written)"]
+
+    try:
+        found = json.loads(procs.result() or "[]")
+    except ValueError:
+        found = []
+    found = [found] if isinstance(found, dict) else found
+    shown = set()
+    for p in found:
+        if p.get("Name", "").lower() in SHELLS or not p.get("CommandLine") or "hook.py" in p["CommandLine"]:
+            continue
+        started = re.search(r"\d+", p.get("CreationDate") or "")
+        since = age(now - int(started.group()) / 1000) if started else "?"
+        cmd = " ".join(re.sub(r'[A-Za-z]:[\\/][^" ]*[\\/]', "", p["CommandLine"]).replace('"', "").split())
+        if cmd in shown:
+            continue  # a venv's launcher and the interpreter it starts are one process to the reader
+        shown.add(cmd)
+        lines.append(f"- running {since}: pid {p['ProcessId']} {cmd[:150]}")
+    if not shown:
+        lines.append(f"- nothing of {name} is running")
+
+    logs = []
+    for root, dirs, files in os.walk(cwd):
+        dirs[:] = [d for d in dirs if d not in HEAVY and not d.startswith(".")]
+        for f in files:
+            if f.endswith(".log"):
+                try:
+                    mtime = (Path(root) / f).stat().st_mtime
+                except OSError:
+                    continue
+                if now - mtime < 3600:
+                    logs.append((mtime, Path(root) / f))
+    for w in watched():
+        if not w["what"].isdigit() and Path(w["what"]).exists():
+            logs.append((Path(w["what"]).stat().st_mtime, Path(w["what"])))
+    for mtime, path in sorted(logs, reverse=True)[:4]:
+        where = path.relative_to(cwd) if path.is_relative_to(cwd) else path
+        tail = last_line(path)
+        lines.append(f"- {where}, written {age(max(0, now - mtime))} ago" + (f": {tail}" if tail else ""))
+    for w in watched():
+        if w["what"].isdigit() and not any(str(p.get("ProcessId")) == w["what"] for p in found):
+            lines.append(f"- watched pid {w['what']} ({w.get('label') or 'no label'}) has exited")
+
+    head, *changes = (status.result() or "").splitlines()
+    if head:
+        ahead = re.search(r"ahead (\d+)", head)
+        lines.append(f"- git: {head[3:].split('...')[0]}, {len(changes)} uncommitted"
+                     + (f", {ahead.group(1)} unpushed" if ahead else "") + f"; last commit {last.result().strip()[:120]}")
+    return "\n".join(lines)
+
+
+def observe_hook(event):
+    text = observe(event)
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": event.get("hook_event_name", "UserPromptSubmit"),
+                                             "additionalContext": text[:CAP]}}))
+
+
 def main():
     # Windows Pythons default to the console code page, which cannot encode what fragments hold.
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stdin.reconfigure(encoding="utf-8")
+    if sys.argv[1] in ("watch", "unwatch", "watching"):
+        watch(sys.argv[1:])  # run by a person or a peer, not the harness: nothing on stdin
+        return
     event = json.load(sys.stdin) if not sys.stdin.isatty() else {}
     if sys.argv[1] == "session-start":
         session_start(event, int(sys.argv[2]) if len(sys.argv) > 2 else 1)
         return
     {"keep": keep, "curate": curate, "precompact": precompact,
-     "subagent-start": subagent_start, "recall": recall}[sys.argv[1]](event)
+     "subagent-start": subagent_start, "recall": recall, "observe": observe_hook}[sys.argv[1]](event)
 
 
 if __name__ == "__main__":
