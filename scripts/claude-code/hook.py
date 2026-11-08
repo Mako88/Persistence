@@ -38,6 +38,7 @@ import re
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -317,7 +318,33 @@ def seen(event, reset=False, add=()):
     return ids
 
 
+def keep_soon(event, delay=5):
+    """The human's words kept as soon as they are sent, not only when the turn ends: another session of
+    the peer reads them from the store (2026-11-08, John asked one session to stop a run the other owned,
+    and the other saw nothing until that turn ended). The harness writes the prompt to the transcript
+    just after this hook, so the keep waits a few seconds, apart from the reply."""
+    import threading
+
+    def later():
+        # The server's own stderr goes nowhere, so the outcome is written beside the hook times.
+        try:
+            time.sleep(delay)
+            path = event.get("transcript_path")
+            exe = os.environ.get("PERSISTENCE_STORE_EXE", "persistence-store")
+            out = subprocess.run([exe, "keep-conversation", path, "--local-peer",
+                                  os.environ.get("PERSISTENCE_SELECTEDLOCALPEER", "Local Peer")],
+                                 creationflags=NO_WINDOW, capture_output=True, text=True, encoding="utf-8", timeout=120)
+            said = (out.stdout if out.returncode == 0 else f"failed ({out.returncode}): {out.stderr}").strip()
+        except Exception as e:  # a background keep must not die unseen
+            said = f"failed: {e!r}"
+        with open(TIMES, "a", encoding="utf-8") as log:
+            log.write(f"{datetime.now().isoformat(timespec='seconds')} keep-soon {said[:160]}\n")
+
+    threading.Thread(target=later, daemon=True).start()
+
+
 def recall(event):
+    keep_soon(event)
     count = int(os.environ.get("PERSISTENCE_RECALL_COUNT", "3"))
     prompt = (event.get("prompt") or "").strip()
     if count <= 0 or len(prompt) < 12:
