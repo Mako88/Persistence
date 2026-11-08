@@ -253,7 +253,8 @@ def subagent_start(event):
 
 
 WATCHED = STATE.parent / "watched.json"
-SHELLS = {"bash.exe", "sh.exe", "powershell.exe", "pwsh.exe", "cmd.exe", "conhost.exe", "git.exe", "claude.exe", "node.exe"}
+SHELLS = {"bash.exe", "sh.exe", "powershell.exe", "pwsh.exe", "cmd.exe", "conhost.exe", "git.exe", "claude.exe", "node.exe",
+          "persistence-store.exe"}  # the harness's and the store's own, not the work
 HEAVY = {"node_modules", "bin", "obj", "data", "models", "__pycache__", "dist", "build"}  # not walked for logs
 NOISE = re.compile(r"^\d+\.\d+\.\d+\.\d+ [IWED] |it/s\]|Loading weights|\bslot\b|\bsrv\b|\| task|LRU|n_tokens|tokens per second|\w = \S")  # a server's per-request lines and key = value chatter, progress bars
 
@@ -371,6 +372,9 @@ def observe(event):
         ahead = re.search(r"ahead (\d+)", head)
         lines.append(f"- git: {head[3:].split('...')[0]}, {len(changes)} uncommitted"
                      + (f", {ahead.group(1)} unpushed" if ahead else "") + f"; last commit {last.result().strip()[:120]}")
+    tokens = context_tokens(event.get("transcript_path", ""))
+    if tokens:
+        lines.append(f"- this context window: {tokens / 1000:.0f}k tokens at the last reply")
     return "\n".join(lines)
 
 
