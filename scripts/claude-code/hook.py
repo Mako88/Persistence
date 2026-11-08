@@ -46,6 +46,14 @@ WHOLE = 200_000  # the core as a file the peer reads after a session starts: bou
 STATE = Path.home() / ".claude" / "persistence" / "state"
 
 
+# Windows: a process started detached has no console, so every console program it then starts (git,
+# tasklist, powershell, the embedder) opened a new window, which took the focus from whatever was in
+# front: Ember's game lost it again and again on 2026-11-08. A hidden console, which children inherit,
+# instead of none; and no window for any child started directly.
+NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+BACKGROUND = NO_WINDOW | 0x00000200 if os.name == "nt" else 0  # no window, own process group
+
+
 PORT = int(os.environ.get("PERSISTENCE_STORE_PORT", "8095"))  # `persistence-store serve`, the store kept open
 
 
@@ -98,7 +106,7 @@ def start_server(exe):
         for old in home.iterdir():
             if old != copy:
                 shutil.rmtree(old, ignore_errors=True)  # a copy still running stays until it ends
-        flags = 0x00000008 | 0x00000200 if os.name == "nt" else 0  # detached, own process group
+        flags = BACKGROUND
         log = open(home / "serve.log", "a", encoding="utf-8")  # why it ended, when it does: an exception lands here
         subprocess.Popen([str(copy / Path(exe).name), "serve", "--port", str(PORT)], creationflags=flags,
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=log, close_fds=True)
@@ -126,7 +134,7 @@ def store(*args, timeout=60, stdin=None, serve=True, cold=True):
         if not cold:
             return ""
     try:
-        out = subprocess.run([exe, *args], input=stdin, capture_output=True, text=True, encoding="utf-8", timeout=timeout)
+        out = subprocess.run(creationflags=NO_WINDOW, args=[exe, *args], input=stdin, capture_output=True, text=True, encoding="utf-8", timeout=timeout)
     except (OSError, subprocess.SubprocessError) as e:
         print(f"persistence hook: {exe} did not run: {e}", file=sys.stderr)
         return ""
@@ -207,7 +215,7 @@ def project(event):
     else its folder's. Fragments tagged project/<name> come into the core only for that project."""
     cwd = event.get("cwd") or os.getcwd()
     try:
-        common = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=cwd,
+        common = subprocess.run(creationflags=NO_WINDOW, args=["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=cwd,
                                 capture_output=True, text=True, timeout=10)
         if common.returncode == 0 and common.stdout.strip():
             return Path(common.stdout.strip()).parent.name.lower()
@@ -241,7 +249,7 @@ def ensure_embedding_server():
     try:
         socket.create_connection((where.hostname, where.port or 80), timeout=1).close()
     except OSError:
-        flags = 0x00000008 | 0x00000200 if os.name == "nt" else 0  # detached, own process group
+        flags = BACKGROUND
         subprocess.Popen([script], creationflags=flags, stdin=subprocess.DEVNULL,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
 
@@ -394,7 +402,7 @@ def age(seconds):
 
 def run_quiet(cmd, cwd=None, timeout=10):
     try:
-        out = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
+        out = subprocess.run(creationflags=NO_WINDOW, args=cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
         return out.stdout if out.returncode == 0 else ""
     except (OSError, subprocess.SubprocessError):
         return ""
@@ -637,7 +645,17 @@ def serve():
         def log_message(self, *args):
             pass
 
-    ThreadingHTTPServer(("127.0.0.1", HOOK_PORT), Handler).serve_forever()
+    class Server(ThreadingHTTPServer):
+        # SO_REUSEADDR on Windows lets a second process bind a port already bound, so two hooks that each
+        # found the server down both started one and the requests were split between them (2026-11-08).
+        # Without it the second fails to bind and ends, and the first keeps the port.
+        allow_reuse_address = os.name != "nt"
+
+    try:
+        server = Server(("127.0.0.1", HOOK_PORT), Handler)
+    except OSError:
+        return  # another server holds the port: it answers
+    server.serve_forever()
 
 
 def ensure():
@@ -648,7 +666,7 @@ def ensure():
     try:
         socket.create_connection(("127.0.0.1", HOOK_PORT), timeout=1).close()
     except OSError:
-        flags = 0x00000008 | 0x00000200 if os.name == "nt" else 0  # detached, own process group
+        flags = BACKGROUND
         subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "serve"], creationflags=flags,
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
 
