@@ -56,6 +56,47 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
             WHERE et.TagId = {tagId} AND cf.IsDeleted = 0
             """);
 
+    /// <summary>Dates are stored as UTC text in this form, so they compare as text.</summary>
+    private static string Stored(DateTimeOffset at) => at.ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss.fffzzz");
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<long>> GetNewestIdsAsync(ContextFragmentType type, int count, IReadOnlyCollection<string> leaveOut) =>
+        count <= 0 ? [] : leaveOut.Count == 0
+            ? (await QueryAsync<long>($"""
+                SELECT Id FROM ContextFragments
+                WHERE FragmentType = {type} AND Status = {ContextFragmentStatus.Active} AND IsDeleted = 0
+                ORDER BY CreatedUtc DESC LIMIT {count}
+                """)).ToList()
+            : (await QueryAsync<long>($"""
+                SELECT Id FROM ContextFragments
+                WHERE FragmentType = {type} AND Status = {ContextFragmentStatus.Active} AND IsDeleted = 0
+                  AND (SessionId IS NULL OR SessionId NOT IN {leaveOut.ToList()})
+                ORDER BY CreatedUtc DESC LIMIT {count}
+                """)).ToList();
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<long>> GetIdsBySessionsAsync(ContextFragmentType type, IReadOnlyCollection<string> sessions) =>
+        sessions.Count == 0 ? [] : (await QueryAsync<long>($"""
+            SELECT Id FROM ContextFragments
+            WHERE FragmentType = {type} AND Status = {ContextFragmentStatus.Active} AND IsDeleted = 0
+              AND SessionId IN {sessions.ToList()}
+            """)).ToList();
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyDictionary<string, DateTimeOffset>> GetSessionsSinceAsync(ContextFragmentType type, DateTimeOffset since) =>
+        (await QueryAsync<(string SessionId, string Newest)>($"""
+            SELECT SessionId, MAX(CreatedUtc) AS Newest FROM ContextFragments
+            WHERE FragmentType = {type} AND IsDeleted = 0 AND SessionId IS NOT NULL AND CreatedUtc >= {Stored(since)}
+            GROUP BY SessionId
+            """)).ToDictionary(r => r.SessionId, r => DateTimeOffset.Parse(r.Newest, System.Globalization.CultureInfo.InvariantCulture));
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<(long Id, string MessageId, string? SessionId)>> GetMessageIdsAsync(ContextFragmentType type) =>
+        (await QueryAsync<(long Id, string MessageId, string? SessionId)>($"""
+            SELECT Id, MessageId, SessionId FROM ContextFragments
+            WHERE FragmentType = {type} AND MessageId IS NOT NULL
+            """)).ToList();
+
     /// <inheritdoc />
     public async Task<IEnumerable<ContextFragmentEntity>> GetSupersededByAsync(long id) =>
         await QueryAsync($"SELECT * FROM ContextFragments WHERE SupersededById = {id} AND IsDeleted = 0");

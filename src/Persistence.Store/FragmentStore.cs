@@ -403,10 +403,8 @@ internal sealed class FragmentStore(
     {
         // Another session still running is kept out: interleaved, its "tests pass, publishing" read as this
         // session's own work. It is shown as a line in the core instead, and joins the history when it ends.
-        var running = (await LiveSessionsAsync()).Keys.ToHashSet();
-        var ids = (await fragments.GetByTypeAsync(ContextFragmentType.ChatMessage))
-            .Where(f => !f.IsDeleted && (f.SessionId is null || !running.Contains(f.SessionId)))
-            .OrderByDescending(f => f.CreatedUtc).Take(count).Select(f => f.Id).ToList();
+        var running = (await LiveSessionsAsync()).Keys.ToList();
+        var ids = await fragments.GetNewestIdsAsync(ContextFragmentType.ChatMessage, count, running);
         return (await HydratedAsync(ids)).OrderBy(f => f.CreatedUtc).ToList();
     }
 
@@ -421,11 +419,8 @@ internal sealed class FragmentStore(
             return new Dictionary<string, DateTimeOffset>();
         }
 
-        var since = DateTimeOffset.UtcNow - Live;
-        return (await fragments.GetByTypeAsync(ContextFragmentType.ChatMessage))
-            .Where(f => !f.IsDeleted && f.SessionId is not null && f.SessionId != Session && f.CreatedUtc >= since)
-            .GroupBy(f => f.SessionId!)
-            .ToDictionary(g => g.Key, g => g.Max(f => f.CreatedUtc));
+        return (await fragments.GetSessionsSinceAsync(ContextFragmentType.ChatMessage, DateTimeOffset.UtcNow - Live))
+            .Where(s => s.Key != Session).ToDictionary(s => s.Key, s => s.Value);
     }
 
     /// <summary>
@@ -443,8 +438,7 @@ internal sealed class FragmentStore(
 
         var notes = (await fragments.GetByTypeAsync(ContextFragmentType.WorkingNote)).Where(f => !f.IsDeleted && f.SessionId is not null)
             .GroupBy(f => f.SessionId!).ToDictionary(g => g.Key, g => g.OrderByDescending(f => f.LastModifiedUtc).First());
-        var said = (await fragments.GetByTypeAsync(ContextFragmentType.ChatMessage))
-            .Where(f => !f.IsDeleted && f.SessionId is not null && live.ContainsKey(f.SessionId)).Select(f => f.Id).ToList();
+        var said = await fragments.GetIdsBySessionsAsync(ContextFragmentType.ChatMessage, live.Keys.ToList());
         var bySession = (await HydratedAsync(said)).GroupBy(f => f.SessionId!).ToDictionary(g => g.Key, g => g.OrderBy(f => f.CreatedUtc).ToList());
 
         static string Clip(string s, int n)
@@ -646,9 +640,10 @@ internal sealed class FragmentStore(
     {
         // The transcript is named for its session (<id>.jsonl).
         var sessionId = Path.GetFileNameWithoutExtension(transcriptPath);
-        var stored = (await fragments.GetByTypeAsync(ContextFragmentType.ChatMessage, activeOnly: false)).ToList();
-        var known = stored.Select(f => f.MessageId).OfType<string>().ToHashSet();
-        var unsessioned = stored.Where(f => f.SessionId is null && f.MessageId is not null).ToDictionary(f => f.MessageId!);
+        // Ids, not fragments: loading every utterance to learn which were kept cost seconds on each keep.
+        var stored = await fragments.GetMessageIdsAsync(ContextFragmentType.ChatMessage);
+        var known = stored.Select(f => f.MessageId).ToHashSet();
+        var unsessioned = stored.Where(f => f.SessionId is null).GroupBy(f => f.MessageId).ToDictionary(g => g.Key, g => g.First().Id);
         var localPeer = await sources.EnsureLocalPeerSourceAsync(localPeerName);
         var remotePeer = await PeerSourceAsync();
         var skipped = 0;
@@ -659,7 +654,7 @@ internal sealed class FragmentStore(
             if (!known.Add(said.Id))
             {
                 // Kept before sessions were: re-reading its transcript tells which session said it.
-                if (unsessioned.Remove(said.Id, out var old))
+                if (unsessioned.Remove(said.Id, out var oldId) && (await fragments.GetByIdsAsync([oldId])).FirstOrDefault() is { } old)
                 {
                     old.SessionId = sessionId;
                     await fragments.SaveAsync(old);
