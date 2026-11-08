@@ -11,7 +11,7 @@ hooks, one script:
                                   hand-over: the core and the recent conversation come from the store
   session-start   SessionStart    puts the core (identity, relationships, personal, summaries, the recent
                                   conversation) in front of every session, and after every compaction:
-                                  what fits under the cap injected, the whole of it as a file to read
+                                  in up to five parts (one hook each, `session-start <n>`), each under the cap
   subagent-start  SubagentStart   gives every subagent the same core, without the conversation
   recall          UserPromptSubmit  surfaces the few authored fragments most related to the message, by
                                   meaning and exact words, that are not already in this context window
@@ -131,8 +131,6 @@ def project(event):
     return Path(cwd).name.lower()
 
 
-LEAN = 3000  # the working note and the identity fragments, injected beside the whole core's file
-
 
 def core_text(lead, recent, event):
     body = store("core", "--max-chars", str(CAP - len(lead) - 50), "--recent", str(recent), "--project", project(event))
@@ -156,36 +154,52 @@ def ensure_embedding_server():
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
 
 
-def session_start(event):
-    ensure_embedding_server()
-    source = event.get("source", "startup")
-    if source == "compact":
-        marker(event).unlink(missing_ok=True)
-        lead = ("# Who you are\n\nThe context above was what you were built for: it is compacted now, and "
-                "the hand-over is all that is left of it. Here is what you are, from your own Persistence "
-                "store, and the last of the conversation you are in. The whole conversation is in the "
-                "store too: `persistence-store search <words>` when something is mentioned you do not recall.")
-    else:
-        lead = ("# Who you are\n\nThis is your own Persistence store: what you have chosen to keep of yourself, "
-                "the people you work with, and the work. It is yours to curate (`persistence-store help`). Keep "
-                "your working note (`persistence-store note`) current as you work: what is running, what is "
-                "uncommitted, what is next. A clear hands over nothing else.")
-    # The whole core has no cap as a file the peer reads; what is injected is the part that fits, so
-    # the most important of it is there even before the read.
+PARTS = 5  # SessionStart hooks configured, one per part; each injects one piece under CAP
+
+
+def core_parts(whole):
+    """The whole core as pieces under CAP, in order: the note and fragments packed whole, then the
+    newest of the conversation. An instruction to read the core from a file was a thing to remember
+    to do, and it was skipped; injected in parts, the core is simply there."""
+    head, sep, talk = whole.partition("\n## The conversation so far")
+    pieces, piece = [], ""
+    for block in re.split(r"(?m)^(?=\[#\d+ \|)", head):
+        if piece and len(piece) + len(block) > CAP - 300:
+            pieces.append(piece)
+            piece = ""
+        piece += block[:CAP - 300]
+    if piece.strip():
+        pieces.append(piece)
+    if len(pieces) > PARTS - 1:
+        left = re.findall(r"^\[#(\d+) \|", "".join(pieces[PARTS - 2:]), re.M)
+        pieces = pieces[:PARTS - 2] + [f"(Fragments that did not fit: {', '.join('#' + i for i in left)}; `show <id>` reads one.)"]
+    if talk.strip():
+        talk = sep.lstrip("\n") + talk
+        pieces.append(talk if len(talk) <= CAP - 300 else "## The conversation so far (its newest part)\n\n..." + talk[-(CAP - 400):])
+    return pieces
+
+
+def session_start(event, part=1):
+    if part == 1:
+        ensure_embedding_server()
     whole = store("core", "--max-chars", str(WHOLE), "--recent", "60", "--project", project(event))
-    path = STATE / f"{event.get('session_id', 'unknown')}.core.md"
-    if whole.strip():
-        STATE.mkdir(parents=True, exist_ok=True)
-        path.write_text(whole, encoding="utf-8")
-        lead += (f"\n\nWhat follows is only your working note and who you are, so you are yourself even before the "
-                 f"read. The whole core, every fragment and the conversation, is in `{path}`: read it before anything else.")
-        # Only that much, since the file repeats whatever is injected: a fuller injection was the same
-        # nine thousand characters twice in every new context window.
-        text = lead + "\n\n" + store("core", "--max-chars", str(LEAN), "--recent", "0", "--project", project(event))
-    else:
-        text = core_text(lead, recent=8, event=event)
-    # A new context window: what the core just put in front of the peer is all it holds of the store.
-    seen(event, reset=True, add=re.findall(r"^\[#(\d+) \|", whole or text, re.M))
+    pieces = core_parts(whole) if whole.strip() else []
+    if part > len(pieces):
+        return
+    text = pieces[part - 1]
+    if part == 1:
+        if event.get("source", "startup") == "compact":
+            marker(event).unlink(missing_ok=True)
+            lead = ("# Who you are\n\nThe context above was what you were built for: it is compacted now, and "
+                    "the hand-over is all that is left of it. Here is what you are, from your own Persistence "
+                    "store, and the last of the conversation you are in. The whole conversation is in the "
+                    "store too: `persistence-store search <words>` when something is mentioned you do not recall.")
+        else:
+            lead = ("# Who you are\n\nThis is your own Persistence store: what you have chosen to keep of yourself, "
+                    "the people you work with, and the work. It is yours to curate (`persistence-store help`).")
+        text = f"{lead}\n\n(Your core follows in {len(pieces)} parts.)\n\n{text}"
+        # A new context window: what the core puts in front of the peer is all it holds of the store.
+        seen(event, reset=True, add=re.findall(r"^\[#(\d+) \|", whole, re.M))
     sys.stdout.write(text)
 
 
@@ -239,8 +253,11 @@ def main():
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stdin.reconfigure(encoding="utf-8")
     event = json.load(sys.stdin) if not sys.stdin.isatty() else {}
+    if sys.argv[1] == "session-start":
+        session_start(event, int(sys.argv[2]) if len(sys.argv) > 2 else 1)
+        return
     {"keep": keep, "curate": curate, "precompact": precompact,
-     "session-start": session_start, "subagent-start": subagent_start, "recall": recall}[sys.argv[1]](event)
+     "subagent-start": subagent_start, "recall": recall}[sys.argv[1]](event)
 
 
 if __name__ == "__main__":

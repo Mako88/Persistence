@@ -27,7 +27,11 @@ CLI it calls, and the one the Claude uses itself to curate.
       { "type": "command", "command": "python ~/.claude/persistence/hook.py precompact", "timeout": 120 }
     ]}],
     "SessionStart": [{ "hooks": [
-      { "type": "command", "command": "python ~/.claude/persistence/hook.py session-start", "timeout": 30 }
+      { "type": "command", "command": "python ~/.claude/persistence/hook.py session-start 1", "timeout": 30 },
+      { "type": "command", "command": "python ~/.claude/persistence/hook.py session-start 2", "timeout": 30 },
+      { "type": "command", "command": "python ~/.claude/persistence/hook.py session-start 3", "timeout": 30 },
+      { "type": "command", "command": "python ~/.claude/persistence/hook.py session-start 4", "timeout": 30 },
+      { "type": "command", "command": "python ~/.claude/persistence/hook.py session-start 5", "timeout": 30 }
     ]}],
     "SubagentStart": [{ "hooks": [
       { "type": "command", "command": "python ~/.claude/persistence/hook.py subagent-start", "timeout": 30 }
