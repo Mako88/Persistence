@@ -21,6 +21,8 @@ internal static class Server
 {
     public const int DefaultPort = 8095;
 
+    private static readonly TimeSpan RequestArrives = TimeSpan.FromSeconds(5);
+
     public static async Task<int> ServeAsync(
         FragmentStore store, string database, int port, Func<CommandLine, FragmentStore, Task<int>> run)
     {
@@ -41,7 +43,10 @@ internal static class Server
             string reply;
             try
             {
-                var request = JsonSerializer.Deserialize<Request>(await reader.ReadLineAsync() ?? "{}") ?? new Request();
+                // Commands run one at a time, so a caller that connects and never finishes its line would
+                // hold every caller behind it: its line has a few seconds to arrive.
+                using var arrive = new CancellationTokenSource(RequestArrives);
+                var request = JsonSerializer.Deserialize<Request>(await reader.ReadLineAsync(arrive.Token) ?? "{}") ?? new Request();
                 var line = CommandLine.Parse(request.Args ?? []);
                 if (line.Get("db") is { } asked && !string.Equals(Path.GetFullPath(asked), database, StringComparison.OrdinalIgnoreCase))
                 {
@@ -83,7 +88,16 @@ internal static class Server
                 reply = Reply(3, "", $"the server could not run that: {e.Message}");
             }
 
-            await writer.WriteLineAsync(reply);
+            try
+            {
+                await writer.WriteLineAsync(reply);
+            }
+            catch (IOException)
+            {
+                // The caller gave up waiting (a hook has a deadline) and closed its end. This write can throw
+                // outside any handler, where it would end the server and every later call would pay for a fresh start.
+                stderr.WriteLine("a caller left before its reply: dropped");
+            }
 
             if (published is not null && File.Exists(published) && File.GetLastWriteTimeUtc(published) != built)
             {

@@ -55,7 +55,13 @@ def served(args, stdin, timeout):
     import socket
 
     try:
-        with socket.create_connection(("127.0.0.1", PORT), timeout=1) as s:
+        # Windows lets a connect to a port nobody listens on time out rather than be refused, so only a
+        # timeout once connected means busy: the OS accepts for a server that is up, however busy it is.
+        connection = socket.create_connection(("127.0.0.1", PORT), timeout=1)
+    except OSError:
+        return None
+    try:
+        with connection as s:
             s.settimeout(timeout)
             s.sendall((json.dumps({"args": list(args), "stdin": stdin or ""}) + "\n").encode("utf-8"))
             data = b""
@@ -66,8 +72,13 @@ def served(args, stdin, timeout):
                 data += chunk
         reply = json.loads(data.decode("utf-8"))
         return reply["code"], reply["out"], reply["err"]
+    except TimeoutError:
+        return BUSY  # it is up but still on an earlier call: a second CLI beside it only adds to the wait
     except (OSError, ValueError, KeyError):
         return None
+
+
+BUSY = (124, "", "the store server is busy")
 
 
 def start_server(exe):
@@ -88,24 +99,32 @@ def start_server(exe):
             if old != copy:
                 shutil.rmtree(old, ignore_errors=True)  # a copy still running stays until it ends
         flags = 0x00000008 | 0x00000200 if os.name == "nt" else 0  # detached, own process group
+        log = open(home / "serve.log", "a", encoding="utf-8")  # why it ended, when it does: an exception lands here
         subprocess.Popen([str(copy / Path(exe).name), "serve", "--port", str(PORT)], creationflags=flags,
-                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=log, close_fds=True)
     except OSError as e:
         print(f"persistence hook: the store server did not start: {e}", file=sys.stderr)
 
 
-def store(*args, timeout=60, stdin=None, serve=True):
+def store(*args, timeout=60, stdin=None, serve=True, cold=True):
     """The CLI's output, or "" if it could not run: a hook must never break the session it serves.
-    Asked of the served store when one is up; otherwise one is started and this call runs the CLI."""
+    Asked of the served store when one is up; otherwise one is started and this call runs the CLI,
+    unless `cold` is False: a cold CLI's recall took 38 s (2026-11-08), past the harness's 20 s, so the
+    message waited and got nothing; better none this message and the started server's from the next."""
     exe = os.environ.get("PERSISTENCE_STORE_EXE", "persistence-store")
     if serve:
-        reply = served(args, stdin, min(timeout, 15))
+        reply = served(args, stdin, min(timeout, 12))  # inside the harness's 20 s for an HTTP hook
+        if reply is BUSY:
+            print(f"persistence hook: {args[0]} skipped: the store server is busy", file=sys.stderr)
+            return ""
         if reply is not None:
             code, out, err = reply
             if code != 0:
                 print(f"persistence hook: {args[0]} failed: {err.strip()}", file=sys.stderr)
             return out if code == 0 else ""
         start_server(exe)
+        if not cold:
+            return ""
     try:
         out = subprocess.run([exe, *args], input=stdin, capture_output=True, text=True, encoding="utf-8", timeout=timeout)
     except (OSError, subprocess.SubprocessError) as e:
@@ -297,7 +316,7 @@ def recall(event):
                   "--wander", os.environ.get("PERSISTENCE_RECALL_WANDER", "1"),
                   "--said", os.environ.get("PERSISTENCE_RECALL_SAID", "3") if len(prompt) >= 40 else "0",
                   *(["--before", since.read_text().strip()] if since.exists() else []),
-                  *(["--exclude", ",".join(already)] if already else []), stdin=prompt)
+                  *(["--exclude", ",".join(already)] if already else []), stdin=prompt, cold=False)
     ids = re.findall(r"^\[#(\d+) \|", found, re.M)
     if not ids:
         return
@@ -450,6 +469,7 @@ def observe_hook(event):
                                              "additionalContext": text[:CAP]}}))
 
 
+TIMES = STATE.parent / "hook-times.log"  # one line per per-message hook answered by `serve`: path, seconds, bytes
 HOOK_PORT = int(os.environ.get("PERSISTENCE_HOOK_PORT", "8097"))  # `hook.py serve`: the hooks answered by URL
 
 
@@ -575,6 +595,7 @@ def serve():
     """The hooks a session calls every message, answered by a process that stays up: the harness posts
     the event to http://127.0.0.1:PERSISTENCE_HOOK_PORT/<hook>[/<part>], and nothing starts per call.
     When this script changes it starts itself again, so an edit is live from the next call."""
+    import time
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
     sys.stdout = PerRequest(sys.stdout)
@@ -584,6 +605,7 @@ def serve():
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             parts = self.path.strip("/").split("/")
+            began = time.perf_counter()
             try:
                 event = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
                 body = answer(parts[0], int(parts[1]) if len(parts) > 1 else 1, event).encode("utf-8")
@@ -596,6 +618,12 @@ def serve():
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+            if parts[0] != "wait":  # each per-message hook's time, so a slowdown can be read rather than guessed
+                try:
+                    with open(TIMES, "a", encoding="utf-8") as log:
+                        log.write(f"{datetime.now().isoformat(timespec='seconds')} {self.path} {time.perf_counter() - began:.2f}s {len(body)}b\n")
+                except OSError:
+                    pass
             if script.stat().st_mtime != written:
                 os.execv(sys.executable, [sys.executable, str(script), "serve"])
 
