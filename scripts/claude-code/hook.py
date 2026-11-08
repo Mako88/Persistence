@@ -20,6 +20,10 @@ hooks, one script:
                                   their last line that says something, git's state, and whatever is watched
                                   (`hook.py watch <pid|file> [label]`, `unwatch`, `watching`)
 
+Every call but `keep` goes to `persistence-store serve`, the store kept open on PERSISTENCE_STORE_PORT
+(default 8095), started from a copy of the published CLI the first time nothing answers, and ending
+itself when a new build is published; until it is up, the call runs the CLI as before.
+
 Configured by environment (settings.json "env"): PERSISTENCE_STORE_DB (this Claude's store, one per
 Claude), PERSISTENCE_STORE_EXE (the published persistence-store), PERSISTENCE_SELECTEDLOCALPEER (the
 human's name), PERSISTENCE_CURATE_AT (tokens, default 500000; set autoCompactWindow above it),
@@ -42,9 +46,66 @@ WHOLE = 200_000  # the core as a file the peer reads after a session starts: bou
 STATE = Path.home() / ".claude" / "persistence" / "state"
 
 
-def store(*args, timeout=60, stdin=None):
-    """The CLI's output, or "" if it could not run: a hook must never break the session it serves."""
+PORT = int(os.environ.get("PERSISTENCE_STORE_PORT", "8095"))  # `persistence-store serve`, the store kept open
+
+
+def served(args, stdin, timeout):
+    """The served store's (code, out, err), or None when no server answers. A new process cost 1.7
+    seconds before any work on every call; the server answers in tens of milliseconds."""
+    import socket
+
+    try:
+        with socket.create_connection(("127.0.0.1", PORT), timeout=1) as s:
+            s.settimeout(timeout)
+            s.sendall((json.dumps({"args": list(args), "stdin": stdin or ""}) + "\n").encode("utf-8"))
+            data = b""
+            while not data.endswith(b"\n"):
+                chunk = s.recv(1 << 16)
+                if not chunk:
+                    break
+                data += chunk
+        reply = json.loads(data.decode("utf-8"))
+        return reply["code"], reply["out"], reply["err"]
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def start_server(exe):
+    """Starts `serve` from a copy of the published CLI, so publishing a new build is never blocked by
+    the running one; the server ends itself when the build changes, and the next call starts the new one."""
+    import shutil
+
+    source = Path(shutil.which(exe) or exe).resolve().parent
+    if not (source / Path(exe).name).exists():
+        return
+    built = int((source / Path(exe).name).stat().st_mtime)
+    home = STATE.parent / "server"
+    copy = home / str(built)
+    try:
+        if not copy.exists():
+            shutil.copytree(source, copy)
+        for old in home.iterdir():
+            if old != copy:
+                shutil.rmtree(old, ignore_errors=True)  # a copy still running stays until it ends
+        flags = 0x00000008 | 0x00000200 if os.name == "nt" else 0  # detached, own process group
+        subprocess.Popen([str(copy / Path(exe).name), "serve", "--port", str(PORT)], creationflags=flags,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
+    except OSError as e:
+        print(f"persistence hook: the store server did not start: {e}", file=sys.stderr)
+
+
+def store(*args, timeout=60, stdin=None, serve=True):
+    """The CLI's output, or "" if it could not run: a hook must never break the session it serves.
+    Asked of the served store when one is up; otherwise one is started and this call runs the CLI."""
     exe = os.environ.get("PERSISTENCE_STORE_EXE", "persistence-store")
+    if serve:
+        reply = served(args, stdin, min(timeout, 15))
+        if reply is not None:
+            code, out, err = reply
+            if code != 0:
+                print(f"persistence hook: {args[0]} failed: {err.strip()}", file=sys.stderr)
+            return out if code == 0 else ""
+        start_server(exe)
     try:
         out = subprocess.run([exe, *args], input=stdin, capture_output=True, text=True, encoding="utf-8", timeout=timeout)
     except (OSError, subprocess.SubprocessError) as e:
@@ -59,7 +120,8 @@ def keep(event):
     path = event.get("transcript_path")
     if path and Path(path).exists():
         store("keep-conversation", path, "--local-peer",
-              os.environ.get("PERSISTENCE_SELECTEDLOCALPEER", "Local Peer"), timeout=120)
+              os.environ.get("PERSISTENCE_SELECTEDLOCALPEER", "Local Peer"), timeout=120,
+              serve=False)  # in the background and slow: run apart, so the server stays free for recall
 
 
 def context_tokens(path):

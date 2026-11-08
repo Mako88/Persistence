@@ -37,6 +37,9 @@ const string Usage = """
                                             identity, relationships, personal, summaries, then the
                                             recent conversation: what a harness puts in front of the peer.
                                             Fragments tagged project/<name> come in only for that project
+      serve [--port 8095]                   stay up with the store open and run the commands sent to it
+                                            (POST /run {"args": [...], "stdin": "..."}): a hook's call costs
+                                            milliseconds, not the seconds a new process takes to start
       keep-conversation <transcript.jsonl> [--local-peer <name>]
                                             store what was said in a Claude Code session; re-running adds
                                             only what is new
@@ -67,7 +70,28 @@ try
     config.DatabasePath = Path.GetFullPath(path);
 
     var store = await FragmentStore.OpenAsync(config, line.Has("debug"));
+    if (line.Command == "serve")
+    {
+        return await Server.ServeAsync(store, config.DatabasePath, line.GetInt("port", Server.DefaultPort), Run);
+    }
 
+    return await Run(line, store);
+}
+catch (UsageException e)
+{
+    Console.Error.WriteLine(e.Message);
+    Console.Error.WriteLine("`persistence-store help` lists the commands.");
+    return 1;
+}
+catch (RefusedException e)
+{
+    Console.Error.WriteLine(e.Message);
+    return 2;
+}
+
+// One command against an open store; `serve` runs the same commands in a process that stays up.
+static async Task<int> Run(CommandLine line, FragmentStore store)
+{
     switch (line.Command)
     {
         case "add":
@@ -207,17 +231,6 @@ try
     }
 
     return 0;
-}
-catch (UsageException e)
-{
-    Console.Error.WriteLine(e.Message);
-    Console.Error.WriteLine("`persistence-store help` lists the commands.");
-    return 1;
-}
-catch (RefusedException e)
-{
-    Console.Error.WriteLine(e.Message);
-    return 2;
 }
 
 static void Print(CommandLine line, IReadOnlyList<ContextFragmentEntity> found)

@@ -117,15 +117,22 @@ internal sealed class ConversationRecaller(
         for (var i = 0; i < missing.Count; i++)
         {
             await vectors.UpsertAsync(Model, missing[i].Id, embedded[i], VectorMath.ContentHash(texts[i]));
+            loaded?.Add(new StoredEmbedding(missing[i].Id, embedded[i], VectorMath.ContentHash(texts[i])));
         }
 
         return missing.Count;
     }
 
+    /// <summary>
+    /// Every utterance's vector, read once and kept: in a process that stays up (`serve`), reading them
+    /// all again was half of each recall. Only this class writes them, and it adds what it writes.
+    /// </summary>
+    private List<StoredEmbedding>? loaded;
+
     private async Task<List<ContextFragmentEntity>> SemanticAsync(string text, Func<ContextFragmentEntity, bool> wanted)
     {
         await BackfillAsync(BackfillPerCall);
-        var stored = await vectors.GetAllAsync(Model);
+        var stored = loaded ??= (await vectors.GetAllAsync(Model)).ToList();
         var query = await embeddings.EmbedAsync([text]);
         if (stored.Count == 0 || query.Count == 0 || query[0].Length == 0)
         {

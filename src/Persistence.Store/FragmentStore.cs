@@ -49,6 +49,7 @@ internal sealed class FragmentStore(
             builder.RegisterInstance(new QuietDisplay(debug)).As<IDisplayProvider>().SingleInstance();
             builder.RegisterType<FragmentStore>().SingleInstance();
             builder.RegisterType<ConversationRecaller>().SingleInstance();
+            builder.RegisterDecorator<RememberingEmbeddingClient, IEmbeddingClient>();
         });
         var store = (FragmentStore)services.GetService(typeof(FragmentStore))!;
         await store.InitializeAsync();
