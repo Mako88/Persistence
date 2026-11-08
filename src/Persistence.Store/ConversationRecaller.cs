@@ -36,9 +36,11 @@ internal sealed class ConversationRecaller(
     /// <summary>
     /// The past utterances most related to <paramref name="text"/>, said before <paramref name="before"/>
     /// (what the current session said is already in front of the peer), leaving out <paramref name="exclude"/>.
+    /// Another session's words are not in front of it whenever they were said: with <paramref name="session"/>
+    /// given, only that session's own are held to <paramref name="before"/>.
     /// </summary>
     public async Task<IReadOnlyList<ContextFragmentEntity>> RecallAsync(
-        string text, int count, IReadOnlyCollection<long> exclude, DateTimeOffset? before)
+        string text, int count, IReadOnlyCollection<long> exclude, DateTimeOffset? before, string? session = null)
     {
         if (count <= 0 || string.IsNullOrWhiteSpace(text))
         {
@@ -47,7 +49,8 @@ internal sealed class ConversationRecaller(
 
         bool Wanted(ContextFragmentEntity f) =>
             f.FragmentType == ContextFragmentType.ChatMessage && !f.IsDeleted && f.Content.Length >= MinLength
-            && f.Importance >= Unimportant && !exclude.Contains(f.Id) && (before is null || f.CreatedUtc < before);
+            && f.Importance >= Unimportant && !exclude.Contains(f.Id)
+            && (before is null || f.CreatedUtc < before || (session is not null && f.SessionId != session));
 
         var terms = text.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Select(w => new string(w.Where(char.IsLetterOrDigit).ToArray())).Where(w => w.Length > 3 && !Filler.Contains(w))

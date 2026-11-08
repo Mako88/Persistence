@@ -50,6 +50,13 @@ public record ContextFragmentEntity : BaseEntity
     /// </summary>
     public long? SupersededById { get; set; }
 
+    /// <summary>
+    /// The harness session that wrote this fragment or said this utterance (a Claude Code session id), so a
+    /// peer running as several sessions at once keeps their conversations and working notes apart.
+    /// <c>null</c> for what was kept before migration 010 and for writes made outside any session.
+    /// </summary>
+    public string? SessionId { get; set; }
+
     public required float Importance { get; set; }
 
     public required float Confidence { get; set; }

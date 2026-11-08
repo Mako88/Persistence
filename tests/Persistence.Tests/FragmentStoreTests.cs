@@ -191,4 +191,108 @@ public sealed class FragmentStoreTests : IDisposable
         Assert.Equal((0, 3), await store.KeepConversationAsync(transcript, "John"));
         Assert.Single(await store.SearchAsync("while worked", 10));
     }
+
+    /// <summary>A transcript named for its session, one utterance a line, said <paramref name="ago"/>.</summary>
+    private string SessionTranscript(string session, TimeSpan ago, params (string Role, string Text)[] said)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"sessions-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var at = DateTimeOffset.UtcNow - ago;
+        var path = Path.Combine(dir, $"{session}.jsonl");
+        File.WriteAllLines(path, said.Select((s, i) => s.Role == "user"
+            ? $$$"""{"type":"user","uuid":"{{{session}}}-{{{i}}}","timestamp":"{{{at.AddSeconds(i):O}}}","message":{"role":"user","content":"{{{s.Text}}}"}}"""
+            : $$$"""{"type":"assistant","uuid":"{{{session}}}-{{{i}}}","timestamp":"{{{at.AddSeconds(i):O}}}","message":{"role":"assistant","content":[{"type":"text","text":"{{{s.Text}}}"}]}}"""));
+        return path;
+    }
+
+    [Fact]
+    public async Task Two_sessions_at_once_keep_their_conversations_and_notes_apart()
+    {
+        var store = await OpenAsync();
+        await store.KeepConversationAsync(SessionTranscript("aaaaaaaa-1", TimeSpan.FromMinutes(30),
+            ("user", "Run the reading sleep."), ("assistant", "Round 9 is training.")), "John");
+        await store.KeepConversationAsync(SessionTranscript("bbbbbbbb-2", TimeSpan.FromMinutes(10),
+            ("user", "Draft the product docs."), ("assistant", "All tests pass, publishing the build.")), "John");
+
+        store.Session = "aaaaaaaa-1";
+        await store.NoteAsync("Round 9 is training; a wake is set.");
+        store.Session = "bbbbbbbb-2";
+        await store.NoteAsync("Drafting docs/product on its own branch.");
+
+        // Each reads its own note and its own conversation; the other is one labelled line.
+        store.Session = "aaaaaaaa-1";
+        Assert.Equal("Round 9 is training; a wake is set.", (await store.NoteAsync(null))!.Content);
+        var core = await store.CoreAsync(maxChars: 20000, recent: 20);
+        Assert.Contains("Round 9 is training.", core);
+        Assert.DoesNotContain("All tests pass, publishing the build.", core);
+        Assert.Contains("Session bbbbbbbb", core);
+        Assert.Contains("Drafting docs/product on its own branch.", core);
+        Assert.DoesNotContain("Draft the product docs.", (await store.RecentAsync(20)).Select(f => f.Content));
+
+        // A session that keeps no note is shown by what it was last asked and how it answered.
+        await store.KeepConversationAsync(SessionTranscript("cccccccc-3", TimeSpan.FromMinutes(5),
+            ("user", "Look at the peers."), ("assistant", "Synth waits for the card.")), "John");
+        var lines = await store.OtherSessionsAsync();
+        Assert.Contains(lines, l => l.StartsWith("Session cccccccc") && l.Contains("Look at the peers.") && l.Contains("Synth waits for the card."));
+
+        // A new session with no note of its own does not take a running session's place.
+        store.Session = "dddddddd-4";
+        Assert.Null(await store.NoteAsync(null));
+    }
+
+    [Fact]
+    public async Task An_ended_sessions_words_and_note_rejoin_the_history()
+    {
+        var store = await OpenAsync();
+        await store.KeepConversationAsync(SessionTranscript("old00000-1", FragmentStore.Live + TimeSpan.FromHours(1),
+            ("user", "Yesterday's question."), ("assistant", "Yesterday's answer.")), "John");
+        store.Session = "old00000-1";
+        await store.NoteAsync("Where yesterday left off.");
+
+        store.Session = "new00000-2";
+        Assert.Contains("Yesterday's answer.", (await store.RecentAsync(20)).Select(f => f.Content));
+        Assert.Empty(await store.OtherSessionsAsync());
+        Assert.Equal("Where yesterday left off.", (await store.NoteAsync(null))!.Content);
+        Assert.Contains("the working note of an ended session", await store.CoreAsync(maxChars: 20000, recent: 20));
+
+        // Writing its own note, the new session keeps the old one's for the old one.
+        await store.NoteAsync("Today's place.");
+        Assert.Equal("Today's place.", (await store.NoteAsync(null))!.Content);
+        store.Session = "old00000-1";
+        Assert.Equal("Where yesterday left off.", (await store.NoteAsync(null))!.Content);
+    }
+
+    [Fact]
+    public async Task A_view_changed_in_another_session_is_refused_with_where()
+    {
+        var store = await OpenAsync();
+        var view = await store.AddAsync("Personal", "The plan is A.", null, null, null, [], false);
+        store.Session = "aaaaaaaa-1";
+        var first = await store.SupersedeAsync([view.Id], "The plan is B.", null, null, null, [], null);
+        Assert.Equal("aaaaaaaa-1", (await store.GetAsync(first.Id)).SessionId);
+
+        store.Session = "bbbbbbbb-2";
+        var refused = await Assert.ThrowsAsync<RefusedException>(() =>
+            store.SupersedeAsync([view.Id], "The plan is C.", null, null, null, [], null));
+        Assert.Contains($"superseded by #{first.Id}, in another session (aaaaaaaa)", refused.Message);
+    }
+
+    [Fact]
+    public async Task Rereading_a_transcript_tells_old_utterances_their_session()
+    {
+        var path = SessionTranscript("eeeeeeee-5", TimeSpan.FromDays(2), ("user", "Said before sessions were kept."));
+        var store = await OpenAsync();
+        await store.KeepConversationAsync(path, "John");
+        var said = (await store.RecentAsync(5)).Single();
+        using (var raw = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={db};Pooling=False"))
+        {
+            raw.Open();  // as everything kept before migration 010 is
+            using var cmd = raw.CreateCommand();
+            cmd.CommandText = $"UPDATE ContextFragments SET SessionId = NULL WHERE Id = {said.Id}";
+            cmd.ExecuteNonQuery();
+        }
+
+        await store.KeepConversationAsync(path, "John");
+        Assert.Equal("eeeeeeee-5", (await store.GetAsync(said.Id)).SessionId);
+    }
 }

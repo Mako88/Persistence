@@ -76,6 +76,10 @@ try
         return await Server.ServeAsync(store, config.DatabasePath, line.GetInt("port", Server.DefaultPort), Run);
     }
 
+    // Run from a session's own shell, the command is that session's; a server serves every session, so
+    // its callers say which they are (--session).
+    store.AmbientSession = Environment.GetEnvironmentVariable("PERSISTENCE_SESSION") is { Length: > 0 } s ? s
+        : Environment.GetEnvironmentVariable("CLAUDE_CODE_SESSION_ID") is { Length: > 0 } c ? c : null;
     return await Run(line, store);
 }
 catch (UsageException e)
@@ -93,6 +97,7 @@ catch (RefusedException e)
 // One command against an open store; `serve` runs the same commands in a process that stays up.
 static async Task<int> Run(CommandLine line, FragmentStore store)
 {
+    store.Session = line.Get("session") is { Length: > 0 } named ? named : store.AmbientSession;
     switch (line.Command)
     {
         case "add":
@@ -164,7 +169,7 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
             Print(line, await store.ListAsync(line.Get("type"), line.Get("tag"), line.Has("archived"), line.GetInt("limit", 50)));
             break;
         case "search":
-            Print(line, await store.SearchAsync(string.Join(' ', line.Positional), line.GetInt("limit", 20)));
+            Print(line, await store.SearchAsync(string.Join(' ', line.Positional), line.GetInt("limit", 20)), store.Session);
             break;
         case "recall":
             var exclude = line.GetAll("exclude")
@@ -198,7 +203,7 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
 
                     foreach (var fragment in found)
                     {
-                        Console.WriteLine(FragmentStore.Render(fragment, maxContent: snippet));
+                        Console.WriteLine(FragmentStore.Render(fragment, maxContent: snippet, self: store.Session));
                         Console.WriteLine();
                     }
                 }
@@ -216,7 +221,7 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
             Console.WriteLine($"\nembedded {embedded} past utterances for conversation recall");
             break;
         case "recent":
-            Print(line, await store.RecentAsync(line.GetInt("limit", 20)));
+            Print(line, await store.RecentAsync(line.GetInt("limit", 20)), store.Session);
             break;
         case "core":
             Console.Write(await store.CoreAsync(line.GetInt("max-chars", 40000), line.GetInt("recent", 20), line.Get("project")));
@@ -237,7 +242,7 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
     return 0;
 }
 
-static void Print(CommandLine line, IReadOnlyList<ContextFragmentEntity> found)
+static void Print(CommandLine line, IReadOnlyList<ContextFragmentEntity> found, string? self = null)
 {
     if (line.Has("json"))
     {
@@ -251,6 +256,7 @@ static void Print(CommandLine line, IReadOnlyList<ContextFragmentEntity> found)
             isProtected = f.IsProtected,
             forgotten = f.IsDeleted,
             supersededBy = f.SupersededById,
+            session = f.SessionId,
             notes = f.Notes,
             tags = f.Tags.Select(t => t.Name),
             source = f.Sources.FirstOrDefault(s => s.Name is not null)?.Name,
@@ -269,7 +275,7 @@ static void Print(CommandLine line, IReadOnlyList<ContextFragmentEntity> found)
 
     foreach (var fragment in found)
     {
-        Console.WriteLine(FragmentStore.Render(fragment));
+        Console.WriteLine(FragmentStore.Render(fragment, self: self));
         Console.WriteLine();
     }
 }

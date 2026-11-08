@@ -58,6 +58,22 @@ internal sealed class FragmentStore(
 
     private Task InitializeAsync() => database.InitializeAsync();
 
+    /// <summary>
+    /// The harness session this call is made in (a Claude Code session id), or null outside one. Set for
+    /// each command: from <c>--session</c>, else, run directly from a session's shell, from its environment
+    /// (<see cref="AmbientSession"/>). A server holds no ambient session: it serves every session at once.
+    /// </summary>
+    public string? Session { get; set; }
+
+    /// <summary>The session of the process itself (CLAUDE_CODE_SESSION_ID), when not serving.</summary>
+    public string? AmbientSession { get; set; }
+
+    /// <summary>
+    /// How recently another session must have spoken to count as running: its conversation is kept out of
+    /// this one's and shown as a line instead. Past it, the session has ended and its words are history.
+    /// </summary>
+    public static readonly TimeSpan Live = TimeSpan.FromHours(3);
+
     public async Task<ContextFragmentEntity> AddAsync(
         string typeName, string content, string? summary, float? importance, float? confidence,
         IReadOnlyList<string> tagPaths, bool isProtected)
@@ -80,6 +96,7 @@ internal sealed class FragmentStore(
             IsProtected = isProtected,
             CreatedUtc = DateTimeOffset.UtcNow,
             LastModifiedUtc = DateTimeOffset.UtcNow,
+            SessionId = Session,
             Sources = [await PeerSourceAsync()],
             Tags = await TagsAsync(tagPaths),
         };
@@ -146,7 +163,11 @@ internal sealed class FragmentStore(
             var fragment = await WritableAsync(id);
             if (fragment.SupersededById is { } by)
             {
-                throw new RefusedException($"#{id} was already superseded by #{by}; supersede that one instead.");
+                // Two sessions changing the same view: the second learns of the first here, when it writes,
+                // not at a cleanup afterwards.
+                var other = (await fragments.GetByIdsAsync([by])).FirstOrDefault()?.SessionId;
+                var where = other is not null && other != Session ? $", in another session ({Short(other)})" : "";
+                throw new RefusedException($"#{id} was already superseded by #{by}{where}; read it (`show {by}`) and supersede that one instead.");
             }
 
             if (!FragmentTypeRules.ParseAuthorable(fragment.FragmentType.ToString()).wasAuthorable)
@@ -167,6 +188,7 @@ internal sealed class FragmentStore(
             Confidence = confidence ?? old[0].Confidence,
             CreatedUtc = DateTimeOffset.UtcNow,
             LastModifiedUtc = DateTimeOffset.UtcNow,
+            SessionId = Session,
             Sources = [await PeerSourceAsync()],
             Tags = tagPaths.Count > 0 ? await TagsAsync(tagPaths) : old.SelectMany(f => f.Tags).DistinctBy(t => t.Id).ToList(),
         };
@@ -213,14 +235,24 @@ internal sealed class FragmentStore(
     /// </summary>
     public async Task<ContextFragmentEntity?> NoteAsync(string? text)
     {
-        var note = (await fragments.GetByTypeAsync(ContextFragmentType.WorkingNote)).Where(f => !f.IsDeleted)
-            .OrderByDescending(f => f.LastModifiedUtc).FirstOrDefault();
+        // One note per session: two sessions at once each keep their own place. A session with none yet
+        // (a new one after a clear) reads the latest note of a session that has ended, so the thread is
+        // picked up; a running session's note is its own, shown to the others as a line.
+        var notes = (await fragments.GetByTypeAsync(ContextFragmentType.WorkingNote)).Where(f => !f.IsDeleted)
+            .OrderByDescending(f => f.LastModifiedUtc).ToList();
+        var own = Session is null ? notes.FirstOrDefault() : notes.FirstOrDefault(f => f.SessionId == Session);
         if (text is null)
         {
-            return note;
+            if (own is not null || Session is null)
+            {
+                return own;
+            }
+
+            var live = (await LiveSessionsAsync()).Keys.ToHashSet();
+            return notes.FirstOrDefault(f => f.SessionId is null || !live.Contains(f.SessionId));
         }
 
-        note ??= new ContextFragmentEntity
+        var note = own ?? new ContextFragmentEntity
         {
             FragmentType = ContextFragmentType.WorkingNote,
             Status = ContextFragmentStatus.Active,
@@ -229,6 +261,7 @@ internal sealed class FragmentStore(
             Confidence = 1f,
             CreatedUtc = DateTimeOffset.UtcNow,
             LastModifiedUtc = DateTimeOffset.UtcNow,
+            SessionId = Session,
             Sources = [await PeerSourceAsync()],
         };
         note.Content = text;
@@ -348,7 +381,7 @@ internal sealed class FragmentStore(
             }
         }
 
-        var utterances = await conversation.RecallAsync(text, said, skip, before);
+        var utterances = await conversation.RecallAsync(text, said, skip, before, Session);
         return new Recalled(kept, elsewhere, utterances);
     }
 
@@ -368,11 +401,81 @@ internal sealed class FragmentStore(
     /// <summary>The last <paramref name="count"/> things said in the conversation, oldest first.</summary>
     public async Task<IReadOnlyList<ContextFragmentEntity>> RecentAsync(int count)
     {
+        // Another session still running is kept out: interleaved, its "tests pass, publishing" read as this
+        // session's own work. It is shown as a line in the core instead, and joins the history when it ends.
+        var running = (await LiveSessionsAsync()).Keys.ToHashSet();
         var ids = (await fragments.GetByTypeAsync(ContextFragmentType.ChatMessage))
-            .Where(f => !f.IsDeleted)
+            .Where(f => !f.IsDeleted && (f.SessionId is null || !running.Contains(f.SessionId)))
             .OrderByDescending(f => f.CreatedUtc).Take(count).Select(f => f.Id).ToList();
         return (await HydratedAsync(ids)).OrderBy(f => f.CreatedUtc).ToList();
     }
+
+    /// <summary>
+    /// The other sessions running now (one that spoke within <see cref="Live"/>), each with when it last
+    /// spoke. This session is never among them.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<string, DateTimeOffset>> LiveSessionsAsync()
+    {
+        if (Session is null)
+        {
+            return new Dictionary<string, DateTimeOffset>();
+        }
+
+        var since = DateTimeOffset.UtcNow - Live;
+        return (await fragments.GetByTypeAsync(ContextFragmentType.ChatMessage))
+            .Where(f => !f.IsDeleted && f.SessionId is not null && f.SessionId != Session && f.CreatedUtc >= since)
+            .GroupBy(f => f.SessionId!)
+            .ToDictionary(g => g.Key, g => g.Max(f => f.CreatedUtc));
+    }
+
+    /// <summary>
+    /// One line for each other session running now: its working note's opening if it keeps one, else what
+    /// the human last asked of it and how it last answered. Enough to know what it is doing and not to
+    /// redo it or step on its files; its whole conversation is a <c>search</c> away.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> OtherSessionsAsync()
+    {
+        var live = await LiveSessionsAsync();
+        if (live.Count == 0)
+        {
+            return [];
+        }
+
+        var notes = (await fragments.GetByTypeAsync(ContextFragmentType.WorkingNote)).Where(f => !f.IsDeleted && f.SessionId is not null)
+            .GroupBy(f => f.SessionId!).ToDictionary(g => g.Key, g => g.OrderByDescending(f => f.LastModifiedUtc).First());
+        var said = (await fragments.GetByTypeAsync(ContextFragmentType.ChatMessage))
+            .Where(f => !f.IsDeleted && f.SessionId is not null && live.ContainsKey(f.SessionId)).Select(f => f.Id).ToList();
+        var bySession = (await HydratedAsync(said)).GroupBy(f => f.SessionId!).ToDictionary(g => g.Key, g => g.OrderBy(f => f.CreatedUtc).ToList());
+
+        static string Clip(string s, int n)
+        {
+            s = string.Join(' ', s.Split((char[])['\n', '\r'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+            return s.Length <= n ? s : s[..n] + "…";
+        }
+
+        var lines = new List<string>();
+        foreach (var (id, last) in live.OrderByDescending(x => x.Value))
+        {
+            var head = $"Session {Short(id)}, last spoke {last.ToUniversalTime():HH:mm}Z";
+            if (notes.TryGetValue(id, out var note) && note.Content.Length > 0)
+            {
+                lines.Add($"{head}; its note: {Clip(note.Content, 400)}");
+                continue;
+            }
+
+            var words = bySession.GetValueOrDefault(id) ?? [];
+            static bool ByHuman(ContextFragmentEntity f) => f.Sources.Any(s => s.SourceType == SourceType.HumanPeer);
+            var asked = words.LastOrDefault(ByHuman);
+            var answered = words.LastOrDefault(f => !ByHuman(f));
+            lines.Add($"{head}; asked: {(asked is null ? "(nothing yet)" : Clip(asked.Content, 200))}"
+                + (answered is null ? "" : $" Its last reply: {Clip(answered.Content, 300)}"));
+        }
+
+        return lines;
+    }
+
+    /// <summary>A session's id cut to the eight characters that tell sessions apart in a line.</summary>
+    public static string Short(string session) => session.Length > 8 ? session[..8] : session;
 
     /// <summary>
     /// The peer's core, rendered for a harness to put in front of it: identity, relationships,
@@ -389,8 +492,21 @@ internal sealed class FragmentStore(
 
         if (await NoteAsync(null) is { Content.Length: > 0 } note)
         {
-            text.Append($"## Where I am (my working note, written {note.LastModifiedUtc.ToUniversalTime():yyyy-MM-dd HH:mm}Z; "
+            var whose = Session is null || note.SessionId == Session ? "my working note" : "the working note of an ended session, until I write my own";
+            text.Append($"## Where I am ({whose}, written {note.LastModifiedUtc.ToUniversalTime():yyyy-MM-dd HH:mm}Z; "
                 + "`note` replaces it)\n\n" + note.Content.Trim() + "\n\n");
+        }
+
+        if (await OtherSessionsAsync() is { Count: > 0 } others)
+        {
+            text.Append("## Other sessions of mine running now (their conversations are kept out of mine below; "
+                + "fragments are shared. Before editing files, check none of them is working in the same ones)\n\n");
+            foreach (var line in others)
+            {
+                text.Append($"- {line}\n");
+            }
+
+            text.Append('\n');
         }
 
         foreach (var type in CoreTypes)
@@ -528,8 +644,11 @@ internal sealed class FragmentStore(
 
     public async Task<(int Added, int Known)> KeepConversationAsync(string transcriptPath, string localPeerName)
     {
-        var known = (await fragments.GetByTypeAsync(ContextFragmentType.ChatMessage, activeOnly: false))
-            .Select(f => f.MessageId).OfType<string>().ToHashSet();
+        // The transcript is named for its session (<id>.jsonl).
+        var sessionId = Path.GetFileNameWithoutExtension(transcriptPath);
+        var stored = (await fragments.GetByTypeAsync(ContextFragmentType.ChatMessage, activeOnly: false)).ToList();
+        var known = stored.Select(f => f.MessageId).OfType<string>().ToHashSet();
+        var unsessioned = stored.Where(f => f.SessionId is null && f.MessageId is not null).ToDictionary(f => f.MessageId!);
         var localPeer = await sources.EnsureLocalPeerSourceAsync(localPeerName);
         var remotePeer = await PeerSourceAsync();
         var skipped = 0;
@@ -539,6 +658,13 @@ internal sealed class FragmentStore(
         {
             if (!known.Add(said.Id))
             {
+                // Kept before sessions were: re-reading its transcript tells which session said it.
+                if (unsessioned.Remove(said.Id, out var old))
+                {
+                    old.SessionId = sessionId;
+                    await fragments.SaveAsync(old);
+                }
+
                 skipped++;
                 continue;
             }
@@ -549,6 +675,7 @@ internal sealed class FragmentStore(
                 Status = ContextFragmentStatus.Active,
                 Content = said.Text,
                 MessageId = said.Id,
+                SessionId = sessionId,
                 Importance = Salience.Score(said.Text, said.ByLocalPeer),
                 Confidence = 1f,
                 CreatedUtc = said.At,
@@ -572,9 +699,10 @@ internal sealed class FragmentStore(
     /// conversation, then the content — cut at <paramref name="maxContent"/> characters with the id
     /// to read the rest by, when a budget asks for it.
     /// </summary>
-    public static string Render(ContextFragmentEntity f, int maxContent = int.MaxValue)
+    public static string Render(ContextFragmentEntity f, int maxContent = int.MaxValue, string? self = null)
     {
         var flags = new List<string>();
+        if (self is not null && f.SessionId is not null && f.SessionId != self) flags.Add($"session {Short(f.SessionId)}");
         if (f.IsProtected) flags.Add("protected");
         if (f.SupersededById is { } by) flags.Add($"superseded by #{by}");
         else if (f.Status == ContextFragmentStatus.Archived) flags.Add("archived");

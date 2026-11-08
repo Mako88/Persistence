@@ -217,8 +217,15 @@ def project(event):
 
 
 
+def session_args(event):
+    """Which session a call is for. The store server serves every session at once, so it cannot read the
+    caller's environment: each call says, and gets its own conversation and working note."""
+    sid = event.get("session_id")
+    return ["--session", sid] if sid else []
+
+
 def core_text(lead, recent, event):
-    body = store("core", "--max-chars", str(CAP - len(lead) - 50), "--recent", str(recent), "--project", project(event))
+    body = store("core", "--max-chars", str(CAP - len(lead) - 50), "--recent", str(recent), "--project", project(event), *session_args(event))
     return lead + "\n\n" + body if body.strip() else ""
 
 
@@ -268,7 +275,7 @@ def session_start(event, part=1):
     if part == 1:
         ensure_embedding_server()
         ensure()  # the hook server, for this session's messages
-    whole = store("core", "--max-chars", str(WHOLE), "--recent", "60", "--project", project(event))
+    whole = store("core", "--max-chars", str(WHOLE), "--recent", "60", "--project", project(event), *session_args(event))
     pieces = core_parts(whole) if whole.strip() else []
     if part > len(pieces):
         return
@@ -312,7 +319,7 @@ def recall(event):
     # A short message ("sounds good") matches past acknowledgements, not what it is about: no past utterances for it.
     already = seen(event)
     since = STATE / f"{event.get('session_id', 'unknown')}.since"
-    found = store("recall", "--text", "-", "--limit", str(count), "--snippet", "300", "--project", project(event),
+    found = store("recall", "--text", "-", *session_args(event), "--limit", str(count), "--snippet", "300", "--project", project(event),
                   "--wander", os.environ.get("PERSISTENCE_RECALL_WANDER", "1"),
                   "--said", os.environ.get("PERSISTENCE_RECALL_SAID", "3") if len(prompt) >= 40 else "0",
                   *(["--before", since.read_text().strip()] if since.exists() else []),
@@ -331,7 +338,7 @@ def subagent_start(event):
             "core, and so yours, with its working note first and what is so on the machine now last. Read it; "
             "do not write to the store, the main session does that.")
     seen_now = observe(event)  # the working context: what is running, what changed, git
-    body = store("core", "--max-chars", str(CAP - len(lead) - len(seen_now) - 100), "--recent", "0", "--project", project(event))
+    body = store("core", "--max-chars", str(CAP - len(lead) - len(seen_now) - 100), "--recent", "0", "--project", project(event), *session_args(event))
     text = f"{lead}\n\n{body}\n\n{seen_now}" if body.strip() else ""
     if text:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "SubagentStart", "additionalContext": text}}))
