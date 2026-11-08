@@ -248,6 +248,7 @@ def core_parts(whole):
 def session_start(event, part=1):
     if part == 1:
         ensure_embedding_server()
+        ensure()  # the hook server, for this session's messages
     whole = store("core", "--max-chars", str(WHOLE), "--recent", "60", "--project", project(event))
     pieces = core_parts(whole) if whole.strip() else []
     if part > len(pieces):
@@ -446,6 +447,93 @@ def observe_hook(event):
                                              "additionalContext": text[:CAP]}}))
 
 
+HOOK_PORT = int(os.environ.get("PERSISTENCE_HOOK_PORT", "8097"))  # `hook.py serve`: the hooks answered by URL
+
+
+class PerRequest:
+    """sys.stdout while serving: each request's thread writes to its own buffer, so the hook functions
+    print exactly as they do when run as a command, and their output becomes that request's reply."""
+
+    def __init__(self, real):
+        import threading
+
+        self.real, self.local = real, threading.local()
+
+    def write(self, text):
+        buffer = getattr(self.local, "buffer", None)
+        return buffer.write(text) if buffer is not None else self.real.write(text)
+
+    def flush(self):
+        if getattr(self.local, "buffer", None) is None:
+            self.real.flush()
+
+
+def answer(name, part, event):
+    """A hook's reply as an HTTP hook needs it: JSON as it is; plain text (the core's parts) wrapped as
+    additionalContext, since an HTTP hook's plain text is not put in front of the peer."""
+    import io
+
+    sys.stdout.local.buffer = io.StringIO()
+    try:
+        if name == "session-start":
+            session_start(event, part)
+        else:
+            {"subagent-start": subagent_start, "recall": recall, "observe": observe_hook}[name](event)
+        out = sys.stdout.local.buffer.getvalue().strip()
+    finally:
+        sys.stdout.local.buffer = None
+    if not out or out.startswith("{"):
+        return out
+    return json.dumps({"hookSpecificOutput": {"hookEventName": event.get("hook_event_name", "SessionStart"), "additionalContext": out}})
+
+
+def serve():
+    """The hooks a session calls every message, answered by a process that stays up: the harness posts
+    the event to http://127.0.0.1:PERSISTENCE_HOOK_PORT/<hook>[/<part>], and nothing starts per call.
+    When this script changes it starts itself again, so an edit is live from the next call."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    sys.stdout = PerRequest(sys.stdout)
+    script = Path(__file__).resolve()
+    written = script.stat().st_mtime
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            parts = self.path.strip("/").split("/")
+            try:
+                event = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+                body = answer(parts[0], int(parts[1]) if len(parts) > 1 else 1, event).encode("utf-8")
+                self.send_response(200)
+            except Exception as e:  # a hook must never break the session it serves
+                print(f"persistence hook server: {self.path} failed: {e!r}", file=sys.stderr)
+                body = b""
+                self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            if script.stat().st_mtime != written:
+                os.execv(sys.executable, [sys.executable, str(script), "serve"])
+
+        def log_message(self, *args):
+            pass
+
+    ThreadingHTTPServer(("127.0.0.1", HOOK_PORT), Handler).serve_forever()
+
+
+def ensure():
+    """Starts the hook server when nothing answers on its port; run by the command hooks that remain,
+    so a server that stopped is back within one turn, and its hooks fail open meanwhile."""
+    import socket
+
+    try:
+        socket.create_connection(("127.0.0.1", HOOK_PORT), timeout=1).close()
+    except OSError:
+        flags = 0x00000008 | 0x00000200 if os.name == "nt" else 0  # detached, own process group
+        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "serve"], creationflags=flags,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
+
+
 def main():
     # Windows Pythons default to the console code page, which cannot encode what fragments hold.
     sys.stdout.reconfigure(encoding="utf-8")
@@ -453,10 +541,15 @@ def main():
     if sys.argv[1] in ("watch", "unwatch", "watching"):
         watch(sys.argv[1:])  # run by a person or a peer, not the harness: nothing on stdin
         return
+    if sys.argv[1] in ("serve", "ensure"):
+        serve() if sys.argv[1] == "serve" else ensure()
+        return
     event = json.load(sys.stdin) if not sys.stdin.isatty() else {}
     if sys.argv[1] == "session-start":
         session_start(event, int(sys.argv[2]) if len(sys.argv) > 2 else 1)
         return
+    if sys.argv[1] in ("keep", "curate"):
+        ensure()  # the Stop hooks run every turn: the hook server, if it stopped, is back by the next message
     {"keep": keep, "curate": curate, "precompact": precompact,
      "subagent-start": subagent_start, "recall": recall, "observe": observe_hook}[sys.argv[1]](event)
 
