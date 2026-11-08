@@ -499,6 +499,33 @@ internal sealed class FragmentStore(
     /// ChatMessage fragment, attributed to the local peer by name or to the remote peer, dated when
     /// it was said. Its transcript id is the message id, so re-reading a transcript adds only what is new.
     /// </summary>
+    /// <summary>
+    /// Scores the salience of every utterance still at the old flat importance (stored before
+    /// <see cref="Salience"/>); one that has been set to anything else is left as it is. Returns how many changed.
+    /// </summary>
+    public async Task<int> RescoreConversationAsync()
+    {
+        var changed = 0;
+        var ids = (await fragments.GetByTypeAsync(ContextFragmentType.ChatMessage, activeOnly: false)).Select(f => f.Id).ToList();
+        foreach (var f in await HydratedAsync(ids))  // with their sources: whose words they are counts
+        {
+            if (Math.Abs(f.Importance - Salience.Default) > 1e-6)
+            {
+                continue;
+            }
+
+            var score = Salience.Score(f.Content, f.Sources.Any(x => x.SourceType == SourceType.HumanPeer));
+            if (Math.Abs(score - f.Importance) > 1e-6)
+            {
+                f.Importance = score;
+                await fragments.SaveAsync(f);
+                changed++;
+            }
+        }
+
+        return changed;
+    }
+
     public async Task<(int Added, int Known)> KeepConversationAsync(string transcriptPath, string localPeerName)
     {
         var known = (await fragments.GetByTypeAsync(ContextFragmentType.ChatMessage, activeOnly: false))
@@ -522,7 +549,7 @@ internal sealed class FragmentStore(
                 Status = ContextFragmentStatus.Active,
                 Content = said.Text,
                 MessageId = said.Id,
-                Importance = 0.3f,
+                Importance = Salience.Score(said.Text, said.ByLocalPeer),
                 Confidence = 1f,
                 CreatedUtc = said.At,
                 LastModifiedUtc = said.At,

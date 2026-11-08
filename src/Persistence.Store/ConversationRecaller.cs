@@ -47,7 +47,7 @@ internal sealed class ConversationRecaller(
 
         bool Wanted(ContextFragmentEntity f) =>
             f.FragmentType == ContextFragmentType.ChatMessage && !f.IsDeleted && f.Content.Length >= MinLength
-            && !exclude.Contains(f.Id) && (before is null || f.CreatedUtc < before);
+            && f.Importance >= Unimportant && !exclude.Contains(f.Id) && (before is null || f.CreatedUtc < before);
 
         var terms = text.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Select(w => new string(w.Where(char.IsLetterOrDigit).ToArray())).Where(w => w.Length > 3 && !Filler.Contains(w))
@@ -161,6 +161,11 @@ internal sealed class ConversationRecaller(
             }
         }
 
-        return scores.OrderByDescending(s => s.Value).ThenBy(s => s.Key).Take(count).Select(s => byId[s.Key]).ToList();
+        // Weighted by how much each mattered when it was said (Salience), as fragment recall weighs by importance.
+        return scores.OrderByDescending(s => s.Value * (0.5 + byId[s.Key].Importance)).ThenBy(s => s.Key)
+            .Take(count).Select(s => byId[s.Key]).ToList();
     }
+
+    /// <summary>Below this an utterance is an acknowledgement (<see cref="Salience"/>), never recalled.</summary>
+    private const float Unimportant = 0.1f;
 }

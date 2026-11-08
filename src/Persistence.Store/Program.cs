@@ -37,6 +37,7 @@ const string Usage = """
                                             identity, relationships, personal, summaries, then the
                                             recent conversation: what a harness puts in front of the peer.
                                             Fragments tagged project/<name> come in only for that project
+      rescore-conversation                 score the salience of utterances stored at the old flat 0.3
       serve [--port 8095]                   stay up with the store open and run the commands sent to it
                                             (POST /run {"args": [...], "stdin": "..."}): a hook's call costs
                                             milliseconds, not the seconds a new process takes to start
@@ -219,6 +220,9 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
             break;
         case "core":
             Console.Write(await store.CoreAsync(line.GetInt("max-chars", 40000), line.GetInt("recent", 20), line.Get("project")));
+            break;
+        case "rescore-conversation":
+            Console.WriteLine($"rescored {await store.RescoreConversationAsync()} past utterances by salience");
             break;
         case "keep-conversation":
             var transcript = line.Positional.FirstOrDefault() ?? throw new UsageException("keep-conversation needs a transcript path.");
