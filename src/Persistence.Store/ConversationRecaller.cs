@@ -97,10 +97,10 @@ internal sealed class ConversationRecaller(
             return 0;
         }
 
-        var have = (await vectors.GetAllAsync(Model)).Select(v => v.ContextFragmentId).ToHashSet();
-        var missing = (await fragments.GetByTypeAsync(ContextFragmentType.ChatMessage))
-            .Where(f => !f.IsDeleted && f.Content.Length >= MinLength && !have.Contains(f.Id))
-            .OrderByDescending(f => f.CreatedUtc).Take(limit).ToList();
+        // Asked of the database: loading every utterance and every vector to find the few new ones cost
+        // seconds on each recall.
+        var ids = await vectors.GetUnembeddedIdsAsync(Model, ContextFragmentType.ChatMessage, MinLength, limit);
+        var missing = ids.Count == 0 ? [] : (await fragments.GetByIdsAsync(ids)).ToList();
         if (missing.Count == 0)
         {
             return 0;

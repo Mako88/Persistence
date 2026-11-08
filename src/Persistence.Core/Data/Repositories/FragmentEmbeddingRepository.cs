@@ -79,6 +79,34 @@ public class FragmentEmbeddingRepository : IFragmentEmbeddingRepository
     }
 
     /// <inheritdoc />
+    public async Task<IReadOnlyList<long>> GetUnembeddedIdsAsync(
+        string model, ContextFragmentType type, int minLength, int limit, CancellationToken ct = default)
+    {
+        if (limit <= 0)
+        {
+            return [];
+        }
+
+        await using var connection = await SqliteConnectionString.OpenAsync(connectionString);
+        var ids = await connection
+            .SqlBuilder($"""
+                SELECT f.Id
+                FROM ContextFragments f
+                LEFT JOIN FragmentEmbeddings e
+                    ON e.ContextFragmentId = f.Id AND e.Model = {model}
+                WHERE f.IsDeleted = 0
+                  AND f.FragmentType = {(int)type}
+                  AND length(f.Content) >= {minLength}
+                  AND e.ContextFragmentId IS NULL
+                ORDER BY f.Id DESC
+                LIMIT {limit}
+                """)
+            .QueryAsync<long>(cancellationToken: ct);
+
+        return ids.ToList();
+    }
+
+    /// <inheritdoc />
     public async Task UpsertAsync(
         string model, long fragmentId, float[] vector, string contentHash, CancellationToken ct = default)
     {

@@ -225,8 +225,8 @@ def recall(event):
     prompt = (event.get("prompt") or "").strip()
     if count <= 0 or len(prompt) < 12:
         return
-    if "<task-notification>" in prompt or prompt.startswith("[SYSTEM NOTIFICATION"):
-        return  # the harness reporting a background task, not the human: nothing of theirs to associate with
+    if any(m in prompt for m in ("<task-notification>", "<agent-message", "[Subagent hand-back]")) or prompt.startswith("[SYSTEM NOTIFICATION"):
+        return  # the harness reporting a background task or a subagent, not the human: nothing of theirs to associate with
     # A short message ("sounds good") matches past acknowledgements, not what it is about: no past utterances for it.
     already = seen(event)
     since = STATE / f"{event.get('session_id', 'unknown')}.since"

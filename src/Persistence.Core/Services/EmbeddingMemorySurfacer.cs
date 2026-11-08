@@ -201,9 +201,19 @@ public class EmbeddingMemorySurfacer : IMemorySurfacer
         }
     }
 
-    /// <summary>The text a fragment is embedded from — its content, or its summary when it has no content.</summary>
-    internal static string EmbedText(ContextFragmentEntity fragment) =>
-        string.IsNullOrWhiteSpace(fragment.Content) ? fragment.Summary ?? "" : fragment.Content;
+    /// <summary>
+    /// The text a fragment is embedded from — the opening of its content, or of its summary when it has
+    /// no content. Small embedders read 512 tokens; one fragment past that failed the whole backfill batch
+    /// on every call, so nothing written after it was ever embedded. The opening is what it is about.
+    /// </summary>
+    internal static string EmbedText(ContextFragmentEntity fragment)
+    {
+        var text = string.IsNullOrWhiteSpace(fragment.Content) ? fragment.Summary ?? "" : fragment.Content;
+        return text.Length > MaxEmbedChars ? text[..MaxEmbedChars] : text;
+    }
+
+    /// <summary>Characters of a fragment embedded: well inside 512 tokens even for dense text.</summary>
+    internal const int MaxEmbedChars = 1200;
 
     /// <summary>The mean of importance and confidence — the same quality signal the lexical path applies.</summary>
     private static double Quality(ContextFragmentEntity f) => (f.Importance + f.Confidence) / 2.0;

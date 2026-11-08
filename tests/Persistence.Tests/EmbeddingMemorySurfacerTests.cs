@@ -313,6 +313,10 @@ public class EmbeddingMemorySurfacerTests
             string model, int limit, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<long>>(Stale.Take(limit).ToList());
 
+        public Task<IReadOnlyList<long>> GetUnembeddedIdsAsync(
+            string model, ContextFragmentType type, int minLength, int limit, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<long>>(Stale.Take(limit).ToList());
+
         public Task UpsertAsync(
             string model, long fragmentId, float[] vector, string contentHash, CancellationToken ct = default)
         {

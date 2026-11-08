@@ -1,3 +1,5 @@
+using Persistence.Data.Entities;
+
 namespace Persistence.Data.Repositories;
 
 /// <summary>A stored embedding: the fragment it describes, its vector, and the content it was made from.</summary>
@@ -25,6 +27,14 @@ public interface IFragmentEmbeddingRepository
     /// </summary>
     Task<IReadOnlyList<long>> GetStaleFragmentIdsAsync(
         string model, int limit, CancellationToken ct = default);
+
+    /// <summary>
+    /// Ids of non-deleted fragments of <paramref name="type"/>, at least <paramref name="minLength"/>
+    /// characters long, with no vector under <paramref name="model"/>, newest first: what a recall over
+    /// past conversation still has to embed, found without loading every utterance to look.
+    /// </summary>
+    Task<IReadOnlyList<long>> GetUnembeddedIdsAsync(
+        string model, ContextFragmentType type, int minLength, int limit, CancellationToken ct = default);
 
     /// <summary>Inserts or replaces the vector for a fragment under <paramref name="model"/>.</summary>
     Task UpsertAsync(
