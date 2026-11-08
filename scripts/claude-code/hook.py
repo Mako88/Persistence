@@ -309,8 +309,11 @@ def recall(event):
 
 def subagent_start(event):
     lead = ("# Who you are\n\nYou are a subagent of a Claude with its own Persistence store; this is its "
-            "core, and so yours. Read it; do not write to the store, the main session does that.")
-    text = core_text(lead, recent=0, event=event)
+            "core, and so yours, with its working note first and what is so on the machine now last. Read it; "
+            "do not write to the store, the main session does that.")
+    seen_now = observe(event)  # the working context: what is running, what changed, git
+    body = store("core", "--max-chars", str(CAP - len(lead) - len(seen_now) - 100), "--recent", "0", "--project", project(event))
+    text = f"{lead}\n\n{body}\n\n{seen_now}" if body.strip() else ""
     if text:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "SubagentStart", "additionalContext": text}}))
 
@@ -468,11 +471,92 @@ class PerRequest:
             self.real.flush()
 
 
+WAKES = STATE.parent / "wakes.json"
+WAITING = {"generation": 0}  # the newest waiter; an older one is let go, since its turn has passed
+
+
+def wakes(update=None):
+    try:
+        items = json.loads(WAKES.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        items = []
+    if update is not None:
+        items = update(items)
+        WAKES.write_text(json.dumps(items, indent=1), encoding="utf-8")
+    return items
+
+
+def add_wake(event):
+    """A wake set by the peer: at a time ({"in": minutes}) or when a process ends ({"pid": n}), with
+    the reason it will be woken with."""
+    item = {"reason": event.get("reason") or "a wake you set", "set": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    if event.get("pid"):
+        item["pid"] = int(event["pid"])
+    else:
+        item["at"] = datetime.now().timestamp() + 60 * float(event.get("in", 30))
+    wakes(lambda items: items + [item])
+    return {"set": item}
+
+
+def alive(pid):
+    out = run_quiet(["tasklist", "/FI", f"PID eq {pid}", "/NH"]) if os.name == "nt" else ""
+    return str(pid) in out if os.name == "nt" else Path(f"/proc/{pid}").exists()
+
+
+def wait_for_wake(event, poll=10):
+    """Held open until a wake is due (then {"wake": reason}), a newer turn's waiter replaces this one
+    ({"wake": null}), or the waiter's own budget runs out."""
+    import time
+
+    WAITING["generation"] += 1
+    mine, deadline = WAITING["generation"], time.time() + float(event.get("seconds", 3000))
+    while time.time() < deadline and WAITING["generation"] == mine:
+        now, due = datetime.now().timestamp(), []
+
+        def take(items):
+            keep = []
+            for w in items:
+                (due if ("at" in w and w["at"] <= now) or ("pid" in w and not alive(w["pid"])) else keep).append(w)
+            return keep
+
+        if any("at" in w and w["at"] <= now or "pid" in w for w in wakes()):
+            wakes(take)
+        if due:
+            return {"wake": "; ".join(w["reason"] + (f" (pid {w['pid']} ended)" if "pid" in w else "") for w in due)}
+        time.sleep(poll)
+    return {"wake": None}
+
+
+def waiter(event):
+    """The Stop hook that can wake the peer (async, asyncRewake): it waits on the hook server and, when
+    a wake comes due, exits 2 with the reason, which starts a turn though no one has written. So the
+    peer chooses when its next input comes, not only the person it works with."""
+    import time
+    import urllib.request
+
+    deadline = time.time() + float(os.environ.get("PERSISTENCE_WAKE_SECONDS", "3300"))
+    while time.time() < deadline:
+        try:
+            body = json.dumps({"seconds": max(1, deadline - time.time() - 5)}).encode("utf-8")
+            request = urllib.request.Request(f"http://127.0.0.1:{HOOK_PORT}/wait", body, {"Content-Type": "application/json"})
+            reply = json.loads(urllib.request.urlopen(request, timeout=deadline - time.time() + 30).read() or b"{}")
+        except (OSError, ValueError):
+            ensure()
+            time.sleep(10)
+            continue
+        if reply.get("wake"):
+            print(f"Woken by a wake you set: {reply['wake']}", file=sys.stderr)
+            sys.exit(2)
+        return  # replaced by a newer turn's waiter, or out of time
+
+
 def answer(name, part, event):
     """A hook's reply as an HTTP hook needs it: JSON as it is; plain text (the core's parts) wrapped as
     additionalContext, since an HTTP hook's plain text is not put in front of the peer."""
     import io
 
+    if name in ("wait", "wake"):
+        return json.dumps(wait_for_wake(event) if name == "wait" else add_wake(event))
     sys.stdout.local.buffer = io.StringIO()
     try:
         if name == "session-start":
@@ -544,13 +628,27 @@ def main():
     if sys.argv[1] in ("serve", "ensure"):
         serve() if sys.argv[1] == "serve" else ensure()
         return
+    if sys.argv[1] == "wake":  # `wake <minutes|pid:N> <reason>` or `wake list`, run by the peer
+        import urllib.request
+
+        if sys.argv[2] == "list":
+            print("\n".join(f"{w.get('pid') and 'when pid ' + str(w['pid']) + ' ends' or datetime.fromtimestamp(w['at']).strftime('at %H:%M')}: {w['reason']}"
+                            for w in wakes()) or "(no wakes set)")
+            return
+        when = sys.argv[2]
+        wake = {"pid": when[4:]} if when.startswith("pid:") else {"in": float(when.rstrip("m"))}
+        wake["reason"] = " ".join(sys.argv[3:])
+        ensure()
+        request = urllib.request.Request(f"http://127.0.0.1:{HOOK_PORT}/wake", json.dumps(wake).encode("utf-8"), {"Content-Type": "application/json"})
+        print(urllib.request.urlopen(request, timeout=10).read().decode("utf-8"))
+        return
     event = json.load(sys.stdin) if not sys.stdin.isatty() else {}
     if sys.argv[1] == "session-start":
         session_start(event, int(sys.argv[2]) if len(sys.argv) > 2 else 1)
         return
     if sys.argv[1] in ("keep", "curate"):
         ensure()  # the Stop hooks run every turn: the hook server, if it stopped, is back by the next message
-    {"keep": keep, "curate": curate, "precompact": precompact,
+    {"keep": keep, "curate": curate, "precompact": precompact, "waiter": waiter,
      "subagent-start": subagent_start, "recall": recall, "observe": observe_hook}[sys.argv[1]](event)
 
 
