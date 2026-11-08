@@ -50,7 +50,7 @@ internal sealed class ConversationRecaller(
             && !exclude.Contains(f.Id) && (before is null || f.CreatedUtc < before);
 
         var terms = text.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(w => new string(w.Where(char.IsLetterOrDigit).ToArray())).Where(w => w.Length > 3)
+            .Select(w => new string(w.Where(char.IsLetterOrDigit).ToArray())).Where(w => w.Length > 3 && !Filler.Contains(w))
             .Distinct(StringComparer.OrdinalIgnoreCase).Select(w => $"\"{w}\"");
         var match = string.Join(" OR ", terms);
         var lexical = match.Length == 0 ? [] : (await fragments.SearchRelevantAsync(match, Pool * 4)).Where(Wanted).Take(Pool).ToList();
@@ -68,8 +68,26 @@ internal sealed class ConversationRecaller(
             }
         }
 
-        return Fuse(lexical, semantic, count);
+        if (!embeddings.IsEnabled)
+        {
+            return Fuse(lexical, semantic, count);
+        }
+
+        // Fusion always fills its count, so a message about nothing in particular brought back three
+        // acknowledgements ("Sounds good!" matched "Sounds good!"). With both senses on, an utterance comes
+        // back only when the words and the meaning both find it; none is better than a weak one.
+        var agreed = lexical.Select(f => f.Id).Intersect(semantic.Select(f => f.Id)).ToHashSet();
+        return Fuse(lexical.Where(f => agreed.Contains(f.Id)).ToList(), semantic.Where(f => agreed.Contains(f.Id)).ToList(), count);
     }
+
+    /// <summary>Words in nearly every message, which match acknowledgements, not what a message is about.</summary>
+    private static readonly HashSet<string> Filler = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "sounds", "good", "great", "thanks", "thank", "okay", "yeah", "cool", "awesome", "perfect", "nice", "sure",
+        "just", "like", "that", "this", "with", "what", "whatever", "anything", "something", "have", "would", "could",
+        "should", "there", "then", "than", "them", "they", "your", "yours", "from", "will", "also", "really", "want",
+        "know", "think", "much", "very", "some", "about", "into", "here", "hows", "whats", "were", "been", "does",
+    };
 
     /// <summary>Embeds up to <paramref name="limit"/> utterances that have no vector yet; returns how many it did.</summary>
     public async Task<int> BackfillAsync(int limit)

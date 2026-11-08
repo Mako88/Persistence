@@ -305,7 +305,7 @@ internal sealed class FragmentStore(
     /// by meaning (embeddings, when configured) fused with exact words (BM25), weighted by importance
     /// and confidence, leaving out <paramref name="exclude"/> (what is already in front of the peer).
     /// A fragment tagged for another project than <paramref name="project"/> is left out, as the core leaves it out,
-    /// except for up to <paramref name="wander"/> of the best of them, returned apart: a memory from elsewhere is
+    /// except for up to <paramref name="wander"/> of them that rank among the best overall, returned apart: a memory from elsewhere is
     /// where a new idea can come from, and labelled as such it reads as a stray thought rather than a rule here.
     /// <paramref name="said"/> past utterances come with them (<see cref="ConversationRecaller"/>).
     /// </summary>
@@ -327,8 +327,9 @@ internal sealed class FragmentStore(
                 break;
             }
 
-            foreach (var fragment in found)
+            for (var rank = 0; rank < found.Count; rank++)
             {
+                var fragment = found[rank];
                 skip.Add(fragment.Id);
                 if (ProjectsOf(fragment, projects).All(p => string.Equals(p, project, StringComparison.OrdinalIgnoreCase)))
                 {
@@ -337,8 +338,10 @@ internal sealed class FragmentStore(
                         kept.Add(fragment);
                     }
                 }
-                else if (elsewhere.Count < wander)
+                else if (elsewhere.Count < wander && round == 0 && rank < count)
                 {
+                    // Only one that ranks among the best overall: another project's best match, taken from
+                    // however far down, came with every message and was never worth the thought.
                     elsewhere.Add(fragment);
                 }
             }
