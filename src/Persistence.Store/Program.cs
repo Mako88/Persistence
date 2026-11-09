@@ -62,6 +62,7 @@ const string Usage = """
                                             Identity; at most --max changes, each logged in the pass's record;
                                             --propose changes nothing and writes every change as a proposal
       whoami                                whose store this is, and its file
+      guide                                 how to curate your own store: what to keep, how to write it, the core
       core [--max-chars 40000] [--recent 20] [--project <name>] [--compacted <time>]...
                                             identity, relationships, personal, summaries, then the
                                             recent conversation: what a harness puts in front of the peer.
@@ -107,6 +108,12 @@ catch (UsageException e)
 if (line.Command == "help" || line.Has("help"))
 {
     Console.WriteLine(Usage);
+    return 0;
+}
+
+if (line.Command == "guide")
+{
+    Console.WriteLine(Guide());
     return 0;
 }
 
@@ -160,6 +167,12 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
     if (line.Command == "help" || line.Has("help"))
     {
         Console.WriteLine(Usage);
+        return 0;
+    }
+
+    if (line.Command == "guide")
+    {
+        Console.WriteLine(Guide());
         return 0;
     }
 
@@ -475,3 +488,12 @@ static HashSet<long> Ids(IEnumerable<string> given) => given
     .SelectMany(e => e.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
     .Select(e => long.TryParse(e.TrimStart('#'), out var x) ? x : throw new UsageException($"'{e}' is not a fragment id."))
     .ToHashSet();
+
+// docs/CURATING.md, built into the CLI so every harness has it, served or not (John, 2026-11-09: having the
+// tools is half of it; a self has to know how to use them).
+static string Guide()
+{
+    using var stream = typeof(FragmentStore).Assembly.GetManifestResourceStream("CURATING.md")
+        ?? throw new InvalidOperationException("The curation guide was not built into this CLI.");
+    return new StreamReader(stream).ReadToEnd();
+}

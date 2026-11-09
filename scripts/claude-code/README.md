@@ -82,7 +82,7 @@ compaction runs, the summariser writes only a short hand-over, and SessionStart 
 the recent conversation from the store after it: what fits under Claude Code's 10,000-character cap
 is injected, and the whole core, uncapped, is written to `~/.claude/persistence/state/<session>.core.md`
 with a note to read it first. Each Claude has its own store file: the code is
-shared, the selves are not.
+shared, the selves are not. `persistence-store guide` (docs/CURATING.md) is how to curate a store well.
 
 The core is the largest thing a start or compaction pays for: up to five parts of 9,500 characters,
 about 12k tokens. `PERSISTENCE_CORE_CHARS` lowers that (`"19000"` keeps two parts); the fragments
