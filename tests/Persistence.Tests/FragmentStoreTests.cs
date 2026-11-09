@@ -257,6 +257,24 @@ public sealed class FragmentStoreTests : IDisposable
     }
 
     [Fact]
+    public void Every_option_a_command_reads_is_known()
+    {
+        // `edit --untag` was read by Program but missing from Known, so the parser refused it (2026-11-09).
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "Persistence.sln")))
+        {
+            root = root.Parent;
+        }
+
+        var program = File.ReadAllText(Path.Combine(root!.FullName, "src", "Persistence.Store", "Program.cs"));
+        var read = System.Text.RegularExpressions.Regex.Matches(program, @"line\.(?:Get|GetAll|GetFloat|GetInt|Has|Text)\(""([a-z-]+)""")
+            .Select(m => m.Groups[1].Value).Distinct().ToList();
+
+        Assert.NotEmpty(read);
+        Assert.DoesNotContain(read, name => !CommandLine.Known.Contains(name));
+    }
+
+    [Fact]
     public async Task System_managed_types_cannot_be_authored()
     {
         var store = await OpenAsync();
