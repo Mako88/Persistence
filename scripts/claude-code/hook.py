@@ -1303,6 +1303,19 @@ def run_quiet(cmd, cwd=None, timeout=10):
         return ""
 
 
+def ended_in(meta, info):
+    """Whether the agent's session was told it ended: resuming a session rewrites each agent's meta without
+    `finished` and touches its transcript, so an agent done hours before read as running (2026-11-09,
+    after a restart). The session's own transcript keeps the task notification with the agent's end."""
+    agent = meta.name[len("agent-"):-len(".meta.json")]
+    try:
+        said = (meta.parent.parent.parent / (meta.parent.parent.name + ".jsonl")).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return re.search(rf"<task-id>{re.escape(agent)}</task-id>.{{0,800}}?<status>(?:completed|failed|killed|stopped)",
+                     said, re.S) is not None
+
+
 def running_agents(transcript, now, within=6 * 3600):
     """Subagents of this project's sessions that have not finished: a subagent runs inside its
     session's process, so the process list cannot see one (a worktree agent working looked like
@@ -1320,7 +1333,7 @@ def running_agents(transcript, now, within=6 * 3600):
             began = meta.stat().st_ctime
         except (OSError, ValueError):
             continue
-        if info.get("finished") is True or now - wrote > within:
+        if info.get("finished") is True or now - wrote > within or ended_in(meta, info):
             continue
         where = f" in worktree {info['worktreeBranch']}" if info.get("worktreeBranch") else ""
         found.append((wrote, f"- agent running {age(max(0, now - began))}: {info.get('description') or meta.stem}"
