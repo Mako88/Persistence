@@ -124,9 +124,14 @@ internal sealed partial class FragmentStore(
 
     public async Task<ContextFragmentEntity> EditAsync(
         long id, string? typeName, string? content, string? summary, float? importance, float? confidence,
-        IReadOnlyList<string> addTags)
+        IReadOnlyList<string> addTags, IReadOnlyList<string>? removeTags = null)
     {
         var fragment = await WritableAsync(id);
+        foreach (var path in removeTags ?? [])
+        {
+            var tag = await FindTagAsync(path) ?? throw new RefusedException($"There is no tag '{path}'.");
+            fragment.Tags.RemoveAll(t => t.Id == tag.Id);
+        }
 
         if (typeName is not null)
         {

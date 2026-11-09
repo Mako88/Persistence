@@ -112,6 +112,18 @@ public sealed class FragmentStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task Edit_takes_a_tag_off()
+    {
+        var store = await OpenAsync();
+        var server = await store.AddAsync("Personal", "My server is home.", null, 0.5f, null, ["machine", "project/john"], false);
+
+        var edited = await store.EditAsync(server.Id, null, null, null, null, null, [], ["project/john"]);
+
+        Assert.Equal(["machine"], edited.Tags.Select(t => t.Name));
+        await Assert.ThrowsAsync<RefusedException>(() => store.EditAsync(server.Id, null, null, null, null, null, [], ["no/such"]));
+    }
+
+    [Fact]
     public async Task The_core_gives_each_other_project_one_line()
     {
         var store = await OpenAsync();

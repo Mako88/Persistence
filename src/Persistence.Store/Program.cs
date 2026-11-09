@@ -13,7 +13,7 @@ const string Usage = """
           [--summary <text>] [--importance 0-1] [--confidence 0-1] [--tag <a/b>]... [--protected]
           [--project <name> | --everywhere]  a Personal fragment takes project/<the repository it is written
                                             in> unless it is tagged project/<name> already or --everywhere
-      edit <id> [--type] [--content <text|->] [--summary] [--importance] [--confidence] [--tag <a/b>]...
+      edit <id> [--type] [--content <text|->] [--summary] [--importance] [--confidence] [--tag <a/b>]... [--untag <a/b>]...
       supersede <id>[,<id>...] --content <text|-> [--reason <text>] [--type] [--summary] [--importance] [--confidence] [--tag <a/b>]...
                                             a change of mind (one id) or a merge (several): the new fragment
                                             takes their type and tags (--tag replaces the tags); the old ones are
@@ -154,7 +154,7 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
             break;
         case "edit":
             Print(line, [await store.EditAsync(line.Id(), line.Get("type"), line.Text(), line.Text("summary"),
-                line.GetFloat("importance"), line.GetFloat("confidence"), line.GetAll("tag"))]);
+                line.GetFloat("importance"), line.GetFloat("confidence"), line.GetAll("tag"), line.GetAll("untag"))]);
             break;
         case "supersede":
             var replaced = line.Positional
