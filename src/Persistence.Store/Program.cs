@@ -51,6 +51,9 @@ const string Usage = """
                                             utterances (said before --before, so not this session's)
       embed-conversation [--batch 64]      embed every past utterance not yet embedded (recall does a few a call)
       recent [--limit 20]                   the latest of the conversation, oldest first
+      sleep-list [--over 1500] [--limit 25] a sleep pass's worklist: oversized fragments, near-duplicate
+                                            pairs, and every authored id (to join with use counts)
+      whoami                                whose store this is, and its file
       core [--max-chars 40000] [--recent 20] [--project <name>] [--compacted <time>]...
                                             identity, relationships, personal, summaries, then the
                                             recent conversation: what a harness puts in front of the peer.
@@ -150,6 +153,9 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
     {
         case "whoami":
             Console.WriteLine(store.Identity);
+            break;
+        case "sleep-list":
+            Console.Write(await store.SleepListAsync(line.GetInt("over", 1500), line.GetInt("limit", 25)));
             break;
         case "add":
             var fresh = await store.AddAsync(

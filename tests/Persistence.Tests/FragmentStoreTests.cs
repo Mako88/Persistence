@@ -136,6 +136,22 @@ public sealed class FragmentStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task The_sleep_list_names_oversized_fragments_and_near_duplicates()
+    {
+        var store = await OpenAsync();
+        var big = await store.AddAsync("Personal", "The salon books dogs by breed and coat. " + new string('x', 2000), null, 0.5f, null, [], false);
+        var small = await store.AddAsync("Personal", "Prove the wiring before trusting a reading.", null, 0.5f, null, [], false);
+        var a = await store.AddAsync("Personal", "Training pauses for any game on the shared card and resumes from its checkpoint.", null, 0.5f, null, [], false);
+        var b = await store.AddAsync("Personal", "Training pauses for any game on the shared card, then resumes from its checkpoint.", null, 0.5f, null, [], false);
+
+        var list = await store.SleepListAsync(1500, 25);
+
+        Assert.Contains($"- #{big.Id} (", list);
+        Assert.DoesNotContain($"- #{small.Id} (", list);
+        Assert.Contains($"- #{a.Id} and #{b.Id} (", list);
+    }
+
+    [Fact]
     public async Task A_recall_only_fragment_stays_out_of_the_core_and_in_recall()
     {
         var store = await OpenAsync();
