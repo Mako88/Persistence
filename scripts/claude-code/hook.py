@@ -1140,6 +1140,15 @@ def recall(event):
                   *(["--exclude", ",".join(already)] if already else []), stdin=prompt + ("\n\n" + reminded if reminded else ""), cold=False)
     ids = re.findall(r"^\[#(\d+) \|", found, re.M)
     if not ids and not reminded:
+        # Nothing new can look like recall broke, when it matched only what this window already holds (the work
+        # Claude, 2026-11-09): ask again without the exclusion and say so in one line.
+        if already:
+            again = store("recall", "--text", "-", *session_args(event), "--limit", str(count), "--snippet", "0",
+                          "--project", project(event), "--wander", "0", "--said", "0", stdin=prompt, cold=False)
+            shown = [i for i in re.findall(r"^\[#(\d+) \|", again, re.M) if i in already]
+            if shown:
+                print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext":
+                      f"Recall: {len(shown)} matched, all already in this window ({', '.join('#' + i for i in shown)})."}}))
         return
     seen(event, add=ids)
     record_shown(event, "recall", ids)
