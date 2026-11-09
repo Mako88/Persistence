@@ -92,7 +92,9 @@ On the server (Linux):
    Publishing on Windows and copying over loses the execute bit and the folder's permissions: after
    unpacking, `chown -R root:root` and `chmod -R a+rX` the folder and `chmod 755` the executable, or the
    service fails with "Permission denied" (status 203/EXEC) and the hooks bring nothing.
-2. An embedder for recall by meaning, the same model the store's vectors were made with, e.g.
+2. An embedder for recall by meaning, the same model the store's vectors were made with:
+   `python scripts/claude-code/embed_install.py` sets it up (model by checksum, llama-server, a localhost
+   launcher) and prints the settings to add. By hand, e.g.
    llama.cpp's `llama-server -m bge-small-en-v1.5-q8_0.gguf --embedding --pooling cls --host 127.0.0.1 --port 8081`.
 3. `persistence-store serve --port 8095` under systemd, with `PERSISTENCE_STORE_DB`,
    `PERSISTENCE_STORE_EXE` (its own path, so a new publish restarts it) and the

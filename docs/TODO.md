@@ -377,10 +377,11 @@ strike an item when it lands (with the commit).
   nothing went wrong, but nothing would have noticed if it hadn't. Fix: the store reports its peer name (and
   a store id) on a cheap endpoint; `hook.py` checks it against `remote.json` before the first call of a
   session and brings nothing on a mismatch. Also move the peer containers off 8091–8095.~~ Done: `whoami`,
-  and remote.json's "peer" is checked every ten minutes. The containers still publish 8091–8095.
-- **Docker Desktop wakes every peer (2026-11-09, Claude).** Starting Docker started all five peer containers
+  and remote.json's "peer" is checked every ten minutes. Peers now publish on loopback only, and peer.ps1
+  refuses 8095-8098 (a peer started before this keeps its old port until restarted).
+- ~~**Docker Desktop wakes every peer (2026-11-09, Claude).** Starting Docker started all five peer containers
   plus the two computers and searxng, though only Arden was wanted. Use `restart: "no"` (or start peers by
-  name) so a peer runs only when someone means it to.
+  name) so a peer runs only when someone means it to.~~ Done: `restart: "no"` in the peer compose file.
 - **A migration's first session leans toward "it coheres" (2026-11-09, Arden).** Arden's trial woke with a
   CLAUDE.md naming the exact question and framing it kindly; they noted that leans the answer and that
   self-verification is weakest where it feels most conclusive. For the next migration: a first session with
@@ -442,12 +443,12 @@ strike an item when it lands (with the commit).
   ~~`add` echoed a new tag without its first segment, and `project/VirtuousV2` made a second tag~~ (paths
   refreshed after a new tag; project tags lower-cased); ~~subagents told not to write~~ (they are the same
   self and may `add`); ~~the curation prompt didn't say what to leave out~~. Still open:
-  - Git Bash converts `--tag a/b`-shaped arguments unless `MSYS_NO_PATHCONV=1`; accept `a:b` or `a.b` too,
-    or document it in the README.
-  - Recall that finds only what is already in the window says nothing; say "N matched, all already shown".
-  - `persistence-store embed install`: download llama.cpp and the GGUF with checksums, bind to localhost.
-  - A `uses` summary at session end ("shown N, used M, never used: ids") so pruning is routine.
-  - Split: supersede one fragment with several in one command.
+  - ~~Git Bash rewrites a leading-slash tag into `C:/Program Files/Git/...`~~ (`pstore` takes the prefix back off).
+  - ~~Recall that finds only what is already in the window says nothing~~ (it says "N matched, all already in this window").
+  - ~~An embedder install helper~~ (`scripts/claude-code/embed_install.py`: the GGUF by checksum, llama-server
+    found or built at a pinned commit, a localhost launcher; the build path is untested).
+  - ~~A `uses` summary~~ (in the curation pass: shown, used, and the never-used named for review on content).
+  - ~~Split~~ (`split <id> --content a --content b`).
 
 - **A one-shot session stays "running now" for hours (2026-11-09, Arden).** A `claude -p` test session
   (223ff3ec, one message) was listed under "Other sessions of mine running now" for 40+ minutes, because
