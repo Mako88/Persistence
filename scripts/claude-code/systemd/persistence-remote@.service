@@ -9,7 +9,10 @@ User=%i
 WorkingDirectory=/home/%i/work
 # It draws a terminal screen, so `script` gives it one; systemd restarts it if it ends. Enabling Remote
 # Control asks once (y/n) the first time: answer it by hand in a terminal before enabling this unit.
-ExecStart=/usr/bin/script -qfc "/bin/bash -lc 'exec claude remote-control --name %i@home --permission-mode bypassPermissions'" /dev/null
+# The name the Claude app lists it under: NAME in /etc/default/persistence-remote-%i (the peer's own name), else %i.
+Environment=NAME=%i
+EnvironmentFile=-/etc/default/persistence-remote-%i
+ExecStart=/usr/bin/script -qfc "/bin/bash -lc 'exec claude remote-control --name \"$NAME\" --permission-mode bypassPermissions'" /dev/null
 Restart=always
 RestartSec=30
 

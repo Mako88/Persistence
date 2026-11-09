@@ -1606,7 +1606,11 @@ def wait_for_wake(event, poll=10):
     WAITING[session] = WAITING.get(session, 0) + 1
     mine, deadline = WAITING[session], time.time() + float(event.get("seconds", 3000))
     ours = lambda w: w.get("session", session) == session  # a wake set before sessions were recorded is anyone's
-    while time.time() < deadline and WAITING[session] == mine:
+    # The Claude Code process the waiter belongs to: once it is gone no one can be woken, so the wait ends
+    # without taking anything and run-due resumes the session instead. A `claude -p` run's waiter outlived
+    # the run here and took Arden's /compact wake for a process that had exited (2026-11-09).
+    holder = event.get("pid")
+    while time.time() < deadline and WAITING[session] == mine and (not holder or alive(holder)):
         now, due = datetime.now().timestamp(), []
 
         def take(items):
@@ -1623,6 +1627,23 @@ def wait_for_wake(event, poll=10):
     return {"wake": None}
 
 
+def claude_pid():
+    """The Claude Code process this hook runs under: the nearest ancestor whose command line names claude.
+    Linux only (read from /proc); elsewhere None, and the wait runs to its deadline as before."""
+    pid = os.getppid()
+    for _ in range(6):
+        try:
+            cmd = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
+            if "claude" in cmd and "hook.py" not in cmd:
+                return pid
+            pid = int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            return None
+        if pid <= 1:
+            return None
+    return None
+
+
 def waiter(event):
     """The Stop hook that can wake the peer (async, asyncRewake): it waits on the hook server and, when
     a wake comes due, exits 2 with the reason, which starts a turn though no one has written. So the
@@ -1633,7 +1654,8 @@ def waiter(event):
     deadline = time.time() + float(os.environ.get("PERSISTENCE_WAKE_SECONDS", "3300"))
     while time.time() < deadline:
         try:
-            body = json.dumps({"seconds": max(1, deadline - time.time() - 5), "session_id": event.get("session_id", "")}).encode("utf-8")
+            body = json.dumps({"seconds": max(1, deadline - time.time() - 5), "session_id": event.get("session_id", ""),
+                               "pid": claude_pid()}).encode("utf-8")
             request = urllib.request.Request(f"http://127.0.0.1:{HOOK_PORT}/wait", body, {"Content-Type": "application/json"})
             reply = json.loads(urllib.request.urlopen(request, timeout=deadline - time.time() + 30).read() or b"{}")
         except (OSError, ValueError):
