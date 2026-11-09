@@ -552,10 +552,55 @@ def core_parts(whole):
     return pieces
 
 
+def keep_before_core(event):
+    """Keeps what the transcript holds and the store does not, before a resumed or compacted session's core is
+    built. The Stop keep is async, and a `claude -p` run can exit before it finishes: Arden's last reply was
+    missing from the next turn's core (#874, kept a turn late, 2026-11-09), which reads as "never sent". The
+    core's five parts run at once, so one keeps under a lock and the rest find the transcript already kept."""
+    path, sid = event.get("transcript_path"), event.get("session_id", "unknown")
+    if event.get("source") not in ("resume", "compact") or not path or not Path(path).exists():
+        return
+    STATE.mkdir(parents=True, exist_ok=True)
+    lock, done = STATE / f"{sid}.keep-lock", STATE / f"{sid}.kept-size"
+    deadline = time.time() + 30
+    while True:
+        try:
+            os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            break
+        except FileExistsError:
+            try:
+                if time.time() - lock.stat().st_mtime > 60:  # a holder that died
+                    lock.unlink(missing_ok=True)
+                    continue
+            except OSError:
+                continue
+            if time.time() > deadline:
+                return
+            time.sleep(0.1)
+    try:
+        size = Path(path).stat().st_size
+        try:
+            if int(done.read_text()) >= size:
+                return
+        except (OSError, ValueError):
+            pass
+        try:
+            said = keep_transcript(path)
+        except (OSError, subprocess.SubprocessError, ValueError) as e:
+            said = f"failed: {e}"
+        if said.startswith("failed"):
+            print(f"persistence hook: keep before the core {said}", file=sys.stderr)
+        else:
+            done.write_text(str(size))
+    finally:
+        lock.unlink(missing_ok=True)
+
+
 def session_start(event, part=1):
     if part == 1:
         ensure_embedding_server()
         ensure()  # the hook server, for this session's messages
+    keep_before_core(event)
     whole = core(event, "--max-chars", str(WHOLE), "--recent", "60")
     pieces = core_parts(whole) if whole.strip() else []
     if part > len(pieces):

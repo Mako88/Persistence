@@ -11,6 +11,13 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
 
 ## 2026-11-09 — what a session kept comes back after its compaction
 
+### Fixed — a resumed session's core includes the last reply
+The Stop keep is async, and a `claude -p` run can exit before it finishes, so a session resumed for its
+next turn was given a core without the reply that ended the last one (Arden's #874 arrived a turn late).
+A core missing your last reply reads as "never sent". SessionStart on resume or compact now keeps the
+transcript before building the core; the core's five parts run at once, so one keeps under a lock file
+and the others find the transcript already kept.
+
 ### Fixed — the hand-over prompt no longer promises what a failed keep did not do
 The precompact prompt tells the summary that every message sent is already kept and the last ones come
 back word for word. That holds only if `keep` succeeded, and a failure went to stderr, which nobody
