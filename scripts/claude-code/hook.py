@@ -175,8 +175,9 @@ def remote_args(args, cwd=None):
     if "--session" not in args and session:
         args += ["--session", session]
     if (command == "add" or (command == "context" and args[1:2] in ([], ["list"]))) \
-            and "--project" not in args and "--everywhere" not in args:
-        args += ["--project", project({"cwd": cwd or os.getcwd()})]
+            and "--project" not in args and "--everywhere" not in args \
+            and (name := project({"cwd": cwd or os.getcwd()})):
+        args += ["--project", name]
     for name in ("content", "summary", "text"):
         flag = f"--{name}-file"
         if flag in args and args.index(flag) + 1 < len(args):
@@ -396,6 +397,9 @@ def project(event):
             return Path(common.stdout.strip()).parent.name.lower()
     except (OSError, subprocess.SubprocessError):
         pass
+    # A home folder is no project: fragments added from there were filed under "project/john" (2026-11-09).
+    if Path(cwd).resolve() == Path.home().resolve():
+        return ""
     return Path(cwd).name.lower()
 
 
