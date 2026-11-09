@@ -456,6 +456,14 @@ strike an item when it lands (with the commit).
 - **Remaining small items from Arden's review:** narrow `core()`'s retry to a usage error once every store
   accepts `--compacted`.
 
+- **The sleep pass (John and the work Claude, 2026-11-09; designed by Arden in `docs/design/sleep-pass.md`).**
+  A periodic curation pass: distill oversized fragments to what lasts (keeping the why), merge duplicates,
+  review unused ones on their content. Built: `sleep-list` (oversized, near-duplicate pairs, authored ids).
+  Next: a store "sleep mode" that refuses `forget`, out-of-scope supersedes and a 13th change; a tag on
+  successors so a distillation isn't distilled again; the nightly runner (a wake that hands the worklist and
+  the prompt to a session), propose-only for the first week. Settled: never archive a fragment for being
+  unused alone; "never shown" measures retrieval, not the fragment (Arden).
+
 ## Open observations
 
 - **Self-recorded lessons can encode mistakes.** When coached to "save what you learned," a peer can save
