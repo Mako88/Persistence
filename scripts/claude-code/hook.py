@@ -708,7 +708,9 @@ def this_turn(path):
             if b.get("type") == "tool_use":
                 given = b.get("input") or {}
                 command = str(given.get("command", ""))
-                if b.get("name") in STARTERS or given.get("run_in_background") or re.search(r"\bpwake\b|hook\.py wake", command):
+                # A wake set by the command itself, at a command position: the words inside a heredoc or a patch are not one
+                # (the README's "hook.py wake" passed for a start on 2026-11-09, and a promise went unheld).
+                if b.get("name") in STARTERS or given.get("run_in_background") or re.search(r"(?:^|[;&|(]\s*)(?:pwake|\S*python\S*\s+\S*hook\.py\s+wake)\s+\S", command, re.M):
                     started = True
                 named.update(re.findall(r"\b(?:show|edit|supersede|tag|untag|merge|archive|protect)\s+(\d{2,})\b", command))
                 named.update(re.findall(r"(?<![\w.])(\d{2,})(?=\s*(?:,\d{2,})*\s)", command) if "supersede" in command else [])
