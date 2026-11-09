@@ -30,6 +30,9 @@ internal sealed partial class FragmentStore(
     /// <summary>The parent tag of the projects: a fragment tagged <c>project/&lt;name&gt;</c> belongs to that project.</summary>
     public const string ProjectTag = "project";
 
+    /// <summary>A fragment recalled by association but never in the core: `--tag recall-only`.</summary>
+    public const string RecallOnlyTag = "recall-only";
+
     /// <summary>The types that make up the peer's core, in the order they are rendered.</summary>
     public static readonly IReadOnlyList<ContextFragmentType> CoreTypes =
     [
@@ -583,7 +586,9 @@ internal sealed partial class FragmentStore(
                 .Where(f => !f.IsDeleted)
                 .OrderByDescending(f => f.Importance).ThenByDescending(f => f.LastModifiedUtc)
                 .Select(f => f.Id).ToList();
-            byType.Add(await HydratedAsync(ofType));
+            // Tagged recall-only: a lookup (a token's shape, a tool's gotcha) that earns a recall by association
+            // but not a place in every core; archiving it hid it from recall too (the work Claude, 2026-11-09).
+            byType.Add((await HydratedAsync(ofType)).Where(f => !f.Tags.Any(t => t.ParentTagId is null && t.Name == RecallOnlyTag)).ToList());
         }
 
         // What this session wrote itself comes first, newest first: after a compaction it is what was in
@@ -895,13 +900,24 @@ internal sealed partial class FragmentStore(
     private async Task<List<TagEntity>> TagsAsync(IReadOnlyList<string> paths)
     {
         var found = new List<TagEntity>();
-        foreach (var path in paths)
+        var made = false;
+        foreach (var given in paths)
         {
-            var (tag, _) = await tags.GetOrCreateByPathAsync(path);
+            // A project is named by its folder, lower-cased (`project/virtuousv2`); a hand-typed
+            // `project/VirtuousV2` made a second tag for the same project (the work Claude, 2026-11-09).
+            var path = given.StartsWith(ProjectTag + "/", StringComparison.OrdinalIgnoreCase) ? given.ToLowerInvariant() : given;
+            var (tag, created) = await tags.GetOrCreateByPathAsync(path);
+            made |= created;
             if (tag is not null)
             {
                 found.Add(tag);
             }
+        }
+
+        // A tag made by this command has no path in the cache yet, so `add` echoed `pdf/rollout` as `rollout`.
+        if (made)
+        {
+            await RefreshTagPathsAsync();
         }
 
         return found;

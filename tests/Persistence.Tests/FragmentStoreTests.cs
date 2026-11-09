@@ -136,6 +136,28 @@ public sealed class FragmentStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task A_recall_only_fragment_stays_out_of_the_core_and_in_recall()
+    {
+        var store = await OpenAsync();
+        var lookup = await store.AddAsync("Personal", "The rollout token is a JWT signed by the pdf service.", null, 0.5f, null, ["recall-only"], false);
+
+        Assert.DoesNotContain($"[#{lookup.Id} |", await store.CoreAsync(40_000, 0));
+        Assert.Contains(lookup.Id, (await store.RecallAsync("the rollout token from the pdf service", 5, [])).Here.Select(f => f.Id));
+    }
+
+    [Fact]
+    public async Task A_new_tag_echoes_with_its_whole_path_and_project_tags_fold_case()
+    {
+        var store = await OpenAsync();
+        await store.RefreshTagPathsAsync();
+        var added = await store.AddAsync("Personal", "Rollout notes.", null, 0.5f, null, ["pdf/rollout", "project/VirtuousV2"], false);
+
+        Assert.Contains("tags: pdf/rollout, project/virtuousv2", FragmentStore.Render(added));
+        var again = await store.AddAsync("Personal", "More rollout notes.", null, 0.5f, null, ["project/virtuousv2"], false);
+        Assert.Equal(added.Tags.Single(t => t.Name == "virtuousv2").Id, again.Tags.Single().Id);
+    }
+
+    [Fact]
     public async Task Edit_takes_a_tag_off()
     {
         var store = await OpenAsync();

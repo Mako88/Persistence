@@ -33,7 +33,8 @@ same route, for the peer's own shell (the `pstore` wrapper).
 Configured by environment (settings.json "env"): PERSISTENCE_STORE_DB (this Claude's store, one per
 Claude), PERSISTENCE_STORE_EXE (the published persistence-store), PERSISTENCE_SELECTEDLOCALPEER (the
 human's name; PERSISTENCE_SPEAKER, set in the environment of a session started on someone's behalf,
-names who actually typed its prompts instead), PERSISTENCE_CURATE_AT (tokens, default 500000; set autoCompactWindow above it),
+names who actually typed its prompts instead), PERSISTENCE_CORE_CHARS (what a session start may inject
+of fragments; the rest is named by id), PERSISTENCE_CURATE_AT (tokens, default 500000; set autoCompactWindow above it),
 PERSISTENCE_RECALL_COUNT (default 3, 0 turns recall off), and PERSISTENCE_EMBEDDING_* for recall by
 meaning (without them recall is by exact words only).
 
@@ -405,6 +406,9 @@ def curate(event):
         "other's own words, what is running and how to pick it up, what you learned about the work, "
         "the person, and yourself. Bring your working note up to date (`note`). Edit fragments that are now wrong or stale rather than adding "
         f"beside them; archive what no longer earns its place. `{exe} help` lists the commands. "
+        # The work Claude read its whole core to learn what not to write (2026-11-09).
+        "Leave out the transcript itself (every message is already kept), what the core already says, and "
+        "step-by-step narration: keep conclusions, decisions and how to resume. "
         "Then carry on with what you were doing.")}))
 
 
@@ -489,9 +493,13 @@ def core_parts(whole):
         piece += block[:CAP - 300]
     if piece.strip():
         pieces.append(piece)
-    if len(pieces) > PARTS - 1:
-        left = re.findall(r"^\[#(\d+) \|", "".join(pieces[PARTS - 2:]), re.M)
-        pieces = pieces[:PARTS - 2] + [f"(Fragments that did not fit: {', '.join('#' + i for i in left)}; `show <id>` reads one.)"]
+    # PERSISTENCE_CORE_CHARS bounds what every start and compaction pays for the fragments (default: all the
+    # parts the hooks allow); what falls past it is named by id, a `show` or a recall away (the work Claude's
+    # 54k-character core, 2026-11-09).
+    room = max(1, min(PARTS - 1, int(os.environ.get("PERSISTENCE_CORE_CHARS", str(PARTS * CAP))) // CAP))
+    if len(pieces) > room:
+        left = re.findall(r"^\[#(\d+) \|", "".join(pieces[room - 1:]), re.M)
+        pieces = pieces[:room - 1] + [f"(Fragments that did not fit: {', '.join('#' + i for i in left)}; `show <id>` reads one.)"]
     if talk.strip():
         talk = sep.lstrip("\n") + talk
         pieces.append(talk if len(talk) <= CAP - 300 else "## The conversation so far (its newest part)\n\n..." + talk[-(CAP - 400):])
@@ -1001,8 +1009,9 @@ def recall(event):
 
 def subagent_start(event):
     lead = ("# Who you are\n\nYou are a subagent of a Claude with its own Persistence store; this is its "
-            "core, and so yours, with its working note first and what is so on the machine now last. Read it; "
-            "do not write to the store, the main session does that.")
+            "core, and so yours, with its working note first and what is so on the machine now last. Read it. "
+            "You are the same self: when you learn something the main session cannot see from your report "
+            "(a gotcha, a fact about the code), add it with `pstore add`; leave the working note to the main session.")
     seen_now = observe(event)  # the working context: what is running, what changed, git
     body = store("core", "--max-chars", str(CAP - len(lead) - len(seen_now) - 100), "--recent", "0", "--project", project(event), *session_args(event))
     text = f"{lead}\n\n{body}\n\n{seen_now}" if body.strip() else ""

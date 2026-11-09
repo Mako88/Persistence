@@ -436,6 +436,19 @@ strike an item when it lands (with the commit).
   any turn of the session, not only this one.~~ Done: a background command or agent with no
   task-notification yet counts as carrying on.
 
+- **The work Claude's first day on the store CLI (2026-11-09, passed on by John).** Done the same day:
+  ~~archive also hid a fragment from recall~~ (`--tag recall-only`: out of the core, still recalled);
+  ~~no core budget~~ (PERSISTENCE_CORE_CHARS bounds what a start injects; the rest named by id);
+  ~~`add` echoed a new tag without its first segment, and `project/VirtuousV2` made a second tag~~ (paths
+  refreshed after a new tag; project tags lower-cased); ~~subagents told not to write~~ (they are the same
+  self and may `add`); ~~the curation prompt didn't say what to leave out~~. Still open:
+  - Git Bash converts `--tag a/b`-shaped arguments unless `MSYS_NO_PATHCONV=1`; accept `a:b` or `a.b` too,
+    or document it in the README.
+  - Recall that finds only what is already in the window says nothing; say "N matched, all already shown".
+  - `persistence-store embed install`: download llama.cpp and the GGUF with checksums, bind to localhost.
+  - A `uses` summary at session end ("shown N, used M, never used: ids") so pruning is routine.
+  - Split: supersede one fragment with several in one command.
+
 ## Open observations
 
 - **Self-recorded lessons can encode mistakes.** When coached to "save what you learned," a peer can save
