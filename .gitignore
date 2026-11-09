@@ -64,3 +64,4 @@ __pycache__/
 
 ## Experiment run data: copies of peer stores and their outputs (contain peer memories).
 experiments/runs/
+*.db.moved-*
