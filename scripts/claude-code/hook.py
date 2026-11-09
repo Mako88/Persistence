@@ -462,7 +462,8 @@ def curate(event):
         # The work Claude read its whole core to learn what not to write (2026-11-09).
         "Leave out the transcript itself (every message is already kept), what the core already says, and "
         "step-by-step narration: keep conclusions, decisions and how to resume. "
-        "Then carry on with what you were doing.")}))
+        + (uses_line(event.get("session_id", "")) + " " if uses_line(event.get("session_id", "")) else "")
+        + "Then carry on with what you were doing.")}))
 
 
 def precompact(event):
@@ -698,6 +699,33 @@ def record_shown(event, moment, ids):
         with USES.open("a", encoding="utf-8") as f:
             f.write(json.dumps({"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "session": event.get("session_id", ""),
                                 "moment": moment, "ids": [str(i) for i in ids]}) + "\n")
+
+
+def uses_line(session):
+    """This session's showings and uses in one line, for the curation pass: pruning as a routine step at the moment
+    it is done, not a report to remember to run (the work Claude, 2026-11-09). What was shown three times or more and
+    never used is named; whether it goes is a judgment about its content, never its count alone (Arden)."""
+    shown, used = {}, set()
+    try:
+        lines = USES.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    for line in lines:
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if e.get("session") != session:
+            continue
+        for i in e.get("ids", []):
+            shown[i] = shown.get(i, 0) + 1
+        used.update(e.get("used", []))
+    if not shown:
+        return ""
+    idle = sorted((i for i in shown if shown[i] >= 3 and i not in used), key=lambda i: -shown[i])
+    return (f"This session, recall and cues showed {len(shown)} fragments and you used {len(used & set(shown))} of them."
+            + (f" Shown 3+ times and never used: {', '.join('#' + i for i in idle[:15])}: read them and decide on what they say "
+               "(keep, tag recall-only, or fold into another), not on the count." if idle else ""))
 
 
 def record_used(event, ids):
