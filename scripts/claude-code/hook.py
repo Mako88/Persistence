@@ -388,13 +388,145 @@ def cued(event, moment, text):
     return found if ids else ""
 
 
+DEFINITIONS = {  # where a language declares a function, method or class: group 1 is its name
+    ".py": re.compile(r"^[ \t]*(?:async[ \t]+)?(?:def|class)[ \t]+(\w+)", re.M),
+    ".cs": re.compile(r"^[ \t]*(?:public|private|internal|protected|static)[\w\s<>\[\],?.]*?[ \t](\w+)(?:<[^>]*>)?[ \t]*\((?!.*;)", re.M),
+    ".js": re.compile(r"^[ \t]*(?:export[ \t]+)?(?:default[ \t]+)?(?:async[ \t]+)?function[ \t]+(\w+)|^[ \t]*(?:export[ \t]+)?(?:const|let)[ \t]+(\w+)[ \t]*=[ \t]*(?:async[ \t]*)?(?:\(|\w+[ \t]*=>)", re.M),
+    ".ps1": re.compile(r"^[ \t]*function[ \t]+([\w-]+)", re.M),
+}
+DEFINITIONS[".ts"] = DEFINITIONS[".tsx"] = DEFINITIONS[".jsx"] = DEFINITIONS[".js"]
+GENERIC = {"get", "set", "async", "the", "new", "init", "main", "test", "tests", "run", "and", "for", "with", "from"}
+
+
+def name_tokens(name):
+    """A name's words, for telling `KeepConversation` from `keep_conversation_async`: camel and snake split, lower case."""
+    return {t.lower() for t in re.findall(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|\d+", name)} - GENERIC
+
+
+def symbols(event, budget=3.0):
+    """The project's definitions by file (name, line), kept in STATE/symbols/<project>.json and refreshed for the
+    files whose mtime changed, within `budget` seconds a call so a huge repository is indexed over a few calls.
+    What is tracked by git, in the languages above; a file over a megabyte is skipped."""
+    cwd = Path(event.get("cwd") or os.getcwd())
+    path = STATE / "symbols" / f"{project(event)}.json"
+    try:
+        index = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        index = {}
+    try:
+        listed = subprocess.run(["git", "ls-files", "-z"], cwd=cwd, capture_output=True, text=True, timeout=10,
+                                creationflags=NO_WINDOW, encoding="utf-8", errors="replace")
+        files = [f for f in listed.stdout.split("\0") if f and Path(f).suffix in DEFINITIONS] if listed.returncode == 0 else []
+        root = Path(listed.stdout and subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=cwd, capture_output=True, text=True,
+                                                     timeout=10, creationflags=NO_WINDOW).stdout.strip() or cwd)
+    except (OSError, subprocess.SubprocessError):
+        return index
+    began, changed, seen_files = time.perf_counter(), False, set()
+    for rel in files:
+        seen_files.add(rel)
+        full = root / rel
+        try:
+            mtime = full.stat().st_mtime
+        except OSError:
+            continue
+        if index.get(rel, {}).get("mtime") == mtime:
+            continue
+        if time.perf_counter() - began > budget:
+            break  # the rest next call
+        try:
+            if full.stat().st_size > 1_000_000:
+                index[rel] = {"mtime": mtime, "symbols": []}
+                continue
+            text = full.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        found = []
+        for m in DEFINITIONS[full.suffix].finditer(text):
+            name = next((g for g in m.groups() if g), None)
+            if name:
+                found.append([name, text.count("\n", 0, m.start()) + 1])
+        index[rel] = {"mtime": mtime, "symbols": found}
+        changed = True
+    for gone in [f for f in index if f not in seen_files]:
+        del index[gone]
+        changed = True
+    if changed:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(index), encoding="utf-8")
+    return index
+
+
+def write_recall(event):
+    """PreToolUse on Write and Edit: the definitions the new text declares, each checked against what the project
+    already has (the same name elsewhere, or one made of the same words) and against the store. John, 2026-11-09:
+    what helps in a large codebase is knowing that something exists for this and where to look, not a search of
+    everything; this is that knowledge, offered at the moment of writing. A name the edit replaces (in old_string)
+    is a change to that function, not a second one, and is left alone."""
+    given = event.get("tool_input") or {}
+    file = Path(given.get("file_path") or "")
+    new = given.get("new_string") or given.get("content") or ""
+    pattern = DEFINITIONS.get(file.suffix)
+    if not pattern or not new:
+        return ""
+    old_names = {next(g for g in m.groups() if g) for m in pattern.finditer(given.get("old_string") or "")}
+    names = [next(g for g in m.groups() if g) for m in pattern.finditer(new)]
+    names = [n for n in dict.fromkeys(names) if n not in old_names and len(n) > 2]
+    if not names:
+        return ""
+    index = symbols(event)
+    # A word's weight is its rarity among the project's names: `Load` is in many and says little, `Hydrated` in
+    # one and says which function this is like. Shared weight over all weight, at least half.
+    import math
+    tokens = {(rel, other, line): name_tokens(other) for rel, entry in index.items() for other, line in entry["symbols"]}
+    df = {}
+    for toks in tokens.values():
+        for tok in toks:
+            df[tok] = df.get(tok, 0) + 1
+    total = max(len(tokens), 1)
+    weight = lambda toks: sum(math.log(1 + total / df.get(tok, 1)) for tok in toks)
+    lines = []
+    for name in names[:4]:
+        mine = name_tokens(name)
+        same, alike = [], []
+        for (rel, other, line), theirs in tokens.items():
+            if other == name and not (Path(rel).name == file.name and other in old_names):
+                same.append(f"{rel}:{line}")
+            elif mine and theirs and other != name and weight(mine & theirs) / weight(mine | theirs) >= 0.5:
+                alike.append((weight(mine & theirs), f"{other} ({rel}:{line})"))
+        alike = [a for _, a in sorted(alike, reverse=True)]
+        if same:
+            lines.append(f"- `{name}` already exists: {', '.join(same[:4])}" + (" …" if len(same) > 4 else ""))
+        if alike:
+            lines.append(f"- like `{name}`: {', '.join(alike[:5])}" + (" …" if len(alike) > 5 else ""))
+    if not lines:
+        return ""
+    # The store by the names' exact words, not by meaning: a fragment that names a helper is the "I know we have
+    # something for this" John described; one merely near in meaning was general advice every time it was tried.
+    said = store("search", *names[:4], "--limit", "4", cold=False).strip()
+    # Authored fragments only: a past utterance that happens to use the words is not knowledge of a helper.
+    said = "\n\n".join(block for block in said.split("\n\n") if block.startswith("[#") and "| ChatMessage |" not in block.split("\n", 1)[0])[:1200]
+    text = f"Before writing {', '.join(f'`{n}`' for n in names[:4])}, what the project already has (reuse or extend it, or name why not):\n" + "\n".join(lines)
+    if said and said != "(nothing)":
+        text += "\n\nWhat your store says about these names:\n\n" + said
+    return text
+
+
 def tool_cue(event):
-    """PreToolUse: a reminder set for this kind of call (`cue set tool/<name> --when '^PowerShell:.*python'`)."""
+    """PreToolUse: a reminder set for this kind of call (`cue set tool/<name> --when '^PowerShell:.*python'`), and
+    for a Write or Edit that declares a function, what the project already has under that name."""
     text = f"{event.get('tool_name', '')}: {json.dumps(event.get('tool_input') or {}, ensure_ascii=False)}"
+    parts = []
     found = cued(event, "tool", text)
     if found:
-        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext":
-                          "A cue you set for calls like this one (a reminder, not a block):\n\n" + found}}))
+        parts.append("A cue you set for calls like this one (a reminder, not a block):\n\n" + found)
+    if event.get("tool_name") in ("Write", "Edit", "MultiEdit"):
+        try:
+            if existing := write_recall(event):
+                parts.append(existing)
+        except Exception as e:  # a reminder must never stop the edit
+            print(f"persistence hook: write recall failed: {e!r}", file=sys.stderr)
+    if parts:
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "\n\n".join(parts)[:CAP]}}))
 
 
 STARTERS = {"Agent", "Task", "Monitor", "ScheduleWakeup", "CronCreate", "Workflow", "mcp__ccd_session__start_session",

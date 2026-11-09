@@ -191,6 +191,20 @@ public sealed class FragmentStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task The_nearest_fragment_is_found_by_shared_words_without_an_embedder()
+    {
+        var store = await OpenAsync();
+        var view = await store.AddAsync("Personal", "Training pauses for any game on the shared card and resumes from its checkpoint when the game closes.", null, null, null, [], false);
+        await store.AddAsync("Personal", "The garden hose on the north wall leaks at the coupling above forty psi.", null, null, null, [], false);
+
+        var near = await store.NearestAsync("Any training run pauses for a game on the card and resumes from checkpoint after the game closes.", null);
+        Assert.NotNull(near);
+        Assert.Equal(view.Id, near!.Fragment.Id);
+        Assert.Null(await store.NearestAsync("The receipts table has no foreign key to purchase orders at all.", null));
+        Assert.Null(await store.NearestAsync("Training pauses for any game on the shared card and resumes from its checkpoint when the game closes.", view.Id));
+    }
+
+    [Fact]
     public void An_option_no_command_reads_is_refused()
     {
         Assert.Throws<UsageException>(() => CommandLine.Parse(["add", "--tags", "a,b", "--content", "x"]));

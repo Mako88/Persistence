@@ -27,11 +27,14 @@ const string Usage = """
                                             A loaded group is in the core (head, subgroups, a line per member):
                                             the project's when it has a head, and those loaded for the session.
                                             Recall brings an unloaded group's head beside a member it surfaces
-      cue [list] | set <moment>/<name> --when <pattern> [--content <text|-> [--type] [--importance] [--project <name>]]
+      cue [list] | set <moment>/<name> --when <pattern> [--content <text|-> [--type] [--importance] [--project <name>]] | remove <moment>/<name>
                                             a cue brings its fragments at a moment, not by association: prompt
                                             (the human's words), tool (a call about to run, as `Tool: {input}`),
                                             stop (my last message as a turn ends). --content adds a fragment to it;
                                             `edit <id> --tag cue/<moment>/<name>` puts an existing one on it
+      nearest <words...> [--text <text|->] [--limit 3]
+                                            the authored fragments nearest a text, with their scores: what `add`
+                                            checks for a view written twice (it names a near one after saving)
       cued <moment> --text <text|-> [--exclude <id,id>] [--snippet 600]
                                             the fragments of the cues the text matches, as the hooks show them
       archive <id> | restore <id>           out of the core and recent lists, still searchable; reversible
@@ -129,12 +132,24 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
     switch (line.Command)
     {
         case "add":
-            Print(line, [await store.AddAsync(
+            var fresh = await store.AddAsync(
                 line.Get("type") ?? "Personal",
                 line.Text() ?? throw new UsageException("add needs --content (or --content -, or --content-file)."),
                 line.Text("summary"), line.GetFloat("importance"), line.GetFloat("confidence"),
                 line.GetAll("tag"), line.Has("protected"),
-                line.Has("everywhere") ? null : line.Get("project") ?? store.AmbientProject?.Invoke())]);
+                line.Has("everywhere") ? null : line.Get("project") ?? store.AmbientProject?.Invoke());
+            Print(line, [fresh]);
+            // Saved first, so nothing is lost; then the nearest existing view is named, with the merge ready.
+            // Duplication is how a store comes to disagree with itself (two fragments, one stale), and the
+            // moment to notice is now, while the writer still has both in mind.
+            if (!line.Has("json") && await store.NearestAsync(fresh.Content, fresh.Id) is { } near)
+            {
+                Console.WriteLine($"(Near #{near.Fragment.Id} by {near.By}, {near.Score:0.00}: "
+                    + $"{FragmentStore.Render(near.Fragment, maxContent: 240).Split('\n', 2)[1].ReplaceLineEndings(" ")}\n"
+                    + $" If it is the same view: `supersede {near.Fragment.Id},{fresh.Id} --content <the one view>` merges them; "
+                    + $"`forget {fresh.Id}` if this was a slip.)");
+            }
+
             break;
         case "edit":
             Print(line, [await store.EditAsync(line.Id(), line.Get("type"), line.Text(), line.Text("summary"),
@@ -215,8 +230,19 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
                     }
 
                     break;
+                case "remove":
+                    Console.WriteLine(await store.RemoveCueAsync(line.Positional.Count > 1 ? line.Positional[1] : throw new UsageException("cue remove needs <moment>/<name>.")));
+                    break;
                 default:
-                    throw new UsageException($"cue {line.Positional[0]}? It takes list or set.");
+                    throw new UsageException($"cue {line.Positional[0]}? It takes list, set or remove.");
+            }
+
+            break;
+        case "nearest":
+            foreach (var close in await store.NearestAsync(line.Text("text") ?? string.Join(' ', line.Positional), null, line.GetInt("limit", 3)))
+            {
+                Console.WriteLine($"{close.Score:0.000} by {close.By}: " + FragmentStore.Render(close.Fragment, maxContent: line.GetInt("snippet", 200)));
+                Console.WriteLine();
             }
 
             break;

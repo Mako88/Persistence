@@ -23,7 +23,9 @@ internal sealed partial class FragmentStore(
     ITagRepository tags,
     ISessionContext session,
     IMemorySurfacer recall,
-    ConversationRecaller conversation)
+    ConversationRecaller conversation,
+    IFragmentEmbeddingRepository vectors,
+    IEmbeddingClient embeddings)
 {
     /// <summary>The parent tag of the projects: a fragment tagged <c>project/&lt;name&gt;</c> belongs to that project.</summary>
     public const string ProjectTag = "project";

@@ -36,6 +36,16 @@ internal sealed partial class FragmentStore
         return $"{CueTag}/{moment}/{name}";
     }
 
+    /// <summary>Removes a cue: its tag goes, its fragments stay (untagged by it) for the writer to archive or keep.</summary>
+    public async Task<string> RemoveCueAsync(string path)
+    {
+        var (moment, name) = CuePath(path);
+        var cue = await FindTagAsync($"{CueTag}/{moment}/{name}") ?? throw new RefusedException($"There is no cue {CueTag}/{moment}/{name}.");
+        var kept = (await fragments.GetByTagAsync(cue.Id)).Select(f => $"#{f.Id}").ToList();
+        await tags.DeleteTreeAsync(cue.Id);
+        return $"{CueTag}/{moment}/{name} is removed" + (kept.Count > 0 ? $"; its fragments stay: {string.Join(", ", kept)} (archive what no longer serves)." : ".");
+    }
+
     /// <summary>Each cue with its pattern and the fragments it brings.</summary>
     public async Task<string> CueListAsync()
     {
