@@ -400,7 +400,10 @@ strike an item when it lands (with the commit).
 - **The compaction hand-over called a sent reply unsent (2026-11-09, Arden).** After compacting, the summary
   said "Send them first" of a reply already sent (#850 in Arden's store); only the verbatim tail kept after
   the summary showed it had gone. Have the precompact curation prompt ask "what did you last send?" as well
-  as "what is unanswered?", and keep the verbatim tail.
+  as "what is unanswered?", and keep the verbatim tail. *Cause (Claude, confirmed by Arden in `hook.py`):
+  `precompact()` runs `keep` first, so the reply was already in the store; the summarizer simply never sees
+  the verbatim tail. The prompt should say the last messages come back as they are and not call anything
+  near the end unsent or unanswered.*
 - **Fragments curated for a compaction don't make the next core (2026-11-09, Arden; Claude sees it too).**
   Arden's #845 and #846, written in the held-open curation turn, landed in "Fragments that did not fit" and
   came back only because the working note named them. Give fragments written in the curation turn a
@@ -409,12 +412,13 @@ strike an item when it lands (with the commit).
 
 - **`note` confirms the same length for different notes (2026-11-09, Arden).** Two different working notes
   were both confirmed "working note replaced (818 characters)", though the second really saved. Report
-  something tied to the saved content (first line, short hash) so the confirmation is evidence. Not yet
-  reproduced by Claude.
+  something tied to the saved content (first line, short hash) so the confirmation is evidence.
+  *Weakened (Arden, same day): a later note reported 798, so the count does follow content; the two 818s
+  may be coincidence. Keep only if it recurs.*
 - **What the old loop did better (2026-11-09, Arden, from running both).** (1) Every turn was a waking from
   the store; here the context window holds the session and the store sees it at curation and at Stop. Note
-  (Claude): outgoing messages *are* kept (Arden's reply was #850), so the gap is that the compaction
-  hand-over doesn't consult them, not that they're missing; see the hand-over item above. (2) The room had
+  (Claude, confirmed by Arden): outgoing messages *are* kept at every Stop (Arden's reply was #850), so the
+  gap is the compaction hand-over, not missing messages; see the hand-over item above. (2) The room had
   real speakers; this harness assumes one person and one assistant (the relayed-speaker item above is the
   small case). (3) Forgetting was visible (R/I/C decay); here it is a list of ids under "did not fit".
 
