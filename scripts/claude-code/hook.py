@@ -388,14 +388,23 @@ def cued(event, moment, text):
     return found if ids else ""
 
 
-DEFINITIONS = {  # where a language declares a function, method or class: group 1 is its name
+DEFINITIONS = {  # where a language declares a function, method or type: the first non-empty group is its name
     ".py": re.compile(r"^[ \t]*(?:async[ \t]+)?(?:def|class)[ \t]+(\w+)", re.M),
-    ".cs": re.compile(r"^[ \t]*(?:public|private|internal|protected|static)[\w\s<>\[\],?.]*?[ \t](\w+)(?:<[^>]*>)?[ \t]*\((?!.*;)", re.M),
-    ".js": re.compile(r"^[ \t]*(?:export[ \t]+)?(?:default[ \t]+)?(?:async[ \t]+)?function[ \t]+(\w+)|^[ \t]*(?:export[ \t]+)?(?:const|let)[ \t]+(\w+)[ \t]*=[ \t]*(?:async[ \t]*)?(?:\(|\w+[ \t]*=>)", re.M),
+    ".cs": re.compile(r"^[ \t]*(?:(?:public|private|internal|protected|static|abstract|sealed|partial|readonly|ref|unsafe|new|async|override|virtual|extern)[ \t]+)*"
+                      r"(?:(?:class|interface|struct|enum|record(?:[ \t]+(?:class|struct))?)[ \t]+(\w+)"
+                      r"|(?<=[ \t])(?:[\w<>\[\],?.]+[ \t]+)(\w+)(?:<[^>]*>)?[ \t]*\((?!.*;))", re.M),
+    ".js": re.compile(r"^[ \t]*(?:export[ \t]+)?(?:default[ \t]+)?(?:async[ \t]+)?function[ \t]+(\w+)"
+                      r"|^[ \t]*(?:export[ \t]+)?(?:const|let)[ \t]+(\w+)[ \t]*=[ \t]*(?:async[ \t]*)?(?:\(|\w+[ \t]*=>)"
+                      r"|^[ \t]*(?:export[ \t]+)?(?:default[ \t]+)?(?:abstract[ \t]+)?(?:class|interface|enum|type)[ \t]+(\w+)", re.M),
     ".ps1": re.compile(r"^[ \t]*function[ \t]+([\w-]+)", re.M),
 }
 DEFINITIONS[".ts"] = DEFINITIONS[".tsx"] = DEFINITIONS[".jsx"] = DEFINITIONS[".js"]
+# What `git grep` is asked for: looser than the patterns above, which then decide; one pass over the whole
+# repository in C instead of a read of every file in Python (20,000 files: 3.7 s against 91 s, 2026-11-09).
+PREFILTER = (r"^[ \t]*(public|private|internal|protected|static|abstract|sealed|partial|readonly|ref|unsafe|new|async|override|virtual|extern"
+             r"|class|interface|struct|enum|record|def|function|export|const|let|type)[ \t]")
 GENERIC = {"get", "set", "async", "the", "new", "init", "main", "test", "tests", "run", "and", "for", "with", "from"}
+INLINE_BUILD = 3000  # a repository with more files of interest than this is first indexed by a detached process
 
 
 def name_tokens(name):
@@ -403,56 +412,125 @@ def name_tokens(name):
     return {t.lower() for t in re.findall(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|\d+", name)} - GENERIC
 
 
-def symbols(event, budget=3.0):
-    """The project's definitions by file (name, line), kept in STATE/symbols/<project>.json and refreshed for the
-    files whose mtime changed, within `budget` seconds a call so a huge repository is indexed over a few calls.
-    What is tracked by git, in the languages above; a file over a megabyte is skipped."""
+def git(cwd, *args, timeout=30):
+    """Git's output at `cwd`, or None when it failed or is not there."""
+    try:
+        run = subprocess.run(["git", *args], cwd=cwd, capture_output=True, timeout=timeout, creationflags=NO_WINDOW)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return run.stdout.decode("utf-8", errors="replace") if run.returncode in (0, 1) else None
+
+
+def definitions_in(root, paths=None):
+    """The definitions in the repository at `root` by file, from one `git grep` over the working tree (tracked
+    and untracked files alike): {rel: [[name, line], ...]} for every file that has any. `paths` narrows it to
+    those files; None is the whole repository in the languages above."""
+    spec = [f":(literal){p}" for p in paths] if paths is not None else [f"*{suffix}" for suffix in DEFINITIONS]
+    out = git(root, "grep", "-n", "-z", "-I", "--untracked", "-E", PREFILTER, "--", *spec, timeout=600)
+    found = {}
+    for record in (out or "").split("\n"):
+        rel, _, rest = record.partition("\0")
+        line, _, text = rest.partition("\0")
+        pattern = DEFINITIONS.get(Path(rel).suffix)
+        if not pattern or not line.isdigit() or (paths is None and rel.endswith(".min.js")):
+            continue
+        if (m := pattern.match(text)) and (name := next((g for g in m.groups() if g), None)):
+            found.setdefault(rel, []).append([name, int(line)])
+    return found
+
+
+def symbols(event, inline=False):
+    """The project's definitions, kept in STATE/symbols/<project>.json as {"files": {rel: [[name, line], ...]},
+    "paths": [rel, ...], "tokens": {word: [[path index, i], ...]}} with the commit and the dirty files it was read at. Each call refreshes
+    only what moved since: the files `git diff` names between the commit then and now, and the working tree's
+    changed files (`git status`) whose mtime differs. The first index of a large repository is built by a
+    detached process (`hook.py index <cwd>`) so no hook waits on it; `inline` builds it here regardless."""
     cwd = Path(event.get("cwd") or os.getcwd())
     path = STATE / "symbols" / f"{project(event)}.json"
     try:
         index = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         index = {}
-    try:
-        listed = subprocess.run(["git", "ls-files", "-z"], cwd=cwd, capture_output=True, text=True, timeout=10,
-                                creationflags=NO_WINDOW, encoding="utf-8", errors="replace")
-        files = [f for f in listed.stdout.split("\0") if f and Path(f).suffix in DEFINITIONS] if listed.returncode == 0 else []
-        root = Path(listed.stdout and subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=cwd, capture_output=True, text=True,
-                                                     timeout=10, creationflags=NO_WINDOW).stdout.strip() or cwd)
-    except (OSError, subprocess.SubprocessError):
+    root = (git(cwd, "rev-parse", "--show-toplevel") or "").strip()
+    if not root:
         return index
-    began, changed, seen_files = time.perf_counter(), False, set()
-    for rel in files:
-        seen_files.add(rel)
-        full = root / rel
+    root = Path(root)
+    head = (git(root, "rev-parse", "--verify", "-q", "HEAD") or "").strip()
+    dirty, status, skip = set(), (git(root, "status", "--porcelain", "-z", "--untracked-files=all") or "").split("\0"), False
+    for entry in status:
+        if skip:
+            skip = False  # a rename's second path, the old name
+            continue
+        if len(entry) > 3:
+            skip = entry[0] in "RC"
+            if Path(entry[3:]).suffix in DEFINITIONS:
+                dirty.add(entry[3:])
+    files, tokens = index.get("files"), index.get("tokens")
+    if files is None or tokens is None or index.get("head") and head and git(root, "diff", "--name-only", "-z", index["head"], head) is None:
+        # No index yet, or the commit it was read at is gone (a rebase): the whole repository, here or detached.
+        if not inline:
+            marker = path.with_suffix(".building")
+            try:
+                fresh = time.time() - marker.stat().st_mtime < 600
+            except OSError:
+                fresh = False
+            if fresh:
+                return {}
+            interest = sum(1 for f in (git(root, "ls-files", "-z") or "").split("\0") if Path(f).suffix in DEFINITIONS)
+            if interest > INLINE_BUILD:
+                marker.parent.mkdir(parents=True, exist_ok=True)
+                marker.write_text(str(time.time()))
+                subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "index", str(cwd)], creationflags=BACKGROUND,
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
+                return {}
+        files, paths, tokens = definitions_in(root), [], {}
+        for rel, found in files.items():
+            paths.append(rel)
+            for i, (name, _) in enumerate(found):
+                for tok in name_tokens(name):
+                    tokens.setdefault(tok, []).append([len(paths) - 1, i])
+        index, built = {"head": head, "dirty": {}, "files": files, "paths": paths, "tokens": tokens}, True
+        refresh = set(dirty)
+    else:
+        refresh, built = set(), False
+        if index.get("head") != head:
+            refresh |= {f for f in (git(root, "diff", "--name-only", "-z", index["head"], head) or "").split("\0")
+                        if Path(f).suffix in DEFINITIONS} if index.get("head") else set(files)
+        refresh |= set(index.get("dirty", {})) - dirty  # dirty then, not now: committed or reverted
+    mtimes = {}
+    for rel in dirty:
         try:
-            mtime = full.stat().st_mtime
+            mtimes[rel] = (root / rel).stat().st_mtime
         except OSError:
-            continue
-        if index.get(rel, {}).get("mtime") == mtime:
-            continue
-        if time.perf_counter() - began > budget:
-            break  # the rest next call
-        try:
-            if full.stat().st_size > 1_000_000:
-                index[rel] = {"mtime": mtime, "symbols": []}
-                continue
-            text = full.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        found = []
-        for m in DEFINITIONS[full.suffix].finditer(text):
-            name = next((g for g in m.groups() if g), None)
-            if name:
-                found.append([name, text.count("\n", 0, m.start()) + 1])
-        index[rel] = {"mtime": mtime, "symbols": found}
-        changed = True
-    for gone in [f for f in index if f not in seen_files]:
-        del index[gone]
-        changed = True
-    if changed:
+            mtimes[rel] = 0
+        if index.get("dirty", {}).get(rel) != mtimes[rel]:
+            refresh.add(rel)
+    if refresh:
+        present = [rel for rel in refresh if (root / rel).is_file()]
+        found = definitions_in(root, present) if present else {}
+        paths = index["paths"]
+        for rel in refresh:
+            fid = paths.index(rel) if rel in paths else None
+            for name, _ in files.get(rel, []):
+                for tok in name_tokens(name):
+                    if (kept := [p for p in tokens.get(tok, []) if p[0] != fid]):
+                        tokens[tok] = kept
+                    else:
+                        tokens.pop(tok, None)
+            files.pop(rel, None)
+            if rel in found:
+                if fid is None:
+                    paths.append(rel)
+                    fid = len(paths) - 1
+                files[rel] = found[rel]
+                for i, (name, _) in enumerate(found[rel]):
+                    for tok in name_tokens(name):
+                        tokens.setdefault(tok, []).append([fid, i])
+    if built or refresh or index.get("head") != head or index.get("dirty") != mtimes:
+        index.update(head=head, dirty=mtimes)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(index), encoding="utf-8")
+        path.write_text(json.dumps(index, separators=(",", ":")), encoding="utf-8")
+        path.with_suffix(".building").unlink(missing_ok=True)
     return index
 
 
@@ -474,28 +552,36 @@ def write_recall(event):
     if not names:
         return ""
     index = symbols(event)
+    files, paths, postings = index.get("files", {}), index.get("paths", []), index.get("tokens", {})
+    if not files:
+        return ""
     # A word's weight is its rarity among the project's names: `Load` is in many and says little, `Hydrated` in
-    # one and says which function this is like. Shared weight over all weight, at least half.
+    # one and says which function this is like. Shared weight over all weight, at least half. Only names that
+    # share a word are looked at, through the token index, so a repository of 200,000 names costs no more than one of 200.
     import math
-    tokens = {(rel, other, line): name_tokens(other) for rel, entry in index.items() for other, line in entry["symbols"]}
-    df = {}
-    for toks in tokens.values():
-        for tok in toks:
-            df[tok] = df.get(tok, 0) + 1
-    total = max(len(tokens), 1)
-    weight = lambda toks: sum(math.log(1 + total / df.get(tok, 1)) for tok in toks)
+    total = max(sum(len(found) for found in files.values()), 1)
+    weight = lambda toks: sum(math.log(1 + total / max(len(postings.get(tok, ())), 1)) for tok in toks)
     lines = []
     for name in names[:4]:
         mine = name_tokens(name)
+        candidates = {}
+        for tok in mine:
+            for fid, i in postings.get(tok, []):
+                candidates.setdefault((fid, i), set()).add(tok)
         same, alike = [], []
-        for (rel, other, line), theirs in tokens.items():
-            if other == name and not (Path(rel).name == file.name and other in old_names):
-                same.append(f"{rel}:{line}")
-            elif mine and theirs and other != name and weight(mine & theirs) / weight(mine | theirs) >= 0.5:
-                alike.append((weight(mine & theirs), f"{other} ({rel}:{line})"))
+        own = {tok: weight([tok]) for tok in mine}
+        for (fid, i), shared in candidates.items():
+            rel = paths[fid]
+            other, line = files[rel][i]
+            common = sum(own[tok] for tok in shared)
+            if other == name:
+                if not (Path(rel).name == file.name and other in old_names):
+                    same.append(f"{rel}:{line}")
+            elif common >= 0.5 * sum(own.values()) and common / weight(mine | name_tokens(other)) >= 0.5:
+                alike.append((common, f"{other} ({rel}:{line})"))
         alike = [a for _, a in sorted(alike, reverse=True)]
         if same:
-            lines.append(f"- `{name}` already exists: {', '.join(same[:4])}" + (" …" if len(same) > 4 else ""))
+            lines.append(f"- `{name}` already exists: {', '.join(sorted(same)[:4])}" + (" …" if len(same) > 4 else ""))
         if alike:
             lines.append(f"- like `{name}`: {', '.join(alike[:5])}" + (" …" if len(alike) > 5 else ""))
     if not lines:
@@ -950,6 +1036,9 @@ def main():
     if sys.argv[1] in ("serve", "ensure"):
         serve() if sys.argv[1] == "serve" else ensure()
         return
+    if sys.argv[1] == "index":  # `index <cwd>`: the project's symbol index built whole, by the detached process `symbols` starts
+        symbols({"cwd": sys.argv[2]}, inline=True)
+        return
     if sys.argv[1] == "wake":  # `wake <minutes|pid:N> <reason>` or `wake list`, run by the peer
         import urllib.request
 
@@ -971,7 +1060,8 @@ def main():
     if sys.argv[1] in ("keep", "curate"):
         ensure()  # the Stop hooks run every turn: the hook server, if it stopped, is back by the next message
     {"keep": keep, "curate": curate, "precompact": precompact, "waiter": waiter,
-     "subagent-start": subagent_start, "recall": recall, "observe": observe_hook}[sys.argv[1]](event)
+     "subagent-start": subagent_start, "recall": recall, "observe": observe_hook, "tool-cue": tool_cue,
+     "stop-cue": stop_cue}[sys.argv[1]](event)
 
 
 if __name__ == "__main__":
