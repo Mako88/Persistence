@@ -1507,6 +1507,8 @@ def run_due(grace=120):
 SLEEP_PROMPT = """This is your sleep pass. You are curating your own store with no one in the conversation, and the self
 who wakes next reads only the result, so change only what you'd be glad to find changed. The store holds the
 limits below as well; when it refuses something, it says why: take that as the answer, not an obstacle.
+`pstore guide` is how to curate well in general; tonight this prompt and the store's refusals are narrower,
+and where they differ, they win.
 
 {opened}
 
