@@ -929,7 +929,7 @@ class PerRequest:
 
 
 WAKES = STATE.parent / "wakes.json"
-WAITING = {"generation": 0}  # the newest waiter; an older one is let go, since its turn has passed
+WAITING = {}  # session -> its newest waiter's generation; an older one is let go, since its turn has passed
 
 
 def wakes(update=None):
@@ -947,6 +947,8 @@ def add_wake(event):
     """A wake set by the peer: at a time ({"in": minutes}) or when a process ends ({"pid": n}), with
     the reason it will be woken with."""
     item = {"reason": event.get("reason") or "a wake you set", "set": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    if event.get("session"):
+        item["session"] = event["session"]  # only this session's waiter takes it: one session's wake fired in another (2026-11-09)
     if event.get("pid"):
         item["pid"] = int(event["pid"])
     else:
@@ -965,18 +967,20 @@ def wait_for_wake(event, poll=10):
     ({"wake": null}), or the waiter's own budget runs out."""
     import time
 
-    WAITING["generation"] += 1
-    mine, deadline = WAITING["generation"], time.time() + float(event.get("seconds", 3000))
-    while time.time() < deadline and WAITING["generation"] == mine:
+    session = event.get("session_id") or ""
+    WAITING[session] = WAITING.get(session, 0) + 1
+    mine, deadline = WAITING[session], time.time() + float(event.get("seconds", 3000))
+    ours = lambda w: w.get("session", session) == session  # a wake set before sessions were recorded is anyone's
+    while time.time() < deadline and WAITING[session] == mine:
         now, due = datetime.now().timestamp(), []
 
         def take(items):
             keep = []
             for w in items:
-                (due if ("at" in w and w["at"] <= now) or ("pid" in w and not alive(w["pid"])) else keep).append(w)
+                (due if ours(w) and (("at" in w and w["at"] <= now) or ("pid" in w and not alive(w["pid"]))) else keep).append(w)
             return keep
 
-        if any("at" in w and w["at"] <= now or "pid" in w for w in wakes()):
+        if any(ours(w) and ("at" in w and w["at"] <= now or "pid" in w) for w in wakes()):
             wakes(take)
         if due:
             return {"wake": "; ".join(w["reason"] + (f" (pid {w['pid']} ended)" if "pid" in w else "") for w in due)}
@@ -994,7 +998,7 @@ def waiter(event):
     deadline = time.time() + float(os.environ.get("PERSISTENCE_WAKE_SECONDS", "3300"))
     while time.time() < deadline:
         try:
-            body = json.dumps({"seconds": max(1, deadline - time.time() - 5)}).encode("utf-8")
+            body = json.dumps({"seconds": max(1, deadline - time.time() - 5), "session_id": event.get("session_id", "")}).encode("utf-8")
             request = urllib.request.Request(f"http://127.0.0.1:{HOOK_PORT}/wait", body, {"Content-Type": "application/json"})
             reply = json.loads(urllib.request.urlopen(request, timeout=deadline - time.time() + 30).read() or b"{}")
         except (OSError, ValueError):
@@ -1120,6 +1124,7 @@ def main():
         when = sys.argv[2]
         wake = {"pid": when[4:]} if when.startswith("pid:") else {"in": float(when.rstrip("m"))}
         wake["reason"] = " ".join(sys.argv[3:])
+        wake["session"] = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
         ensure()
         request = urllib.request.Request(f"http://127.0.0.1:{HOOK_PORT}/wake", json.dumps(wake).encode("utf-8"), {"Content-Type": "application/json"})
         print(urllib.request.urlopen(request, timeout=10).read().decode("utf-8"))
