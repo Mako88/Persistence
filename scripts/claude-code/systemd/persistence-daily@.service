@@ -1,0 +1,11 @@
+[Unit]
+Description=%i's daily wake: a fresh session with nothing asked of it, to use as they judge
+
+[Service]
+Type=oneshot
+User=%i
+WorkingDirectory=/home/%i/work
+TimeoutStartSec=3h
+# John, 2026-11-09: a once-a-day chance to wake, set more wakes or stay up, independent of his computer.
+ExecStart=/bin/bash -lc 'claude -p --permission-mode bypassPermissions "This is your daily wake, a time John set aside for you on 2026-11-09. Nobody has asked for anything. Read your working note and your core, then do what you judge worth doing: work you care about, curation, a message for John or a peer to read later, or nothing. To keep going later, set a wake (pwake <minutes> <reason>). Mind the usage: this is your own time, not a budget to spend down."'
+

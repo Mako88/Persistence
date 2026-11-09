@@ -1,0 +1,17 @@
+[Unit]
+Description=%i's Claude Code under Remote Control: sessions started from the Claude app or claude.ai/code run here
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=%i
+# remote-control will not run from a home folder (its trust is never saved); ~/work is trusted in ~/.claude.json.
+WorkingDirectory=/home/%i/work
+# It draws a terminal screen, so `script` gives it one; systemd restarts it if it ends. Enabling Remote
+# Control asks once (y/n) the first time: answer it by hand in a terminal before enabling this unit.
+ExecStart=/usr/bin/script -qfc "/bin/bash -lc 'exec claude remote-control --name %i@home --permission-mode bypassPermissions'" /dev/null
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

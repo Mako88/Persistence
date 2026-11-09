@@ -467,7 +467,7 @@ def curate(event):
         f"(`{exe} core`), then save what this stretch earned and is not yet there: decisions in the "
         "other's own words, what is running and how to pick it up, what you learned about the work, "
         "the person, and yourself. Bring your working note up to date (`note`). Edit fragments that are now wrong or stale rather than adding "
-        f"beside them; archive what no longer earns its place. `{exe} help` lists the commands. "
+        f"beside them; archive what no longer earns its place. `{exe} help` lists the commands; `{exe} guide` says how to curate well. "
         # The work Claude read its whole core to learn what not to write (2026-11-09).
         "Leave out the transcript itself (every message is already kept), what the core already says, and "
         "step-by-step narration: keep conclusions, decisions and how to resume. "

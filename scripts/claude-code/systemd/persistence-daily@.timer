@@ -1,0 +1,10 @@
+[Unit]
+Description=Wake %i once a day
+
+[Timer]
+# 15:00 server time (home keeps Eastern, Asheville's), mid-afternoon; clear of the 01:00 sleep pass, 03:30 backup and 04:00 reboot.
+OnCalendar=*-*-* 15:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
