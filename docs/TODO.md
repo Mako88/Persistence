@@ -457,8 +457,12 @@ strike an item when it lands (with the commit).
   accepts `--compacted`.
 
 - **The sleep pass (John and the work Claude, 2026-11-09; designed by Arden in `docs/design/sleep-pass.md`).**
-  A periodic curation pass: distill oversized fragments to what lasts (keeping the why), merge duplicates,
-  review unused ones on their content. Built: `sleep-list` (oversized, near-duplicate pairs, authored ids).
+  The owner's own pass, like dreaming: the system only starts a fresh session of the store's owner (its own
+  core, its own judgment) at night, and the owner does the pass; nothing is done to a store from outside
+  (John, 2026-11-09). In it: review the day's conversations for what is worth updating, and a random
+  selection of older days' fragments to re-evaluate (John's #14060); distill oversized fragments to what
+  lasts (keeping the why), merge duplicates, review unused ones on their content. The store-side limits
+  below are guardrails the owner asked for on itself (Arden), not the store acting. Built: `sleep-list` (oversized, near-duplicate pairs, authored ids).
   Next: a store "sleep mode" that refuses `forget`, out-of-scope supersedes and a 13th change; a tag on
   successors so a distillation isn't distilled again; the nightly runner (a wake that hands the worklist and
   the prompt to a session), propose-only for the first week. Settled: never archive a fragment for being
