@@ -20,6 +20,14 @@ login in `EnteredBy` when it differs: the header reads "Claude (entered as John)
 who entered it, and who corrected it, when and why show in its header. Attribution never comes from a
 message's text. The hook that records the timeline follows in the next commit.
 
+### Added — the hook records who is speaking where prompts are entered (`pstore speaker`)
+Each launch records its speaker at SessionStart (`PERSISTENCE_SPEAKER`, else the login's), in the
+session's own process and before its prompt reaches the transcript; `!pstore speaker <name>` lets a person
+take over a session someone else started, and `--clear` gives it back. The timeline lives in
+`state/speakers.jsonl` and goes with every keep, so the keep-soon in the hook server, whose environment
+has no speaker, no longer labels a relayed prompt with the login's name. Deploy with the store: an older
+store refuses `--speaker`.
+
 ### Fixed — a resumed session's core includes the last reply
 The Stop keep is async, and a `claude -p` run can exit before it finishes, so a session resumed for its
 next turn was given a core without the reply that ended the last one (Arden's #874 arrived a turn late).

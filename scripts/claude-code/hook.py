@@ -271,18 +271,61 @@ def store(*args, timeout=60, stdin=None, serve=True, cold=True):
     return out.stdout if out.returncode == 0 else ""
 
 
+SPEAKERS = STATE / "speakers.jsonl"  # each session's speaker timeline: who writes its prompts, from when
+
+
+def entered_by():
+    """The login the harness runs under: whose account entered a prompt, whoever wrote it."""
+    return os.environ.get("PERSISTENCE_SELECTEDLOCALPEER") or "Local Peer"
+
+
+def speaker_timeline(session):
+    """A session's speaker timeline, oldest first: [{session, from, written_by, entered_by}]."""
+    try:
+        lines = SPEAKERS.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    spans = []
+    for line in lines:
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if e.get("session") == session and e.get("from") and e.get("written_by") and e.get("entered_by"):
+            spans.append(e)
+    return sorted(spans, key=lambda e: e["from"])
+
+
+def record_speaker(session, written, entered):
+    """Appends a span to the session's timeline when the speaker differs from the one in force. Recorded where
+    a prompt is entered, never where it is kept: keep runs in whichever process gets there first, the hook
+    server among them, whose environment is not the session's (#839, 2026-11-09). Returns whether it changed."""
+    spans = speaker_timeline(session)
+    if spans and (spans[-1]["written_by"], spans[-1]["entered_by"]) == (written, entered):
+        return False
+    STATE.mkdir(parents=True, exist_ok=True)
+    with open(SPEAKERS, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"session": session, "from": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+                            "written_by": written, "entered_by": entered}) + "\n")
+    return True
+
+
+def speaker_args(session):
+    return [a for e in speaker_timeline(session) for a in ("--speaker", f"{e['from']}|{e['written_by']}|{e['entered_by']}")]
+
+
 def keep_transcript(path):
     """What `keep-conversation` said of a transcript ("kept N new utterances ..."), or why it failed.
     Local: the CLI reads the file, run apart so the server stays free for recall. Remote: the lines the
     store has not been sent yet go with the call (the store keeps each utterance once, so a line sent
     twice by two hooks at once costs nothing), and how far it has been sent is kept per transcript."""
-    # Who typed this session's prompts. Claude relaying to Arden through John's login was kept as John
-    # (#839 in Arden's store, 2026-11-09): whoever starts a session for someone else sets PERSISTENCE_SPEAKER.
+    # Who typed prompts kept before the session's speaker timeline began (see record_speaker): the timeline,
+    # passed with --speaker, decides for everything after its first span, whatever process is keeping.
     peer = os.environ.get("PERSISTENCE_SPEAKER") or os.environ.get("PERSISTENCE_SELECTEDLOCALPEER", "Local Peer")
     where = remote()
     if not where:
         exe = os.environ.get("PERSISTENCE_STORE_EXE", "persistence-store")
-        out = subprocess.run([exe, "keep-conversation", path, "--local-peer", peer],
+        out = subprocess.run([exe, "keep-conversation", path, "--local-peer", peer, *speaker_args(Path(path).stem)],
                              creationflags=NO_WINDOW, capture_output=True, text=True, encoding="utf-8", timeout=120)
         return (out.stdout if out.returncode == 0 else f"failed ({out.returncode}): {out.stderr}").strip()
     sent_file = STATE / "kept-offsets.json"
@@ -298,7 +341,8 @@ def keep_transcript(path):
     end = data.rfind(b"\n") + 1  # whole lines only: the harness may be mid-line
     if end == 0:
         return "kept 0 new utterances (nothing new sent)"
-    reply = served_remote(where, ["keep-conversation", Path(path).name, "--transcript", "-", "--local-peer", peer],
+    reply = served_remote(where, ["keep-conversation", Path(path).name, "--transcript", "-", "--local-peer", peer,
+                                  *speaker_args(Path(path).stem)],
                           data[:end].decode("utf-8", errors="replace"), 120)
     if reply is None or reply is BUSY:
         return f"failed: the store on {where['host']} did not answer"
@@ -598,6 +642,12 @@ def keep_before_core(event):
 
 def session_start(event, part=1):
     if part == 1:
+        # A launch says who is at the keyboard: PERSISTENCE_SPEAKER for a session started on someone's behalf,
+        # else the login's own. SessionStart runs in the session's process, before the prompt's transcript line
+        # (measured 2026-11-09); UserPromptSubmit runs after it, and in the hook server. Not on compact: the
+        # same process goes on, and a `pstore speaker` switch made in it stands.
+        if event.get("source", "startup") != "compact" and event.get("session_id"):
+            record_speaker(event["session_id"], os.environ.get("PERSISTENCE_SPEAKER") or entered_by(), entered_by())
         ensure_embedding_server()
         ensure()  # the hook server, for this session's messages
     keep_before_core(event)
@@ -1434,9 +1484,36 @@ def ensure():
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
 
 
+def speaker_command(args):
+    """`pstore speaker <name>`: from now on this session's prompts are <name>'s, entered under the login's.
+    For a person taking over a session someone else started (`!pstore speaker John`). `--clear` gives them back to
+    the login; no argument says who is speaking. Out of band on purpose: never read from a message's text."""
+    session = os.environ.get("PERSISTENCE_SESSION") or os.environ.get("CLAUDE_CODE_SESSION_ID")
+    if not session:
+        print("speaker: no session here (run it from the session's shell: `!pstore speaker <name>`).", file=sys.stderr)
+        return 1
+    spans = speaker_timeline(session)
+    if not args:
+        now = spans[-1] if spans else None
+        print(f"{now['written_by']}{'' if now['written_by'] == now['entered_by'] else ' (entered as ' + now['entered_by'] + ')'}, "
+              f"since {now['from']}" if now
+              else f"no speaker recorded for this session; its prompts are kept as {entered_by()}'s")
+        return 0
+    written = entered_by() if args[0] == "--clear" else " ".join(args).strip()
+    if not written or written.startswith("--"):
+        print("speaker: give a name, or --clear.", file=sys.stderr)
+        return 1
+    changed = record_speaker(session, written, entered_by())
+    print(f"{'from now on' if changed else 'already'}, this session's prompts are {written}'s"
+          + (f", entered as {entered_by()}" if written != entered_by() else ""))
+    return 0
+
+
 def cli(args):
     """The store CLI for the peer's own shell. Local: the published CLI itself. Remote: the same call
     sent to the remote store, its output printed here; never a local store in its place."""
+    if args[:1] == ["speaker"]:
+        return speaker_command(args[1:])
     exe = os.environ.get("PERSISTENCE_STORE_EXE", "persistence-store")
     where = remote()
     if not where:
