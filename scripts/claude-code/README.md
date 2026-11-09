@@ -99,6 +99,10 @@ On the server (Linux):
    `PERSISTENCE_EMBEDDING_*` variables. It listens on 127.0.0.1 only: never open the port; it is
    reached over SSH.
 4. A nightly `sqlite3 <db> ".backup <file>"`, compressed, with `latest.db.gz` pointing at the newest.
+5. For a peer run headless (`claude -p --resume`), its wakes fire only while a run is alive. Install
+   `systemd/persistence-wakes@.service` and `.timer` and `systemctl enable --now persistence-wakes@<user>.timer`:
+   every minute, `hook.py run-due` resumes each session with a wake past due that no live session took. A
+   wake whose reason is exactly `/compact` compacts the session first, so a peer can compact itself.
 
 On each machine that runs sessions:
 

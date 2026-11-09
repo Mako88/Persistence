@@ -44,6 +44,7 @@ Standard library only, Python 3.9+: hooks run under whatever `python` the shell 
 import json
 import re
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -1333,6 +1334,8 @@ def add_wake(event):
     """A wake set by the peer: at a time ({"in": minutes}) or when a process ends ({"pid": n}), with
     the reason it will be woken with."""
     item = {"reason": event.get("reason") or "a wake you set", "set": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    if event.get("cwd"):
+        item["cwd"] = event["cwd"]
     if event.get("session"):
         item["session"] = event["session"]  # only this session's waiter takes it: one session's wake fired in another (2026-11-09)
     if event.get("pid"):
@@ -1341,6 +1344,38 @@ def add_wake(event):
         item["at"] = datetime.now().timestamp() + 60 * float(event.get("in", 30))
     wakes(lambda items: items + [item])
     return {"set": item}
+
+
+def run_due(grace=120):
+    """`hook.py run-due`, from a server's timer every minute: wakes past due for a session no live process holds.
+    A wake fires through a running session's Stop waiter; a peer run as `claude -p` has none once the run ends,
+    so its wakes never fired and it could not carry on without someone resuming it (Arden, 2026-11-09). Each
+    such session is resumed with its reasons. A reason of exactly "/compact" compacts it first: a peer's own
+    compaction. The grace leaves a live waiter time to take its wake first."""
+    now = datetime.now().timestamp()
+    due = [w for w in wakes() if w.get("session") and "at" in w and w["at"] + grace <= now]
+    for session in {w["session"] for w in due}:
+        if run_quiet(["pgrep", "-f", f"claude.*{session}"]).strip():
+            continue  # a run of it is going: its wake waits for the next minute
+        mine = [w for w in due if w["session"] == session]
+        wakes(lambda items: [w for w in items if w not in mine])
+        compact = any(w["reason"].strip() == "/compact" for w in mine)
+        reasons = "; ".join(w["reason"] for w in mine if w["reason"].strip() != "/compact") or "you compacted yourself; carry on"
+        STATE.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        prompt = STATE / f"wake-{session[:8]}-{stamp}.txt"
+        prompt.write_text(f"A wake you set came due: {reasons}", encoding="utf-8")
+        out = STATE / f"wake-{session[:8]}-{stamp}.json"
+        cwd = next((w["cwd"] for w in mine if w.get("cwd")), str(Path.home()))
+        run = f"cd {shlex.quote(cwd)} && "
+        if compact:
+            run += f"claude -p --resume {session} /compact >/dev/null 2>&1; "
+        run += f"claude -p --resume {session} --output-format json < {shlex.quote(str(prompt))} > {shlex.quote(str(out))} 2>&1"
+        # The words are the peer's own, from the wake it set, entered under the login's account.
+        env = {**os.environ, "PERSISTENCE_SPEAKER": f"{os.environ.get('PERSISTENCE_PEERNAME') or 'me'} (a wake I set)"}
+        subprocess.Popen(["bash", "-lc", run], env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+        print(f"woke {session[:8]}: {reasons}{' (compacted first)' if compact else ''}")
 
 
 def alive(pid):
@@ -1553,6 +1588,9 @@ def main():
     if sys.argv[1] == "index":  # `index <cwd>`: the project's symbol index built whole, by the detached process `symbols` starts
         symbols({"cwd": sys.argv[2]}, inline=True)
         return
+    if sys.argv[1] == "run-due":  # a server's timer, every minute: wakes no live session took
+        run_due()
+        return
     if sys.argv[1] == "wake":  # `wake <minutes|pid:N> <reason>` or `wake list`, run by the peer
         import urllib.request
 
@@ -1564,6 +1602,7 @@ def main():
         wake = {"pid": when[4:]} if when.startswith("pid:") else {"in": float(when.rstrip("m"))}
         wake["reason"] = " ".join(sys.argv[3:])
         wake["session"] = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+        wake["cwd"] = os.getcwd()  # where run-due resumes it, when no live session takes it
         ensure()
         request = urllib.request.Request(f"http://127.0.0.1:{HOOK_PORT}/wake", json.dumps(wake).encode("utf-8"), {"Content-Type": "application/json"})
         print(urllib.request.urlopen(request, timeout=10).read().decode("utf-8"))

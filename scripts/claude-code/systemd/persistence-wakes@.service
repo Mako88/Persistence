@@ -1,0 +1,8 @@
+[Unit]
+Description=Fire %i's Persistence wakes that no live Claude Code session took
+
+[Service]
+Type=oneshot
+User=%i
+# A login shell, so claude and the peer's PATH are found as in their own sessions.
+ExecStart=/bin/bash -lc 'python3 "$HOME/.claude/persistence/hook.py" run-due'
