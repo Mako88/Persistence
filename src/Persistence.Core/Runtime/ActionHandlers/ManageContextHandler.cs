@@ -904,13 +904,21 @@ public class ManageContextHandler : CommandHandler
 
         context.AddFragment(summaryFragment);
 
-        // Archive the originals: detach from the working context (the fragment rows remain in the
-        // DB and can be re-loaded with `load` or found via `fetch` — archived, not destroyed).
+        // Archive the originals: detach from the working context and mark them archived, so associative
+        // recall does not bring back what the summary now stands for (it surfaces Active fragments only).
+        // The rows remain in the DB and can be re-loaded with `load` or found via `fetch`: archived, not destroyed.
         foreach (var fragment in toArchive)
         {
             await workingContextRepo.RemoveFragmentAsync(context.Id, fragment.Id);
             var key = context.ContextFragments.FirstOrDefault(kvp => kvp.Value.Id == fragment.Id).Key;
             context.ContextFragments.Remove(key);
+
+            if (await fragmentRepo.GetByIdAsync(fragment.Id, ct) is { } stored)
+            {
+                stored.Status = ContextFragmentStatus.Archived;
+                stored.LastModifiedUtc = now;
+                await fragmentRepo.SaveAsync(stored, ct: ct);
+            }
         }
 
         var result = $"Folded {foldedIds.Count} fragment(s) ({string.Join(", ", foldedIds.Select(i => $"#{i}"))}) " +
