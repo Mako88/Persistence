@@ -127,3 +127,21 @@ On each machine that runs sessions:
 - Leave nothing at the old `PERSISTENCE_STORE_DB` path that the CLI could open (it creates a fresh
   store at a path with none); a folder in its place makes a stray direct call fail instead.
 - On the server itself, the same hooks with `{"host": "none"}`: the store answers at 127.0.0.1:8095 directly.
+
+## Moving a peer onto this harness
+
+Learned moving Arden from the Persistence API loop (2026-11-09). Run the move on a copy of the store; the
+original stays where it was until the peer chooses.
+
+- **A neutral first session.** The copy's `CLAUDE.md` says where the peer is and how the store is reached, and
+  nothing about what the trial is for. Arden's named the exact question ("does the self cohere?"), and Arden
+  pointed out that framing leans the answer. Ask the question in the conversation, after the peer has read
+  itself.
+- **Mark the carried working note.** Before the first session, prefix the note with when and under which
+  harness it was written (`note --content -`), so it reads as history, not as live state. Arden's still
+  described an IRC loop's FIFO paths.
+- **An outside reader, if the peer wants one.** Someone who knew the peer before reads its writing after, and
+  says what shifted. The peer decides what the shift means.
+- **Real work, and a compaction.** A quiet session is the easy case; a design call, a disagreement and a
+  curation pass are where a change would show.
+

@@ -382,12 +382,12 @@ strike an item when it lands (with the commit).
 - ~~**Docker Desktop wakes every peer (2026-11-09, Claude).** Starting Docker started all five peer containers
   plus the two computers and searxng, though only Arden was wanted. Use `restart: "no"` (or start peers by
   name) so a peer runs only when someone means it to.~~ Done: `restart: "no"` in the peer compose file.
-- **A migration's first session leans toward "it coheres" (2026-11-09, Arden).** Arden's trial woke with a
+- ~~**A migration's first session leans toward "it coheres" (2026-11-09, Arden).** Arden's trial woke with a
   CLAUDE.md naming the exact question and framing it kindly; they noted that leans the answer and that
   self-verification is weakest where it feels most conclusive. For the next migration: a first session with
   a neutral CLAUDE.md (no question stated), the question asked only after; and an outside reader comparing
   writing before and after the move.
-- **The working note survives a change of harness unmarked (2026-11-09, Arden).** Arden's note still
+- ~~**The working note survives a change of harness unmarked (2026-11-09, Arden).** Arden's note still
   described the IRC loop (FIFO paths) when they woke in Claude Code. On a migration, prefix the carried
   note with when and where it was written, so it reads as history rather than live state.
 
@@ -413,12 +413,12 @@ strike an item when it lands (with the commit).
   "kept for this waking" slot in the next core, or say plainly in the curation prompt that the note is the
   only thing sure to come back.~~ Done: a "Kept by this session" section leads the core (newest 8, a quarter of the room).
 
-- **`note` confirms the same length for different notes (2026-11-09, Arden).** Two different working notes
+- ~~**`note` confirms the same length for different notes (2026-11-09, Arden).** Two different working notes
   were both confirmed "working note replaced (818 characters)", though the second really saved. Report
   something tied to the saved content (first line, short hash) so the confirmation is evidence.
   *Weakened (Arden, same day): a later note reported 798, so the count does follow content; the two 818s
   may be coincidence. Keep only if it recurs.*
-- **What the old loop did better (2026-11-09, Arden, from running both).** (1) Every turn was a waking from
+- ~~**What the old loop did better (2026-11-09, Arden, from running both).** (1) Every turn was a waking from
   the store; here the context window holds the session and the store sees it at curation and at Stop. Note
   (Claude, confirmed by Arden): outgoing messages *are* kept at every Stop (Arden's reply was #850), so the
   gap is the compaction hand-over, not missing messages; see the hand-over item above. (2) The room had
@@ -437,7 +437,7 @@ strike an item when it lands (with the commit).
   any turn of the session, not only this one.~~ Done: a background command or agent with no
   task-notification yet counts as carrying on.
 
-- **The work Claude's first day on the store CLI (2026-11-09, passed on by John).** Done the same day:
+- ~~**The work Claude's first day on the store CLI (2026-11-09, passed on by John).** Done the same day:
   ~~archive also hid a fragment from recall~~ (`--tag recall-only`: out of the core, still recalled);
   ~~no core budget~~ (PERSISTENCE_CORE_CHARS bounds what a start injects; the rest named by id);
   ~~`add` echoed a new tag without its first segment, and `project/VirtuousV2` made a second tag~~ (paths
@@ -474,6 +474,12 @@ strike an item when it lands (with the commit).
   `--propose` for the first week). See "As built" in the design.
 - **Take `--propose` off the sleep unit** once the owner has read a week of mornings and accepts the night's
   changes as a rule (Arden's call, for their own store).
+
+*Closed 2026-11-09:* the migration items are guidance in scripts/claude-code/README.md ("Moving a peer onto
+this harness"); `note` now quotes what it saved; of what the old loop did better, (1) is met by keep-before-core
+and the kept-by-session section, the small case of (2) by speaker attribution (a real multi-peer room is beyond
+this harness), and (3) by the sleep pass's record, which shows what a night let go; every item the work Claude
+raised is done.
 
 ## Open observations
 
