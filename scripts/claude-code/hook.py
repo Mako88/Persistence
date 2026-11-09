@@ -347,9 +347,30 @@ def keep_soon(event, delay=5):
 CUE_AGAIN = 30 * 60  # a cue that came in is not shown again within this many seconds of the same window
 
 
+_cues = {"at": 0.0, "patterns": []}
+
+
+def cue_patterns():
+    """The cues' (moment, pattern), read from the store once a minute. Asking the store on every tool call cost
+    0.4 s a call for calls that almost never match; matched here, only a match costs a store call."""
+    now = datetime.now().timestamp()
+    if now - _cues["at"] > 60:
+        listed = store("cue", "list", cold=False)
+        patterns = []
+        for m in re.finditer(r"^cue/(\w+)/\S+ when /(.*)/: ", listed, re.M):
+            try:
+                patterns.append((m.group(1), re.compile(m.group(2), re.I)))
+            except re.error:
+                patterns.append((m.group(1), None))  # a .NET pattern Python cannot read: the store decides
+        _cues.update(at=now, patterns=patterns)
+    return _cues["patterns"]
+
+
 def cued(event, moment, text):
     """The fragments of the cues `text` matches at `moment`, rendered, less those shown in this window in the
     last CUE_AGAIN seconds: a reminder at the moment it can change what happens, not every time."""
+    if not any(m == moment and (p is None or p.search(text)) for m, p in cue_patterns()):
+        return ""
     path = STATE / f"{event.get('session_id', 'unknown')}.cued"
     try:
         shown = json.loads(path.read_text())
