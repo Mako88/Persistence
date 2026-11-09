@@ -50,6 +50,7 @@
     <EmbeddedResource Include="Data\Migrations\009_AddSupersession.sql" />
     <EmbeddedResource Include="Data\Migrations\010_AddSessionId.sql" />
     <EmbeddedResource Include="Data\Migrations\011_AddTouchedSessionId.sql" />
+    <EmbeddedResource Include="Data\Migrations\012_AddSpeakerAttribution.sql" />
   </ItemGroup>
 
   <ItemGroup>

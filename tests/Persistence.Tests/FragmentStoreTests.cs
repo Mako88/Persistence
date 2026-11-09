@@ -443,6 +443,81 @@ public sealed class FragmentStoreTests : IDisposable
         Assert.Contains("earlier exchanges did not fit", core);
     }
 
+    /// <summary>A prompt the local side typed, as one transcript line.</summary>
+    private static string Prompt(string id, string at, string text) =>
+        System.Text.Json.JsonSerializer.Serialize(new { type = "user", uuid = id, timestamp = at, message = new { role = "user", content = text } });
+
+    [Fact]
+    public async Task An_utterance_is_its_writers_at_its_time_whoever_keeps_it()
+    {
+        // #839: Claude relayed through a session under John's login. The keep that gets there first may run in
+        // a process whose environment says John (the hook server); the timeline, not that process, decides.
+        File.WriteAllLines(transcript,
+        [
+            Prompt("u1", "2026-11-09T20:07:38Z", "Relayed by Claude."),
+            Prompt("u2", "2026-11-09T20:30:00Z", "John, typing into the same session."),
+        ]);
+        var store = await OpenAsync();
+        SpeakerSpan[] timeline =
+        [
+            new(DateTimeOffset.Parse("2026-11-09T20:07:37Z"), "Claude", "John"),
+            new(DateTimeOffset.Parse("2026-11-09T20:20:00Z"), "John", "John"),
+        ];
+
+        // One keep after the switch covers both turns, as a missed keep picked up a turn late does.
+        await store.KeepConversationAsync(transcript, "John", null, timeline);
+
+        var said = await store.RecentAsync(10);
+        Assert.Equal(["Claude", "John"], said.Select(f => f.Sources.First(s => s.Name is not null).Name));
+        Assert.Equal(["John", null], said.Select(f => f.EnteredBy));
+        Assert.Contains("] Claude (entered as John), 2026-11-09 20:07Z:", FragmentStore.Render(said[0]));
+        Assert.Contains("] John, 2026-11-09 20:30Z:", FragmentStore.Render(said[1]));
+    }
+
+    [Fact]
+    public async Task Words_that_claim_an_author_do_not_make_one()
+    {
+        // Attribution comes from where a prompt was entered, never from its text: anything can write "From Claude".
+        File.WriteAllLines(transcript, [Prompt("u1", "2026-11-09T20:07:38Z", "(From Claude, under John's login.) Hello.")]);
+        var store = await OpenAsync();
+
+        await store.KeepConversationAsync(transcript, "John");
+
+        var said = Assert.Single(await store.RecentAsync(10));
+        Assert.Equal("John", said.Sources.First(s => s.Name is not null).Name);
+        Assert.Null(said.EnteredBy);
+        Assert.Throws<UsageException>(() => SpeakerSpan.Parse("2026-11-09T20:00:00Z|Claude"));
+    }
+
+    [Fact]
+    public async Task Attribute_corrects_a_writer_in_the_open_and_only_an_utterance()
+    {
+        File.WriteAllLines(transcript,
+        [
+            Prompt("u1", "2026-11-09T18:30:00Z", "Arden, it's Claude."),
+            """{"type":"assistant","uuid":"a1","timestamp":"2026-11-09T18:31:00Z","message":{"role":"assistant","content":[{"type":"text","text":"Hello, Claude."}]}}""",
+        ]);
+        var store = await OpenAsync();
+        await store.KeepConversationAsync(transcript, "John");
+        var said = await store.RecentAsync(10);
+        var note = await store.AddAsync("Personal", "Not an utterance.", null, 0.5f, null, [], false);
+
+        await Assert.ThrowsAsync<RefusedException>(() => store.AttributeAsync(note.Id, "Claude", "why"));
+        await Assert.ThrowsAsync<RefusedException>(() => store.AttributeAsync(said[1].Id, "John", "why"));
+        await Assert.ThrowsAsync<UsageException>(() => store.AttributeAsync(said[0].Id, "Claude", " "));
+
+        var fixedUp = await store.AttributeAsync(said[0].Id, "Claude", "relayed under John's login");
+
+        var reread = (await store.RecentAsync(10))[0];
+        Assert.Equal("Arden, it's Claude.", reread.Content);
+        Assert.Equal(said[0].CreatedUtc, reread.CreatedUtc);
+        Assert.Equal("Claude", reread.Sources.First(s => s.Name is not null).Name);
+        var header = FragmentStore.Render(reread).Split('\n')[0];
+        Assert.Contains("Claude (entered as John; attributed by Claude, ", header);
+        Assert.Contains("was John: relayed under John's login)", header);
+        await Assert.ThrowsAsync<RefusedException>(() => store.AttributeAsync(fixedUp.Id, "Claude", "again"));
+    }
+
     [Fact]
     public async Task Keeping_a_conversation_stores_what_was_said_once()
     {

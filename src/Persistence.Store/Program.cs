@@ -64,7 +64,12 @@ const string Usage = """
       keep-conversation <transcript.jsonl> [--local-peer <name>] [--transcript -]
                                             store what was said in a Claude Code session; re-running adds
                                             only what is new. --transcript - reads its lines from standard
-                                            input (a store served on another machine); the path names the session
+                                            input (a store served on another machine); the path names the session.
+                                            --speaker "<time>|<written by>|<entered by>" (repeatable) is the
+                                            session's speaker timeline: each utterance is its writer's at its time
+      attribute <id> --written-by <name> --reason <text>
+                                            correct who wrote an utterance already kept: the old writer is kept as
+                                            who entered it, and the correction is shown with it, never hidden
 
     --debug shows the embedding client's diagnostics on stderr. --json prints fragments as JSON. Exit codes: 0 done, 1 usage, 2 refused (no such fragment, protected).
     Protected fragments are the local peer's: this tool reads them and never changes them.
@@ -365,11 +370,20 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
         case "rescore-conversation":
             Console.WriteLine($"rescored {await store.RescoreConversationAsync()} past utterances by salience");
             break;
+        case "attribute":
+            var target = line.Positional.FirstOrDefault() is { } rawId && long.TryParse(rawId.TrimStart('#'), out var attrId)
+                ? attrId : throw new UsageException("attribute needs the utterance's id.");
+            var attributed = await store.AttributeAsync(target,
+                line.Get("written-by") ?? throw new UsageException("attribute needs --written-by <name>."),
+                line.Get("reason") ?? "");
+            Console.WriteLine(FragmentStore.Render(attributed, maxContent: 200));
+            break;
         case "keep-conversation":
             var transcript = line.Positional.FirstOrDefault() ?? throw new UsageException("keep-conversation needs a transcript path.");
             var (added, known) = await store.KeepConversationAsync(transcript,
                 line.Get("local-peer") ?? Environment.GetEnvironmentVariable("PERSISTENCE_SELECTEDLOCALPEER") ?? "Local Peer",
-                line.Get("transcript") == "-" ? Console.In : null);
+                line.Get("transcript") == "-" ? Console.In : null,
+                line.GetAll("speaker").Select(SpeakerSpan.Parse).ToList());
             Console.WriteLine($"kept {added} new utterances ({known} already in the store)");
             break;
         default:

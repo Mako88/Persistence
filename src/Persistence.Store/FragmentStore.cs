@@ -818,8 +818,14 @@ internal sealed partial class FragmentStore(
 
     /// <param name="transcriptPath">The transcript, named for its session (<c>&lt;id&gt;.jsonl</c>).</param>
     /// <param name="content">Its lines, when the file is on another machine: the path then only names the session.</param>
-    public async Task<(int Added, int Known)> KeepConversationAsync(string transcriptPath, string localPeerName, TextReader? content)
+    /// <param name="speakers">The session's speaker timeline, recorded where prompts are entered: each local
+    /// utterance is the writer's in force at its time, with the login that entered it. An utterance before the
+    /// first span, or with no timeline, is <paramref name="localPeerName"/>'s, as before (#839, 2026-11-09).</param>
+    public async Task<(int Added, int Known)> KeepConversationAsync(
+        string transcriptPath, string localPeerName, TextReader? content, IReadOnlyList<SpeakerSpan>? speakers = null)
     {
+        var timeline = (speakers ?? []).OrderBy(s => s.From).ToList();
+        var writers = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
         // The transcript is named for its session (<id>.jsonl).
         var sessionId = Path.GetFileNameWithoutExtension(transcriptPath);
         // Ids, not fragments: loading every utterance to learn which were kept cost seconds on each keep.
@@ -846,6 +852,16 @@ internal sealed partial class FragmentStore(
                 continue;
             }
 
+            // The writer in force when it was said, never the keeping process's: keep runs in whichever
+            // process gets there first, the hook server among them (2026-11-09).
+            var span = said.ByLocalPeer ? timeline.LastOrDefault(s => s.From <= said.At) : null;
+            var writer = span?.WrittenBy ?? localPeerName;
+            if (!writers.TryGetValue(writer, out var writerId))
+            {
+                writers[writer] = writerId = string.Equals(writer, localPeerName, StringComparison.OrdinalIgnoreCase)
+                    ? localPeer : await sources.EnsureLocalPeerSourceAsync(writer);
+            }
+
             fresh.Add(new ContextFragmentEntity
             {
                 FragmentType = ContextFragmentType.ChatMessage,
@@ -857,8 +873,10 @@ internal sealed partial class FragmentStore(
                 Confidence = 1f,
                 CreatedUtc = said.At,
                 LastModifiedUtc = said.At,
+                EnteredBy = span is not null && !string.Equals(span.EnteredBy, span.WrittenBy, StringComparison.OrdinalIgnoreCase)
+                    ? span.EnteredBy : null,
                 Sources = [said.ByLocalPeer
-                    ? new SourceEntity { Id = localPeer, SourceType = SourceType.HumanPeer, Name = localPeerName, CreatedUtc = said.At, LastModifiedUtc = said.At }
+                    ? new SourceEntity { Id = writerId, SourceType = SourceType.HumanPeer, Name = writer, CreatedUtc = said.At, LastModifiedUtc = said.At }
                     : remotePeer],
             });
         }
@@ -899,7 +917,10 @@ internal sealed partial class FragmentStore(
         if (f.FragmentType == ContextFragmentType.ChatMessage)
         {
             var who = f.Sources.FirstOrDefault(s => s.Name is not null)?.Name ?? "?";
-            header += $" {who}, {f.CreatedUtc.ToUniversalTime():yyyy-MM-dd HH:mm}Z:";
+            var how = new List<string>();
+            if (f.EnteredBy is not null) how.Add($"entered as {f.EnteredBy}");
+            if (f.AttributedNote is not null) how.Add($"attributed {f.AttributedNote}");
+            header += $" {who}{(how.Count > 0 ? $" ({string.Join("; ", how)})" : "")}, {f.CreatedUtc.ToUniversalTime():yyyy-MM-dd HH:mm}Z:";
         }
         else
         {
@@ -913,6 +934,45 @@ internal sealed partial class FragmentStore(
             ? f.Content
             : f.Content[..maxContent] + $"… [#{f.Id} continues: `show {f.Id}`]";
         return $"{header}\n{content}";
+    }
+
+    /// <summary>
+    /// Corrects who wrote an utterance already kept, without rewriting it: the writer becomes
+    /// <paramref name="writtenBy"/>, the old writer is kept as the login that entered it, and who corrected it,
+    /// when and why is kept with it and shown in its header. Only an utterance the local side said; the peer's
+    /// own words are its own (#839: Claude's words kept as John's, 2026-11-09).
+    /// </summary>
+    public async Task<ContextFragmentEntity> AttributeAsync(long id, string writtenBy, string reason)
+    {
+        var said = await GetAsync(id);
+        var peer = await PeerSourceAsync();
+        if (said.FragmentType != ContextFragmentType.ChatMessage)
+        {
+            throw new RefusedException($"#{id} is a {said.FragmentType}, not an utterance: only what was said has a writer to correct.");
+        }
+
+        if (said.Sources.Any(s => s.Id == peer.Id))
+        {
+            throw new RefusedException($"#{id} is {peer.Name}'s own words: attribute corrects who on the other side said something.");
+        }
+
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            throw new UsageException("attribute needs --reason: a correction to the record says why.");
+        }
+
+        var was = said.Sources.FirstOrDefault(s => s.Name is not null)?.Name ?? "?";
+        if (string.Equals(was, writtenBy, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new RefusedException($"#{id} is already {was}'s.");
+        }
+
+        var writer = await sources.EnsureLocalPeerSourceAsync(writtenBy);
+        said.EnteredBy ??= was;
+        said.AttributedNote = $"by {peer.Name}, {DateTimeOffset.UtcNow:yyyy-MM-dd}, was {was}: {reason.Trim()}";
+        said.Sources = [new SourceEntity { Id = writer, SourceType = SourceType.HumanPeer, Name = writtenBy, CreatedUtc = said.CreatedUtc, LastModifiedUtc = said.CreatedUtc }];
+        await fragments.SaveAsync(said);
+        return said;
     }
 
     private async Task<ContextFragmentEntity> WritableAsync(long id)

@@ -11,6 +11,15 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
 
 ## 2026-11-09 — what a session kept comes back after its compaction
 
+### Added — who wrote an utterance, apart from whose login entered it (migration 012)
+Claude's messages to Arden, relayed through a session under John's login, were kept as John's (#839). The
+store now takes a session's speaker timeline (`keep-conversation --speaker "<time>|<written by>|<entered
+by>"`, repeatable) and keeps each local utterance as the writer in force at its time, with the entering
+login in `EnteredBy` when it differs: the header reads "Claude (entered as John)". `attribute <id>
+--written-by <name> --reason <text>` corrects an utterance already kept, in the open: the old writer becomes
+who entered it, and who corrected it, when and why show in its header. Attribution never comes from a
+message's text. The hook that records the timeline follows in the next commit.
+
 ### Fixed — a resumed session's core includes the last reply
 The Stop keep is async, and a `claude -p` run can exit before it finishes, so a session resumed for its
 next turn was given a core without the reply that ended the last one (Arden's #874 arrived a turn late).

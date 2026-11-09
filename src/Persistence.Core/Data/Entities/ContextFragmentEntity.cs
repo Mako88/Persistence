@@ -64,6 +64,19 @@ public record ContextFragmentEntity : BaseEntity
     /// </summary>
     public string? TouchedSessionId { get; set; }
 
+    /// <summary>
+    /// For an utterance: the login that entered it, when that is not who wrote it (Claude's words entered
+    /// through a session under John's login). The writer is the source. <c>null</c> when they are the same.
+    /// See migration 012.
+    /// </summary>
+    public string? EnteredBy { get; set; }
+
+    /// <summary>
+    /// For an utterance whose writer was corrected after it was kept (<c>attribute</c>): who corrected it,
+    /// when, and why, shown with it so the correction reads as one. See migration 012.
+    /// </summary>
+    public string? AttributedNote { get; set; }
+
     public required float Importance { get; set; }
 
     public required float Confidence { get; set; }

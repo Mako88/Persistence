@@ -8,6 +8,28 @@ namespace Persistence.Store;
 internal sealed record Utterance(string Id, bool ByLocalPeer, DateTimeOffset At, string Text);
 
 /// <summary>
+/// From <paramref name="From"/> on, a session's prompts are <paramref name="WrittenBy"/>'s, entered under
+/// <paramref name="EnteredBy"/>'s login: one entry of a session's speaker timeline, recorded where prompts are
+/// entered (the hook at session start, or <c>pstore speaker</c>), never where they happen to be kept.
+/// On the command line: <c>--speaker "&lt;ISO time&gt;|&lt;written by&gt;|&lt;entered by&gt;"</c>.
+/// </summary>
+internal sealed record SpeakerSpan(DateTimeOffset From, string WrittenBy, string EnteredBy)
+{
+    public static SpeakerSpan Parse(string raw)
+    {
+        var parts = raw.Split('|');
+        if (parts.Length != 3 || parts[1].Trim().Length == 0 || parts[2].Trim().Length == 0
+            || !DateTimeOffset.TryParse(parts[0], System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AssumeUniversal, out var from))
+        {
+            throw new UsageException($"--speaker must be \"<ISO time>|<written by>|<entered by>\", not '{raw}'.");
+        }
+
+        return new SpeakerSpan(from, parts[1].Trim(), parts[2].Trim());
+    }
+}
+
+/// <summary>
 /// Reads a Claude Code session transcript (the <c>.jsonl</c> the harness writes, one event a line)
 /// into the conversation it holds: what the local peer typed and what the remote peer said back.
 /// Tool calls, tool results, subagent sidechains and harness-injected blocks are left out — they are
