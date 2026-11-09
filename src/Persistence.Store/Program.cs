@@ -101,6 +101,7 @@ try
     config.DatabasePath = Path.GetFullPath(path);
 
     var store = await FragmentStore.OpenAsync(config, line.Has("debug"));
+    store.Identity = $"{config.PeerName} {config.DatabasePath}";
     if (line.Command == "serve")
     {
         return await Server.ServeAsync(store, config.DatabasePath, line.GetInt("port", Server.DefaultPort), Run);
@@ -129,9 +130,20 @@ catch (RefusedException e)
 static async Task<int> Run(CommandLine line, FragmentStore store)
 {
     store.Session = line.Get("session") is { Length: > 0 } named ? named : store.AmbientSession;
+    // A served store gets `help` here, past the check at startup: `pstore help` through the server said
+    // "No command 'help'", and `note --help` read the note (Arden, 2026-11-09).
+    if (line.Command == "help" || line.Has("help"))
+    {
+        Console.WriteLine(Usage);
+        return 0;
+    }
+
     await store.RefreshTagPathsAsync();
     switch (line.Command)
     {
+        case "whoami":
+            Console.WriteLine(store.Identity);
+            break;
         case "add":
             var fresh = await store.AddAsync(
                 line.Get("type") ?? "Personal",
@@ -185,7 +197,10 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
                 : line.Positional.Count > 0 ? string.Join(' ', line.Positional) : null);
             var note = await store.NoteAsync(written);
             // Written, it is acknowledged, not echoed: the writer has it in front of them already.
-            Console.WriteLine(note is null ? "(no working note)" : written is null ? note.Content : $"working note replaced ({note.Content.Length} characters)");
+            // The acknowledgement quotes what was saved, so it is evidence of the write, not just an exit code
+            // (Arden could not tell two "818 characters" apart, 2026-11-09).
+            Console.WriteLine(note is null ? "(no working note)" : written is null ? note.Content
+                : $"working note replaced ({note.Content.Length} characters), beginning: {(note.Content.Trim().Split('\n')[0].Trim() is var first && first.Length > 80 ? first[..80] + "…" : first)}");
             break;
         case "context":
             var path = line.Positional.Count > 1 ? line.Positional[1] : null;

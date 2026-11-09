@@ -76,6 +76,9 @@ internal sealed partial class FragmentStore(
     /// <summary>The session of the process itself (CLAUDE_CODE_SESSION_ID), when not serving.</summary>
     public string? AmbientSession { get; set; }
 
+    /// <summary>Whose store this is and where its file lives ("Arden /home/arden/store/arden.db"): `whoami`.</summary>
+    public string Identity { get; set; } = "";
+
     /// <summary>
     /// How recently another session must have spoken to count as running: its conversation is kept out of
     /// this one's and shown as a line instead. Past it, the session has ended and its words are history.

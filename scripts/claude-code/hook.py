@@ -197,7 +197,38 @@ def served_remote(where, args, stdin, timeout):
     reply = served(args, stdin, timeout)
     if reply is None and open_tunnel(where):
         reply = served(args, stdin, timeout)
+    if reply is not None and reply is not BUSY and not verified(where):
+        return None
     return reply
+
+
+def verified(where):
+    """Whether the store answering on the port is the one remote.json names ("peer"): another store on the
+    same local port would otherwise be read and written as this one. The Synth container published 8095,
+    the tunnel's own port, beside it (2026-11-09). Asked once in ten minutes; no "peer" set, no check."""
+    expected = where.get("peer")
+    if not expected:
+        return True
+    stamp = STATE / "store.verified"
+    try:
+        if time.time() - stamp.stat().st_mtime < 600 and stamp.read_text(encoding="utf-8") == expected:
+            return True
+    except OSError:
+        pass
+    reply = served(["whoami"], None, 5)
+    if reply is None or reply is BUSY:
+        return True  # cannot ask now; the call itself already answered
+    code, out, err = reply
+    if code != 0 and "No command" in err:
+        return True  # a store from before `whoami`: it cannot say, so it is not refused
+    name = out.split(" ", 1)[0].strip() if code == 0 else ""
+    if name != expected:
+        print(f"persistence hook: the store on port {PORT} is {out.strip() or 'unknown'}, not {expected}'s; "
+              "nothing was read or written. Check what else listens on that port.", file=sys.stderr)
+        return False
+    STATE.mkdir(parents=True, exist_ok=True)
+    stamp.write_text(expected, encoding="utf-8")
+    return True
 
 
 def store(*args, timeout=60, stdin=None, serve=True, cold=True):

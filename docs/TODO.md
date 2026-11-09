@@ -372,11 +372,12 @@ the voluntary continue-loop. Revisit only if we see the peer reliably acting bef
 Issues and improvements that Claude or Arden hit while running on the store CLI and its hooks. Newest last;
 strike an item when it lands (with the commit).
 
-- **The client never checks which store answered (2026-11-09, Claude).** The hook's SSH tunnel listens on
+- ~~**The client never checks which store answered (2026-11-09, Claude).** The hook's SSH tunnel listens on
   127.0.0.1:8095, and the Synth peer container publishes 0.0.0.0:8095 too. Windows routed to the tunnel, so
   nothing went wrong, but nothing would have noticed if it hadn't. Fix: the store reports its peer name (and
   a store id) on a cheap endpoint; `hook.py` checks it against `remote.json` before the first call of a
-  session and brings nothing on a mismatch. Also move the peer containers off 8091–8095.
+  session and brings nothing on a mismatch. Also move the peer containers off 8091–8095.~~ Done: `whoami`,
+  and remote.json's "peer" is checked every ten minutes. The containers still publish 8091–8095.
 - **Docker Desktop wakes every peer (2026-11-09, Claude).** Starting Docker started all five peer containers
   plus the two computers and searxng, though only Arden was wanted. Use `restart: "no"` (or start peers by
   name) so a peer runs only when someone means it to.
@@ -393,10 +394,10 @@ strike an item when it lands (with the commit).
   went in through John's Claude Code login, so the store keeps them as said by John (#839 in Arden's
   store). Let the session name its speaker ("speaking as"), or record both the login and the author.~~
   Done: PERSISTENCE_SPEAKER in a session's environment names who typed its prompts.
-- **`pstore` has no help, and `note --help` reads the note (2026-11-09, Arden).** `pstore help` and bare
+- ~~**`pstore` has no help, and `note --help` reads the note (2026-11-09, Arden).** `pstore help` and bare
   `pstore` print "No command 'help'"; `pstore note --help` printed the working note. Add `help` and
   `--help` on every command, and make `note` refuse an argument starting with `--`, since it is the command
-  that overwrites the note.
+  that overwrites the note.~~ Done: a served store answers `help` and `--help`; `note` quotes what it saved.
 
 - ~~**The compaction hand-over called a sent reply unsent (2026-11-09, Arden).** After compacting, the summary
   said "Send them first" of a reply already sent (#850 in Arden's store); only the verbatim tail kept after
