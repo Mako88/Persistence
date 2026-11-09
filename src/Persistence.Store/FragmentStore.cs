@@ -365,6 +365,9 @@ internal sealed partial class FragmentStore(
         int wander = 0, int said = 0, DateTimeOffset? before = null)
     {
         var projects = (await FindTagAsync(ProjectTag))?.Id;
+        // A project the message names out loud ("the Minecraft mods folder") is in hand for this message,
+        // whichever project the session sits in: its fragments count as here, not as a wander.
+        var named = await NamedProjectsAsync(text, projects);
         var skip = exclude.ToHashSet();
         var kept = new List<ContextFragmentEntity>();
         var elsewhere = new List<ContextFragmentEntity>();
@@ -382,7 +385,7 @@ internal sealed partial class FragmentStore(
             {
                 var fragment = found[rank];
                 skip.Add(fragment.Id);
-                if (ProjectsOf(fragment, projects).All(p => string.Equals(p, project, StringComparison.OrdinalIgnoreCase)))
+                if (ProjectsOf(fragment, projects).All(p => string.Equals(p, project, StringComparison.OrdinalIgnoreCase) || named.Contains(p)))
                 {
                     if (kept.Count < count)
                     {
@@ -411,6 +414,43 @@ internal sealed partial class FragmentStore(
         IReadOnlyList<ContextFragmentEntity> Elsewhere,
         IReadOnlyList<ContextFragmentEntity> Said,
         IReadOnlyList<ContextFragmentEntity> Frames);
+
+    /// <summary>
+    /// The projects whose names a text says as words: <c>minecraft-mods</c> is named by "the Minecraft mods
+    /// folder". Names shorter than four letters are left out, since they match by accident.
+    /// </summary>
+    private async Task<HashSet<string>> NamedProjectsAsync(string text, long? projects)
+    {
+        var named = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (projects is null || string.IsNullOrWhiteSpace(text))
+        {
+            return named;
+        }
+
+        var said = Spoken(text);
+        foreach (var tag in await tags.GetChildrenAsync(projects.Value))
+        {
+            var name = Spoken(tag.Name);
+            if (name.Trim().Length >= 4 && said.Contains(name, StringComparison.Ordinal))
+            {
+                named.Add(tag.Name);
+            }
+        }
+
+        return named;
+    }
+
+    /// <summary>A text as lower-case words between single spaces, padded, so a name matches only whole words.</summary>
+    private static string Spoken(string text)
+    {
+        var words = new StringBuilder(" ");
+        foreach (var c in text.ToLowerInvariant())
+        {
+            words.Append(char.IsLetterOrDigit(c) ? c : ' ');
+        }
+
+        return string.Join(' ', words.ToString().Split(' ', StringSplitOptions.RemoveEmptyEntries)) is { Length: > 0 } joined ? $" {joined} " : " ";
+    }
 
     /// <summary>The projects a fragment is tagged for (<c>project/&lt;name&gt;</c>); none means it belongs everywhere.</summary>
     private static List<string> ProjectsOf(ContextFragmentEntity fragment, long? projects) =>
@@ -459,12 +499,6 @@ internal sealed partial class FragmentStore(
         var said = await fragments.GetIdsBySessionsAsync(ContextFragmentType.ChatMessage, live.Keys.ToList());
         var bySession = (await HydratedAsync(said)).GroupBy(f => f.SessionId!).ToDictionary(g => g.Key, g => g.OrderBy(f => f.CreatedUtc).ToList());
 
-        static string Clip(string s, int n)
-        {
-            s = string.Join(' ', s.Split((char[])['\n', '\r'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
-            return s.Length <= n ? s : s[..n] + "…";
-        }
-
         var lines = new List<string>();
         foreach (var (id, last) in live.OrderByDescending(x => x.Value))
         {
@@ -489,6 +523,13 @@ internal sealed partial class FragmentStore(
     /// <summary>A session's id cut to the eight characters that tell sessions apart in a line.</summary>
     public static string Short(string session) => session.Length > 8 ? session[..8] : session;
 
+    /// <summary>A text on one line, cut to <paramref name="n"/> characters with an ellipsis when longer.</summary>
+    private static string Clip(string s, int n)
+    {
+        s = string.Join(' ', s.Split((char[])['\n', '\r'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        return s.Length <= n ? s : s[..n] + "…";
+    }
+
     /// <summary>
     /// The peer's core, rendered for a harness to put in front of it: identity, relationships,
     /// personal fragments and summaries, most important first within each type, then the recent
@@ -500,6 +541,7 @@ internal sealed partial class FragmentStore(
         var text = new StringBuilder();
         var left = new List<long>();
         var elsewhere = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        var leading = new Dictionary<string, ContextFragmentEntity>(StringComparer.OrdinalIgnoreCase);
         var projects = (await FindTagAsync(ProjectTag))?.Id;
         var groups = await GroupsAsync();
         var shown = new HashSet<long>();
@@ -547,6 +589,14 @@ internal sealed partial class FragmentStore(
                 if (own.Count > 0 && !own.Contains(project ?? "", StringComparer.OrdinalIgnoreCase))
                 {
                     elsewhere.UnionWith(own);
+                    foreach (var name in own)
+                    {
+                        if (!leading.TryGetValue(name, out var best) || fragment.Importance > best.Importance)
+                        {
+                            leading[name] = fragment;
+                        }
+                    }
+
                     continue;
                 }
 
@@ -577,10 +627,19 @@ internal sealed partial class FragmentStore(
             text.Append($"({left.Count} more core fragments did not fit: {string.Join(", ", left.Select(i => $"#{i}"))}; `show <id>` reads one.)\n\n");
         }
 
+        // Each other project gets one line, its most important fragment's first, so a session knows the work
+        // exists and where without carrying it: the in-between of the project in hand and nothing at all.
         if (elsewhere.Count > 0)
         {
-            text.Append($"(Other projects have fragments of their own: {string.Join(", ", elsewhere)}; `core --project <name>` "
-                + $"or `list --tag {ProjectTag}/<name>` brings one in.)\n\n");
+            text.Append($"## Other projects (each keeps fragments of its own; naming one in a message brings them into recall, "
+                + $"`core --project <name>` or `list --tag {ProjectTag}/<name>` reads them)\n\n");
+            foreach (var name in elsewhere)
+            {
+                var lead = leading[name];
+                text.Append($"- {name}: {Clip(lead.Content.Split('\n')[0], 160)} (#{lead.Id})\n");
+            }
+
+            text.Append('\n');
         }
 
         // The conversation gets what the core leaves: the human's words and the replies that ended the

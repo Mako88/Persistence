@@ -99,6 +99,33 @@ public sealed class FragmentStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task A_project_named_in_the_message_is_in_hand_for_its_recall()
+    {
+        var store = await OpenAsync();
+        var mods = await store.AddAsync("Personal", "Finished jars wait in mods-pending until the game closes.", null, 0.5f, null, ["project/minecraft-mods"], false);
+
+        var unnamed = await store.RecallAsync("where do finished jars wait", 5, [], "pawsitivity");
+        Assert.DoesNotContain(mods.Id, unnamed.Here.Select(f => f.Id));
+
+        var named = await store.RecallAsync("check the Minecraft mods folder: where do finished jars wait?", 5, [], "pawsitivity");
+        Assert.Contains(mods.Id, named.Here.Select(f => f.Id));
+    }
+
+    [Fact]
+    public async Task The_core_gives_each_other_project_one_line()
+    {
+        var store = await OpenAsync();
+        var lead = await store.AddAsync("Personal", "Minecraft mods for Ember: one private repo.\nThe rest of it.", null, 0.8f, null, ["project/minecraft-mods"], false);
+        await store.AddAsync("Personal", "A smaller mods detail.", null, 0.3f, null, ["project/minecraft-mods"], false);
+
+        var core = await store.CoreAsync(40_000, 0, project: "pawsitivity");
+
+        Assert.Contains($"- minecraft-mods: Minecraft mods for Ember: one private repo. (#{lead.Id})", core);
+        Assert.DoesNotContain("The rest of it.", core);
+        Assert.DoesNotContain("A smaller mods detail.", core);
+    }
+
+    [Fact]
     public async Task The_working_note_replaces_itself_and_leads_the_core()
     {
         var store = await OpenAsync();
@@ -127,8 +154,11 @@ public sealed class FragmentStoreTests : IDisposable
         Assert.Equal(["pawsitivity"], named.Tags.Select(t => t.Name));
         Assert.Empty(everywhere.Tags);
         Assert.Empty(identity.Tags);
-        Assert.DoesNotContain("The reading needs", await store.CoreAsync(40_000, 0, project: "pawsitivity"));
-        Assert.Contains("The reading needs", await store.CoreAsync(40_000, 0, project: "open-plexus"));
+        // Elsewhere it is only its project's one index line, never the fragment itself.
+        var elsewhere = await store.CoreAsync(40_000, 0, project: "pawsitivity");
+        Assert.DoesNotContain($"[#{here.Id} |", elsewhere);
+        Assert.Contains($"- open-plexus: The reading needs 0.71. (#{here.Id})", elsewhere);
+        Assert.Contains($"[#{here.Id} |", await store.CoreAsync(40_000, 0, project: "open-plexus"));
     }
 
     [Fact]
