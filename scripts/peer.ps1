@@ -61,6 +61,8 @@ if ($Down) {
 }
 
 if (-not $Port) { throw 'Port is required when starting a peer (e.g. -Port 8092).' }
+# 8095-8098 belong to the Claude Code store and hook servers (and the SSH tunnel to a remote store).
+if ($Port -ge 8095 -and $Port -le 8098) { throw "Port $Port is the store's (8095-8098); pick another, e.g. 8191." }
 $env:PEER_PORT = "$Port"
 
 # Each peer reads its own config file (provider/model/key/budgets). Make sure it exists before starting.

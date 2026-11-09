@@ -22,7 +22,9 @@ services:
     container_name: persistence-peer-${PEER_NAME:?set PEER_NAME (e.g. via scripts/peer.ps1)}
     networks: [lab]
     ports:
-      - "${PEER_PORT:?set PEER_PORT}:8080"  # the peer's API, for a client (the TUI) to connect to
+      # The peer's API, for a client (the TUI) on this machine. Loopback only: published on 0.0.0.0, the Synth
+      # peer's 8095 sat beside the store tunnel's own 127.0.0.1:8095 (2026-11-09).
+      - "127.0.0.1:${PEER_PORT:?set PEER_PORT}:8080"
     volumes:
       - data:/data                          # the peer's persistent self: memory (db/) + vault/
       # The peer's HOME, kept on the same volume. Everything outside /data is destroyed when a container
@@ -56,7 +58,9 @@ services:
       - PERSISTENCE_CONFIGPATH=/config/${PEER_NAME}.json
       # Optional shared search (SearXNG on persistence-lab); web_search is inert if unset.
       - SEARXNG_URL=${SEARXNG_URL:-}
-    restart: unless-stopped
+    # Started on purpose, by peer.ps1: "unless-stopped" brought every peer up whenever Docker Desktop started,
+    # when only one was wanted (2026-11-09).
+    restart: "no"
     # Isolation: the container is the peer's own sandbox (autonomy over its body — no allowlist), but it
     # stays unprivileged with escalation blocked and bounded resources.
     security_opt: [no-new-privileges:true]
