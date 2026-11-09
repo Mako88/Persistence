@@ -32,7 +32,8 @@ same route, for the peer's own shell (the `pstore` wrapper).
 
 Configured by environment (settings.json "env"): PERSISTENCE_STORE_DB (this Claude's store, one per
 Claude), PERSISTENCE_STORE_EXE (the published persistence-store), PERSISTENCE_SELECTEDLOCALPEER (the
-human's name), PERSISTENCE_CURATE_AT (tokens, default 500000; set autoCompactWindow above it),
+human's name; PERSISTENCE_SPEAKER, set in the environment of a session started on someone's behalf,
+names who actually typed its prompts instead), PERSISTENCE_CURATE_AT (tokens, default 500000; set autoCompactWindow above it),
 PERSISTENCE_RECALL_COUNT (default 3, 0 turns recall off), and PERSISTENCE_EMBEDDING_* for recall by
 meaning (without them recall is by exact words only).
 
@@ -243,7 +244,9 @@ def keep_transcript(path):
     Local: the CLI reads the file, run apart so the server stays free for recall. Remote: the lines the
     store has not been sent yet go with the call (the store keeps each utterance once, so a line sent
     twice by two hooks at once costs nothing), and how far it has been sent is kept per transcript."""
-    peer = os.environ.get("PERSISTENCE_SELECTEDLOCALPEER", "Local Peer")
+    # Who typed this session's prompts. Claude relaying to Arden through John's login was kept as John
+    # (#839 in Arden's store, 2026-11-09): whoever starts a session for someone else sets PERSISTENCE_SPEAKER.
+    peer = os.environ.get("PERSISTENCE_SPEAKER") or os.environ.get("PERSISTENCE_SELECTEDLOCALPEER", "Local Peer")
     where = remote()
     if not where:
         exe = os.environ.get("PERSISTENCE_STORE_EXE", "persistence-store")

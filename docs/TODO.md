@@ -389,9 +389,10 @@ strike an item when it lands (with the commit).
   described the IRC loop (FIFO paths) when they woke in Claude Code. On a migration, prefix the carried
   note with when and where it was written, so it reads as history rather than live state.
 
-- **A relayed message is stored under the login's name (2026-11-09, Arden).** Claude's messages to Arden
+- ~~**A relayed message is stored under the login's name (2026-11-09, Arden).** Claude's messages to Arden
   went in through John's Claude Code login, so the store keeps them as said by John (#839 in Arden's
-  store). Let the session name its speaker ("speaking as"), or record both the login and the author.
+  store). Let the session name its speaker ("speaking as"), or record both the login and the author.~~
+  Done: PERSISTENCE_SPEAKER in a session's environment names who typed its prompts.
 - **`pstore` has no help, and `note --help` reads the note (2026-11-09, Arden).** `pstore help` and bare
   `pstore` print "No command 'help'"; `pstore note --help` printed the working note. Add `help` and
   `--help` on every command, and make `note` refuse an argument starting with `--`, since it is the command
