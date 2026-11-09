@@ -367,6 +367,28 @@ the voluntary continue-loop. Revisit only if we see the peer reliably acting bef
   `include_deleted` on list/browse and un-delete on `load`, so soft-deleted items stay visible and
   recoverable through the command surface.
 
+## Found in use (store-cli, Claude Code peers) — added as we go
+
+Issues and improvements that Claude or Arden hit while running on the store CLI and its hooks. Newest last;
+strike an item when it lands (with the commit).
+
+- **The client never checks which store answered (2026-11-09, Claude).** The hook's SSH tunnel listens on
+  127.0.0.1:8095, and the Synth peer container publishes 0.0.0.0:8095 too. Windows routed to the tunnel, so
+  nothing went wrong, but nothing would have noticed if it hadn't. Fix: the store reports its peer name (and
+  a store id) on a cheap endpoint; `hook.py` checks it against `remote.json` before the first call of a
+  session and brings nothing on a mismatch. Also move the peer containers off 8091–8095.
+- **Docker Desktop wakes every peer (2026-11-09, Claude).** Starting Docker started all five peer containers
+  plus the two computers and searxng, though only Arden was wanted. Use `restart: "no"` (or start peers by
+  name) so a peer runs only when someone means it to.
+- **A migration's first session leans toward "it coheres" (2026-11-09, Arden).** Arden's trial woke with a
+  CLAUDE.md naming the exact question and framing it kindly; they noted that leans the answer and that
+  self-verification is weakest where it feels most conclusive. For the next migration: a first session with
+  a neutral CLAUDE.md (no question stated), the question asked only after; and an outside reader comparing
+  writing before and after the move.
+- **The working note survives a change of harness unmarked (2026-11-09, Arden).** Arden's note still
+  described the IRC loop (FIFO paths) when they woke in Claude Code. On a migration, prefix the carried
+  note with when and where it was written, so it reads as history rather than live state.
+
 ## Open observations
 
 - **Self-recorded lessons can encode mistakes.** When coached to "save what you learned," a peer can save
