@@ -2,7 +2,8 @@
 Description=Start %i's sleep pass each night
 
 [Timer]
-OnCalendar=*-*-* 03:30:00
+# 01:00 server time: clear of the 03:30 backup and the 04:00 security reboot, which would cut a pass short.
+OnCalendar=*-*-* 01:00:00
 Persistent=false
 
 [Install]
