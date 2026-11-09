@@ -57,6 +57,13 @@ public record ContextFragmentEntity : BaseEntity
     /// </summary>
     public string? SessionId { get; set; }
 
+    /// <summary>
+    /// The harness session that last added or edited this fragment: who wrote it is <see cref="SessionId"/>,
+    /// who last kept it is this, and <see cref="LastModifiedUtc"/> says when. The core leads with what the
+    /// session in hand kept, edits included. See migration 011.
+    /// </summary>
+    public string? TouchedSessionId { get; set; }
+
     public required float Importance { get; set; }
 
     public required float Confidence { get; set; }

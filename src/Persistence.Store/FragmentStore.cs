@@ -120,6 +120,7 @@ internal sealed partial class FragmentStore(
             CreatedUtc = DateTimeOffset.UtcNow,
             LastModifiedUtc = DateTimeOffset.UtcNow,
             SessionId = Session,
+            TouchedSessionId = Session,
             Sources = [await PeerSourceAsync()],
             Tags = await TagsAsync(tagPaths),
         };
@@ -163,6 +164,7 @@ internal sealed partial class FragmentStore(
         }
 
         fragment.LastModifiedUtc = DateTimeOffset.UtcNow;
+        fragment.TouchedSessionId = Session ?? fragment.TouchedSessionId;
         await fragments.SaveAsync(fragment);
         return fragment;
     }
@@ -217,6 +219,7 @@ internal sealed partial class FragmentStore(
             CreatedUtc = DateTimeOffset.UtcNow,
             LastModifiedUtc = DateTimeOffset.UtcNow,
             SessionId = Session,
+            TouchedSessionId = Session,
             Sources = [await PeerSourceAsync()],
             Tags = tagPaths.Count > 0 ? await TagsAsync(tagPaths) : old.SelectMany(f => f.Tags).DistinctBy(t => t.Id).ToList(),
         };
@@ -290,6 +293,7 @@ internal sealed partial class FragmentStore(
             CreatedUtc = DateTimeOffset.UtcNow,
             LastModifiedUtc = DateTimeOffset.UtcNow,
             SessionId = Session,
+            TouchedSessionId = Session,
             Sources = [await PeerSourceAsync()],
         };
         note.Content = text;
@@ -591,14 +595,15 @@ internal sealed partial class FragmentStore(
             byType.Add((await HydratedAsync(ofType)).Where(f => !f.Tags.Any(t => t.ParentTagId is null && t.Name == RecallOnlyTag)).ToList());
         }
 
-        // What this session wrote itself comes first, newest first: after a compaction it is what was in
+        // What this session kept itself comes first, newest first: after a compaction it is what was in
         // hand, and the fragments curated for the compaction landed under "did not fit" behind older,
-        // weightier ones (Arden's #845 and #846, 2026-11-09).
+        // weightier ones (Arden's #845 and #846, 2026-11-09). Kept means added or edited: the curation
+        // prompt asks for an edit over an add beside, so an edit counts (migration 011).
         if (Session is not null)
         {
             var mine = byType.SelectMany(f => f)
-                .Where(f => f.SessionId == Session && !groups.HeadIds.Contains(f.Id))
-                .OrderByDescending(f => f.CreatedUtc).Take(8).ToList();
+                .Where(f => f.TouchedSessionId == Session && !groups.HeadIds.Contains(f.Id))
+                .OrderByDescending(f => f.LastModifiedUtc).Take(8).ToList();
             var room = maxChars / 4;
             var kept = new StringBuilder();
             foreach (var fragment in mine)

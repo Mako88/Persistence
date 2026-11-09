@@ -49,6 +49,7 @@
     <EmbeddedResource Include="Data\Migrations\008_AddFragmentEmbeddings.sql" />
     <EmbeddedResource Include="Data\Migrations\009_AddSupersession.sql" />
     <EmbeddedResource Include="Data\Migrations\010_AddSessionId.sql" />
+    <EmbeddedResource Include="Data\Migrations\011_AddTouchedSessionId.sql" />
   </ItemGroup>
 
   <ItemGroup>

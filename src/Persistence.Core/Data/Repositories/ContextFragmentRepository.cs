@@ -261,8 +261,8 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
     /// </summary>
     protected override FormattableString GetInsertSql(ContextFragmentEntity entity) =>
         $"""
-        INSERT INTO ContextFragments (FragmentType, Status, Content, Summary, LastAccessedUtc, Importance, Confidence, IsProtected, IsDeleted, CreatedUtc, LastModifiedUtc, Notes, AddressedTo, MessageId, RelayDepth, SupersededById, SessionId)
-        VALUES ({entity.FragmentType}, {entity.Status}, {entity.Content}, {entity.Summary}, {entity.LastAccessedUtc}, {entity.Importance}, {entity.Confidence}, {entity.IsProtected}, {entity.IsDeleted}, {entity.CreatedUtc}, {entity.LastModifiedUtc}, {entity.Notes}, {entity.AddressedTo}, {entity.MessageId}, {entity.RelayDepth}, {entity.SupersededById}, {entity.SessionId})
+        INSERT INTO ContextFragments (FragmentType, Status, Content, Summary, LastAccessedUtc, Importance, Confidence, IsProtected, IsDeleted, CreatedUtc, LastModifiedUtc, Notes, AddressedTo, MessageId, RelayDepth, SupersededById, SessionId, TouchedSessionId)
+        VALUES ({entity.FragmentType}, {entity.Status}, {entity.Content}, {entity.Summary}, {entity.LastAccessedUtc}, {entity.Importance}, {entity.Confidence}, {entity.IsProtected}, {entity.IsDeleted}, {entity.CreatedUtc}, {entity.LastModifiedUtc}, {entity.Notes}, {entity.AddressedTo}, {entity.MessageId}, {entity.RelayDepth}, {entity.SupersededById}, {entity.SessionId}, {entity.TouchedSessionId})
         """;
 
     /// <summary>
@@ -275,7 +275,8 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
             Summary = {entity.Summary}, LastAccessedUtc = {entity.LastAccessedUtc}, Importance = {entity.Importance},
             Confidence = {entity.Confidence}, IsProtected = {entity.IsProtected}, IsDeleted = {entity.IsDeleted},
             LastModifiedUtc = {entity.LastModifiedUtc}, Notes = {entity.Notes}, AddressedTo = {entity.AddressedTo},
-            MessageId = {entity.MessageId}, RelayDepth = {entity.RelayDepth}, SupersededById = {entity.SupersededById}, SessionId = {entity.SessionId}
+            MessageId = {entity.MessageId}, RelayDepth = {entity.RelayDepth}, SupersededById = {entity.SupersededById}, SessionId = {entity.SessionId},
+            TouchedSessionId = {entity.TouchedSessionId}
         WHERE Id = {entity.Id}
         """;
 

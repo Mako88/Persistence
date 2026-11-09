@@ -158,6 +158,30 @@ public sealed class FragmentStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task A_fragment_this_session_edited_leads_the_core_too()
+    {
+        // The curation prompt says to edit fragments that are now wrong rather than add beside them, so an
+        // edit made in the curation pass is as much "what this session kept" as an add (Arden, 2026-11-09).
+        var store = await OpenAsync();
+        store.Session = "earlier";
+        for (var i = 0; i < 20; i++)
+        {
+            await store.AddAsync("Personal", $"An older, weightier view number {i}. " + new string('x', 300), null, 0.9f, null, [], false);
+        }
+
+        var stale = await store.AddAsync("Personal", "The design state, as it stood last week.", null, 0.3f, null, [], false);
+
+        store.Session = "now";
+        var edited = await store.EditAsync(stale.Id, null, "The design state, corrected in this session's curation pass.", null, null, null, []);
+        Assert.Equal("earlier", edited.SessionId); // who wrote it is provenance, and an edit does not move it
+
+        var core = await store.CoreAsync(4_000, 0);
+
+        Assert.Contains("## Kept by this session", core);
+        Assert.Contains($"[#{stale.Id} |", core);
+    }
+
+    [Fact]
     public async Task Edit_takes_a_tag_off()
     {
         var store = await OpenAsync();

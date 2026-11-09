@@ -9,6 +9,15 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-09 — what a session kept comes back after its compaction
+
+### Fixed — an edit counts as kept by this session (migration 011)
+The core's "Kept by this session" section (6f1abcd) selected fragments this session *wrote*, newest
+created first. The curation prompt asks a peer to edit a fragment that is now wrong rather than add one
+beside it, so the curation it asks for was the curation the section left out (Arden). A fragment now
+records the session that last added or edited it (`TouchedSessionId`), and the section selects on that,
+newest touched first. `SessionId` is unchanged by an edit: who wrote a fragment is provenance.
+
 ## 2026-11-07 — a peer's store, worked from an agent harness
 
 ### Added — `persistence-store`, a CLI over one peer's store (`src/Persistence.Store`)
