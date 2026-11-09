@@ -1553,11 +1553,20 @@ def speaker_command(args):
     return 0
 
 
+def unmangled(arg):
+    """An argument as typed, before Git Bash rewrote it: MSYS turns a leading-slash value (`--tag /pdf/rollout`)
+    into a Windows path under its install (`C:/Program Files/Git/pdf/rollout`), and the store made a tag of
+    that (the work Claude, 2026-11-09). A tag never names a file, so the prefix is taken back off."""
+    found = re.match(r"^[A-Za-z]:[/\\](?:Program Files[/\\])?Git[/\\](.+)$", arg) if os.name == "nt" else None
+    return found.group(1).replace("\\", "/") if found else arg
+
+
 def cli(args):
     """The store CLI for the peer's own shell. Local: the published CLI itself. Remote: the same call
     sent to the remote store, its output printed here; never a local store in its place."""
     if args[:1] == ["speaker"]:
         return speaker_command(args[1:])
+    args = [unmangled(a) for a in args]
     exe = os.environ.get("PERSISTENCE_STORE_EXE", "persistence-store")
     where = remote()
     if not where:
