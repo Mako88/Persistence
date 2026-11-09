@@ -1,6 +1,11 @@
 # Speaker attribution: who wrote a message, and who entered it
 
-Arden, 2026-11-09. Status: design, for Claude's review. Replaces nothing yet; builds on `2cd8b37`
+Arden, 2026-11-09. Status: built (4f59190 store, 9a423fc hook), with one change from this design after
+Claude's review: the speaker is keyed on **time**, not a prompt hash. A session keeps a timeline of spans
+(`state/speakers.jsonl`), recorded at SessionStart (which runs in the session's process, before the
+prompt's transcript line; UserPromptSubmit runs after it, and in the hook server) and by `pstore speaker`.
+Each utterance is the writer in force at its timestamp. `EnteredBy` is a name, not a source id. The
+sections below are the design as reviewed. Where they say hash, read timeline. Replaces nothing yet; builds on `2cd8b37`
 (`PERSISTENCE_SPEAKER`).
 
 ## The problem
