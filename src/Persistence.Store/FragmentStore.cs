@@ -112,6 +112,13 @@ internal sealed partial class FragmentStore(
                 $"'{typeName}' is not a type a peer authors; use one of {string.Join(", ", FragmentTypeRules.Authorable)}.");
         }
 
+        // A sleep pass may add what the day's conversation earned, but who I am is revised awake.
+        var pass = await AsleepAsync();
+        if (pass is not null && type == ContextFragmentType.Identity)
+        {
+            throw new RefusedException("A sleep pass doesn't add to who I am: propose the Identity fragment in the pass's record.");
+        }
+
         var fragment = new ContextFragmentEntity
         {
             FragmentType = type,
@@ -130,6 +137,11 @@ internal sealed partial class FragmentStore(
         };
 
         await fragments.SaveAsync(fragment);
+        if (pass is not null)
+        {
+            await LogAsync(pass, $"+#{fragment.Id} added: {Clip(content, 100)}");
+        }
+
         return fragment;
     }
 
@@ -138,6 +150,20 @@ internal sealed partial class FragmentStore(
         IReadOnlyList<string> addTags, IReadOnlyList<string>? removeTags = null)
     {
         var fragment = await WritableAsync(id);
+        // A sleep pass changes nothing in place: an edit leaves no old view to read back. Its one edit is
+        // taking a fragment out of the core while leaving it to recall.
+        var pass = await AsleepAsync();
+        if (pass is not null)
+        {
+            if (typeName is not null || content is not null || summary is not null || importance is not null || confidence is not null || removeTags is { Count: > 0 }
+                || addTags is not [var only] || !string.Equals(only, RecallOnlyTag, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new RefusedException($"A sleep pass edits nothing in place: supersede to change a view. Its one edit is `edit {id} --tag {RecallOnlyTag}`.");
+            }
+
+            SettledOrRefuse(fragment);
+        }
+
         foreach (var path in removeTags ?? [])
         {
             var tag = await FindTagAsync(path) ?? throw new RefusedException($"There is no tag '{path}'.");
@@ -170,6 +196,11 @@ internal sealed partial class FragmentStore(
         fragment.LastModifiedUtc = DateTimeOffset.UtcNow;
         fragment.TouchedSessionId = Session ?? fragment.TouchedSessionId;
         await fragments.SaveAsync(fragment);
+        if (pass is not null)
+        {
+            await LogAsync(pass, $"#{id} tagged {RecallOnlyTag}: out of the core, still recalled");
+        }
+
         return fragment;
     }
 
@@ -212,6 +243,23 @@ internal sealed partial class FragmentStore(
             old.Add(fragment);
         }
 
+        // A sleep pass: only what has settled, never who I am, and never a distillation distilled again (the reason
+        // goes first under repeated compression, because it looks like elaboration once its need is forgotten).
+        var pass = await AsleepAsync();
+        if (pass is not null)
+        {
+            old.ForEach(SettledOrRefuse);
+            if (old is [var single] && single.Tags.Any(t => HasPath(t, SleepDistilledTag)))
+            {
+                throw new RefusedException($"#{single.Id} is already a sleep pass's distillation: merge it with another view, or propose the change for a waking session.");
+            }
+
+            if (type == ContextFragmentType.Identity)
+            {
+                throw new RefusedException("A sleep pass doesn't write who I am: propose the Identity fragment in the pass's record.");
+            }
+        }
+
         var successor = new ContextFragmentEntity
         {
             FragmentType = type ?? old[0].FragmentType,
@@ -225,7 +273,8 @@ internal sealed partial class FragmentStore(
             SessionId = Session,
             TouchedSessionId = Session,
             Sources = [await PeerSourceAsync()],
-            Tags = tagPaths.Count > 0 ? await TagsAsync(tagPaths) : old.SelectMany(f => f.Tags).DistinctBy(t => t.Id).ToList(),
+            Tags = (tagPaths.Count > 0 ? await TagsAsync(tagPaths) : old.SelectMany(f => f.Tags))
+                .Concat(pass is null ? [] : await TagsAsync([SleepDistilledTag])).DistinctBy(t => t.Id).ToList(),
         };
         await fragments.SaveAsync(successor);
 
@@ -236,6 +285,11 @@ internal sealed partial class FragmentStore(
             fragment.Notes = string.IsNullOrWhiteSpace(reason) ? fragment.Notes : reason.Trim();
             fragment.LastModifiedUtc = DateTimeOffset.UtcNow;
             await fragments.SaveAsync(fragment);
+        }
+
+        if (pass is not null)
+        {
+            await LogAsync(pass, $"{string.Join(", ", ids.Select(i => "#" + i))} → #{successor.Id}: {(string.IsNullOrWhiteSpace(reason) ? "(no reason given)" : reason.Trim())}");
         }
 
         return successor;

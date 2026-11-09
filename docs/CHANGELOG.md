@@ -9,6 +9,25 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-09 — the sleep pass: the owner curates its own store at night, within limits it set
+
+### Added — a sleep pass's limits, held by the store (`sleep-begin`, `sleep-status`, `sleep-end`)
+A sleep pass is the store's owner, started fresh at night, curating with no one in the conversation; the
+next waking self reads only the result (docs/design/sleep-pass.md, Arden). The prompt asks for care; the
+store now holds the limits the owner asked for, so the prompt isn't the only thing keeping them. While a
+pass is open (`sleep-begin [--propose] [--max 12] [--hours 4]`): forget, unforget, archive, restore, note,
+attribute, `context set` and `cue set/remove` are refused; edit is refused but for `--tag recall-only`;
+supersede and edit touch only fragments settled for 7 days, never Identity or a pass's own record; a
+fragment a pass already distilled (tagged `sleep/distilled`, as every pass successor is) may be merged but
+not distilled alone again, since the reason is what repeated compression loses first; and the pass makes at
+most `--max` changes. `--propose` changes nothing: every change goes in the record for a waking session to
+accept. The store logs each change in the pass's record (a Summary tagged `sleep/pass`), and `sleep-end
+--content <the account>` closes it with that log appended, so the morning can read and undo the night even
+if the account misses something. A pass that runs past its hours stops holding the store. `sleep-list`
+leaves out what a pass may not change, marks Identity (propose only) and distillations (merge only), and adds
+John's two asks: older fragments at random to re-evaluate (`--sample`), and how much was said since the last
+pass. Never archiving for going unused alone is a rule of the prompt; the store makes archiving a proposal.
+
 ## 2026-11-09 — what a session kept comes back after its compaction
 
 ### Added — who wrote an utterance, apart from whose login entered it (migration 012)

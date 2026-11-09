@@ -11,13 +11,13 @@ internal sealed class CommandLine
     /// <summary>Every option some command reads (a text option's <c>-file</c> form too); anything else is refused.</summary>
     public static readonly IReadOnlySet<string> Known = new HashSet<string>(
         ["archived", "batch", "before", "compacted", "confidence", "db", "debug", "everywhere", "exclude", "help", "importance", "json",
-         "limit", "local-peer", "max-chars", "over", "peer", "port", "project", "protected", "reason", "recent", "said", "session",
+         "hours", "limit", "local-peer", "max", "max-chars", "over", "peer", "port", "project", "propose", "protected", "reason", "recent", "said", "sample", "session",
          "snippet", "speaker", "tag", "transcript", "type", "untag", "wander", "when", "written-by", "content", "content-file", "summary", "summary-file", "text", "text-file"],
         StringComparer.OrdinalIgnoreCase);
 
     public static readonly IReadOnlySet<string> Flags = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
-        "json", "protected", "archived", "help", "debug", "everywhere",
+        "json", "protected", "archived", "help", "debug", "everywhere", "propose",
     };
 
     public string Command { get; }

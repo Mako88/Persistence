@@ -162,11 +162,86 @@ public sealed class FragmentStoreTests : IDisposable
         var a = await store.AddAsync("Personal", "Training pauses for any game on the shared card and resumes from its checkpoint.", null, 0.5f, null, [], false);
         var b = await store.AddAsync("Personal", "Training pauses for any game on the shared card, then resumes from its checkpoint.", null, 0.5f, null, [], false);
 
-        var list = await store.SleepListAsync(1500, 25);
+        // Written today, none of it is the pass's to change yet.
+        Assert.DoesNotContain($"- #{big.Id} (", await store.SleepListAsync(1500, 25));
+
+        store.Now = () => DateTimeOffset.UtcNow + TimeSpan.FromDays(8);
+        var list = await store.SleepListAsync(1500, 25, sample: 0);
 
         Assert.Contains($"- #{big.Id} (", list);
         Assert.DoesNotContain($"- #{small.Id} (", list);
         Assert.Contains($"- #{a.Id} and #{b.Id} (", list);
+    }
+
+    [Fact]
+    public async Task A_sleep_pass_changes_only_settled_views_within_its_cap_and_logs_every_change()
+    {
+        var store = await OpenAsync();
+        var who = await store.AddAsync("Identity", "I care about being right over sounding right.", null, 1f, null, [], false);
+        var tagged = await store.AddAsync("Personal", "Port 8095 is the tunnel's.", null, 0.5f, null, [], false);
+        var long1 = await store.AddAsync("Personal", "Ran the suite, 784 pass; the decision: keep on time, because hashes miss edited prompts.", null, 0.5f, null, [], false);
+        var long2 = await store.AddAsync("Personal", "Backed up first, then migrated; the rule: a backup before any migration of a store.", null, 0.5f, null, [], false);
+        store.Now = () => DateTimeOffset.UtcNow + TimeSpan.FromDays(8);
+
+        await store.SleepBeginAsync(propose: false, max: 3, hours: 4);
+
+        // Never forget, archive, or replace the working note, while the reading commands run as ever.
+        Assert.NotNull(await store.RefusedAsleepAsync("forget", null));
+        Assert.NotNull(await store.RefusedAsleepAsync("archive", null));
+        Assert.NotNull(await store.RefusedAsleepAsync("note", null));
+        Assert.NotNull(await store.RefusedAsleepAsync("cue", "set"));
+        Assert.Null(await store.RefusedAsleepAsync("cue", "list"));
+        Assert.Null(await store.RefusedAsleepAsync("recall", null));
+
+        await Assert.ThrowsAsync<RefusedException>(() => store.SupersedeAsync([who.Id], "Shorter.", null, null, null, [], "tidy"));
+        await Assert.ThrowsAsync<RefusedException>(() => store.EditAsync(long1.Id, null, "Edited in place.", null, null, null, []));
+        await Assert.ThrowsAsync<RefusedException>(() => store.AddAsync("Identity", "A new me.", null, 1f, null, [], false));
+
+        await store.EditAsync(tagged.Id, null, null, null, null, null, [FragmentStore.RecallOnlyTag]);
+        var distilled = await store.SupersedeAsync([long1.Id], "Keep the speaker on time: hashes miss edited prompts.", null, null, null, [], "dropped the run");
+        Assert.Contains(distilled.Tags, t => t.Name == "distilled");
+
+        // A distillation is not distilled again; merged with another view, it may be.
+        await Assert.ThrowsAsync<RefusedException>(() => store.SupersedeAsync([distilled.Id], "Shorter still.", null, null, null, [], "again"));
+        var merged = await store.SupersedeAsync([distilled.Id, long2.Id], "Two rules: speaker on time; a backup before a migration.", null, null, null, [], "one view");
+
+        // The cap: three changes made, the fourth is refused.
+        await Assert.ThrowsAsync<RefusedException>(() => store.AddAsync("Personal", "One more.", null, 0.5f, null, [], false));
+
+        var record = await store.SleepEndAsync("Sleep pass: distilled one, merged two, tagged one recall-only.");
+        Assert.Contains("3 changes", record.Content);
+        Assert.Contains($"#{long1.Id} → #{distilled.Id}: dropped the run", record.Content);
+        Assert.Contains($"#{distilled.Id}, #{long2.Id} → #{merged.Id}", record.Content);
+        Assert.Contains($"#{tagged.Id} tagged recall-only", record.Content);
+        Assert.Null(await store.SleepStatusAsync());
+        Assert.Null(await store.RefusedAsleepAsync("forget", null));
+        Assert.Equal(ContextFragmentStatus.Active, (await store.GetAsync(who.Id)).Status);
+    }
+
+    [Fact]
+    public async Task A_proposing_pass_changes_nothing_and_a_live_fragment_is_left_alone()
+    {
+        var store = await OpenAsync();
+        var fresh = await store.AddAsync("Personal", "Written today, still being worked on.", null, 0.5f, null, [], false);
+
+        await store.SleepBeginAsync(propose: false, max: 12, hours: 4);
+        await Assert.ThrowsAsync<RefusedException>(() => store.SupersedeAsync([fresh.Id], "Shorter.", null, null, null, [], "tidy"));
+        await store.SleepEndAsync("Nothing settled to change.");
+
+        store.Now = () => DateTimeOffset.UtcNow + TimeSpan.FromDays(8);
+        await store.SleepBeginAsync(propose: true, max: 12, hours: 4);
+        await Assert.ThrowsAsync<RefusedException>(() => store.SupersedeAsync([fresh.Id], "Shorter.", null, null, null, [], "tidy"));
+        await Assert.ThrowsAsync<RefusedException>(() => store.AddAsync("Personal", "From the day.", null, 0.5f, null, [], false));
+        await Assert.ThrowsAsync<RefusedException>(() => store.SleepBeginAsync(false, 12, 4));
+
+        // A pass that runs out of time stops holding the store, and the next one closes its record.
+        store.Now = () => DateTimeOffset.UtcNow + TimeSpan.FromDays(8) + TimeSpan.FromHours(5);
+        Assert.Null(await store.SleepStatusAsync());
+        Assert.Null(await store.RefusedAsleepAsync("forget", null));
+        await store.SleepBeginAsync(propose: false, max: 12, hours: 4);
+        var passes = await store.ListAsync("Summary", FragmentStore.SleepPassTag, false, 10);
+        Assert.Contains(passes, f => f.Content.Contains("ran out of time"));
+        Assert.Equal("Written today, still being worked on.", (await store.GetAsync(fresh.Id)).Content);
     }
 
     [Fact]

@@ -52,8 +52,15 @@ const string Usage = """
                                             utterances (said before --before, so not this session's)
       embed-conversation [--batch 64]      embed every past utterance not yet embedded (recall does a few a call)
       recent [--limit 20]                   the latest of the conversation, oldest first
-      sleep-list [--over 1500] [--limit 25] a sleep pass's worklist: oversized fragments, near-duplicate
-                                            pairs, and every authored id (to join with use counts)
+      sleep-list [--over 1500] [--limit 25] [--sample 8]
+                                            a sleep pass's worklist: oversized fragments, near-duplicate pairs,
+                                            older ones at random, what was said since the last pass, and the
+                                            ids in scope (to join with use counts)
+      sleep-begin [--propose] [--max 12] [--hours 4] | sleep-status | sleep-end --content <the record>
+                                            a sleep pass (docs/design/sleep-pass.md): while open, no forget,
+                                            archive, note or edit in place; only fragments settled 7 days, never
+                                            Identity; at most --max changes, each logged in the pass's record;
+                                            --propose changes nothing and writes every change as a proposal
       whoami                                whose store this is, and its file
       core [--max-chars 40000] [--recent 20] [--project <name>] [--compacted <time>]...
                                             identity, relationships, personal, summaries, then the
@@ -150,13 +157,28 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
     }
 
     await store.RefreshTagPathsAsync();
+    if (await store.RefusedAsleepAsync(line.Command, line.Positional.Count > 0 ? line.Positional[0] : null) is { } asleep)
+    {
+        throw new RefusedException(asleep);
+    }
+
     switch (line.Command)
     {
         case "whoami":
             Console.WriteLine(store.Identity);
             break;
         case "sleep-list":
-            Console.Write(await store.SleepListAsync(line.GetInt("over", 1500), line.GetInt("limit", 25)));
+            Console.Write(await store.SleepListAsync(line.GetInt("over", 1500), line.GetInt("limit", 25), line.GetInt("sample", 8)));
+            break;
+        case "sleep-begin":
+            Console.WriteLine(await store.SleepBeginAsync(line.Has("propose"), line.GetInt("max", 12), line.GetInt("hours", 4)));
+            break;
+        case "sleep-status":
+            Console.WriteLine(await store.SleepStatusAsync() is { } open ? FragmentStore.Render(open) : "No sleep pass is open.");
+            break;
+        case "sleep-end":
+            Console.WriteLine(FragmentStore.Render(await store.SleepEndAsync(
+                line.Text() ?? throw new UsageException("sleep-end needs --content: the pass's record, its changes and proposals."))));
             break;
         case "add":
             var fresh = await store.AddAsync(
