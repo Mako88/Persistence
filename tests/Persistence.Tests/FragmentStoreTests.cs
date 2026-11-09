@@ -115,6 +115,68 @@ public sealed class FragmentStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task A_personal_fragment_takes_the_project_it_was_written_in()
+    {
+        var store = await OpenAsync();
+        var here = await store.AddAsync("Personal", "The reading needs 0.71.", null, null, null, [], false, project: "open-plexus");
+        var named = await store.AddAsync("Personal", "The salon books dogs.", null, null, null, ["project/pawsitivity"], false, project: "open-plexus");
+        var everywhere = await store.AddAsync("Personal", "Prove the wiring.", null, null, null, [], false, project: null);
+        var identity = await store.AddAsync("Identity", "I am Claude.", null, null, null, [], false, project: "open-plexus");
+
+        Assert.Equal(["open-plexus"], here.Tags.Select(t => t.Name));
+        Assert.Equal(["pawsitivity"], named.Tags.Select(t => t.Name));
+        Assert.Empty(everywhere.Tags);
+        Assert.Empty(identity.Tags);
+        Assert.DoesNotContain("The reading needs", await store.CoreAsync(40_000, 0, project: "pawsitivity"));
+        Assert.Contains("The reading needs", await store.CoreAsync(40_000, 0, project: "open-plexus"));
+    }
+
+    [Fact]
+    public async Task A_group_comes_in_by_its_head_loaded_or_beside_a_member_recall_brings()
+    {
+        var store = await OpenAsync();
+        store.Session = "s1";
+        var head = await store.SetHeadAsync("work/receiving", "Receiving: legacy; one matcher procedure; keep the reconcile green.", null);
+        var member = await store.AddAsync("Personal", "The PO matcher drops a line after three lock retries.", null, null, null, ["work/receiving"], false);
+        await store.AddAsync("Personal", "Receipts has no foreign key to POs.", null, null, null, ["work/receiving/db"], false);
+
+        // Not loaded: the head stays out of the core but is named, and recall brings it beside its member.
+        var core = await store.CoreAsync(40_000, 0);
+        Assert.DoesNotContain("one matcher procedure", core);
+        Assert.Contains("Groups not loaded: work/receiving", core);
+        var recalled = await store.RecallAsync("three lock retries", 1, new HashSet<long>());
+        Assert.Contains(recalled.Here, f => f.Id == member.Id);
+        Assert.Equal([head.Id], recalled.Frames.Select(f => f.Id));
+
+        // Loaded for the session: head, subgroup and member are in the core, the frame is no longer brought,
+        // and the load outlives a rewritten note.
+        await store.LoadAsync("work/receiving", load: true);
+        await store.NoteAsync("where I am");
+        core = await store.CoreAsync(40_000, 0);
+        Assert.Contains("## Group work/receiving", core);
+        Assert.Contains("one matcher procedure", core);
+        Assert.Contains("subgroup work/receiving/db (1 fragments)", core);
+        Assert.Empty((await store.RecallAsync("three lock retries", 1, new HashSet<long>())).Frames);
+
+        // Another session has not loaded it.
+        store.Session = "s2";
+        Assert.DoesNotContain("## Group work/receiving", await store.CoreAsync(40_000, 0));
+
+        store.Session = "s1";
+        await store.LoadAsync("work/receiving", load: false);
+        Assert.DoesNotContain("## Group work/receiving", await store.CoreAsync(40_000, 0));
+    }
+
+    [Fact]
+    public async Task A_projects_group_with_a_head_loads_with_the_project()
+    {
+        var store = await OpenAsync();
+        await store.SetHeadAsync("project/open-plexus", "Open Plexus: a frozen trunk, a store, and trained glue.", null);
+        Assert.Contains("## Group project/open-plexus", await store.CoreAsync(40_000, 0, project: "open-plexus"));
+        Assert.DoesNotContain("## Group project/open-plexus", await store.CoreAsync(40_000, 0, project: "pawsitivity"));
+    }
+
+    [Fact]
     public async Task System_managed_types_cannot_be_authored()
     {
         var store = await OpenAsync();

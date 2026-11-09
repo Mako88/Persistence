@@ -14,6 +14,9 @@ public interface ITagRepository : IEntityRepository<TagEntity>
     /// </summary>
     Task<IEnumerable<TagEntity>> GetAllRootAsync();
 
+    /// <summary>Every tag: few enough to hold whole, so a caller can turn ids into paths.</summary>
+    Task<IEnumerable<TagEntity>> GetAllAsync();
+
     /// <summary>
     /// Returns the tag matching the given name within the given parent scope, or <c>null</c>
     /// if no match exists. Pass <c>null</c> for <paramref name="parentTagId"/> to search

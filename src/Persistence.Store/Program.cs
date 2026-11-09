@@ -11,6 +11,8 @@ const string Usage = """
 
       add --type <Identity|Relational|Personal|Summary> --content <text|-> [--content-file <path>]
           [--summary <text>] [--importance 0-1] [--confidence 0-1] [--tag <a/b>]... [--protected]
+          [--project <name> | --everywhere]  a Personal fragment takes project/<the repository it is written
+                                            in> unless it is tagged project/<name> already or --everywhere
       edit <id> [--type] [--content <text|->] [--summary] [--importance] [--confidence] [--tag <a/b>]...
       supersede <id>[,<id>...] --content <text|-> [--reason <text>] [--type] [--summary] [--importance] [--confidence] [--tag <a/b>]...
                                             a change of mind (one id) or a merge (several): the new fragment
@@ -19,6 +21,12 @@ const string Usage = """
                                             (`show` follows the line)
       note [--content <text|->]              the working note: where I am, what is running, what is next; replaced
                                             each time, first in the core, so a clear loses no more than a compaction
+      context [list] | show <tag/path> | set <tag/path> --content <head> [--summary] | load <tag/path> | unload <tag/path>
+                                            groups: a tag is a group, its child tags its subgroups; its head (a
+                                            fragment tagged with it and `head`) is what to hold in mind about it.
+                                            A loaded group is in the core (head, subgroups, a line per member):
+                                            the project's when it has a head, and those loaded for the session.
+                                            Recall brings an unloaded group's head beside a member it surfaces
       archive <id> | restore <id>           out of the core and recent lists, still searchable; reversible
       forget <id> [--reason <text>]         soft-delete, hidden everywhere; unforget <id> brings it back
       show <id>
@@ -78,6 +86,7 @@ try
 
     // Run from a session's own shell, the command is that session's; a server serves every session, so
     // its callers say which they are (--session).
+    store.AmbientProject = () => Projects.Of(Environment.CurrentDirectory);
     store.AmbientSession = Environment.GetEnvironmentVariable("PERSISTENCE_SESSION") is { Length: > 0 } s ? s
         : Environment.GetEnvironmentVariable("CLAUDE_CODE_SESSION_ID") is { Length: > 0 } c ? c : null;
     return await Run(line, store);
@@ -98,6 +107,7 @@ catch (RefusedException e)
 static async Task<int> Run(CommandLine line, FragmentStore store)
 {
     store.Session = line.Get("session") is { Length: > 0 } named ? named : store.AmbientSession;
+    await store.RefreshTagPathsAsync();
     switch (line.Command)
     {
         case "add":
@@ -105,7 +115,8 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
                 line.Get("type") ?? "Personal",
                 line.Text() ?? throw new UsageException("add needs --content (or --content -, or --content-file)."),
                 line.Text("summary"), line.GetFloat("importance"), line.GetFloat("confidence"),
-                line.GetAll("tag"), line.Has("protected"))]);
+                line.GetAll("tag"), line.Has("protected"),
+                line.Has("everywhere") ? null : line.Get("project") ?? store.AmbientProject?.Invoke())]);
             break;
         case "edit":
             Print(line, [await store.EditAsync(line.Id(), line.Get("type"), line.Text(), line.Text("summary"),
@@ -135,10 +146,37 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
 
             break;
         case "note":
-            var written = line.Text() ?? (line.Positional.Count > 0 ? string.Join(' ', line.Positional) : null);
+            // `note -` reads standard input as `--content -` does: taken as the note's text, it replaced a note with "-".
+            var written = line.Text() ?? (line.Positional is ["-"] ? Console.In.ReadToEnd()
+                : line.Positional.Count > 0 ? string.Join(' ', line.Positional) : null);
             var note = await store.NoteAsync(written);
             // Written, it is acknowledged, not echoed: the writer has it in front of them already.
             Console.WriteLine(note is null ? "(no working note)" : written is null ? note.Content : $"working note replaced ({note.Content.Length} characters)");
+            break;
+        case "context":
+            var path = line.Positional.Count > 1 ? line.Positional[1] : null;
+            string NeedPath() => path ?? throw new UsageException($"context {line.Positional[0]} needs the group's tag path.");
+            switch (line.Positional.Count > 0 ? line.Positional[0] : "list")
+            {
+                case "list":
+                    Console.WriteLine(await store.GroupListAsync(line.Get("project") ?? store.AmbientProject?.Invoke()));
+                    break;
+                case "show":
+                    Console.WriteLine(await store.GroupShowAsync(NeedPath()));
+                    break;
+                case "set":
+                    Print(line, [await store.SetHeadAsync(NeedPath(),
+                        line.Text() ?? throw new UsageException("context set needs --content (or --content -): the group's head."),
+                        line.Text("summary"))]);
+                    break;
+                case "load":
+                case "unload":
+                    Console.WriteLine(await store.LoadAsync(NeedPath(), line.Positional[0] == "load"));
+                    break;
+                default:
+                    throw new UsageException($"context {line.Positional[0]}? It takes list, show, set, load or unload.");
+            }
+
             break;
         case "archive":
             Print(line, [await store.SetStatusAsync(line.Id(), ContextFragmentStatus.Archived)]);
@@ -183,7 +221,7 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
                 exclude, line.Get("project"), line.GetInt("wander", 0), line.GetInt("said", 0), before);
             if (line.Has("json"))
             {
-                Print(line, [.. recalled.Here, .. recalled.Elsewhere, .. recalled.Said]);
+                Print(line, [.. recalled.Here, .. recalled.Frames, .. recalled.Elsewhere, .. recalled.Said]);
             }
             else
             {
@@ -191,6 +229,7 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
                 foreach (var (heading, found) in new[]
                 {
                     ((string?)null, recalled.Here),
+                    ("The group it belongs to (its head; `context load <path>` keeps it in mind):", recalled.Frames),
                     ("A wander, from another project (a stray association, not a rule here):", recalled.Elsewhere),
                     ("Said before, in past conversation:", recalled.Said),
                 })

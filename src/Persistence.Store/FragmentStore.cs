@@ -16,7 +16,7 @@ namespace Persistence.Store;
 /// the core of who the peer is, and keep the conversation it is having. Every write goes through the
 /// repositories, so it is audited and reversible exactly as a turn's commands are.
 /// </summary>
-internal sealed class FragmentStore(
+internal sealed partial class FragmentStore(
     IDatabaseManager database,
     IContextFragmentRepository fragments,
     ISourceRepository sources,
@@ -65,6 +65,12 @@ internal sealed class FragmentStore(
     /// </summary>
     public string? Session { get; set; }
 
+    /// <summary>
+    /// The project of the process itself (the repository its folder is in), asked only when needed: a
+    /// server serves every project, so it has none and its callers say (--project).
+    /// </summary>
+    public Func<string?>? AmbientProject { get; set; }
+
     /// <summary>The session of the process itself (CLAUDE_CODE_SESSION_ID), when not serving.</summary>
     public string? AmbientSession { get; set; }
 
@@ -76,9 +82,18 @@ internal sealed class FragmentStore(
 
     public async Task<ContextFragmentEntity> AddAsync(
         string typeName, string content, string? summary, float? importance, float? confidence,
-        IReadOnlyList<string> tagPaths, bool isProtected)
+        IReadOnlyList<string> tagPaths, bool isProtected, string? project = null)
     {
         var (type, authorable) = FragmentTypeRules.ParseAuthorable(typeName);
+        // A personal fragment is about the work in hand far more often than about everything: unscoped, the
+        // details of one project crowded every other project's core. It takes the project it was written in
+        // unless it names one (or --everywhere passes null here); the writer sees the tag and can change it.
+        if (type == ContextFragmentType.Personal && project is { Length: > 0 }
+            && !tagPaths.Any(p => p.StartsWith(ProjectTag + "/", StringComparison.OrdinalIgnoreCase)))
+        {
+            tagPaths = [.. tagPaths, $"{ProjectTag}/{project}"];
+        }
+
         if (!authorable)
         {
             throw new UsageException(
@@ -382,7 +397,7 @@ internal sealed class FragmentStore(
         }
 
         var utterances = await conversation.RecallAsync(text, said, skip, before, Session);
-        return new Recalled(kept, elsewhere, utterances);
+        return new Recalled(kept, elsewhere, utterances, await FramesAsync(kept, skip, project));
     }
 
     /// <summary>Embeds up to <paramref name="limit"/> past utterances that have none yet, for conversation recall.</summary>
@@ -392,7 +407,8 @@ internal sealed class FragmentStore(
     public sealed record Recalled(
         IReadOnlyList<ContextFragmentEntity> Here,
         IReadOnlyList<ContextFragmentEntity> Elsewhere,
-        IReadOnlyList<ContextFragmentEntity> Said);
+        IReadOnlyList<ContextFragmentEntity> Said,
+        IReadOnlyList<ContextFragmentEntity> Frames);
 
     /// <summary>The projects a fragment is tagged for (<c>project/&lt;name&gt;</c>); none means it belongs everywhere.</summary>
     private static List<string> ProjectsOf(ContextFragmentEntity fragment, long? projects) =>
@@ -483,6 +499,11 @@ internal sealed class FragmentStore(
         var left = new List<long>();
         var elsewhere = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
         var projects = (await FindTagAsync(ProjectTag))?.Id;
+        var groups = await GroupsAsync();
+        var shown = new HashSet<long>();
+        var loaded = await LoadedAsync(project, groups);
+        // A loaded group is what was asked to be held in mind, so it keeps room the core types cannot take.
+        var groupRoom = loaded.Count == 0 ? 0 : Math.Min(maxChars / 4, 4000 * loaded.Count);
 
         if (await NoteAsync(null) is { Content.Length: > 0 } note)
         {
@@ -512,6 +533,12 @@ internal sealed class FragmentStore(
 
             foreach (var fragment in await HydratedAsync(ofType))
             {
+                // A group's head comes in with its group, loaded, or beside a member recall brings.
+                if (groups.HeadIds.Contains(fragment.Id))
+                {
+                    continue;
+                }
+
                 // A fragment tagged project/<name> is in the core only while that project is the one in
                 // hand; the rest stay a `list --tag` or a recall away.
                 var own = ProjectsOf(fragment, projects);
@@ -522,14 +549,25 @@ internal sealed class FragmentStore(
                 }
 
                 var rendered = Render(fragment) + "\n\n";
-                if (text.Length + rendered.Length > maxChars)
+                if (text.Length + rendered.Length > maxChars - groupRoom)
                 {
                     left.Add(fragment.Id);
                     continue;
                 }
 
                 text.Append(rendered);
+                shown.Add(fragment.Id);
             }
+        }
+
+        foreach (var group in loaded)
+        {
+            text.Append(await RenderGroupAsync(group, groups, shown, maxChars - text.Length, loaded: true));
+        }
+
+        if (groups.Heads.Keys.Where(g => !loaded.Contains(g)).Select(g => groups.Paths[g]).Order().ToList() is { Count: > 0 } put)
+        {
+            text.Append($"(Groups not loaded: {string.Join(", ", put)}; `context load <path>` brings one in, `context show <path>` reads it.)\n\n");
         }
 
         if (left.Count > 0)
@@ -694,6 +732,15 @@ internal sealed class FragmentStore(
     /// conversation, then the content — cut at <paramref name="maxContent"/> characters with the id
     /// to read the rest by, when a budget asks for it.
     /// </summary>
+    /// <summary>
+    /// Each tag's whole path, by id, as of the command in hand (<see cref="RefreshTagPathsAsync"/>): a fragment
+    /// shows <c>work/receiving/db</c>, where its leaf alone (<c>db</c>) could be any group's.
+    /// </summary>
+    private static IReadOnlyDictionary<long, string> TagPaths = new Dictionary<long, string>();
+
+    /// <summary>Reads the tags' paths afresh, before a command renders anything.</summary>
+    public async Task RefreshTagPathsAsync() => TagPaths = (await GroupsAsync(heads: false)).Paths;
+
     public static string Render(ContextFragmentEntity f, int maxContent = int.MaxValue, string? self = null)
     {
         var flags = new List<string>();
@@ -702,7 +749,7 @@ internal sealed class FragmentStore(
         if (f.SupersededById is { } by) flags.Add($"superseded by #{by}");
         else if (f.Status == ContextFragmentStatus.Archived) flags.Add("archived");
         if (f.IsDeleted) flags.Add("forgotten");
-        if (f.Tags.Count > 0) flags.Add("tags: " + string.Join(", ", f.Tags.Select(t => t.Name)));
+        if (f.Tags.Count > 0) flags.Add("tags: " + string.Join(", ", f.Tags.Select(t => TagPaths.GetValueOrDefault(t.Id, t.Name))));
 
         var header = $"[#{f.Id} | {f.FragmentType} | i:{f.Importance:0.##} c:{f.Confidence:0.##}{(flags.Count > 0 ? " | " + string.Join(" | ", flags) : "")}]";
         if (f.FragmentType == ContextFragmentType.ChatMessage)
