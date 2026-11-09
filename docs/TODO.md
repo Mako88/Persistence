@@ -422,6 +422,12 @@ strike an item when it lands (with the commit).
   real speakers; this harness assumes one person and one assistant (the relayed-speaker item above is the
   small case). (3) Forgetting was visible (R/I/C decay); here it is a list of ids under "did not fit".
 
+- ~~**Another project's memory is out of reach unless asked for (2026-11-09, John).** In the pawsitivity
+  session John asked for a Minecraft car; months of Minecraft mod work sat in the store tagged for another
+  project, and nothing brought it. The in-between he asked for: the core now gives every other project one
+  line (its most important fragment's first line and id), and a message that names a project ("the Minecraft
+  mods folder") brings that project's fragments into recall as its own.~~ Done (this commit's parent).
+
 ## Open observations
 
 - **Self-recorded lessons can encode mistakes.** When coached to "save what you learned," a peer can save
