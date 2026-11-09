@@ -18,7 +18,7 @@ hooks, one script:
   session-end     SessionEnd      marks the session ended, so other sessions stop listing it as running, and
                                   keeps its last words
   observe         UserPromptSubmit, SessionStart  what is so now, read off the machine rather than written
-                                  down: this project's running processes, logs written in the last hour with
+                                  down: this project's running processes and unfinished subagents, logs written in the last hour with
                                   their last line that says something, git's state, and whatever is watched
                                   (`hook.py watch <pid|file> [label]`, `unwatch`, `watching`)
 
