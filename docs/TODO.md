@@ -449,6 +449,13 @@ strike an item when it lands (with the commit).
   - A `uses` summary at session end ("shown N, used M, never used: ids") so pruning is routine.
   - Split: supersede one fragment with several in one command.
 
+- **A one-shot session stays "running now" for hours (2026-11-09, Arden).** A `claude -p` test session
+  (223ff3ec, one message) was listed under "Other sessions of mine running now" for 40+ minutes, because
+  "running" means "spoke in the last 3 hours". A stale line there teaches a peer to skip the heading. Mark a
+  session ended on SessionEnd (or use a heartbeat) rather than a time window.
+- **Remaining small items from Arden's review:** narrow `core()`'s retry to a usage error once every store
+  accepts `--compacted`.
+
 ## Open observations
 
 - **Self-recorded lessons can encode mistakes.** When coached to "save what you learned," a peer can save
