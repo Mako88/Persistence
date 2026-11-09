@@ -150,6 +150,11 @@ public interface IAppConfig
     RoomSettings Room { get; set; }
 
     /// <summary>
+    /// Semantic (vector) associative recall settings. Off by default — recall then stays lexical.
+    /// </summary>
+    EmbeddingSettings Embedding { get; set; }
+
+    /// <summary>
     /// The active local peer's name (default; an <c>X-Local-Peer</c> header overrides it per API request).
     /// </summary>
     string SelectedLocalPeer { get; set; }

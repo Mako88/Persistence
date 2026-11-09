@@ -67,4 +67,23 @@ public sealed class DatabaseManagerMigrationTests : IAsyncLifetime
         var applied = await check.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM Migrations");
         Assert.True(applied >= 6, $"expected the 6 migrations re-recorded, saw {applied}");
     }
+
+    [Fact]
+    public async Task EveryMigrationScriptIsRegisteredAsAnEmbeddedResourceAndActuallyRuns()
+    {
+        // A migration file that exists on disk but is missing from the .csproj EmbeddedResource list
+        // is silently skipped: the runner only sees embedded resources, so the store comes up without
+        // the change and nothing reports a problem. Assert against the newest migration's own table
+        // rather than a count, so this fails for the right reason.
+        await NewManager().InitializeAsync();
+
+        SqliteConnection.ClearAllPools();
+        await using var check = new SqliteConnection(SqliteConnectionString.For(dbPath));
+        await check.OpenAsync();
+
+        var table = await check.ExecuteScalarAsync<string>(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'FragmentEmbeddings'");
+
+        Assert.Equal("FragmentEmbeddings", table);
+    }
 }

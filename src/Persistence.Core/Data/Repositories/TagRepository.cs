@@ -30,6 +30,9 @@ public class TagRepository : EntityRepository<TagEntity>, ITagRepository
     /// <summary>
     /// Returns all root tags (those with no parent), with children populated
     /// </summary>
+    public async Task<IEnumerable<TagEntity>> GetAllAsync() =>
+        await QueryAsync($"SELECT * FROM Tags");
+
     public async Task<IEnumerable<TagEntity>> GetAllRootAsync() =>
         await QueryAsync($"SELECT * FROM Tags WHERE ParentTagId IS NULL");
 

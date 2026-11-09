@@ -56,6 +56,51 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
             WHERE et.TagId = {tagId} AND cf.IsDeleted = 0
             """);
 
+    /// <summary>Dates are stored as UTC text in this form, so they compare as text.</summary>
+    private static string Stored(DateTimeOffset at) => at.ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss.fffzzz");
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<long>> GetNewestIdsAsync(ContextFragmentType type, int count, IReadOnlyCollection<string> leaveOut) =>
+        count <= 0 ? [] : leaveOut.Count == 0
+            ? (await QueryAsync<long>($"""
+                SELECT Id FROM ContextFragments
+                WHERE FragmentType = {type} AND Status = {ContextFragmentStatus.Active} AND IsDeleted = 0
+                ORDER BY CreatedUtc DESC LIMIT {count}
+                """)).ToList()
+            : (await QueryAsync<long>($"""
+                SELECT Id FROM ContextFragments
+                WHERE FragmentType = {type} AND Status = {ContextFragmentStatus.Active} AND IsDeleted = 0
+                  AND (SessionId IS NULL OR SessionId NOT IN {leaveOut.ToList()})
+                ORDER BY CreatedUtc DESC LIMIT {count}
+                """)).ToList();
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<long>> GetIdsBySessionsAsync(ContextFragmentType type, IReadOnlyCollection<string> sessions) =>
+        sessions.Count == 0 ? [] : (await QueryAsync<long>($"""
+            SELECT Id FROM ContextFragments
+            WHERE FragmentType = {type} AND Status = {ContextFragmentStatus.Active} AND IsDeleted = 0
+              AND SessionId IN {sessions.ToList()}
+            """)).ToList();
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyDictionary<string, DateTimeOffset>> GetSessionsSinceAsync(ContextFragmentType type, DateTimeOffset since) =>
+        (await QueryAsync<(string SessionId, string Newest)>($"""
+            SELECT SessionId, MAX(CreatedUtc) AS Newest FROM ContextFragments
+            WHERE FragmentType = {type} AND IsDeleted = 0 AND SessionId IS NOT NULL AND CreatedUtc >= {Stored(since)}
+            GROUP BY SessionId
+            """)).ToDictionary(r => r.SessionId, r => DateTimeOffset.Parse(r.Newest, System.Globalization.CultureInfo.InvariantCulture));
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<(long Id, string MessageId, string? SessionId)>> GetMessageIdsAsync(ContextFragmentType type) =>
+        (await QueryAsync<(long Id, string MessageId, string? SessionId)>($"""
+            SELECT Id, MessageId, SessionId FROM ContextFragments
+            WHERE FragmentType = {type} AND MessageId IS NOT NULL
+            """)).ToList();
+
+    /// <inheritdoc />
+    public async Task<IEnumerable<ContextFragmentEntity>> GetSupersededByAsync(long id) =>
+        await QueryAsync($"SELECT * FROM ContextFragments WHERE SupersededById = {id} AND IsDeleted = 0");
+
     /// <summary>
     /// Returns up to <paramref name="limit"/> results ordered best-match first.
     /// </summary>
@@ -216,8 +261,8 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
     /// </summary>
     protected override FormattableString GetInsertSql(ContextFragmentEntity entity) =>
         $"""
-        INSERT INTO ContextFragments (FragmentType, Status, Content, Summary, LastAccessedUtc, Importance, Confidence, IsProtected, IsDeleted, CreatedUtc, LastModifiedUtc, Notes, AddressedTo, MessageId, RelayDepth)
-        VALUES ({entity.FragmentType}, {entity.Status}, {entity.Content}, {entity.Summary}, {entity.LastAccessedUtc}, {entity.Importance}, {entity.Confidence}, {entity.IsProtected}, {entity.IsDeleted}, {entity.CreatedUtc}, {entity.LastModifiedUtc}, {entity.Notes}, {entity.AddressedTo}, {entity.MessageId}, {entity.RelayDepth})
+        INSERT INTO ContextFragments (FragmentType, Status, Content, Summary, LastAccessedUtc, Importance, Confidence, IsProtected, IsDeleted, CreatedUtc, LastModifiedUtc, Notes, AddressedTo, MessageId, RelayDepth, SupersededById, SessionId)
+        VALUES ({entity.FragmentType}, {entity.Status}, {entity.Content}, {entity.Summary}, {entity.LastAccessedUtc}, {entity.Importance}, {entity.Confidence}, {entity.IsProtected}, {entity.IsDeleted}, {entity.CreatedUtc}, {entity.LastModifiedUtc}, {entity.Notes}, {entity.AddressedTo}, {entity.MessageId}, {entity.RelayDepth}, {entity.SupersededById}, {entity.SessionId})
         """;
 
     /// <summary>
@@ -230,7 +275,7 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
             Summary = {entity.Summary}, LastAccessedUtc = {entity.LastAccessedUtc}, Importance = {entity.Importance},
             Confidence = {entity.Confidence}, IsProtected = {entity.IsProtected}, IsDeleted = {entity.IsDeleted},
             LastModifiedUtc = {entity.LastModifiedUtc}, Notes = {entity.Notes}, AddressedTo = {entity.AddressedTo},
-            MessageId = {entity.MessageId}, RelayDepth = {entity.RelayDepth}
+            MessageId = {entity.MessageId}, RelayDepth = {entity.RelayDepth}, SupersededById = {entity.SupersededById}, SessionId = {entity.SessionId}
         WHERE Id = {entity.Id}
         """;
 

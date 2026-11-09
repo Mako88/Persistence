@@ -11,7 +11,9 @@ namespace Persistence.Services;
 /// keeps only the peer's authored memories not already in context, and re-ranks them by relevance ×
 /// importance × confidence. All per-model knowledge stays out of here — it's pure retrieval + ranking.
 /// </summary>
-[Singleton(typeof(IMemorySurfacer))]
+// Registered as itself, not as IMemorySurfacer: EmbeddingMemorySurfacer fills that role and
+// composes this one, so lexical recall stays the floor every other path falls back to.
+[Singleton(typeof(MemorySurfacer))]
 public partial class MemorySurfacer : IMemorySurfacer
 {
     private readonly IContextFragmentRepository fragmentRepo;
