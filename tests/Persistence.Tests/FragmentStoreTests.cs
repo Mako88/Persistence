@@ -136,6 +136,24 @@ public sealed class FragmentStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task Split_turns_one_catch_all_into_several_and_names_them_on_the_old()
+    {
+        var store = await OpenAsync();
+        await store.RefreshTagPathsAsync();
+        var catchAll = await store.AddAsync("Personal", "Deploys go through deploy.sh. Olivia prefers mornings.", null, 0.7f, null, ["project/pawsitivity"], false);
+
+        var parts = await store.SplitAsync(catchAll.Id, ["Deploys go through deploy.sh.", "Olivia prefers mornings."], "two views");
+
+        Assert.Equal(2, parts.Count);
+        Assert.All(parts, p => Assert.Equal(0.7f, p.Importance));
+        Assert.All(parts, p => Assert.Contains(p.Tags, t => t.Name == "pawsitivity"));
+        var old = await store.GetAsync(catchAll.Id);
+        Assert.Equal(parts[0].Id, old.SupersededById);
+        Assert.Equal($"Split into #{parts[0].Id}, #{parts[1].Id}: two views", old.Notes);
+        await Assert.ThrowsAsync<UsageException>(() => store.SplitAsync(parts[1].Id, ["only one"], null));
+    }
+
+    [Fact]
     public async Task The_sleep_list_names_oversized_fragments_and_near_duplicates()
     {
         var store = await OpenAsync();

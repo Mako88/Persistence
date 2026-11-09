@@ -242,6 +242,52 @@ internal sealed partial class FragmentStore(
     }
 
     /// <summary>
+    /// Replaces one catch-all fragment with several, one per view (`split <id> --content a --content b`): the first
+    /// supersedes it as <see cref="SupersedeAsync"/> does, the rest take its type, tags, importance and confidence,
+    /// and the old one's note names every part, so the split reads back whole. One command, where it took one
+    /// supersede per part (the work Claude, 2026-11-09, asked by John to split catch-alls).
+    /// </summary>
+    public async Task<IReadOnlyList<ContextFragmentEntity>> SplitAsync(long id, IReadOnlyList<string> contents, string? reason)
+    {
+        if (contents.Count < 2)
+        {
+            throw new UsageException("split needs two or more --content, one per part; one is a `supersede`.");
+        }
+
+        var old = await WritableAsync(id);
+        var tagPaths = old.Tags.Select(t => TagPaths.GetValueOrDefault(t.Id, t.Name)).ToList();
+        var parts = new List<ContextFragmentEntity>
+        {
+            await SupersedeAsync([id], contents[0], null, null, null, [], reason),
+        };
+        foreach (var content in contents.Skip(1))
+        {
+            var part = new ContextFragmentEntity
+            {
+                FragmentType = old.FragmentType,
+                Status = ContextFragmentStatus.Active,
+                Content = content,
+                Importance = old.Importance,
+                Confidence = old.Confidence,
+                CreatedUtc = DateTimeOffset.UtcNow,
+                LastModifiedUtc = DateTimeOffset.UtcNow,
+                SessionId = Session,
+                TouchedSessionId = Session,
+                Sources = [await PeerSourceAsync()],
+                Tags = await TagsAsync(tagPaths),
+            };
+            await fragments.SaveAsync(part);
+            parts.Add(part);
+        }
+
+        var archived = await GetAsync(id);
+        archived.Notes = $"Split into {string.Join(", ", parts.Select(p => $"#{p.Id}"))}"
+            + (string.IsNullOrWhiteSpace(reason) ? "." : $": {reason.Trim()}");
+        await fragments.SaveAsync(archived);
+        return parts;
+    }
+
+    /// <summary>
     /// A fragment with where it stands in its line of views: what it replaced (with why), and what
     /// replaced it, so an old view found by search leads to the current one.
     /// </summary>

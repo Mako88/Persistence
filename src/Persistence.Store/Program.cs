@@ -15,6 +15,7 @@ const string Usage = """
                                             in> unless it is tagged project/<name> already or --everywhere
       edit <id> [--type] [--content <text|->] [--summary] [--importance] [--confidence] [--tag <a/b>]... [--untag <a/b>]...
       supersede <id>[,<id>...] --content <text|-> [--reason <text>] [--type] [--summary] [--importance] [--confidence] [--tag <a/b>]...
+      split <id> --content <part> --content <part>... [--reason <text>]   one catch-all into several, each part a fragment
                                             a change of mind (one id) or a merge (several): the new fragment
                                             takes their type and tags (--tag replaces the tags); the old ones are
                                             archived, keep their content and the reason, and point at it
@@ -180,6 +181,9 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
         case "edit":
             Print(line, [await store.EditAsync(line.Id(), line.Get("type"), line.Text(), line.Text("summary"),
                 line.GetFloat("importance"), line.GetFloat("confidence"), line.GetAll("tag"), line.GetAll("untag"))]);
+            break;
+        case "split":
+            Print(line, await store.SplitAsync(line.Id(), line.GetAll("content"), line.Get("reason")));
             break;
         case "supersede":
             var replaced = line.Positional
