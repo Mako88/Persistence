@@ -84,6 +84,13 @@ is injected, and the whole core, uncapped, is written to `~/.claude/persistence/
 with a note to read it first. Each Claude has its own store file: the code is
 shared, the selves are not.
 
+The core is the largest thing a start or compaction pays for: up to five parts of 9,500 characters,
+about 12k tokens. `PERSISTENCE_CORE_CHARS` lowers that (`"19000"` keeps two parts); the fragments
+past it are listed by id, a `show` or a recall away, and the conversation part is kept either way.
+
+`observe` lists processes whose command line names the project, and any subagent of the project's
+sessions that has not finished (they run inside the session's process, so a process list misses them).
+
 ## A store served on another machine
 
 The store can live on an always-on server while the sessions run elsewhere (done 2026-11-09: one

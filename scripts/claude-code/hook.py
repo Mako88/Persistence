@@ -1303,9 +1303,34 @@ def run_quiet(cmd, cwd=None, timeout=10):
         return ""
 
 
+def running_agents(transcript, now, within=6 * 3600):
+    """Subagents of this project's sessions that have not finished: a subagent runs inside its
+    session's process, so the process list cannot see one (a worktree agent working looked like
+    "nothing is running"). Claude Code writes each one's transcript beside a `.meta.json` that gains
+    `"finished": true` when it ends; one with no finish that wrote within `within` is reported, with
+    how long ago it last wrote, so a crashed agent reads as quiet rather than as busy."""
+    if not transcript:
+        return []
+    found = []
+    for meta in Path(transcript).parent.glob("*/subagents/agent-*.meta.json"):
+        try:
+            info = json.loads(meta.read_text(encoding="utf-8"))
+            log = meta.with_name(meta.name[:-len(".meta.json")] + ".jsonl")
+            wrote = log.stat().st_mtime if log.exists() else meta.stat().st_mtime
+            began = meta.stat().st_ctime
+        except (OSError, ValueError):
+            continue
+        if info.get("finished") is True or now - wrote > within:
+            continue
+        where = f" in worktree {info['worktreeBranch']}" if info.get("worktreeBranch") else ""
+        found.append((wrote, f"- agent running {age(max(0, now - began))}: {info.get('description') or meta.stem}"
+                             f"{where}, last wrote {age(max(0, now - wrote))} ago"))
+    return [line for _, line in sorted(found, reverse=True)]
+
+
 def observe(event):
     """What is so now, read off the machine every message rather than written down: the processes
-    running from this project, logs written in the last hour with their last line, git's state, and
+    running from this project, its sessions' unfinished subagents, logs written in the last hour with their last line, git's state, and
     whatever is watched (`hook.py watch`). Written down, it went stale; read, it cannot."""
     from concurrent.futures import ThreadPoolExecutor
 
@@ -1337,7 +1362,9 @@ def observe(event):
             continue  # a venv's launcher and the interpreter it starts are one process to the reader
         shown.add(cmd)
         lines.append(f"- running {since}: pid {p['ProcessId']} {cmd[:150]}")
-    if not shown:
+    agents = running_agents(event.get("transcript_path", ""), now)
+    lines += agents
+    if not shown and not agents:
         lines.append(f"- nothing of {name} is running")
 
     logs = []
