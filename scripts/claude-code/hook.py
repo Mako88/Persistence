@@ -312,6 +312,7 @@ def seen(event, reset=False, add=()):
     ids.update(str(i) for i in add)
     STATE.mkdir(parents=True, exist_ok=True)
     if reset:
+        (STATE / f"{event.get('session_id', 'unknown')}.cued").unlink(missing_ok=True)  # a new window is reminded afresh
         # When this context window began: what was said since is in front of the peer already.
         path.with_suffix(".since").write_text(datetime.now(timezone.utc).isoformat())
     path.write_text(" ".join(sorted(ids)))
@@ -343,6 +344,90 @@ def keep_soon(event, delay=5):
     threading.Thread(target=later, daemon=True).start()
 
 
+CUE_AGAIN = 30 * 60  # a cue that came in is not shown again within this many seconds of the same window
+
+
+def cued(event, moment, text):
+    """The fragments of the cues `text` matches at `moment`, rendered, less those shown in this window in the
+    last CUE_AGAIN seconds: a reminder at the moment it can change what happens, not every time."""
+    path = STATE / f"{event.get('session_id', 'unknown')}.cued"
+    try:
+        shown = json.loads(path.read_text())
+    except (OSError, ValueError):
+        shown = {}
+    now = datetime.now().timestamp()
+    recent = [i for i, at in shown.items() if now - at < CUE_AGAIN]
+    found = store("cued", moment, "--text", "-", *session_args(event), *(["--exclude", ",".join(recent)] if recent else []),
+                  stdin=text, cold=False).strip()
+    ids = re.findall(r"^\[#(\d+) \|", found, re.M)
+    if ids:
+        shown.update({i: now for i in ids})
+        STATE.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(shown))
+    return found if ids else ""
+
+
+def tool_cue(event):
+    """PreToolUse: a reminder set for this kind of call (`cue set tool/<name> --when '^PowerShell:.*python'`)."""
+    text = f"{event.get('tool_name', '')}: {json.dumps(event.get('tool_input') or {}, ensure_ascii=False)}"
+    found = cued(event, "tool", text)
+    if found:
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext":
+                          "A cue you set for calls like this one (a reminder, not a block):\n\n" + found}}))
+
+
+STARTERS = {"Agent", "Task", "Monitor", "ScheduleWakeup", "CronCreate", "Workflow", "mcp__ccd_session__start_session",
+            "mcp__ccd_session__hand_off_to_session"}
+
+
+def this_turn(path):
+    """The last message the peer wrote this turn, and whether the turn started anything that outlives it (a
+    background command, a wake, an agent, a session), read from the transcript since the human last spoke."""
+    try:
+        lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()[-400:]
+    except OSError:
+        return "", False
+    said, started = "", False
+    for line in reversed(lines):
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if e.get("isSidechain"):
+            continue
+        content = (e.get("message") or {}).get("content")
+        if e.get("type") == "user":
+            if isinstance(content, str) or any(isinstance(b, dict) and b.get("type") == "text" for b in content or []):
+                break  # the message that began the turn: the human's, or the harness's
+            continue
+        if e.get("type") != "assistant" or not isinstance(content, list):
+            continue
+        for b in content:
+            if b.get("type") == "text" and not said:
+                said = b.get("text", "")
+            if b.get("type") == "tool_use":
+                given = b.get("input") or {}
+                if b.get("name") in STARTERS or given.get("run_in_background") or re.search(r"\bpwake\b|hook\.py wake", str(given.get("command", ""))):
+                    started = True
+    return said, started
+
+
+def stop_cue(event):
+    """Stop: a reminder set for how a turn ends (`cue set stop/<name> --when <promise>`), shown only when the turn
+    started nothing that carries on, and only once (stop_hook_active): a turn that said "I'll build it next" and
+    ended without starting it is held, once, with the reminder."""
+    if event.get("stop_hook_active"):
+        return
+    said, started = this_turn(event.get("transcript_path", ""))
+    if not said or started:
+        return
+    found = cued(event, "stop", said)
+    if found:
+        print(json.dumps({"decision": "block", "reason": "A cue you set for how a turn ends matched your last message, "
+                          "and this turn started nothing that carries on (no background command, wake, agent or session). "
+                          "If you meant to start something, start it now; if not, end the turn again.\n\n" + found}))
+
+
 def recall(event):
     keep_soon(event)
     count = int(os.environ.get("PERSISTENCE_RECALL_COUNT", "3"))
@@ -352,19 +437,22 @@ def recall(event):
     if any(m in prompt for m in ("<task-notification>", "<agent-message", "[Subagent hand-back]")) or prompt.startswith("[SYSTEM NOTIFICATION"):
         return  # the harness reporting a background task or a subagent, not the human: nothing of theirs to associate with
     # A short message ("sounds good") matches past acknowledgements, not what it is about: no past utterances for it.
+    reminded = cued(event, "prompt", prompt)
     already = seen(event)
     since = STATE / f"{event.get('session_id', 'unknown')}.since"
     found = store("recall", "--text", "-", *session_args(event), "--limit", str(count), "--snippet", "300", "--project", project(event),
                   "--wander", os.environ.get("PERSISTENCE_RECALL_WANDER", "1"),
                   "--said", os.environ.get("PERSISTENCE_RECALL_SAID", "3") if len(prompt) >= 40 else "0",
                   *(["--before", since.read_text().strip()] if since.exists() else []),
-                  *(["--exclude", ",".join(already)] if already else []), stdin=prompt, cold=False)
+                  # A cue's text joins what is looked for: "receiving" also finds what was said about receipting.
+                  *(["--exclude", ",".join(already)] if already else []), stdin=prompt + ("\n\n" + reminded if reminded else ""), cold=False)
     ids = re.findall(r"^\[#(\d+) \|", found, re.M)
-    if not ids:
+    if not ids and not reminded:
         return
     seen(event, add=ids)
-    text = ("Recalled from your store, by association with this message (`persistence-store show <id>` "
-            "reads the whole of one):\n\n" + found.strip())
+    text = ("Cued by this message (a reminder you set for words like these):\n\n" + reminded + "\n\n" if reminded else "") + (
+        "Recalled from your store, by association with this message (`persistence-store show <id>` "
+        "reads the whole of one):\n\n" + found.strip() if ids else "")
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": text[:CAP]}}))
 
 
@@ -624,7 +712,8 @@ def answer(name, part, event):
         if name == "session-start":
             session_start(event, part)
         else:
-            {"subagent-start": subagent_start, "recall": recall, "observe": observe_hook}[name](event)
+            {"subagent-start": subagent_start, "recall": recall, "observe": observe_hook, "tool-cue": tool_cue,
+             "stop-cue": stop_cue}[name](event)
         out = sys.stdout.local.buffer.getvalue().strip()
     finally:
         sys.stdout.local.buffer = None

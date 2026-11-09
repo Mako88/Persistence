@@ -27,6 +27,13 @@ const string Usage = """
                                             A loaded group is in the core (head, subgroups, a line per member):
                                             the project's when it has a head, and those loaded for the session.
                                             Recall brings an unloaded group's head beside a member it surfaces
+      cue [list] | set <moment>/<name> --when <pattern> [--content <text|-> [--type] [--importance] [--project <name>]]
+                                            a cue brings its fragments at a moment, not by association: prompt
+                                            (the human's words), tool (a call about to run, as `Tool: {input}`),
+                                            stop (my last message as a turn ends). --content adds a fragment to it;
+                                            `edit <id> --tag cue/<moment>/<name>` puts an existing one on it
+      cued <moment> --text <text|-> [--exclude <id,id>] [--snippet 600]
+                                            the fragments of the cues the text matches, as the hooks show them
       archive <id> | restore <id>           out of the core and recent lists, still searchable; reversible
       forget <id> [--reason <text>]         soft-delete, hidden everywhere; unforget <id> brings it back
       show <id>
@@ -61,7 +68,18 @@ const string Usage = """
 Console.OutputEncoding = System.Text.Encoding.UTF8;
 Console.InputEncoding = System.Text.Encoding.UTF8;
 
-var line = CommandLine.Parse(args);
+CommandLine line;
+try
+{
+    line = CommandLine.Parse(args);
+}
+catch (UsageException e)
+{
+    Console.Error.WriteLine(e.Message);
+    Console.Error.WriteLine("`persistence-store help` lists the commands.");
+    return 1;
+}
+
 if (line.Command == "help" || line.Has("help"))
 {
     Console.WriteLine(Usage);
@@ -178,6 +196,41 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
             }
 
             break;
+        case "cue":
+            switch (line.Positional.Count > 0 ? line.Positional[0] : "list")
+            {
+                case "list":
+                    Console.WriteLine(await store.CueListAsync());
+                    break;
+                case "set":
+                    var cue = await store.SetCueAsync(
+                        line.Positional.Count > 1 ? line.Positional[1] : throw new UsageException("cue set needs <moment>/<name>."),
+                        line.Get("when") ?? throw new UsageException("cue set needs --when <pattern>."));
+                    Console.WriteLine($"{cue} is set.");
+                    if (line.Text() is { } reminder)
+                    {
+                        // A reminder holds wherever its moment comes, so it is scoped to a project only when asked.
+                        Print(line, [await store.AddAsync(line.Get("type") ?? "Personal", reminder, line.Text("summary"),
+                            line.GetFloat("importance"), line.GetFloat("confidence"), [cue], false, line.Get("project"))]);
+                    }
+
+                    break;
+                default:
+                    throw new UsageException($"cue {line.Positional[0]}? It takes list or set.");
+            }
+
+            break;
+        case "cued":
+            var cued = await store.CuedAsync(
+                line.Positional.Count > 0 ? line.Positional[0] : throw new UsageException("cued needs the moment."),
+                line.Text("text") ?? "", Ids(line.GetAll("exclude")));
+            foreach (var fragment in cued)
+            {
+                Console.WriteLine(FragmentStore.Render(fragment, maxContent: line.GetInt("snippet", 600), self: store.Session));
+                Console.WriteLine();
+            }
+
+            break;
         case "archive":
             Print(line, [await store.SetStatusAsync(line.Id(), ContextFragmentStatus.Archived)]);
             break;
@@ -210,10 +263,7 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
             Print(line, await store.SearchAsync(string.Join(' ', line.Positional), line.GetInt("limit", 20)), store.Session);
             break;
         case "recall":
-            var exclude = line.GetAll("exclude")
-                .SelectMany(e => e.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                .Select(e => long.TryParse(e.TrimStart('#'), out var x) ? x : throw new UsageException($"'{e}' is not a fragment id."))
-                .ToHashSet();
+            var exclude = Ids(line.GetAll("exclude"));
             var before = line.Get("before") is { } at
                 ? DateTimeOffset.TryParse(at, out var t) ? t : throw new UsageException($"'{at}' is not a date and time.")
                 : (DateTimeOffset?)null;
@@ -318,3 +368,9 @@ static void Print(CommandLine line, IReadOnlyList<ContextFragmentEntity> found, 
         Console.WriteLine();
     }
 }
+
+// Fragment ids given as `--exclude 1,2 --exclude #3`.
+static HashSet<long> Ids(IEnumerable<string> given) => given
+    .SelectMany(e => e.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+    .Select(e => long.TryParse(e.TrimStart('#'), out var x) ? x : throw new UsageException($"'{e}' is not a fragment id."))
+    .ToHashSet();

@@ -8,6 +8,13 @@ namespace Persistence.Store;
 internal sealed class CommandLine
 {
     /// <summary>The options that are switches rather than carrying a value.</summary>
+    /// <summary>Every option some command reads (a text option's <c>-file</c> form too); anything else is refused.</summary>
+    public static readonly IReadOnlySet<string> Known = new HashSet<string>(
+        ["archived", "batch", "before", "confidence", "db", "debug", "everywhere", "exclude", "help", "importance", "json",
+         "limit", "local-peer", "max-chars", "peer", "port", "project", "protected", "reason", "recent", "said", "session",
+         "snippet", "tag", "type", "wander", "when", "content", "content-file", "summary", "summary-file", "text", "text-file"],
+        StringComparer.OrdinalIgnoreCase);
+
     public static readonly IReadOnlySet<string> Flags = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         "json", "protected", "archived", "help", "debug", "everywhere",
@@ -43,6 +50,12 @@ internal sealed class CommandLine
 
             var name = arg[2..];
             string? value = null;
+            if (name.Split('=')[0] is var asked && !Known.Contains(asked))
+            {
+                // An option no command reads was ignored without a word: `--tags a,b` for `--tag a/b` left a day
+                // of fragments untagged (2026-11-08). Now it is refused before anything is written.
+                throw new UsageException($"--{asked} is not an option of any command.");
+            }
 
             var eq = name.IndexOf('=');
             if (eq >= 0)

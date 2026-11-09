@@ -177,6 +177,27 @@ public sealed class FragmentStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task A_cue_brings_its_fragments_when_its_moment_matches()
+    {
+        var store = await OpenAsync();
+        var cue = await store.SetCueAsync("tool/powershell-python", @"^PowerShell:.*\bpython\b");
+        var reminder = await store.AddAsync("Personal", "Python inside PowerShell breaks on quoting; use Bash.", null, null, null, [cue], false);
+
+        Assert.Equal([reminder.Id], (await store.CuedAsync("tool", "PowerShell: {\"command\": \"python -c 1\"}", new HashSet<long>())).Select(f => f.Id));
+        Assert.Empty(await store.CuedAsync("tool", "Bash: {\"command\": \"python -c 1\"}", new HashSet<long>()));
+        Assert.Empty(await store.CuedAsync("prompt", "PowerShell: python", new HashSet<long>()));
+        Assert.Empty(await store.CuedAsync("tool", "PowerShell: python", new HashSet<long> { reminder.Id }));
+        Assert.Contains("cue/tool/powershell-python", await store.CueListAsync());
+    }
+
+    [Fact]
+    public void An_option_no_command_reads_is_refused()
+    {
+        Assert.Throws<UsageException>(() => CommandLine.Parse(["add", "--tags", "a,b", "--content", "x"]));
+        Assert.Equal(["a/b"], CommandLine.Parse(["add", "--tag", "a/b", "--content", "x"]).GetAll("tag"));
+    }
+
+    [Fact]
     public async Task System_managed_types_cannot_be_authored()
     {
         var store = await OpenAsync();
