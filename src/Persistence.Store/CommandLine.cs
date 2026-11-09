@@ -12,7 +12,7 @@ internal sealed class CommandLine
     public static readonly IReadOnlySet<string> Known = new HashSet<string>(
         ["archived", "batch", "before", "confidence", "db", "debug", "everywhere", "exclude", "help", "importance", "json",
          "limit", "local-peer", "max-chars", "peer", "port", "project", "protected", "reason", "recent", "said", "session",
-         "snippet", "tag", "type", "wander", "when", "content", "content-file", "summary", "summary-file", "text", "text-file"],
+         "snippet", "tag", "transcript", "type", "wander", "when", "content", "content-file", "summary", "summary-file", "text", "text-file"],
         StringComparer.OrdinalIgnoreCase);
 
     public static readonly IReadOnlySet<string> Flags = new HashSet<string>(StringComparer.OrdinalIgnoreCase)

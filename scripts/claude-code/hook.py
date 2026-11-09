@@ -24,6 +24,12 @@ Every call but `keep` goes to `persistence-store serve`, the store kept open on 
 (default 8095), started from a copy of the published CLI the first time nothing answers, and ending
 itself when a new build is published; until it is up, the call runs the CLI as before.
 
+A store served on another machine: `~/.claude/persistence/remote.json`, {"host": "<ssh host>", "port":
+8095}. Every call then goes to that machine's `serve` through an SSH tunnel (`ssh -N -L`) that the hook
+opens when nothing answers; `keep` sends the transcript's new lines rather than a path; and nothing ever
+falls back to a local store, so two copies never drift apart. `hook.py cli <args>` is the CLI by the
+same route, for the peer's own shell (the `pstore` wrapper).
+
 Configured by environment (settings.json "env"): PERSISTENCE_STORE_DB (this Claude's store, one per
 Claude), PERSISTENCE_STORE_EXE (the published persistence-store), PERSISTENCE_SELECTEDLOCALPEER (the
 human's name), PERSISTENCE_CURATE_AT (tokens, default 500000; set autoCompactWindow above it),
@@ -115,12 +121,99 @@ def start_server(exe):
         print(f"persistence hook: the store server did not start: {e}", file=sys.stderr)
 
 
+REMOTE = Path(os.environ.get("PERSISTENCE_STORE_REMOTE_FILE") or STATE.parent / "remote.json")  # the variable: for a trial run
+
+
+def remote():
+    """Where the store is served when it is on another machine ({"host", "port"}), else None."""
+    try:
+        where = json.loads(REMOTE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return where if isinstance(where, dict) and where.get("host") else None
+
+
+def open_tunnel(where, wait=8):
+    """Opens the SSH tunnel to the remote store's port, and waits for it to answer. A second tunnel
+    beside a live one ends at once (ExitOnForwardFailure: the port is taken), so no record of the first
+    is needed; attempts are spaced, so a machine that is down is not asked on every call."""
+    STATE.mkdir(parents=True, exist_ok=True)
+    stamp = STATE / "tunnel.tried"
+    try:
+        if time.time() - stamp.stat().st_mtime < 15:
+            return False
+    except OSError:
+        pass
+    stamp.touch()
+    forward = f"127.0.0.1:{PORT}:127.0.0.1:{int(where.get('port', 8095))}"
+    try:
+        subprocess.Popen(["ssh", "-N", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes",
+                          "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "-L", forward, where["host"]],
+                         creationflags=BACKGROUND, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=open(STATE / "tunnel.log", "a", encoding="utf-8"), close_fds=True)
+    except OSError as e:
+        print(f"persistence hook: the tunnel to {where['host']} did not start: {e}", file=sys.stderr)
+        return False
+    import socket
+
+    for _ in range(wait * 4):
+        time.sleep(0.25)
+        try:
+            socket.create_connection(("127.0.0.1", PORT), timeout=1).close()
+            return True
+        except OSError:
+            continue
+    return False
+
+
+def remote_args(args, cwd=None):
+    """A call as the remote server needs it: it has no shell of this session's, so the session, the
+    project an added fragment belongs to, and any file the call names travel with the call."""
+    args, stdin = list(args), None
+    command = args[0] if args else ""
+    session = os.environ.get("PERSISTENCE_SESSION") or os.environ.get("CLAUDE_CODE_SESSION_ID")
+    if "--session" not in args and session:
+        args += ["--session", session]
+    if (command == "add" or (command == "context" and args[1:2] in ([], ["list"]))) \
+            and "--project" not in args and "--everywhere" not in args:
+        args += ["--project", project({"cwd": cwd or os.getcwd()})]
+    for name in ("content", "summary", "text"):
+        flag = f"--{name}-file"
+        if flag in args and args.index(flag) + 1 < len(args):
+            at = args.index(flag)
+            text = Path(args[at + 1]).read_text(encoding="utf-8")
+            if name != "summary" and stdin is None and "-" not in args:
+                args[at:at + 2], stdin = [f"--{name}", "-"], text
+            else:
+                args[at:at + 2] = [f"--{name}", text]
+    return args, stdin
+
+
+def served_remote(where, args, stdin, timeout):
+    """The remote store's (code, out, err), opening the tunnel when nothing answers; None when the store
+    cannot be reached. Never a local store in its place."""
+    reply = served(args, stdin, timeout)
+    if reply is None and open_tunnel(where):
+        reply = served(args, stdin, timeout)
+    return reply
+
+
 def store(*args, timeout=60, stdin=None, serve=True, cold=True):
     """The CLI's output, or "" if it could not run: a hook must never break the session it serves.
     Asked of the served store when one is up; otherwise one is started and this call runs the CLI,
     unless `cold` is False: a cold CLI's recall took 38 s (2026-11-08), past the harness's 20 s, so the
     message waited and got nothing; better none this message and the started server's from the next."""
     exe = os.environ.get("PERSISTENCE_STORE_EXE", "persistence-store")
+    where = remote()
+    if where:
+        reply = served_remote(where, args, stdin, timeout if args[:1] == ("keep-conversation",) else min(timeout, 12))
+        if reply is None or reply is BUSY:
+            print(f"persistence hook: {args[0]} skipped: the store on {where['host']} did not answer", file=sys.stderr)
+            return ""
+        code, out, err = reply
+        if code != 0:
+            print(f"persistence hook: {args[0]} failed: {err.strip()}", file=sys.stderr)
+        return out if code == 0 else ""
     if serve:
         reply = served(args, stdin, min(timeout, 12))  # inside the harness's 20 s for an HTTP hook
         if reply is BUSY:
@@ -144,12 +237,92 @@ def store(*args, timeout=60, stdin=None, serve=True, cold=True):
     return out.stdout if out.returncode == 0 else ""
 
 
+def keep_transcript(path):
+    """What `keep-conversation` said of a transcript ("kept N new utterances ..."), or why it failed.
+    Local: the CLI reads the file, run apart so the server stays free for recall. Remote: the lines the
+    store has not been sent yet go with the call (the store keeps each utterance once, so a line sent
+    twice by two hooks at once costs nothing), and how far it has been sent is kept per transcript."""
+    peer = os.environ.get("PERSISTENCE_SELECTEDLOCALPEER", "Local Peer")
+    where = remote()
+    if not where:
+        exe = os.environ.get("PERSISTENCE_STORE_EXE", "persistence-store")
+        out = subprocess.run([exe, "keep-conversation", path, "--local-peer", peer],
+                             creationflags=NO_WINDOW, capture_output=True, text=True, encoding="utf-8", timeout=120)
+        return (out.stdout if out.returncode == 0 else f"failed ({out.returncode}): {out.stderr}").strip()
+    sent_file = STATE / "kept-offsets.json"
+    try:
+        sent = json.loads(sent_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        sent = {}
+    with open(path, "rb") as f:
+        size = f.seek(0, 2)
+        start = sent.get(path, 0) if sent.get(path, 0) <= size else 0  # a shorter file is a new one
+        f.seek(start)
+        data = f.read()
+    end = data.rfind(b"\n") + 1  # whole lines only: the harness may be mid-line
+    if end == 0:
+        return "kept 0 new utterances (nothing new sent)"
+    reply = served_remote(where, ["keep-conversation", Path(path).name, "--transcript", "-", "--local-peer", peer],
+                          data[:end].decode("utf-8", errors="replace"), 120)
+    if reply is None or reply is BUSY:
+        return f"failed: the store on {where['host']} did not answer"
+    code, out, err = reply
+    if code != 0:
+        return f"failed ({code}): {err}".strip()
+    try:
+        sent = json.loads(sent_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        sent = {}
+    sent[path] = max(sent.get(path, 0), start + end)
+    STATE.mkdir(parents=True, exist_ok=True)
+    sent_file.write_text(json.dumps(sent), encoding="utf-8")
+    return out.strip()
+
+
+def pull_backup(where, every=20 * 3600, kept=30):
+    """A remote store's newest nightly backup copied here, at most once a day, so this machine always
+    holds a recent copy: remote.json's "backup_dir" (none, no copy) and "backup_path" (the newest on the
+    server, default /var/lib/persistence/backups/latest.db.gz). The last `kept` copies stay."""
+    folder = where.get("backup_dir")
+    if not folder:
+        return
+    folder = Path(folder)
+    stamp = STATE / "backup.pulled"
+    try:
+        if time.time() - stamp.stat().st_mtime < every:
+            return
+    except OSError:
+        pass
+    STATE.mkdir(parents=True, exist_ok=True)
+    stamp.touch()  # before the copy: a slow one is not started again by the next turn
+    folder.mkdir(parents=True, exist_ok=True)
+    name = f"claude-{datetime.now().strftime('%Y-%m-%d')}.db.gz"
+    partial = folder / (name + ".part")
+    source = where.get("backup_path", "/var/lib/persistence/backups/latest.db.gz")
+    try:
+        with open(partial, "wb") as out:
+            done = subprocess.run(["ssh", "-o", "BatchMode=yes", where["host"], f"cat {source}"], stdout=out,
+                                  stderr=subprocess.PIPE, creationflags=NO_WINDOW, timeout=600)
+        if done.returncode != 0 or partial.stat().st_size < 1024:
+            raise OSError(done.stderr.decode("utf-8", "replace").strip() or "an empty copy")
+        partial.replace(folder / name)
+    except (OSError, subprocess.SubprocessError) as e:
+        partial.unlink(missing_ok=True)
+        stamp.unlink(missing_ok=True)  # try again next turn
+        print(f"persistence hook: the store's backup was not copied here: {e}", file=sys.stderr)
+        return
+    for old in sorted(folder.glob("claude-*.db.gz"))[:-kept]:
+        old.unlink(missing_ok=True)
+
+
 def keep(event):
     path = event.get("transcript_path")
     if path and Path(path).exists():
-        store("keep-conversation", path, "--local-peer",
-              os.environ.get("PERSISTENCE_SELECTEDLOCALPEER", "Local Peer"), timeout=120,
-              serve=False)  # in the background and slow: run apart, so the server stays free for recall
+        said = keep_transcript(path)
+        if said.startswith("failed"):
+            print(f"persistence hook: keep-conversation {said}", file=sys.stderr)
+    if remote():
+        pull_backup(remote())
 
 
 def context_tokens(path):
@@ -187,7 +360,8 @@ def curate(event):
         return
     STATE.mkdir(parents=True, exist_ok=True)
     marker(event).write_text(str(tokens))
-    exe = os.environ.get("PERSISTENCE_STORE_EXE", "persistence-store")
+    # A remote store is reached through `hook.py cli` (the `pstore` wrapper), never the CLI's own file.
+    exe = "pstore" if remote() else os.environ.get("PERSISTENCE_STORE_EXE", "persistence-store")
     print(json.dumps({"decision": "block", "reason": (
         f"Your context is at {tokens:,} tokens. Before long it is compacted, and what you know then is "
         "only your store: the core (identity, relationships, personal, summaries) and the last of the "
@@ -244,7 +418,7 @@ def ensure_embedding_server():
     import socket
     from urllib.parse import urlparse
     url, script = os.environ.get("PERSISTENCE_EMBEDDING_APIBASEURL"), os.environ.get("PERSISTENCE_EMBEDDING_SERVER")
-    if not url or not script:
+    if not url or not script or remote():  # a remote store embeds on its own machine
         return
     where = urlparse(url)
     try:
@@ -385,12 +559,7 @@ def keep_soon(event, delay=5):
         # The server's own stderr goes nowhere, so the outcome is written beside the hook times.
         try:
             time.sleep(delay)
-            path = event.get("transcript_path")
-            exe = os.environ.get("PERSISTENCE_STORE_EXE", "persistence-store")
-            out = subprocess.run([exe, "keep-conversation", path, "--local-peer",
-                                  os.environ.get("PERSISTENCE_SELECTEDLOCALPEER", "Local Peer")],
-                                 creationflags=NO_WINDOW, capture_output=True, text=True, encoding="utf-8", timeout=120)
-            said = (out.stdout if out.returncode == 0 else f"failed ({out.returncode}): {out.stderr}").strip()
+            said = keep_transcript(event.get("transcript_path"))
         except Exception as e:  # a background keep must not die unseen
             said = f"failed: {e!r}"
         with open(TIMES, "a", encoding="utf-8") as log:
@@ -1098,6 +1267,30 @@ def ensure():
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
 
 
+def cli(args):
+    """The store CLI for the peer's own shell. Local: the published CLI itself. Remote: the same call
+    sent to the remote store, its output printed here; never a local store in its place."""
+    exe = os.environ.get("PERSISTENCE_STORE_EXE", "persistence-store")
+    where = remote()
+    if not where:
+        return subprocess.run([exe, *args]).returncode
+    try:
+        call, stdin = remote_args(args)
+    except OSError as e:
+        print(f"could not read a file the call names: {e}", file=sys.stderr)
+        return 1
+    if stdin is None and "-" in call:
+        stdin = sys.stdin.read()
+    reply = served_remote(where, call, stdin or "", 300)
+    if reply is None or reply is BUSY:
+        print(f"the store on {where['host']} did not answer (tunnel log: {STATE / 'tunnel.log'})", file=sys.stderr)
+        return 3
+    code, out, err = reply
+    sys.stdout.write(out)
+    sys.stderr.write(err)
+    return code
+
+
 def main():
     # Windows Pythons default to the console code page, which cannot encode what fragments hold.
     sys.stdout.reconfigure(encoding="utf-8")
@@ -1108,6 +1301,8 @@ def main():
     if sys.argv[1] in ("serve", "ensure"):
         serve() if sys.argv[1] == "serve" else ensure()
         return
+    if sys.argv[1] == "cli":  # `cli <args>`: the store CLI, by way of the remote store when there is one
+        sys.exit(cli(sys.argv[2:]))
     if sys.argv[1] == "uses":  # `uses [days]`: what recall and the cues showed, and how much of it a turn then used
         uses_report(int(sys.argv[2]) if len(sys.argv) > 2 else 30)
         return

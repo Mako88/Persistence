@@ -80,3 +80,32 @@ the recent conversation from the store after it: what fits under Claude Code's 1
 is injected, and the whole core, uncapped, is written to `~/.claude/persistence/state/<session>.core.md`
 with a note to read it first. Each Claude has its own store file: the code is
 shared, the selves are not.
+
+## A store served on another machine
+
+The store can live on an always-on server while the sessions run elsewhere (done 2026-11-09: one
+store, reached from John's desktop and from a Claude Code on the server itself).
+
+On the server (Linux):
+
+1. `dotnet publish src/Persistence.Store -c Release -r linux-x64 --self-contained true -o /opt/persistence/store`
+2. An embedder for recall by meaning, the same model the store's vectors were made with, e.g.
+   llama.cpp's `llama-server -m bge-small-en-v1.5-q8_0.gguf --embedding --pooling cls --host 127.0.0.1 --port 8081`.
+3. `persistence-store serve --port 8095` under systemd, with `PERSISTENCE_STORE_DB`,
+   `PERSISTENCE_STORE_EXE` (its own path, so a new publish restarts it) and the
+   `PERSISTENCE_EMBEDDING_*` variables. It listens on 127.0.0.1 only: never open the port; it is
+   reached over SSH.
+4. A nightly `sqlite3 <db> ".backup <file>"`, compressed, with `latest.db.gz` pointing at the newest.
+
+On each machine that runs sessions:
+
+- `~/.claude/persistence/remote.json`: `{"host": "<ssh host>", "port": 8095, "backup_dir": "<folder>"}`.
+  The hooks then open `ssh -N -L 127.0.0.1:8095:127.0.0.1:8095 <host>` when nothing answers, send
+  `keep` the transcript's new lines (`keep-conversation <name> --transcript -`), and copy the newest
+  backup into `backup_dir` once a day. Nothing falls back to a local store: when the server cannot
+  be reached, the hooks bring nothing that turn rather than write to a second copy.
+- The CLI by the same route: a `pstore` wrapper that runs `python ~/.claude/persistence/hook.py cli "$@"`.
+  It sends the session, an added fragment's project, and any `--content-file` with the call.
+- Leave nothing at the old `PERSISTENCE_STORE_DB` path that the CLI could open (it creates a fresh
+  store at a path with none); a folder in its place makes a stray direct call fail instead.
+- On the server itself, the same hooks with `{"host": "none"}`: the store answers at 127.0.0.1:8095 directly.

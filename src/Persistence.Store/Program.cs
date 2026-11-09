@@ -59,9 +59,10 @@ const string Usage = """
       serve [--port 8095]                   stay up with the store open and run the commands sent to it
                                             (POST /run {"args": [...], "stdin": "..."}): a hook's call costs
                                             milliseconds, not the seconds a new process takes to start
-      keep-conversation <transcript.jsonl> [--local-peer <name>]
+      keep-conversation <transcript.jsonl> [--local-peer <name>] [--transcript -]
                                             store what was said in a Claude Code session; re-running adds
-                                            only what is new
+                                            only what is new. --transcript - reads its lines from standard
+                                            input (a store served on another machine); the path names the session
 
     --debug shows the embedding client's diagnostics on stderr. --json prints fragments as JSON. Exit codes: 0 done, 1 usage, 2 refused (no such fragment, protected).
     Protected fragments are the local peer's: this tool reads them and never changes them.
@@ -347,7 +348,8 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
         case "keep-conversation":
             var transcript = line.Positional.FirstOrDefault() ?? throw new UsageException("keep-conversation needs a transcript path.");
             var (added, known) = await store.KeepConversationAsync(transcript,
-                line.Get("local-peer") ?? Environment.GetEnvironmentVariable("PERSISTENCE_SELECTEDLOCALPEER") ?? "Local Peer");
+                line.Get("local-peer") ?? Environment.GetEnvironmentVariable("PERSISTENCE_SELECTEDLOCALPEER") ?? "Local Peer",
+                line.Get("transcript") == "-" ? Console.In : null);
             Console.WriteLine($"kept {added} new utterances ({known} already in the store)");
             break;
         default:

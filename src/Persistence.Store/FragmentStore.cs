@@ -676,7 +676,12 @@ internal sealed partial class FragmentStore(
         return changed;
     }
 
-    public async Task<(int Added, int Known)> KeepConversationAsync(string transcriptPath, string localPeerName)
+    public Task<(int Added, int Known)> KeepConversationAsync(string transcriptPath, string localPeerName) =>
+        KeepConversationAsync(transcriptPath, localPeerName, null);
+
+    /// <param name="transcriptPath">The transcript, named for its session (<c>&lt;id&gt;.jsonl</c>).</param>
+    /// <param name="content">Its lines, when the file is on another machine: the path then only names the session.</param>
+    public async Task<(int Added, int Known)> KeepConversationAsync(string transcriptPath, string localPeerName, TextReader? content)
     {
         // The transcript is named for its session (<id>.jsonl).
         var sessionId = Path.GetFileNameWithoutExtension(transcriptPath);
@@ -689,7 +694,7 @@ internal sealed partial class FragmentStore(
         var skipped = 0;
         var fresh = new List<ContextFragmentEntity>();
 
-        foreach (var said in Transcript.Read(transcriptPath))
+        foreach (var said in content is null ? Transcript.Read(transcriptPath) : Transcript.Read(content))
         {
             if (!known.Add(said.Id))
             {

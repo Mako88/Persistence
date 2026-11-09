@@ -25,7 +25,16 @@ internal static partial class Transcript
         // The harness keeps appending while a session runs; share the file rather than lock it.
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         using var reader = new StreamReader(stream);
+        foreach (var said in Read(reader))
+        {
+            yield return said;
+        }
+    }
 
+    /// <summary>A transcript's lines from a reader: what a client sends a store served on another machine,
+    /// which cannot open the client's file.</summary>
+    public static IEnumerable<Utterance> Read(TextReader reader)
+    {
         while (reader.ReadLine() is { } line)
         {
             if (string.IsNullOrWhiteSpace(line))

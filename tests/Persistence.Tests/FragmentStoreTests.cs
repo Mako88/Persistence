@@ -289,6 +289,22 @@ public sealed class FragmentStoreTests : IDisposable
         Assert.Single(await store.SearchAsync("while worked", 10));
     }
 
+    [Fact]
+    public async Task A_transcript_sent_as_text_is_kept_like_the_file_under_its_session()
+    {
+        // A store served on another machine cannot open the client's file: the client sends the lines,
+        // and the path only names the session.
+        var path = SessionTranscript("cccccccc-3", TimeSpan.FromMinutes(5), ("user", "Move the store."), ("assistant", "Moving it."));
+        var lines = await File.ReadAllTextAsync(path);
+        var store = await OpenAsync();
+
+        var kept = await store.KeepConversationAsync("/elsewhere/cccccccc-3.jsonl", "John", new StringReader(lines));
+
+        Assert.Equal((2, 0), kept);
+        Assert.Equal((0, 2), await store.KeepConversationAsync(path, "John"));
+        Assert.All(await store.RecentAsync(10), f => Assert.Equal("cccccccc-3", f.SessionId));
+    }
+
     /// <summary>A transcript named for its session, one utterance a line, said <paramref name="ago"/>.</summary>
     private string SessionTranscript(string session, TimeSpan ago, params (string Role, string Text)[] said)
     {
