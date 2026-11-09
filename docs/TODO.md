@@ -430,10 +430,11 @@ strike an item when it lands (with the commit).
   line (its most important fragment's first line and id), and a message that names a project ("the Minecraft
   mods folder") brings that project's fragments into recall as its own.~~ Done (this commit's parent).
 
-- **The stop-promise cue misses work started in an earlier turn (2026-11-09, Claude).** "Your last message
+- ~~**The stop-promise cue misses work started in an earlier turn (2026-11-09, Claude).** "Your last message
   promises work ... this turn started nothing" fired twice while a background agent started turns earlier
   was still running and would notify. The cue should count agents, commands and wakes still running from
-  any turn of the session, not only this one.
+  any turn of the session, not only this one.~~ Done: a background command or agent with no
+  task-notification yet counts as carrying on.
 
 ## Open observations
 

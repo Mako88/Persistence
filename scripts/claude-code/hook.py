@@ -930,6 +930,29 @@ def this_turn(path):
     return said, started, named
 
 
+def still_running(path):
+    """Whether something started in an earlier turn (a background command, an agent) has not yet reported back:
+    the harness notifies with a <task-notification> naming the starting call's id when it ends. The promise cue
+    fired twice while an agent started turns before was still building the promised thing (2026-11-09)."""
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    starts, ended = set(), set(re.findall(r"<tool-use-id>(toolu_\w+)</tool-use-id>", text))
+    for line in text.splitlines()[-3000:]:
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if e.get("isSidechain") or e.get("type") != "assistant":
+            continue
+        for b in (e.get("message") or {}).get("content") or []:
+            if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("id") and (
+                    b.get("name") in ("Agent", "Task") or (b.get("input") or {}).get("run_in_background")):
+                starts.add(b["id"])
+    return bool(starts - ended)
+
+
 def stop_cue(event):
     """Stop: a reminder set for how a turn ends (`cue set stop/<name> --when <promise>`), shown only when the turn
     started nothing that carries on, and only once (stop_hook_active): a turn that said "I'll build it next" and
@@ -938,7 +961,7 @@ def stop_cue(event):
         return
     said, started, named = this_turn(event.get("transcript_path", ""))
     record_used(event, named)
-    if not said or started:
+    if not said or started or still_running(event.get("transcript_path", "")):
         return
     found = cued(event, "stop", said)
     if found:
