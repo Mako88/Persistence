@@ -45,6 +45,9 @@ CLI it calls, and the one the Claude uses itself to curate.
     ]}],
     "SubagentStart": [{ "hooks": [
       { "type": "command", "command": "python ~/.claude/persistence/hook.py subagent-start", "timeout": 30 }
+    ]}],
+    "SessionEnd": [{ "hooks": [
+      { "type": "command", "command": "python ~/.claude/persistence/hook.py session-end", "timeout": 60 }
     ]}]
   }
 }
@@ -105,6 +108,12 @@ On the server (Linux):
    `systemd/persistence-wakes@.service` and `.timer` and `systemctl enable --now persistence-wakes@<user>.timer`:
    every minute, `hook.py run-due` resumes each session with a wake past due that no live session took. A
    wake whose reason is exactly `/compact` compacts the session first, so a peer can compact itself.
+6. The owner's sleep pass (docs/design/sleep-pass.md): `systemd/persistence-sleep@.service` and `.timer`,
+   `systemctl enable --now persistence-sleep@<user>.timer`. Each night `hook.py sleep` opens a pass in the
+   store (`sleep-begin`), builds the worklist (`sleep-list`, joined with what recall showed in 30 days), and
+   starts a fresh `claude -p` session of the owner with it and the prompt; the store holds the pass to its
+   limits, and a pass its session left open is closed afterwards. The unit passes `--propose` for the first
+   week: nothing changes, and the record lists every change for a waking session to accept.
 
 On each machine that runs sessions:
 

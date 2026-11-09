@@ -718,6 +718,24 @@ public sealed class FragmentStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task A_session_the_harness_saw_end_is_not_listed_as_running_until_it_speaks_again()
+    {
+        var store = await OpenAsync();
+        await store.KeepConversationAsync(SessionTranscript("test0000-1", TimeSpan.FromMinutes(10),
+            ("user", "Reply with the single word: ready"), ("assistant", "ready")), "John");
+        store.Session = "mine0000-2";
+        Assert.Contains(await store.OtherSessionsAsync(), l => l.StartsWith("Session test0000"));
+
+        store.Ended = new Dictionary<string, DateTimeOffset> { ["test0000-1"] = DateTimeOffset.UtcNow - TimeSpan.FromMinutes(9) };
+        Assert.Empty(await store.OtherSessionsAsync());
+        Assert.Contains("ready", (await store.RecentAsync(20)).Select(f => f.Content));
+
+        // Resumed and speaking after its end, it is running again.
+        store.Ended = new Dictionary<string, DateTimeOffset> { ["test0000-1"] = DateTimeOffset.UtcNow - TimeSpan.FromMinutes(20) };
+        Assert.Contains(await store.OtherSessionsAsync(), l => l.StartsWith("Session test0000"));
+    }
+
+    [Fact]
     public async Task An_ended_sessions_words_and_note_rejoin_the_history()
     {
         var store = await OpenAsync();

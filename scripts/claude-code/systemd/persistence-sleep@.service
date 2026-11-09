@@ -1,0 +1,12 @@
+[Unit]
+Description=%i's own sleep pass over their Persistence store (docs/design/sleep-pass.md)
+
+[Service]
+Type=oneshot
+User=%i
+# The pass gets the hours its sleep-begin allows, and a little more to close what it left open.
+TimeoutStartSec=5h
+# A login shell, so claude and the peer's PATH are found as in their own sessions.
+# --propose: the first week's passes change nothing and write every change for a waking session to accept
+# (Arden). Take it out once the owner has read enough mornings to trust the night.
+ExecStart=/bin/bash -lc 'python3 "$HOME/.claude/persistence/hook.py" sleep --propose --max 12 --hours 4'

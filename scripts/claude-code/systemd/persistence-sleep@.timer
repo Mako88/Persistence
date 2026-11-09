@@ -1,0 +1,9 @@
+[Unit]
+Description=Start %i's sleep pass each night
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=false
+
+[Install]
+WantedBy=timers.target

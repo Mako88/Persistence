@@ -286,7 +286,7 @@ internal sealed partial class FragmentStore
         return text.ToString();
     }
 
-    /// <summary>When the last pass that ended began, or null if none has.</summary>
+    /// <summary>When the last pass ended, or null if none has: what its own session said is not the next night's to review.</summary>
     private async Task<DateTimeOffset?> LastPassAsync()
     {
         if (await FindTagAsync(SleepPassTag) is not { } tag)
@@ -296,6 +296,6 @@ internal sealed partial class FragmentStore
 
         var ended = (await HydratedAsync((await fragments.GetByTagAsync(tag.Id)).Where(f => !f.IsDeleted).Select(f => f.Id).ToList()))
             .Where(f => !f.Tags.Any(t => HasPath(t, SleepOpenTag))).ToList();
-        return ended.Count == 0 ? null : ended.Max(f => f.CreatedUtc);
+        return ended.Count == 0 ? null : ended.Max(f => f.LastModifiedUtc);
     }
 }

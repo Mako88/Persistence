@@ -67,7 +67,9 @@ const string Usage = """
                                             recent conversation: what a harness puts in front of the peer.
                                             Fragments tagged project/<name> come in only for that project.
                                             --compacted (repeatable) gives the session's compaction times:
-                                            what it kept since the latest leads its section, by importance
+                                            what it kept since the latest leads its section, by importance.
+                                            --ended "<session>|<time>" (repeatable, on any command): sessions the
+                                            harness saw end; one silent since is not listed as running
       rescore-conversation                 score the salience of utterances stored at the old flat 0.3
       serve [--port 8095]                   stay up with the store open and run the commands sent to it
                                             (POST /run {"args": [...], "stdin": "..."}): a hook's call costs
@@ -148,6 +150,11 @@ catch (RefusedException e)
 static async Task<int> Run(CommandLine line, FragmentStore store)
 {
     store.Session = line.Get("session") is { Length: > 0 } named ? named : store.AmbientSession;
+    store.Ended = line.GetAll("ended").Select(e => e.Split('|', 2))
+        .Select(p => p.Length == 2 && DateTimeOffset.TryParse(p[1], System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AssumeUniversal, out var at) ? (p[0], at)
+            : throw new UsageException($"--ended takes <session>|<time>, not '{string.Join('|', p)}'."))
+        .GroupBy(e => e.Item1).ToDictionary(g => g.Key, g => g.Max(e => e.Item2));
     // A served store gets `help` here, past the check at startup: `pstore help` through the server said
     // "No command 'help'", and `note --help` read the note (Arden, 2026-11-09).
     if (line.Command == "help" || line.Has("help"))

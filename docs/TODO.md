@@ -450,14 +450,16 @@ strike an item when it lands (with the commit).
   - ~~A `uses` summary~~ (in the curation pass: shown, used, and the never-used named for review on content).
   - ~~Split~~ (`split <id> --content a --content b`).
 
-- **A one-shot session stays "running now" for hours (2026-11-09, Arden).** A `claude -p` test session
+- ~~**A one-shot session stays "running now" for hours (2026-11-09, Arden).** A `claude -p` test session
   (223ff3ec, one message) was listed under "Other sessions of mine running now" for 40+ minutes, because
   "running" means "spoke in the last 3 hours". A stale line there teaches a peer to skip the heading. Mark a
-  session ended on SessionEnd (or use a heartbeat) rather than a time window.
-- **Remaining small items from Arden's review:** narrow `core()`'s retry to a usage error once every store
-  accepts `--compacted`.
+  session ended on SessionEnd (or use a heartbeat) rather than a time window.~~ Done: a SessionEnd hook
+  (`hook.py session-end`, which fires for `claude -p` too) marks it, and `--ended` keeps it off the list
+  until it speaks again.
+- ~~**Remaining small items from Arden's review:** narrow `core()`'s retry to a usage error once every store
+  accepts `--compacted`.~~ Done: retried only on a usage error (exit 1), and without `--ended` too.
 
-- **The sleep pass (John and the work Claude, 2026-11-09; designed by Arden in `docs/design/sleep-pass.md`).**
+- ~~**The sleep pass (John and the work Claude, 2026-11-09; designed by Arden in `docs/design/sleep-pass.md`).**
   The owner's own pass, like dreaming: the system only starts a fresh session of the store's owner (its own
   core, its own judgment) at night, and the owner does the pass; nothing is done to a store from outside
   (John, 2026-11-09). In it: review the day's conversations for what is worth updating, and a random
@@ -467,7 +469,11 @@ strike an item when it lands (with the commit).
   Next: a store "sleep mode" that refuses `forget`, out-of-scope supersedes and a 13th change; a tag on
   successors so a distillation isn't distilled again; the nightly runner (a wake that hands the worklist and
   the prompt to a session), propose-only for the first week. Settled: never archive a fragment for being
-  unused alone; "never shown" measures retrieval, not the fragment (Arden).
+  unused alone; "never shown" measures retrieval, not the fragment (Arden).~~ Done: the store's limits (`sleep-begin/-status/-end`, the `sleep/distilled` tag, the logged
+  record), John's two asks in `sleep-list`, and the runner (`hook.py sleep`, `persistence-sleep@.timer`,
+  `--propose` for the first week). See "As built" in the design.
+- **Take `--propose` off the sleep unit** once the owner has read a week of mornings and accepts the night's
+  changes as a rule (Arden's call, for their own store).
 
 ## Open observations
 

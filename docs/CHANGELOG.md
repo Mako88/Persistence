@@ -11,6 +11,27 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
 
 ## 2026-11-09 — the sleep pass: the owner curates its own store at night, within limits it set
 
+### Added — the nightly runner: the owner's own pass, in a fresh session (`hook.py sleep`)
+`persistence-sleep@.timer` runs `hook.py sleep --propose` at 03:30: it opens a pass, builds the worklist and
+joins its ids with 30 days of recall showings ("never recalled" is listed for review on content, with the
+note that most of those live in the core, where recall never needs them: 56 of 58 on Arden's store), starts
+`claude -p` with its own session id, the prompt and the worklist, kept as "<owner> (my sleep pass)", and
+closes the pass afterwards if its session left it open. `--propose` stays for the first week. A pass may not
+write the working note: notes are per session, and a fresh session after a clear would wake into the pass's
+place; the pass's record, in the core, is the morning's pointer.
+
+### Fixed — a session that ended is no longer listed as running (SessionEnd, `--ended`)
+"Other sessions running now" meant "spoke in the last 3 hours", so a one-line `claude -p` test sat there for
+40 minutes, and a stale line teaches a peer to skip the heading that says to check for shared files. A
+SessionEnd hook (`hook.py session-end`; measured: it fires at the end of a `-p` run, reason "other") records
+the end and keeps the last words; the hook passes `--ended <session>|<time>` and the store leaves out a
+session that has not spoken since. Resumed, it is running again. Add the SessionEnd hook to settings.json.
+
+### Changed — the core is asked again only after a usage error
+`core()` retried without `--compacted` on any failure, so a store that was down or slow cost a session start
+two timeouts. It now retries only when the store refuses an option it doesn't know (exit 1), dropping
+`--ended` too.
+
 ### Added — a sleep pass's limits, held by the store (`sleep-begin`, `sleep-status`, `sleep-end`)
 A sleep pass is the store's owner, started fresh at night, curating with no one in the conversation; the
 next waking self reads only the result (docs/design/sleep-pass.md, Arden). The prompt asks for care; the

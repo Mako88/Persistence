@@ -80,6 +80,13 @@ internal sealed partial class FragmentStore(
     /// </summary>
     public Func<string?>? AmbientProject { get; set; }
 
+    /// <summary>
+    /// Sessions the harness saw end (its SessionEnd hook), with when: <c>--ended &lt;session&gt;|&lt;time&gt;</c>. One
+    /// that has not spoken since it ended is not running, however recently it spoke: a one-line `claude -p` test
+    /// was listed as running for 40 minutes under the 3-hour window (Arden, 2026-11-09).
+    /// </summary>
+    public IReadOnlyDictionary<string, DateTimeOffset> Ended { get; set; } = new Dictionary<string, DateTimeOffset>();
+
     /// <summary>The session of the process itself (CLAUDE_CODE_SESSION_ID), when not serving.</summary>
     public string? AmbientSession { get; set; }
 
@@ -586,8 +593,8 @@ internal sealed partial class FragmentStore(
     }
 
     /// <summary>
-    /// The other sessions running now (one that spoke within <see cref="Live"/>), each with when it last
-    /// spoke. This session is never among them.
+    /// The other sessions running now (one that spoke within <see cref="Live"/> and has not ended since), each
+    /// with when it last spoke. This session is never among them.
     /// </summary>
     public async Task<IReadOnlyDictionary<string, DateTimeOffset>> LiveSessionsAsync()
     {
@@ -597,7 +604,8 @@ internal sealed partial class FragmentStore(
         }
 
         return (await fragments.GetSessionsSinceAsync(ContextFragmentType.ChatMessage, DateTimeOffset.UtcNow - Live))
-            .Where(s => s.Key != Session).ToDictionary(s => s.Key, s => s.Value);
+            .Where(s => s.Key != Session && !(Ended.TryGetValue(s.Key, out var ended) && ended >= s.Value))
+            .ToDictionary(s => s.Key, s => s.Value);
     }
 
     /// <summary>

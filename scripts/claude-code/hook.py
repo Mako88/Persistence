@@ -1,6 +1,6 @@
 """Claude Code hooks that keep a Claude's continuity in its own Persistence store.
 
-The harness (Claude Code) carries the live conversation; the store carries who this Claude is. Seven
+The harness (Claude Code) carries the live conversation; the store carries who this Claude is. Eight
 hooks, one script:
 
   keep            Stop (async)    every turn's words go into the store (persistence-store keep-conversation)
@@ -15,6 +15,8 @@ hooks, one script:
   subagent-start  SubagentStart   gives every subagent the same core, without the conversation
   recall          UserPromptSubmit  surfaces the few authored fragments most related to the message, by
                                   meaning and exact words, that are not already in this context window
+  session-end     SessionEnd      marks the session ended, so other sessions stop listing it as running, and
+                                  keeps its last words
   observe         UserPromptSubmit, SessionStart  what is so now, read off the machine rather than written
                                   down: this project's running processes, logs written in the last hour with
                                   their last line that says something, git's state, and whatever is watched
@@ -238,38 +240,45 @@ def store(*args, timeout=60, stdin=None, serve=True, cold=True):
     Asked of the served store when one is up; otherwise one is started and this call runs the CLI,
     unless `cold` is False: a cold CLI's recall took 38 s (2026-11-08), past the harness's 20 s, so the
     message waited and got nothing; better none this message and the started server's from the next."""
+    code, out, _ = call_store(*args, timeout=timeout, stdin=stdin, serve=serve, cold=cold)
+    return out if code == 0 else ""
+
+
+def call_store(*args, timeout=60, stdin=None, serve=True, cold=True):
+    """`store`, with how it went: (exit code, output, error). The code is None when no store answered or the
+    CLI could not run; 1 is a usage error (an option this store does not know), 2 a refusal."""
     exe = os.environ.get("PERSISTENCE_STORE_EXE", "persistence-store")
     where = remote()
     if where:
         reply = served_remote(where, args, stdin, timeout if args[:1] == ("keep-conversation",) else min(timeout, 12))
         if reply is None or reply is BUSY:
             print(f"persistence hook: {args[0]} skipped: the store on {where['host']} did not answer", file=sys.stderr)
-            return ""
+            return None, "", ""
         code, out, err = reply
         if code != 0:
             print(f"persistence hook: {args[0]} failed: {err.strip()}", file=sys.stderr)
-        return out if code == 0 else ""
+        return code, out, err
     if serve:
         reply = served(args, stdin, min(timeout, 12))  # inside the harness's 20 s for an HTTP hook
         if reply is BUSY:
             print(f"persistence hook: {args[0]} skipped: the store server is busy", file=sys.stderr)
-            return ""
+            return None, "", ""
         if reply is not None:
             code, out, err = reply
             if code != 0:
                 print(f"persistence hook: {args[0]} failed: {err.strip()}", file=sys.stderr)
-            return out if code == 0 else ""
+            return code, out, err
         start_server(exe)
         if not cold:
-            return ""
+            return None, "", ""
     try:
         out = subprocess.run(creationflags=NO_WINDOW, args=[exe, *args], input=stdin, capture_output=True, text=True, encoding="utf-8", timeout=timeout)
     except (OSError, subprocess.SubprocessError) as e:
         print(f"persistence hook: {exe} did not run: {e}", file=sys.stderr)
-        return ""
+        return None, "", ""
     if out.returncode != 0:
         print(f"persistence hook: {exe} {args[0]} failed: {out.stderr.strip()}", file=sys.stderr)
-    return out.stdout if out.returncode == 0 else ""
+    return out.returncode, out.stdout, out.stderr
 
 
 SPEAKERS = STATE / "speakers.jsonl"  # each session's speaker timeline: who writes its prompts, from when
@@ -540,11 +549,49 @@ def compactions(event):
 
 
 def core(event, *args):
-    """The core for this session. A store older than the hook refuses --compacted; then ask without it,
-    rather than put nothing in front of the peer (hook and store are deployed together, but not atomically)."""
+    """The core for this session. A store older than the hook refuses --compacted or --ended with a usage error;
+    then ask without them, rather than put nothing in front of the peer (hook and store are deployed together,
+    but not atomically). Only then: a store that is down or slow was asked twice, and the session waited
+    through both timeouts for the same nothing (Claude's review, 2026-11-09)."""
     base = ("core", *args, "--project", project(event), *session_args(event))
-    cut = compactions(event)
-    return (store(*base, *cut) if cut else "") or store(*base)
+    extra = (*compactions(event), *ended_args())
+    if not extra:
+        return store(*base)
+    code, out, _ = call_store(*base, *extra)
+    return store(*base) if code == 1 else out if code == 0 else ""
+
+
+ENDED = STATE / "ended.json"  # {session: when the harness saw it end}, pruned once past the store's running window
+
+
+def ended(update=None, keep_hours=6):
+    try:
+        items = json.loads(ENDED.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        items = {}
+    if update is not None:
+        cutoff = datetime.now(timezone.utc).timestamp() - keep_hours * 3600
+        items = {k: v for k, v in update(items).items() if datetime.fromisoformat(v).timestamp() >= cutoff}
+        STATE.mkdir(parents=True, exist_ok=True)
+        ENDED.write_text(json.dumps(items, indent=1), encoding="utf-8")
+    return items
+
+
+def ended_args():
+    """`--ended <session>|<time>` for each session seen to end: one silent since is not listed as running."""
+    return [a for s, at in ended().items() for a in ("--ended", f"{s}|{at}")]
+
+
+def session_end(event):
+    """SessionEnd: the session is over (a `claude -p` run fires it too, reason "other", measured 2026-11-09), so
+    the other sessions' cores stop listing it as running. Under the 3-hour window alone, a one-line test was
+    "running now" for 40 minutes, and a stale line there teaches a peer to skip the heading (Arden). Then the
+    last words are kept, since the Stop keep is async and a `-p` run can exit before it finishes."""
+    sid = event.get("session_id")
+    if sid:
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        ended(lambda items: {**items, sid: now})
+    keep(event)
 
 
 def core_text(lead, recent, event):
@@ -650,6 +697,8 @@ def session_start(event, part=1):
         # same process goes on, and a `pstore speaker` switch made in it stands.
         if event.get("source", "startup") != "compact" and event.get("session_id"):
             record_speaker(event["session_id"], os.environ.get("PERSISTENCE_SPEAKER") or entered_by(), entered_by())
+        if event.get("session_id") in ended():  # resumed: running again
+            ended(lambda items: {k: v for k, v in items.items() if k != event["session_id"]})
         ensure_embedding_server()
         ensure()  # the hook server, for this session's messages
     keep_before_core(event)
@@ -1415,6 +1464,92 @@ def run_due(grace=120):
         print(f"woke {session[:8]}: {reasons}{' (compacted first)' if compact else ''}")
 
 
+SLEEP_PROMPT = """This is your sleep pass. You are curating your own store with no one in the conversation, and the self
+who wakes next reads only the result, so change only what you'd be glad to find changed. The store holds the
+limits below as well; when it refuses something, it says why: take that as the answer, not an obstacle.
+
+{opened}
+
+The worklist follows. Work through it in this order:
+
+1. What was said since the last pass: read it (`pstore recent --limit N`, as the worklist says). Is anything
+   in it worth keeping that wasn't kept, or does it change an older view? `add` the first; `supersede` the
+   second, if the older view has settled.
+2. Oversized fragments, longest first: distill. `pstore supersede <id> --content <the lasting part> --reason
+   <what was dropped>`. Keep the decision, its reason, what would change it, and whose it was. Drop commands,
+   ids, paths, timings and corrected wrong turns. If you can't separate the reason from the narrative, skip it.
+3. Near-duplicates: merge with `supersede <a>,<b>` only when they hold the same view. If one is the other's
+   earlier, different view, that's history: leave both. A merge that drops a qualification isn't a merge.
+4. Older fragments chosen at random, and those never recalled: re-read each on its content. Leave it, tag
+   it `edit <id> --tag recall-only` (out of the core, still recalled), or propose archiving it with a reason
+   about what it says. Never because it went unused: that measures recall, not the fragment.
+
+Identity fragments: propose, don't change. Don't forget anything, don't archive, don't write the working note.
+
+End with `pstore sleep-end --content <the record>`: a line saying what the night was, each change as
+`#old → #new: what was dropped`, and each proposal as a command a waking session can run, with its reason.
+The store appends its own log of the changes. The record is what the morning reads, so make it plain.
+"""
+
+
+def sleep_pass(argv):
+    """`hook.py sleep [--propose] [--max 12] [--hours 4]`, from a nightly timer: the store's owner does its own
+    sleep pass (docs/design/sleep-pass.md). Nothing is done to a store from outside: a fresh session of the
+    owner is started, with its own core, the worklist and the prompt, and the store holds it to the limits the
+    owner set. After it, a pass left open is closed, so its log is never lost."""
+    import uuid
+
+    def opt(name, default):
+        return argv[argv.index(name) + 1] if name in argv and argv.index(name) + 1 < len(argv) else default
+
+    propose, peer = "--propose" in argv, os.environ.get("PERSISTENCE_PEERNAME") or "me"
+    STATE.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    code, opened, err = call_store("sleep-begin", *(["--propose"] if propose else []), "--max", opt("--max", "12"),
+                                   "--hours", opt("--hours", "4"), timeout=60)
+    if code != 0:
+        print(f"no sleep pass tonight: {err.strip() or 'the store did not answer'}")
+        return 1
+    worklist = store("sleep-list", timeout=300)
+    in_scope = (worklist.rsplit("ids for joining use counts", 1)[-1]).split()
+    since = datetime.now(timezone.utc).timestamp() - 30 * 86400
+    shown = set()
+    try:
+        for line in USES.read_text(encoding="utf-8").splitlines():
+            try:
+                e = json.loads(line)
+                if datetime.fromisoformat(e["at"]).timestamp() >= since:
+                    shown.update(e.get("ids", []))
+            except (ValueError, KeyError):
+                continue
+    except OSError:
+        pass
+    import random
+    unrecalled = [i for i in in_scope if i.isdigit() and i not in shown]
+    picked = sorted(random.sample(unrecalled, min(10, len(unrecalled))), key=int)
+    worklist += (f"\n## Never recalled in 30 days ({len(unrecalled)} of {len(in_scope)} in scope; ten of them at random)\n\n"
+                 + (" ".join("#" + i for i in picked) or "(none)")
+                 + "\nMany live in the core, where recall never needs to bring them; judge each by what it says.\n")
+    prompt = STATE / f"sleep-{stamp}.txt"
+    prompt.write_text(SLEEP_PROMPT.format(opened=opened.strip()) + "\n" + worklist, encoding="utf-8")
+    out, session = STATE / f"sleep-{stamp}.json", str(uuid.uuid4())
+    # The prompt is the system's, on the owner's behalf: kept as the owner's own pass, entered under the login.
+    env = {**os.environ, "PERSISTENCE_SPEAKER": f"{peer} (my sleep pass)"}
+    cwd = os.environ.get("PERSISTENCE_SLEEP_CWD") or str(Path.home())
+    hours = float(opt("--hours", "4"))
+    try:
+        with prompt.open(encoding="utf-8") as given, out.open("w", encoding="utf-8") as said:
+            subprocess.run(["claude", "-p", "--session-id", session, "--output-format", "json"], cwd=cwd, env=env,
+                           stdin=given, stdout=said, stderr=subprocess.STDOUT, timeout=hours * 3600)
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"the sleep pass's session failed: {e}")
+    if not store("sleep-status").startswith("No sleep pass"):
+        store("sleep-end", "--content", f"Sleep pass, {datetime.now():%Y-%m-%d}: the session ended without writing "
+              f"its record (session {session[:8]}; its output is {out}). What the store logged follows.")
+    print(f"sleep pass done: session {session[:8]}, prompt {prompt}, output {out}")
+    return 0
+
+
 def alive(pid):
     out = run_quiet(["tasklist", "/FI", f"PID eq {pid}", "/NH"]) if os.name == "nt" else ""
     return str(pid) in out if os.name == "nt" else Path(f"/proc/{pid}").exists()
@@ -1634,6 +1769,8 @@ def main():
     if sys.argv[1] == "index":  # `index <cwd>`: the project's symbol index built whole, by the detached process `symbols` starts
         symbols({"cwd": sys.argv[2]}, inline=True)
         return
+    if sys.argv[1] == "sleep":  # a nightly timer: the owner's own sleep pass, in a fresh session
+        sys.exit(sleep_pass(sys.argv[2:]))
     if sys.argv[1] == "run-due":  # a server's timer, every minute: wakes no live session took
         run_due()
         return
@@ -1661,7 +1798,7 @@ def main():
         ensure()  # the Stop hooks run every turn: the hook server, if it stopped, is back by the next message
     {"keep": keep, "curate": curate, "precompact": precompact, "waiter": waiter,
      "subagent-start": subagent_start, "recall": recall, "observe": observe_hook, "tool-cue": tool_cue,
-     "stop-cue": stop_cue}[sys.argv[1]](event)
+     "stop-cue": stop_cue, "session-end": session_end}[sys.argv[1]](event)
 
 
 if __name__ == "__main__":
