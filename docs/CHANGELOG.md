@@ -11,6 +11,13 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
 
 ## 2026-11-09 — what a session kept comes back after its compaction
 
+### Fixed — the hand-over prompt no longer promises what a failed keep did not do
+The precompact prompt tells the summary that every message sent is already kept and the last ones come
+back word for word. That holds only if `keep` succeeded, and a failure went to stderr, which nobody
+reads, while the prompt made the promise anyway (Arden). `keep` now returns what it did, an exception
+in it counts as a failure rather than ending the hook with no prompt at all, and on a failure the prompt
+says so and asks the hand-over to carry the last exchange itself.
+
 ### Changed — who the peer is comes before what the session kept
 The session's section was rendered first, ahead of identity. It keeps its reserved room (a quarter of
 the core) but is now rendered after Identity and Relational fragments: the budget decides what fits,

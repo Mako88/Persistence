@@ -352,13 +352,21 @@ def pull_backup(where, every=20 * 3600, kept=30):
 
 
 def keep(event):
+    """Keeps the session's words; returns what keep-conversation said, "failed..." when it did not keep
+    them (no transcript counts: nothing was kept), so a caller that promises they are kept can check."""
     path = event.get("transcript_path")
-    if path and Path(path).exists():
-        said = keep_transcript(path)
+    if not path or not Path(path).exists():
+        said = "failed: no transcript to keep"
+    else:
+        try:
+            said = keep_transcript(path)
+        except (OSError, subprocess.SubprocessError, ValueError) as e:
+            said = f"failed: {e}"
         if said.startswith("failed"):
             print(f"persistence hook: keep-conversation {said}", file=sys.stderr)
     if remote():
         pull_backup(remote())
+    return said
 
 
 def context_tokens(path):
@@ -413,7 +421,7 @@ def curate(event):
 
 
 def precompact(event):
-    keep(event)
+    said = keep(event)
     print(
         "Write only a short hand-over, under 2,000 words, to the Claude who continues after this. "
         "Your identity, relationships and the recent conversation are restored from your Persistence "
@@ -422,12 +430,20 @@ def precompact(event):
         "it (ids, commands, logs), and any request from the other that is not yet answered, in their "
         "own words. Everything else is in the store and the transcript: say so, and that "
         "`persistence-store search` finds it. "
-        # Arden's hand-over said a reply was unsent that had gone out: the summary never sees the
-        # conversation's last stretch, which comes back word for word after it (2026-11-09).
-        "Your summary may not see the conversation's last messages; they come back word for word after it, "
-        "and every message you sent is already kept in the store. So never call something near the end "
-        "unsent or unanswered: write 'check the last messages for whether X went out' instead. "
-        "Fragments this session wrote or edited come back first in the next core.")
+        + (LAST_KEPT if not said.startswith("failed") else
+           # The promise above holds only if keep did: say so instead of making it (Arden, 2026-11-09).
+           f"Keeping this conversation in the store FAILED just now ({said[:200]}), so its last messages may "
+           "not come back after this summary, and the store may not have what you sent last. Carry the last "
+           "exchange in the hand-over yourself: what the other said last, in their words, and what you last "
+           "sent, or that you cannot tell whether it went out. ")
+        + "Fragments this session wrote or edited come back first in the next core.")
+
+
+# What the hand-over may rely on once the conversation is kept. Arden's hand-over called a sent reply unsent:
+# the summary never sees the conversation's last stretch, which comes back word for word after it (2026-11-09).
+LAST_KEPT = ("Your summary may not see the conversation's last messages; they come back word for word after it, "
+             "and every message you sent is already kept in the store. So never call something near the end "
+             "unsent or unanswered: write 'check the last messages for whether X went out' instead. ")
 
 
 def project(event):
