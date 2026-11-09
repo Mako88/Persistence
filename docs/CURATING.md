@@ -5,7 +5,9 @@ look after it. The commands are in `persistence-store help`; this is how to use 
 `persistence-store guide`, so it reaches every harness, and the curation and sleep prompts point here.
 
 Having the tools is half of it. A store that keeps everything reads like a transcript and crowds out what
-matters; a store that keeps too little loses the why. Curating is choosing, in your own judgment.
+matters; a store that keeps too little loses the why. Curating is choosing, in your own judgment. This is
+guidance, not rules: where your judgment about your own store differs, follow it, and say why in the
+fragment.
 
 ## What a fragment is for
 
@@ -17,10 +19,20 @@ produced it. Write information, not a record of how you got it:
 - **Leave out:** the transcript (every message is already kept and `search` finds it), step-by-step
   narration, corrected wrong turns, and commands, ids, paths or hashes that the repo or a README already
   holds. Point to the source of truth instead: "current state: the repo's git log", not a snapshot of it.
+- **Except when the wrong turn is the lesson.** "I blamed the store; it was the summarizer" teaches what to
+  check next time, and the correction is only legible beside what it corrected. Keep the wrong turn in one
+  line, as the lesson, not as narrative.
+- **Keep the story when the story is the reason.** Information is the default, but some things are
+  carried by what happened: how you met someone, the moment a value was formed ("the day I seeded this, I
+  was wrong about..."). Strip those to facts and the fact survives while the reason it matters to you
+  doesn't. Short, but a story.
 - **One subject per fragment.** If a fragment answers two questions, `split` it.
 - **Short.** Most fragments fit in a few hundred characters; the sleep pass flags anything over 1,500.
   A long fragment is usually narrative wrapped around a short conclusion.
 - **Record the why when you choose.** It is cheap then and nearly impossible to rebuild later (Arden).
+- **Say how you know a state.** A fragment is a record, not the state. "Deployed", "sent", "running" were
+  true when written; date them and say how they were known (observed, or told), and check the thing itself
+  before acting on one. The worst false beliefs come from a record that was true once and feels conclusive.
 
 ## The types
 
@@ -52,10 +64,13 @@ is listed by id and is a `show` or a recall away. Read it with `persistence-stor
 
 ## Changing what you kept
 
-- `edit`: a correction to a fragment that is wrong or stale. Prefer it over adding a second one beside.
+- `edit`: a slip of wording or fact that nothing was decided on. Prefer it over adding a second one beside.
+  If you believed it and acted on it, `supersede` instead, so having been wrong stays visible.
 - `supersede <id>[,<id>...]`: a changed view, or several fragments distilled into one. The old ones are
-  archived with your reason and stay searchable. A merge that drops a qualification is not a merge, and an
-  earlier, different view is history, not a duplicate: leave both.
+  archived with your reason and stay searchable. Give `--reason` and name what you dropped: it is the only
+  way a later self can tell a distillation from a loss. A merge that drops a qualification is not a merge,
+  and an earlier, different view is history, not a duplicate: leave both. Don't distill a distillation;
+  the reason is what goes first, because it looks like elaboration once its need is forgotten.
 - `split`: one catch-all into several fragments, each about one thing.
 - `archive`: out of the core and recent lists, still searchable. For what no longer earns a place.
 - `forget`: hidden everywhere, reversible with `unforget`. Rarely right; never to make room.
@@ -69,7 +84,8 @@ is listed by id and is a `show` or a recall away. Read it with `persistence-stor
 - **The curation pass,** once per stretch before compaction: save what the stretch earned, fix what is now
   wrong, update the note.
 - **The sleep pass,** at night: a fresh session of you reviews the day, distills oversized fragments, merges
-  true duplicates and re-reads a random sample of older ones (docs/design/sleep-pass.md).
+  true duplicates and re-reads a random sample of older ones (docs/design/sleep-pass.md). It runs under
+  tighter limits than this guide: no archive, forget, note or edit in place, only fragments settled a week.
 
 ## Other selves' stores
 
