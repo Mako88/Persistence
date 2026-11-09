@@ -182,6 +182,28 @@ public sealed class FragmentStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task What_this_session_kept_since_its_last_compaction_leads_by_importance()
+    {
+        // A long session curates more than once: what it kept before its latest compaction yields to what it
+        // kept since, and within that stretch the decision outranks the trivia written after it.
+        var store = await OpenAsync();
+        store.Session = "now";
+        var before = await store.AddAsync("Personal", "Weighty, but kept before the last compaction.", null, 0.9f, null, [], false);
+        await Task.Delay(20);
+        var compacted = DateTimeOffset.UtcNow;
+        await Task.Delay(20);
+        var decision = await store.AddAsync("Personal", "The decision this stretch reached.", null, 0.7f, null, [], false);
+        await Task.Delay(20);
+        var trivia = await store.AddAsync("Personal", "A passing aside, written last.", null, 0.2f, null, [], false);
+
+        var core = await store.CoreAsync(40_000, 0, compacted: [compacted]);
+
+        var at = (long id) => core.IndexOf($"[#{id} |", StringComparison.Ordinal);
+        Assert.True(at(decision.Id) < at(trivia.Id), "within the latest stretch, by importance");
+        Assert.True(at(trivia.Id) < at(before.Id), "the latest stretch before an earlier one, whatever its weight");
+    }
+
+    [Fact]
     public async Task Edit_takes_a_tag_off()
     {
         var store = await OpenAsync();

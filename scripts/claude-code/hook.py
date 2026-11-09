@@ -427,7 +427,7 @@ def precompact(event):
         "Your summary may not see the conversation's last messages; they come back word for word after it, "
         "and every message you sent is already kept in the store. So never call something near the end "
         "unsent or unanswered: write 'check the last messages for whether X went out' instead. "
-        "Fragments this session wrote come back first in the next core.")
+        "Fragments this session wrote or edited come back first in the next core.")
 
 
 def project(event):
@@ -455,8 +455,38 @@ def session_args(event):
     return ["--session", sid] if sid else []
 
 
+def compactions(event):
+    """When this session was compacted, as `--compacted` options for `core`: the store cannot see the
+    transcript (it may be on another machine), and the harness marks each compaction there with a
+    compact_boundary line. The core puts what the session kept since the latest of them first."""
+    path = event.get("transcript_path")
+    found = []
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if '"compact_boundary"' not in line:
+                    continue
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                if e.get("subtype") == "compact_boundary" and not e.get("isSidechain") and e.get("timestamp"):
+                    found += ["--compacted", e["timestamp"]]
+    except (OSError, TypeError):
+        pass
+    return found
+
+
+def core(event, *args):
+    """The core for this session. A store older than the hook refuses --compacted; then ask without it,
+    rather than put nothing in front of the peer (hook and store are deployed together, but not atomically)."""
+    base = ("core", *args, "--project", project(event), *session_args(event))
+    cut = compactions(event)
+    return (store(*base, *cut) if cut else "") or store(*base)
+
+
 def core_text(lead, recent, event):
-    body = store("core", "--max-chars", str(CAP - len(lead) - 50), "--recent", str(recent), "--project", project(event), *session_args(event))
+    body = core(event, "--max-chars", str(CAP - len(lead) - 50), "--recent", str(recent))
     return lead + "\n\n" + body if body.strip() else ""
 
 
@@ -510,7 +540,7 @@ def session_start(event, part=1):
     if part == 1:
         ensure_embedding_server()
         ensure()  # the hook server, for this session's messages
-    whole = store("core", "--max-chars", str(WHOLE), "--recent", "60", "--project", project(event), *session_args(event))
+    whole = core(event, "--max-chars", str(WHOLE), "--recent", "60")
     pieces = core_parts(whole) if whole.strip() else []
     if part > len(pieces):
         return
@@ -1013,7 +1043,7 @@ def subagent_start(event):
             "You are the same self: when you learn something the main session cannot see from your report "
             "(a gotcha, a fact about the code), add it with `pstore add`; leave the working note to the main session.")
     seen_now = observe(event)  # the working context: what is running, what changed, git
-    body = store("core", "--max-chars", str(CAP - len(lead) - len(seen_now) - 100), "--recent", "0", "--project", project(event), *session_args(event))
+    body = core(event, "--max-chars", str(CAP - len(lead) - len(seen_now) - 100), "--recent", "0")
     text = f"{lead}\n\n{body}\n\n{seen_now}" if body.strip() else ""
     if text:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "SubagentStart", "additionalContext": text}}))

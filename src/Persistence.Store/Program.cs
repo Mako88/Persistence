@@ -51,10 +51,12 @@ const string Usage = """
                                             utterances (said before --before, so not this session's)
       embed-conversation [--batch 64]      embed every past utterance not yet embedded (recall does a few a call)
       recent [--limit 20]                   the latest of the conversation, oldest first
-      core [--max-chars 40000] [--recent 20] [--project <name>]
+      core [--max-chars 40000] [--recent 20] [--project <name>] [--compacted <time>]...
                                             identity, relationships, personal, summaries, then the
                                             recent conversation: what a harness puts in front of the peer.
-                                            Fragments tagged project/<name> come in only for that project
+                                            Fragments tagged project/<name> come in only for that project.
+                                            --compacted (repeatable) gives the session's compaction times:
+                                            what it kept since the latest leads its section, by importance
       rescore-conversation                 score the salience of utterances stored at the old flat 0.3
       serve [--port 8095]                   stay up with the store open and run the commands sent to it
                                             (POST /run {"args": [...], "stdin": "..."}): a hook's call costs
@@ -355,7 +357,10 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
             Print(line, await store.RecentAsync(line.GetInt("limit", 20)), store.Session);
             break;
         case "core":
-            Console.Write(await store.CoreAsync(line.GetInt("max-chars", 40000), line.GetInt("recent", 20), line.Get("project")));
+            var compacted = line.GetAll("compacted").Select(raw =>
+                DateTimeOffset.TryParse(raw, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out var at)
+                    ? at : throw new UsageException($"--compacted must be a time (ISO 8601), not '{raw}'.")).ToList();
+            Console.Write(await store.CoreAsync(line.GetInt("max-chars", 40000), line.GetInt("recent", 20), line.Get("project"), compacted));
             break;
         case "rescore-conversation":
             Console.WriteLine($"rescored {await store.RescoreConversationAsync()} past utterances by salience");

@@ -10,7 +10,7 @@ internal sealed class CommandLine
     /// <summary>The options that are switches rather than carrying a value.</summary>
     /// <summary>Every option some command reads (a text option's <c>-file</c> form too); anything else is refused.</summary>
     public static readonly IReadOnlySet<string> Known = new HashSet<string>(
-        ["archived", "batch", "before", "confidence", "db", "debug", "everywhere", "exclude", "help", "importance", "json",
+        ["archived", "batch", "before", "compacted", "confidence", "db", "debug", "everywhere", "exclude", "help", "importance", "json",
          "limit", "local-peer", "max-chars", "peer", "port", "project", "protected", "reason", "recent", "said", "session",
          "snippet", "tag", "transcript", "type", "untag", "wander", "when", "content", "content-file", "summary", "summary-file", "text", "text-file"],
         StringComparer.OrdinalIgnoreCase);

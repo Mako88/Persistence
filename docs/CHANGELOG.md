@@ -11,6 +11,15 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
 
 ## 2026-11-09 — what a session kept comes back after its compaction
 
+### Changed — the session's section leads with what it kept since its last compaction, by importance
+A long session curates once per compaction, so "newest 8" let an earlier pass's fragments compete with
+the latest by age, and within the latest pass put whatever was written last (often an aside) ahead of
+the decision before it. The hook now reads the session's compaction times from its transcript
+(`compact_boundary` lines) and passes them as `core --compacted <time>` (repeatable); the store cannot
+see the transcript, which may be on another machine. The section orders by stretch (compactions before
+the fragment's last touch, latest first), then importance, then recency. If a store older than the hook
+refuses `--compacted`, the hook asks again without it rather than show no core.
+
 ### Fixed — an edit counts as kept by this session (migration 011)
 The core's "Kept by this session" section (6f1abcd) selected fragments this session *wrote*, newest
 created first. The curation prompt asks a peer to edit a fragment that is now wrong rather than add one

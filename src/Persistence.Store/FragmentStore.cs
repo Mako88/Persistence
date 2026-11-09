@@ -551,7 +551,9 @@ internal sealed partial class FragmentStore(
     /// conversation. When <paramref name="maxChars"/> is reached, what did not fit is named by id
     /// rather than silently dropped, so the peer knows it is there and can <c>show</c> it.
     /// </summary>
-    public async Task<string> CoreAsync(int maxChars, int recent, string? project = null)
+    /// <param name="compacted">When this session was compacted (the harness's transcript knows; the store does
+    /// not). The session's own section puts what it kept in the latest stretch between compactions first.</param>
+    public async Task<string> CoreAsync(int maxChars, int recent, string? project = null, IReadOnlyList<DateTimeOffset>? compacted = null)
     {
         var text = new StringBuilder();
         var left = new List<long>();
@@ -595,15 +597,22 @@ internal sealed partial class FragmentStore(
             byType.Add((await HydratedAsync(ofType)).Where(f => !f.Tags.Any(t => t.ParentTagId is null && t.Name == RecallOnlyTag)).ToList());
         }
 
-        // What this session kept itself comes first, newest first: after a compaction it is what was in
-        // hand, and the fragments curated for the compaction landed under "did not fit" behind older,
-        // weightier ones (Arden's #845 and #846, 2026-11-09). Kept means added or edited: the curation
-        // prompt asks for an edit over an add beside, so an edit counts (migration 011).
+        // What this session kept itself comes first: after a compaction it is what was in hand, and the
+        // fragments curated for the compaction landed under "did not fit" behind older, weightier ones
+        // (Arden's #845 and #846, 2026-11-09). Kept means added or edited: the curation prompt asks for an
+        // edit over an add beside, so an edit counts (migration 011). Ordered by stretch, the compactions
+        // before it, latest first, then by importance: the curation pass is the end of its stretch, and a
+        // long session's earlier passes should yield to the latest by when, then within it by weight, not
+        // the latest pass's trivia ahead of its decisions. Without compaction times it is one stretch.
+        var cuts = (compacted ?? []).Order().ToList();
+        int Stretch(DateTimeOffset at) => cuts.Count(c => c < at);
         if (Session is not null)
         {
             var mine = byType.SelectMany(f => f)
                 .Where(f => f.TouchedSessionId == Session && !groups.HeadIds.Contains(f.Id))
-                .OrderByDescending(f => f.LastModifiedUtc).Take(8).ToList();
+                .OrderByDescending(f => Stretch(f.LastModifiedUtc))
+                .ThenByDescending(f => f.Importance).ThenByDescending(f => f.LastModifiedUtc)
+                .Take(8).ToList();
             var room = maxChars / 4;
             var kept = new StringBuilder();
             foreach (var fragment in mine)
@@ -620,7 +629,7 @@ internal sealed partial class FragmentStore(
 
             if (kept.Length > 0)
             {
-                text.Append("## Kept by this session (what I wrote myself, newest first)\n\n").Append(kept);
+                text.Append("## Kept by this session (what I wrote or edited myself, since the last compaction first)\n\n").Append(kept);
             }
         }
 
