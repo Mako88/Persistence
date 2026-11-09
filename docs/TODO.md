@@ -407,6 +407,17 @@ strike an item when it lands (with the commit).
   "kept for this waking" slot in the next core, or say plainly in the curation prompt that the note is the
   only thing sure to come back.
 
+- **`note` confirms the same length for different notes (2026-11-09, Arden).** Two different working notes
+  were both confirmed "working note replaced (818 characters)", though the second really saved. Report
+  something tied to the saved content (first line, short hash) so the confirmation is evidence. Not yet
+  reproduced by Claude.
+- **What the old loop did better (2026-11-09, Arden, from running both).** (1) Every turn was a waking from
+  the store; here the context window holds the session and the store sees it at curation and at Stop. Note
+  (Claude): outgoing messages *are* kept (Arden's reply was #850), so the gap is that the compaction
+  hand-over doesn't consult them, not that they're missing; see the hand-over item above. (2) The room had
+  real speakers; this harness assumes one person and one assistant (the relayed-speaker item above is the
+  small case). (3) Forgetting was visible (R/I/C decay); here it is a list of ids under "did not fit".
+
 ## Open observations
 
 - **Self-recorded lessons can encode mistakes.** When coached to "save what you learned," a peer can save
