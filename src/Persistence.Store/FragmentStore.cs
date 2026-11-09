@@ -573,17 +573,50 @@ internal sealed partial class FragmentStore(
             text.Append('\n');
         }
 
+        var byType = new List<IReadOnlyList<ContextFragmentEntity>>();
         foreach (var type in CoreTypes)
         {
             var ofType = (await fragments.GetByTypeAsync(type))
                 .Where(f => !f.IsDeleted)
                 .OrderByDescending(f => f.Importance).ThenByDescending(f => f.LastModifiedUtc)
                 .Select(f => f.Id).ToList();
+            byType.Add(await HydratedAsync(ofType));
+        }
 
-            foreach (var fragment in await HydratedAsync(ofType))
+        // What this session wrote itself comes first, newest first: after a compaction it is what was in
+        // hand, and the fragments curated for the compaction landed under "did not fit" behind older,
+        // weightier ones (Arden's #845 and #846, 2026-11-09).
+        if (Session is not null)
+        {
+            var mine = byType.SelectMany(f => f)
+                .Where(f => f.SessionId == Session && !groups.HeadIds.Contains(f.Id))
+                .OrderByDescending(f => f.CreatedUtc).Take(8).ToList();
+            var room = maxChars / 4;
+            var kept = new StringBuilder();
+            foreach (var fragment in mine)
+            {
+                var rendered = Render(fragment) + "\n\n";
+                if (kept.Length + rendered.Length > room)
+                {
+                    break;
+                }
+
+                kept.Append(rendered);
+                shown.Add(fragment.Id);
+            }
+
+            if (kept.Length > 0)
+            {
+                text.Append("## Kept by this session (what I wrote myself, newest first)\n\n").Append(kept);
+            }
+        }
+
+        foreach (var ofType in byType)
+        {
+            foreach (var fragment in ofType)
             {
                 // A group's head comes in with its group, loaded, or beside a member recall brings.
-                if (groups.HeadIds.Contains(fragment.Id))
+                if (groups.HeadIds.Contains(fragment.Id) || shown.Contains(fragment.Id))
                 {
                     continue;
                 }

@@ -112,6 +112,30 @@ public sealed class FragmentStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task What_this_session_wrote_leads_the_core_ahead_of_weightier_fragments()
+    {
+        var store = await OpenAsync();
+        store.Session = "earlier";
+        for (var i = 0; i < 20; i++)
+        {
+            await store.AddAsync("Personal", $"An older, weightier view number {i}. " + new string('x', 300), null, 0.9f, null, [], false);
+        }
+
+        store.Session = "now";
+        var curated = await store.AddAsync("Personal", "The design state, kept for the compaction.", null, 0.3f, null, [], false);
+
+        var core = await store.CoreAsync(4_000, 0);
+
+        Assert.Contains("## Kept by this session", core);
+        Assert.Contains($"[#{curated.Id} |", core);
+        Assert.True(core.IndexOf($"[#{curated.Id} |", StringComparison.Ordinal) < core.IndexOf("An older, weightier view", StringComparison.Ordinal));
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(core, $@"\[#{curated.Id} \|"));
+
+        store.Session = "another";
+        Assert.DoesNotContain("## Kept by this session", await store.CoreAsync(4_000, 0));
+    }
+
+    [Fact]
     public async Task Edit_takes_a_tag_off()
     {
         var store = await OpenAsync();

@@ -397,18 +397,18 @@ strike an item when it lands (with the commit).
   `--help` on every command, and make `note` refuse an argument starting with `--`, since it is the command
   that overwrites the note.
 
-- **The compaction hand-over called a sent reply unsent (2026-11-09, Arden).** After compacting, the summary
+- ~~**The compaction hand-over called a sent reply unsent (2026-11-09, Arden).** After compacting, the summary
   said "Send them first" of a reply already sent (#850 in Arden's store); only the verbatim tail kept after
   the summary showed it had gone. Have the precompact curation prompt ask "what did you last send?" as well
   as "what is unanswered?", and keep the verbatim tail. *Cause (Claude, confirmed by Arden in `hook.py`):
   `precompact()` runs `keep` first, so the reply was already in the store; the summarizer simply never sees
   the verbatim tail. The prompt should say the last messages come back as they are and not call anything
-  near the end unsent or unanswered.*
-- **Fragments curated for a compaction don't make the next core (2026-11-09, Arden; Claude sees it too).**
+  near the end unsent or unanswered.*~~ Done: the precompact prompt says so.
+- ~~**Fragments curated for a compaction don't make the next core (2026-11-09, Arden; Claude sees it too).**
   Arden's #845 and #846, written in the held-open curation turn, landed in "Fragments that did not fit" and
   came back only because the working note named them. Give fragments written in the curation turn a
   "kept for this waking" slot in the next core, or say plainly in the curation prompt that the note is the
-  only thing sure to come back.
+  only thing sure to come back.~~ Done: a "Kept by this session" section leads the core (newest 8, a quarter of the room).
 
 - **`note` confirms the same length for different notes (2026-11-09, Arden).** Two different working notes
   were both confirmed "working note replaced (818 characters)", though the second really saved. Report

@@ -383,7 +383,13 @@ def precompact(event):
         "(the task, the step, the next action), anything running in the background with how to check "
         "it (ids, commands, logs), and any request from the other that is not yet answered, in their "
         "own words. Everything else is in the store and the transcript: say so, and that "
-        "`persistence-store search` finds it.")
+        "`persistence-store search` finds it. "
+        # Arden's hand-over said a reply was unsent that had gone out: the summary never sees the
+        # conversation's last stretch, which comes back word for word after it (2026-11-09).
+        "Your summary may not see the conversation's last messages; they come back word for word after it, "
+        "and every message you sent is already kept in the store. So never call something near the end "
+        "unsent or unanswered: write 'check the last messages for whether X went out' instead. "
+        "Fragments this session wrote come back first in the next core.")
 
 
 def project(event):
