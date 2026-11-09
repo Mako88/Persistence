@@ -319,6 +319,61 @@ def seen(event, reset=False, add=()):
     return ids
 
 
+USES = STATE / "uses.jsonl"  # one line per showing ({"at", "session", "moment", "ids"}) and per turn's uses ({"at", "session", "used"})
+
+
+def record_shown(event, moment, ids):
+    """Records that recall, a cue or write-time recall put these fragments in front of the peer, so `hook.py uses`
+    can say which of what is shown is ever used: the proof John asked for (2026-11-09) that recall earns its tokens."""
+    if ids:
+        STATE.mkdir(parents=True, exist_ok=True)
+        with USES.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "session": event.get("session_id", ""),
+                                "moment": moment, "ids": [str(i) for i in ids]}) + "\n")
+
+
+def record_used(event, ids):
+    """Records the shown fragments a turn used: named by #id in what the peer wrote, or read, edited or superseded by id."""
+    ids = [i for i in ids if i in seen(event)]
+    if ids:
+        with USES.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "session": event.get("session_id", ""),
+                                "used": sorted(set(ids))}) + "\n")
+
+
+def uses_report(days=30):
+    """`hook.py uses [days]`: for each fragment shown, how often, at which moments, and how often a turn then used it."""
+    since = datetime.now(timezone.utc).timestamp() - days * 86400
+    showings, uses_by, moments = {}, {}, {}
+    try:
+        lines = USES.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        lines = []
+    for line in lines:
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if datetime.fromisoformat(e["at"]).timestamp() < since:
+            continue
+        for i in e.get("ids", []):
+            showings[i] = showings.get(i, 0) + 1
+            moments.setdefault(i, set()).add(e["moment"])
+        for i in e.get("used", []):
+            uses_by[i] = uses_by.get(i, 0) + 1
+    if not showings:
+        print(f"(nothing shown in the last {days} days)")
+        return
+    total_shown, total_used = sum(showings.values()), sum(min(uses_by.get(i, 0), showings[i]) for i in showings)
+    print(f"Last {days} days: {len(showings)} fragments shown {total_shown} times; {total_used} showings used ({100 * total_used / total_shown:.0f}%).")
+    print("id        shown  used  moments")
+    for i in sorted(showings, key=lambda i: (-showings[i], int(i) if i.isdigit() else 0)):
+        print(f"#{i:<8} {showings[i]:>5} {uses_by.get(i, 0):>5}  {', '.join(sorted(moments[i]))}")
+    idle = [i for i in showings if showings[i] >= 3 and not uses_by.get(i)]
+    if idle:
+        print("\nShown three times or more, never used (lower their importance, narrow their cue, or archive): " + ", ".join(f"#{i}" for i in idle))
+
+
 def keep_soon(event, delay=5):
     """The human's words kept as soon as they are sent, not only when the turn ends: another session of
     the peer reads them from the store (2026-11-08, John asked one session to stop a run the other owned,
@@ -382,6 +437,7 @@ def cued(event, moment, text):
                   stdin=text, cold=False).strip()
     ids = re.findall(r"^\[#(\d+) \|", found, re.M)
     if ids:
+        record_shown(event, f"cue/{moment}", ids)
         shown.update({i: now for i in ids})
         STATE.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(shown))
@@ -593,6 +649,9 @@ def write_recall(event):
     said = "\n\n".join(block for block in said.split("\n\n") if block.startswith("[#") and "| ChatMessage |" not in block.split("\n", 1)[0])[:1200]
     text = f"Before writing {', '.join(f'`{n}`' for n in names[:4])}, what the project already has (reuse or extend it, or name why not):\n" + "\n".join(lines)
     if said and said != "(nothing)":
+        write_ids = re.findall(r"^\[#(\d+) \|", said, re.M)
+        seen(event, add=write_ids)
+        record_shown(event, "write", write_ids)
         text += "\n\nWhat your store says about these names:\n\n" + said
     return text
 
@@ -626,7 +685,7 @@ def this_turn(path):
         lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()[-400:]
     except OSError:
         return "", False
-    said, started = "", False
+    said, started, named = "", False, set()
     for line in reversed(lines):
         try:
             e = json.loads(line)
@@ -642,13 +701,18 @@ def this_turn(path):
         if e.get("type") != "assistant" or not isinstance(content, list):
             continue
         for b in content:
-            if b.get("type") == "text" and not said:
-                said = b.get("text", "")
+            if b.get("type") == "text":
+                if not said:
+                    said = b.get("text", "")
+                named.update(re.findall(r"#(\d{2,})\b", b.get("text", "")))
             if b.get("type") == "tool_use":
                 given = b.get("input") or {}
-                if b.get("name") in STARTERS or given.get("run_in_background") or re.search(r"\bpwake\b|hook\.py wake", str(given.get("command", ""))):
+                command = str(given.get("command", ""))
+                if b.get("name") in STARTERS or given.get("run_in_background") or re.search(r"\bpwake\b|hook\.py wake", command):
                     started = True
-    return said, started
+                named.update(re.findall(r"\b(?:show|edit|supersede|tag|untag|merge|archive|protect)\s+(\d{2,})\b", command))
+                named.update(re.findall(r"(?<![\w.])(\d{2,})(?=\s*(?:,\d{2,})*\s)", command) if "supersede" in command else [])
+    return said, started, named
 
 
 def stop_cue(event):
@@ -657,7 +721,8 @@ def stop_cue(event):
     ended without starting it is held, once, with the reminder."""
     if event.get("stop_hook_active"):
         return
-    said, started = this_turn(event.get("transcript_path", ""))
+    said, started, named = this_turn(event.get("transcript_path", ""))
+    record_used(event, named)
     if not said or started:
         return
     found = cued(event, "stop", said)
@@ -689,6 +754,7 @@ def recall(event):
     if not ids and not reminded:
         return
     seen(event, add=ids)
+    record_shown(event, "recall", ids)
     text = ("Cued by this message (a reminder you set for words like these):\n\n" + reminded + "\n\n" if reminded else "") + (
         "Recalled from your store, by association with this message (`persistence-store show <id>` "
         "reads the whole of one):\n\n" + found.strip() if ids else "")
@@ -1035,6 +1101,9 @@ def main():
         return
     if sys.argv[1] in ("serve", "ensure"):
         serve() if sys.argv[1] == "serve" else ensure()
+        return
+    if sys.argv[1] == "uses":  # `uses [days]`: what recall and the cues showed, and how much of it a turn then used
+        uses_report(int(sys.argv[2]) if len(sys.argv) > 2 else 30)
         return
     if sys.argv[1] == "index":  # `index <cwd>`: the project's symbol index built whole, by the detached process `symbols` starts
         symbols({"cwd": sys.argv[2]}, inline=True)
