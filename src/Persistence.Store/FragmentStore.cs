@@ -635,8 +635,11 @@ internal sealed partial class FragmentStore(
                 + $"`core --project <name>` or `list --tag {ProjectTag}/<name>` reads them)\n\n");
             foreach (var name in elsewhere)
             {
+                // A migrated memory opens with a "(Memory file ...)" provenance line that says nothing of the work.
                 var lead = leading[name];
-                text.Append($"- {name}: {Clip(lead.Content.Split('\n')[0], 160)} (#{lead.Id})\n");
+                var lines = lead.Content.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                var line = lines.FirstOrDefault(l => !l.StartsWith("(Memory file", StringComparison.Ordinal)) ?? lines.FirstOrDefault() ?? "";
+                text.Append($"- {name}: {Clip(line, 160)} (#{lead.Id})\n");
             }
 
             text.Append('\n');

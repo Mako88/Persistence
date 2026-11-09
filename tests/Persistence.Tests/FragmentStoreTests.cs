@@ -123,6 +123,9 @@ public sealed class FragmentStoreTests : IDisposable
         Assert.Contains($"- minecraft-mods: Minecraft mods for Ember: one private repo. (#{lead.Id})", core);
         Assert.DoesNotContain("The rest of it.", core);
         Assert.DoesNotContain("A smaller mods detail.", core);
+
+        var migrated = await store.AddAsync("Personal", "(Memory file roadmap.md from the kadesh project; migrated verbatim.)\nKadesh ships the garden first.", null, 0.5f, null, ["project/kadesh"], false);
+        Assert.Contains($"- kadesh: Kadesh ships the garden first. (#{migrated.Id})", await store.CoreAsync(40_000, 0, project: "pawsitivity"));
     }
 
     [Fact]

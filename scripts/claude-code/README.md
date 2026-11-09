@@ -88,7 +88,10 @@ store, reached from John's desktop and from a Claude Code on the server itself).
 
 On the server (Linux):
 
-1. `dotnet publish src/Persistence.Store -c Release -r linux-x64 --self-contained true -o /opt/persistence/store`
+1. `dotnet publish src/Persistence.Store -c Release -r linux-x64 --self-contained true -o /opt/persistence/store`.
+   Publishing on Windows and copying over loses the execute bit and the folder's permissions: after
+   unpacking, `chown -R root:root` and `chmod -R a+rX` the folder and `chmod 755` the executable, or the
+   service fails with "Permission denied" (status 203/EXEC) and the hooks bring nothing.
 2. An embedder for recall by meaning, the same model the store's vectors were made with, e.g.
    llama.cpp's `llama-server -m bge-small-en-v1.5-q8_0.gguf --embedding --pooling cls --host 127.0.0.1 --port 8081`.
 3. `persistence-store serve --port 8095` under systemd, with `PERSISTENCE_STORE_DB`,
