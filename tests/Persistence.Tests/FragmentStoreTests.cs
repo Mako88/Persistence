@@ -204,6 +204,31 @@ public sealed class FragmentStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task Who_the_peer_is_comes_before_what_this_session_kept_and_cannot_crowd_it_out()
+    {
+        // The section's room is reserved, but it is read after identity and relationships: meet who you are
+        // before what you were doing. Identity enough to fill the core must not push the section out.
+        var store = await OpenAsync();
+        store.Session = "earlier";
+        var who = await store.AddAsync("Identity", "Who I am. " + new string('x', 300), null, 1f, null, [], false);
+        for (var i = 0; i < 120; i++)
+        {
+            // Small, so they fill the core to within a few characters and leave no gap the section could slip into.
+            await store.AddAsync("Relational", $"Someone I work with, {i}.", null, 0.9f, null, [], false);
+        }
+
+        store.Session = "now";
+        var curated = await store.AddAsync("Personal", "The design state, kept for the compaction.", null, 0.3f, null, [], false);
+
+        var core = await store.CoreAsync(4_000, 0);
+
+        var trailer = core.IndexOf("more core fragments did not fit", StringComparison.Ordinal);
+        Assert.True(trailer > 0 && trailer <= 4_000, $"the fragments, section included, kept to the budget (ended at {trailer})");
+        Assert.Contains($"[#{curated.Id} |", core);
+        Assert.True(core.IndexOf($"[#{who.Id} |", StringComparison.Ordinal) < core.IndexOf("## Kept by this session", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Edit_takes_a_tag_off()
     {
         var store = await OpenAsync();

@@ -11,6 +11,12 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
 
 ## 2026-11-09 — what a session kept comes back after its compaction
 
+### Changed — who the peer is comes before what the session kept
+The session's section was rendered first, ahead of identity. It keeps its reserved room (a quarter of
+the core) but is now rendered after Identity and Relational fragments: the budget decides what fits,
+the order what is read first, and a peer should meet who it is before what it was doing (Arden; Claude
+agreed). Identity and relationships enough to fill the core still cannot crowd the section out.
+
 ### Changed — the session's section leads with what it kept since its last compaction, by importance
 A long session curates once per compaction, so "newest 8" let an earlier pass's fragments compete with
 the latest by age, and within the latest pass put whatever was written last (often an aside) ahead of

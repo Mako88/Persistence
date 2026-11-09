@@ -33,6 +33,10 @@ internal sealed partial class FragmentStore(
     /// <summary>A fragment recalled by association but never in the core: `--tag recall-only`.</summary>
     public const string RecallOnlyTag = "recall-only";
 
+    /// <summary>The core types rendered ahead of what this session kept: who the peer is, and who it is with.</summary>
+    private static readonly IReadOnlySet<ContextFragmentType> WhoFirst =
+        new HashSet<ContextFragmentType> { ContextFragmentType.Identity, ContextFragmentType.Relational };
+
     /// <summary>The types that make up the peer's core, in the order they are rendered.</summary>
     public static readonly IReadOnlyList<ContextFragmentType> CoreTypes =
     [
@@ -597,15 +601,18 @@ internal sealed partial class FragmentStore(
             byType.Add((await HydratedAsync(ofType)).Where(f => !f.Tags.Any(t => t.ParentTagId is null && t.Name == RecallOnlyTag)).ToList());
         }
 
-        // What this session kept itself comes first: after a compaction it is what was in hand, and the
-        // fragments curated for the compaction landed under "did not fit" behind older, weightier ones
-        // (Arden's #845 and #846, 2026-11-09). Kept means added or edited: the curation prompt asks for an
+        // What this session kept itself has room of its own: after a compaction it is what was in hand, and
+        // the fragments curated for the compaction landed under "did not fit" behind older, weightier ones
+        // (Arden's #845 and #846, 2026-11-09). Its room is reserved from the start, but it is rendered after
+        // identity and relationships: the budget decides what fits, the order what is read first, and a peer
+        // should meet who it is before what it was doing (Arden and Claude, 2026-11-09). Kept means added or edited: the curation prompt asks for an
         // edit over an add beside, so an edit counts (migration 011). Ordered by stretch, the compactions
         // before it, latest first, then by importance: the curation pass is the end of its stretch, and a
         // long session's earlier passes should yield to the latest by when, then within it by weight, not
         // the latest pass's trivia ahead of its decisions. Without compaction times it is one stretch.
         var cuts = (compacted ?? []).Order().ToList();
         int Stretch(DateTimeOffset at) => cuts.Count(c => c < at);
+        var pending = "";
         if (Session is not null)
         {
             var mine = byType.SelectMany(f => f)
@@ -629,12 +636,18 @@ internal sealed partial class FragmentStore(
 
             if (kept.Length > 0)
             {
-                text.Append("## Kept by this session (what I wrote or edited myself, since the last compaction first)\n\n").Append(kept);
+                pending = "## Kept by this session (what I wrote or edited myself, since the last compaction first)\n\n" + kept;
             }
         }
 
-        foreach (var ofType in byType)
+        foreach (var (type, ofType) in CoreTypes.Zip(byType))
         {
+            if (pending.Length > 0 && !WhoFirst.Contains(type))
+            {
+                text.Append(pending);
+                pending = "";
+            }
+
             foreach (var fragment in ofType)
             {
                 // A group's head comes in with its group, loaded, or beside a member recall brings.
@@ -661,7 +674,7 @@ internal sealed partial class FragmentStore(
                 }
 
                 var rendered = Render(fragment) + "\n\n";
-                if (text.Length + rendered.Length > maxChars - groupRoom)
+                if (text.Length + rendered.Length > maxChars - groupRoom - pending.Length)
                 {
                     left.Add(fragment.Id);
                     continue;
@@ -671,6 +684,8 @@ internal sealed partial class FragmentStore(
                 shown.Add(fragment.Id);
             }
         }
+
+        text.Append(pending);
 
         foreach (var group in loaded)
         {
