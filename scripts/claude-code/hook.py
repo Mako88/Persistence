@@ -1517,7 +1517,8 @@ def run_due(grace=120):
         cwd = next((w["cwd"] for w in mine if w.get("cwd")), str(Path.home()))
         run = f"cd {shlex.quote(cwd)} && "
         if compact:
-            run += f"claude -p --resume {session} /compact >/dev/null 2>&1; "
+            # Kept, not thrown away: Arden's 19:07 compact failed and /dev/null hid why (Arden, 2026-11-09).
+            run += f"claude -p --resume {session} /compact --output-format json > {shlex.quote(str(out.with_suffix('.compact.json')))} 2>&1; "
         run += f"claude -p --resume {session} --output-format json < {shlex.quote(str(prompt))} > {shlex.quote(str(out))} 2>&1"
         # The words are the peer's own, from the wake it set, entered under the login's account.
         env = {**os.environ, "PERSISTENCE_SPEAKER": f"{os.environ.get('PERSISTENCE_PEERNAME') or 'me'} (a wake I set)"}
