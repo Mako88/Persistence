@@ -43,6 +43,10 @@ internal sealed partial class FragmentStore
         ["context set"] = "A sleep pass changes fragments only by supersede, add, and `edit <id> --tag recall-only`; propose a group's head in the record.",
         ["cue set"] = "A sleep pass doesn't set cues; propose one in the pass's record.",
         ["cue remove"] = "A sleep pass doesn't remove cues; propose it in the pass's record.",
+        // The pass may add facts (they wait as proposals when they are about who someone is); judging them is awake work.
+        ["concept accept"] = "Accepting a fact is the waking self's: it stays a proposal for the morning's `concept review`.",
+        ["concept reject"] = "Rejecting a fact is the waking self's; flag it (`concept flag`) for the morning's review.",
+        ["concept kind"] = "What a concept is (a person, a self, a value) is decided awake; it counts as a person until then.",
     };
 
     /// <summary>An open pass: its record, its limits, and the changes logged so far.</summary>
@@ -126,7 +130,7 @@ internal sealed partial class FragmentStore
     /// <summary>Why <paramref name="command"/> may not run now, or null: a pass is open and the command is one it never runs.</summary>
     public async Task<string?> RefusedAsleepAsync(string command, string? sub)
     {
-        var key = command is "context" or "cue" && sub is not null ? $"{command} {sub}" : command;
+        var key = command is "context" or "cue" or "concept" && sub is not null ? $"{command} {sub}" : command;
         return RefusedAsleep.TryGetValue(key, out var why) && await OpenPassAsync(includeExpired: false) is not null ? why : null;
     }
 

@@ -110,9 +110,9 @@ Three parts, inside the same character budget the hook has now:
 
 ## Build order
 
-1. Migration + store rules (citation, proposal by subject-or-object kind, Kind confirmation, supersede, flags) +
+1. ~~Migration + store rules (citation, proposal by subject-or-object kind, Kind confirmation, supersede, flags) +
    `concept` CLI, with tests that fail when a rule is disconnected, including one that a state fact renders with its
-   RecordedAt.
+   RecordedAt.~~ Built 2026-11-10 (migration 013, `concept`, ConceptGraphTests: each rule's test fails with it off).
 2. Extractor on a sample of 40 authored fragments with two candidate models; I and Arden read the output and judge
    it against the sources, including whether it proposes the right supersedes. Note cost and time.
 3. Titles for all authored fragments.

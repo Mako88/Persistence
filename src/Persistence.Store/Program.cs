@@ -33,6 +33,15 @@ const string Usage = """
                                             (the human's words), tool (a call about to run, as `Tool: {input}`),
                                             stop (my last message as a turn ends). --content adds a fragment to it;
                                             `edit <id> --tag cue/<moment>/<name>` puts an existing one on it
+      concept [review] | show <name> [--history] | add <subject> --fact <text> --source <id>[,<id>]... [--object <name>]
+              [--state] [--as-of <date>] [--supersedes <fact id>] [--kind <thing|person|self|value>] [--by <extractor>]
+              | accept <fact id> [--reason] | reject <fact id> --reason | flag <fact id> --reason [--by]
+              | kind <name> <thing|person|self|value> | alias <name> <alias> [--note]
+                                            the concept graph (docs/design/concept-graph.md): facts about concepts,
+                                            each citing its fragments. A fact about a person, a self or a value (or
+                                            from an Identity/Relational fragment) is a proposal only the owner
+                                            accepts; a concept counts as a person until its kind is confirmed.
+                                            Change supersedes; a rejection is kept and not offered again
       nearest <words...> [--text <text|->] [--limit 3]
                                             the authored fragments nearest a text, with their scores: what `add`
                                             checks for a view written twice (it names a near one after saving)
@@ -310,6 +319,54 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
                     break;
                 default:
                     throw new UsageException($"cue {line.Positional[0]}? It takes list, set or remove.");
+            }
+
+            break;
+        case "concept":
+            {
+                string Arg(int i, string what) => line.Positional.Count > i ? line.Positional[i] : throw new UsageException($"concept {line.Positional[0]} needs {what}.");
+                long FactId(int i) => long.TryParse(Arg(i, "<fact id>").TrimStart('#'), out var v) ? v : throw new UsageException($"'{line.Positional[i]}' is not a fact id.");
+                switch (line.Positional.Count > 0 ? line.Positional[0] : "review")
+                {
+                    case "show":
+                        Console.WriteLine(await store.ConceptShowAsync(Arg(1, "<name>"), line.Has("history")));
+                        break;
+                    case "add":
+                        var fact = await store.AddFactAsync(Arg(1, "<subject>"), line.Text("fact") ?? throw new UsageException("concept add needs --fact <text>."),
+                            line.GetAll("source").SelectMany(v => v.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                                .Select(v => long.TryParse(v.TrimStart('#'), out var id) ? id : throw new UsageException($"'{v}' is not a fragment id.")).ToList(),
+                            line.Get("object"), line.Has("state"), line.Get("as-of"), line.Get("by"),
+                            line.Get("supersedes") is { } sup ? long.Parse(sup.TrimStart('#')) : null, line.Get("kind"));
+                        Console.WriteLine((fact.Status == "proposed" ? "Proposed (about who someone is, so it waits for `concept review`): " : "Added: ")
+                            + await store.RenderFactAsync(fact));
+                        break;
+                    case "accept":
+                        var accepted = await store.AcceptFactAsync(FactId(1), line.Get("reason"));
+                        Console.WriteLine($"#{accepted.Id} stands." + (accepted.Supersedes is { } r ? $" It replaces #{r}." : ""));
+                        break;
+                    case "reject":
+                        var rejected = await store.RejectFactAsync(FactId(1), line.Get("reason") ?? "");
+                        Console.WriteLine($"#{rejected.Id} is rejected and kept, so it isn't offered again.");
+                        break;
+                    case "flag":
+                        var flagId = FactId(1);
+                        await store.FlagFactAsync(flagId, line.Get("by") ?? Environment.GetEnvironmentVariable("PERSISTENCE_SPEAKER") ?? "unknown", line.Get("reason") ?? "");
+                        Console.WriteLine($"#{flagId} is flagged; it waits in the owner's `concept review`.");
+                        break;
+                    case "kind":
+                        var kinded = await store.ConfirmKindAsync(Arg(1, "<name>"), Arg(2, $"<{string.Join("|", FragmentStore.ConceptKinds)}>"));
+                        Console.WriteLine($"{kinded.Name} is a {kinded.Kind}, confirmed.");
+                        break;
+                    case "alias":
+                        var aliased = await store.AddAliasAsync(Arg(1, "<name>"), Arg(2, "<alias>"), line.Get("note"));
+                        Console.WriteLine($"'{line.Positional[2]}' now names {aliased.Name}.");
+                        break;
+                    case "review":
+                        Console.WriteLine(await store.ConceptReviewAsync());
+                        break;
+                    default:
+                        throw new UsageException($"concept {line.Positional[0]}? It takes show, add, accept, reject, flag, kind, alias or review.");
+                }
             }
 
             break;

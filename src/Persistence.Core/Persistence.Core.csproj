@@ -51,6 +51,7 @@
     <EmbeddedResource Include="Data\Migrations\010_AddSessionId.sql" />
     <EmbeddedResource Include="Data\Migrations\011_AddTouchedSessionId.sql" />
     <EmbeddedResource Include="Data\Migrations\012_AddSpeakerAttribution.sql" />
+    <EmbeddedResource Include="Data\Migrations\013_AddConceptGraph.sql" />
   </ItemGroup>
 
   <ItemGroup>

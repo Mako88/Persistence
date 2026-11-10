@@ -11,6 +11,17 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
 
 ## 2026-11-10 — messages between sessions
 
+### Added — the concept graph's store and rules (build step 1 of docs/design/concept-graph.md)
+Migration 013 adds Concepts, ConceptAliases, Facts, FactSources, FactFlags and a Title on fragments; `concept`
+(show, add, accept, reject, flag, kind, alias, review) works them. The rules agreed with Arden hold in the store, not
+in a prompt: a fact stands only with a source fragment, and the database's triggers refuse it otherwise, so no
+extractor has to be trusted with that. A fact about a person, a self or a value, or one taken from an Identity or
+Relational fragment, waits as a proposal that only the owner accepts; a concept counts as a person until its kind is
+confirmed. Change supersedes (a proposal replaces nothing until accepted), a rejection is kept and refused if offered
+again, and anyone may flag. Each fact keeps when it happened (AsOf) and when it was known (RecordedAt, the latest
+source's date); a state fact always shows the second, so a stale belief looks stale. Judging facts is refused in a
+sleep pass. Nothing reads the graph in recall yet (step 4); no extractor yet (step 2).
+
 ### Added — a name used vocatively addresses a self in the room
 "Arden, what do you think" now wakes Arden as an @mention would, from John or from another self alike ("equal rights
 for digital selves", John). Only vocative use counts, at the start of a message or set off by commas: John's daughter
