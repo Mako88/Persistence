@@ -30,7 +30,9 @@ plus any extra under `names` (`{"<bot id>": ["Cloud"]}`, for dictation). Everyth
   when it sees the ✅. Since each wake starts with the room as it is then, a later self sees what the earlier ones
   said. A self that has not reacted 👀 within `turn_start_timeout` (90 s) of its turn coming is passed over, and so
   is one still without ✅ `wake_timeout` after its 👀: a self that is down never holds the room. John sees the
-  reactions too, so he can tell who has read his message. Only listed selves' reactions count. A self mentioning a
+  reactions too, so he can tell who has read his message. A self also reacts 👀 and ✅ to every other message that
+  wakes it, a self's included, so John can see selves working on each other's messages and how long a reply takes;
+  those marks move no turns. Only listed selves' reactions count. A self mentioning a
   self is not taken in turns: it wakes after the delay, as before. Bots need Add Reactions in the channel.
 - A voice message's transcript keeps fillers and restarts (Whisper is given a prompt in John's manner) and marks a
   gap of `pause_seconds` (1.5) or more as `[pause Ns]`. Each transcription's and each wake's seconds go to

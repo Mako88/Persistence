@@ -540,6 +540,16 @@ class TurnTests(unittest.TestCase):
         self.assertIsNotNone(w)
         self.assertEqual(w.turns, [])
 
+    def test_every_trigger_is_marked_a_selfs_message_too(self):
+        # John, 2026-11-10: 👀 and ✅ on every message that wakes a self, so he sees selves answering each other too.
+        r = rc.Room(A, "A", self.conf(), rng=Rng())
+        r.on_message(msg(9, author="B", author_id=B, bot=True, mentions=[A]), 0)
+        r.on_message(self.john(11), 0)
+        w = r.tick(10)
+        self.assertEqual([t["id"] for t in w.to_mark], [t["id"] for t in w.triggers])
+        self.assertEqual(len(w.to_mark), 2)
+        self.assertEqual([t["id"] for t in w.turns], ["11"])
+
     def test_without_selves_configured_the_delays_alone_apply(self):
         r = rc.Room(A, "A", config(people={JOHN: "John"}), rng=Rng())
         r.on_message(self.john(10), 0)

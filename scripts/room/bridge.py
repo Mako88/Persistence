@@ -112,7 +112,7 @@ class Bridge:
                     print(f"could not transcribe {path}: {e}", flush=True)
         return rc.with_attachments(m.content, [a.filename for a in m.attachments], voice, saved, transcript)
 
-    # -- turns: a reaction on the person's message when this self's turn starts and when it ends
+    # -- marks: a reaction on each message that woke this self, when the wake starts and when it ends
     async def mark(self, turns, which):
         emoji = self.config["turn_marks"][which]
         for t in turns:
@@ -132,7 +132,7 @@ class Bridge:
         cwd = self.config["cwd"] or (str(Path.home() / "work") if (Path.home() / "work").is_dir() else str(Path.home()))
         self.current_channel = wake.channel_id
         log = STATE / f"wake-{int(time.time())}.json"
-        await self.mark(wake.turns, "start")
+        await self.mark(wake.to_mark, "start")
         started = time.time()
         try:
             with log.open("w") as out:
@@ -155,7 +155,7 @@ class Bridge:
             log_timing({"what": "wake", "triggers": [t["id"] for t in wake.triggers], "wake_s": round(time.time() - started, 1),
                         "since_message_s": round(time.time() - newest, 1) if newest else None})
             self.current_channel = None
-            await self.mark(wake.turns, "done")
+            await self.mark(wake.to_mark, "done")
             self.room.finish(time.time())
 
     async def ticker(self):

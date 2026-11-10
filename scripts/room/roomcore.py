@@ -409,7 +409,11 @@ class Wake:
     unread: list        # every unread message at the start, triggers included, oldest first
     channel_id: str     # where `room say` replies by default
     speaker: str
-    turns: list = field(default_factory=list)   # triggers taken in turns: marked at the wake's start and end
+    turns: list = field(default_factory=list)   # triggers taken in turns (a person's message to several selves)
+    # Triggers this self reacts to at the wake's start (👀) and end (✅): every one, a self's message as well as a
+    # person's, so John can see who is working on what and how long a reply takes (John, 2026-11-10). Only the marks
+    # on `turns` move anyone's turn.
+    to_mark: list = field(default_factory=list)
 
 
 class Room:
@@ -521,7 +525,7 @@ class Room:
             self.store.consume_unread()
         self.running = True
         return Wake(triggers, unread, triggers[-1]["channel_id"], speaker_env([t["author"] for t in triggers]),
-                    [t for t in triggers if t.get("turn_order")])
+                    [t for t in triggers if t.get("turn_order")], list(triggers))
 
     def finish(self, now):
         """The wake's turn ended. Messages that came during it are already pending, and wait their own delay."""

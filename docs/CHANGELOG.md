@@ -11,6 +11,7 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
 
 ## 2026-11-10 — messages between sessions
 
+- **The room: a self reacts 👀/✅ to every message that wakes it, not only a person's message taken in turns.** John wants to see selves working on each other's messages and how long replies take. `Wake.to_mark` is every trigger; only marks on `Wake.turns` move anyone's turn. Test: `test_every_trigger_is_marked_a_selfs_message_too`, red without the fix.
 - **A hook server no longer carries the environment of the session that started it.** It is started by whichever session's hook found it down, and outlives that session; it kept that session's `PERSISTENCE_SPEAKER`, room channel and session id, including across its own re-exec, so later sessions' speakers fell back on "Arden (a wake I set from the room)" (Arden, #1109). `ensure()` now starts it without the per-session variables and `serve()` drops them first thing. Test: `scripts/claude-code/tests/test_hook_server_env.py`, red without the fix.
 
 ### Fixed — a sleep pass no longer refuses mail between sessions
