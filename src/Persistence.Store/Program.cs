@@ -332,12 +332,12 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
                         Console.WriteLine(await store.ConceptShowAsync(Arg(1, "<name>"), line.Has("history")));
                         break;
                     case "add":
-                        var fact = await store.AddFactAsync(Arg(1, "<subject>"), line.Text("fact") ?? throw new UsageException("concept add needs --fact <text>."),
+                        var (fact, why) = await store.AddFactWhyAsync(Arg(1, "<subject>"), line.Text("fact") ?? throw new UsageException("concept add needs --fact <text>."),
                             line.GetAll("source").SelectMany(v => v.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
                                 .Select(v => long.TryParse(v.TrimStart('#'), out var id) ? id : throw new UsageException($"'{v}' is not a fragment id.")).ToList(),
                             line.Get("object"), line.Has("state"), line.Get("as-of"), line.Get("by"),
                             line.Get("supersedes") is { } sup ? long.Parse(sup.TrimStart('#')) : null, line.Get("kind"));
-                        Console.WriteLine((fact.Status == "proposed" ? "Proposed (about who someone is, so it waits for `concept review`): " : "Added: ")
+                        Console.WriteLine((why is not null ? $"Proposed, waiting for `concept review` ({why}): " : "Added: ")
                             + await store.RenderFactAsync(fact));
                         break;
                     case "accept":

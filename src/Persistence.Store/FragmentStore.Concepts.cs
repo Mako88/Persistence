@@ -47,6 +47,11 @@ internal sealed partial class FragmentStore
     /// active, or proposed when it is about who someone is.
     /// </summary>
     public async Task<FactRow> AddFactAsync(string subject, string text, IReadOnlyCollection<long> sources, string? @object = null,
+        bool isState = false, string? asOf = null, string? extractedBy = null, long? supersedes = null, string? kind = null) =>
+        (await AddFactWhyAsync(subject, text, sources, @object, isState, asOf, extractedBy, supersedes, kind)).Fact;
+
+    /// <summary><see cref="AddFactAsync"/>, with why it is a proposal (null when it stands).</summary>
+    public async Task<(FactRow Fact, string? WhyProposed)> AddFactWhyAsync(string subject, string text, IReadOnlyCollection<long> sources, string? @object = null,
         bool isState = false, string? asOf = null, string? extractedBy = null, long? supersedes = null, string? kind = null)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -91,7 +96,12 @@ internal sealed partial class FragmentStore
             throw new RefusedException($"This was rejected before as #{rejected.Id} ({rejected.Resolution ?? "no reason given"}); it is not proposed again.");
         }
 
-        var proposal = AboutWho(subj) || (obj is not null && AboutWho(obj)) || types.Values.Any(WhoSources.Contains);
+        string? Why(ConceptRow c, string role) => !AboutWho(c) ? null
+            : c.Confirmed ? $"its {role} {c.Name} is a {c.Kind}" : $"its {role} {c.Name} has no confirmed kind, so counts as a person (`concept kind`)";
+        var whys = new[] { Why(subj, "subject"), obj is null ? null : Why(obj, "object"),
+            types.Where(t => WhoSources.Contains(t.Value)).Select(t => $"#{t.Key} is {(ContextFragmentType)t.Value}").FirstOrDefault() is { } w ? $"its source {w}" : null }
+            .Where(x => x is not null).ToList();
+        var proposal = whys.Count > 0;
         var id = await concepts.AddFactAsync(subj.Id, obj?.Id, text, isState, asOf, extractedBy ?? "by hand",
             sources, proposal ? "proposed" : "active", replaced?.Id);
         if (!proposal && replaced is not null)
@@ -99,7 +109,7 @@ internal sealed partial class FragmentStore
             await concepts.SupersedeFactAsync(replaced.Id, id, $"superseded by #{id}");
         }
 
-        return (await concepts.GetFactAsync(id))!;
+        return ((await concepts.GetFactAsync(id))!, proposal ? string.Join("; ", whys) : null);
     }
 
     /// <summary>The self accepts a proposal: it stands, and replaces the fact it names, if any.</summary>

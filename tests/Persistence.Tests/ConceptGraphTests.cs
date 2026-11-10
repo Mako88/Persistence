@@ -64,8 +64,10 @@ public sealed class ConceptGraphTests : IDisposable
         var personal = await FragmentAsync(store, "Personal", "The bridge transcribes voice with Whisper small.");
         var relational = await FragmentAsync(store, "Relational", "Ember is John's daughter; \"Emma\" was dictation.");
 
-        // A new concept counts as a person until its kind is confirmed.
-        Assert.Equal("proposed", (await store.AddFactAsync("the room bridge", "transcribes voice with Whisper small", [personal])).Status);
+        // A new concept counts as a person until its kind is confirmed, and the proposal says that is why.
+        var (unconfirmed, why) = await store.AddFactWhyAsync("the room bridge", "transcribes voice with Whisper small", [personal]);
+        Assert.Equal("proposed", unconfirmed.Status);
+        Assert.Contains("no confirmed kind", why);
         await store.ConfirmKindAsync("the room bridge", "thing");
         Assert.Equal("active", (await store.AddFactAsync("the room bridge", "saves attachments under state/attachments", [personal])).Status);
 
