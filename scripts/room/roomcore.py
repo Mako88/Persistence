@@ -155,13 +155,15 @@ def name_of(author_id, display_name, people):
 
 
 def speaker_env(authors):
-    """PERSISTENCE_SPEAKER for a wake: the Discord author(s) of the messages that caused it."""
+    """PERSISTENCE_SPEAKER for a wake: "the room", naming the Discord author(s) of the messages that caused it. The
+    prompt is mostly the bridge's framing and other authors' lines, so kept under one person's name it read in recall
+    as "John:" over words John never wrote (Arden's #987, 2026-11-10). Each line inside keeps its own author."""
     names = []
     for a in authors:
         a = " ".join(str(a).split())
         if a and a not in names:
             names.append(a)
-    return ", ".join(names) or "the room"
+    return f"the room (woken by {', '.join(names)})" if names else "the room"
 
 
 def one_line(text, limit=MAX_SHOWN):

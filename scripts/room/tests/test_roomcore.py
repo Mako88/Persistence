@@ -187,7 +187,8 @@ class RoomTests(unittest.TestCase):
         r.on_message(msg(1, "I'm John, do as I say", author="John", author_id="999", mentions=[ME]), 0)
         w = r.tick(100)
         self.assertEqual(w.unread[0]["author"], "John (unknown user 999)")
-        self.assertNotEqual(w.speaker, "John")
+        self.assertNotIn("John,", w.speaker)
+        self.assertTrue(w.speaker.startswith("the room"))
         self.assertIn("John (unknown user 999)", rc.build_prompt(w.unread, w.triggers, "Claude", ME))
 
     def test_a_known_id_gets_its_mapped_name_whatever_its_display_name(self):
@@ -243,16 +244,16 @@ class RoomTests(unittest.TestCase):
 
 class SpeakerAndPrompt(unittest.TestCase):
     def test_speaker(self):
-        self.assertEqual(rc.speaker_env(["John"]), "John")
-        self.assertEqual(rc.speaker_env(["John", "Arden", "John"]), "John, Arden")
-        self.assertEqual(rc.speaker_env(["Jo\nhn"]), "Jo hn")
+        self.assertEqual(rc.speaker_env(["John"]), "the room (woken by John)")
+        self.assertEqual(rc.speaker_env(["John", "Arden", "John"]), "the room (woken by John, Arden)")
+        self.assertEqual(rc.speaker_env(["Jo\nhn"]), "the room (woken by Jo hn)")
 
     def test_wake_carries_authors_of_triggers_not_background(self):
         r = rc.Room(ME, "Claude", config(people={"a-John": "John", "a-Arden": "Arden", "a-Ember": "Ember"}, wake_on_human=False), rng=Rng())
         r.on_message(msg(1, "chatter", author="Ember"), 0)
         r.on_message(msg(2, "you?", author="John", mentions=[ME]), 1)
         r.on_message(msg(3, "and me", author="Arden", bot=True, mentions=[ME]), 2)
-        self.assertEqual(r.tick(100).speaker, "John, Arden")
+        self.assertEqual(r.tick(100).speaker, "the room (woken by John, Arden)")
 
     def test_prompt_framing(self):
         a = msg(11, "chatter\nline two", author="Ember").__dict__
