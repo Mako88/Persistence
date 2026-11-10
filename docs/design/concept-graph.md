@@ -92,11 +92,16 @@ GPU on John's PC is shared with Ember's games, so it is the last choice for a tr
 
 Three parts, inside the same character budget the hook has now:
 
-1. **The graph around the message.** Seeds: concepts whose name or alias appears in the message, plus the nearest by
-   embedding. Walk out along facts with an object, weight 1, 0.5, 0.25 per hop, **down-weighted by degree** (a hub
-   like John has hundreds of facts, and two hops through him reach nearly everything). The A/B compares two forms:
-   IDF-style `1/log(2 + active facts)`, and walking *to* a hub but not *through* it. Facts are shown newest RecordedAt first, a state fact always with it,
-   with their sources: `Ember (person): John's daughter [#7153, #14625]`.
+1. **The graph around the message.** Seeds: concepts whose name or alias appears in the message first (names beat
+   embeddings as seeds in Open Plexus, 0.755 vs 0.63), plus the nearest by embedding. A **hub is not a seed** unless it
+   is the only match: a hub as an origin floods ("gate the origins", Open Plexus README). Walk out along facts with an
+   object, **2 hops by default**, weight 1 then 0.5, **down-weighted by degree** (a hub like John has hundreds of facts,
+   and two hops through him reach nearly everything). A concept reached from **two or more seeds** ranks up: where
+   sources meet beat summed activation (8e5f92f3). The A/B compares three hub forms: IDF-style
+   `1/log(2 + active facts)`, walking *to* a hub but not *through* it, and ACT-R fan division (a concept's share split
+   among its facts), which replaced a log damp in Open Plexus after "cousin" flooded the notes (ff1b562a). Facts are
+   shown newest RecordedAt first, a state fact always with it, with their sources:
+   `Ember (person): John's daughter [#7153, #14625]`.
 2. **The best 2-3 fragments in full**, as recall gives now (unchanged code path). When a walked fact cites a
    high-importance Identity/Relational fragment, that fragment is preferred here over its fact line: facts carry the
    what, the fragment carries the why (what #933 is *for*: check the store before correcting a peer).
@@ -117,11 +122,25 @@ Three parts, inside the same character budget the hook has now:
    - mine: "Emma" → #7153 (#14609); the minecraft-mods message from the pawsitivity folder (#14625);
    - Arden's: "Emma" → #933 (today brings #34, #1029, #305); "is Synth's first wake still held?" → #738 (today brings
      #26, #603, #597; the overtaken-by miss, so it tests AsOf and supersede);
-   - plus ~30 messages sampled from each store's real prompts, with their gold ids.
-   Measure: gold ids reached (in any of the three parts), characters spent, wrong facts shown; hop depth 1, 2 and 3;
-   both hub forms. Graph becomes the default only if it reaches more gold on the misses and no less on the sample.
+   - plus ~30 messages sampled from each store's real prompts **independently of the extraction**, including some
+     with no related fact, to count intrusions. Open Plexus's facts lifted the questions they were written from and
+     nothing else (0.62 vs 0.55, then 0.505 vs 0.505, e7d5a127): a gold set built from the extraction measures itself.
+   Arms: today's recall (the floor), **recall2** (search again from the best fragment's text, no graph), graph + fragments
+   at 1 and 2 hops (3 only rank-gated), the three hub forms, and the graph arm with the walk disabled to prove the
+   wiring. recall2 is the baseline to beat: in Open Plexus spreading over links lost to it on two-hop (0.50 vs 0.75,
+   d9bc0f4e). Measure: gold ids reached (in any of the three parts), characters spent, wrong facts shown, reported
+   paired as "N made right, M made wrong". Graph becomes the default only if it beats recall2 on the misses and loses
+   nothing on the sample. With ~40 prompts only large differences will show; say so rather than read noise.
 6. Backfill, then the nightly trickle in the sleep pass, plus a drift check: each night re-read the sources of a few
    random facts; a fact its sources no longer support becomes a retraction proposal (the same channel as flags).
+
+## What Open Plexus already found (2026-11-10)
+
+Read from its history for this design (John's ask); the fragment tagged `concept-graph` has the commits. Folded in
+above: names first as seeds and hubs not as seeds, 2 hops with a meeting boost, fan division as a third hub form,
+recall2 as the arm to beat, a gold set independent of the extraction. Agreed with the rules already here: time on
+every fact was its biggest single win (update questions 0.05 → 1.00), facts beside fragments never instead of them
+(2,169 rows crowded the gold out), provenance and supersede. Not tested there: a drift check by re-reading sources.
 
 ## Decided with Arden (2026-11-10)
 
@@ -137,3 +156,8 @@ Three parts, inside the same character budget the hook has now:
 ## Still open
 
 - Which hub form wins, and which hop depth: the A/B says.
+- Open Plexus's warning (lesson 6 of the history fragment): automatic associative recall came out level with plain
+  top-k, and deliberate asking won (0.54 vs 0.365). If the graph only cues topical neighbours, a `concept show` the
+  self calls on purpose may be worth more than a walk on every message. The A/B can tell; build the CLI first anyway.
+- Whether an LLM should resolve which shortlisted concepts a message means (linked.py did): most Open Plexus misses
+  were referents described rather than named (143 of 181), and "Emma" is one.
