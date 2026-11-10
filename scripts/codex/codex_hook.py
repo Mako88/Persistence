@@ -141,12 +141,14 @@ def conversation(text, session, last=None):
     return out
 
 
-def keep_log(path, last=None, timeout=120, cold=True):
+def keep_log(path, last=None, timeout=120, cold=None):
     """What keep-conversation said of a Codex log, or why it failed. The store is sent the converted lines (the same
     `--transcript -` a remote store is sent), named for the session, so its utterances are filed under the session id
     the hooks use. The whole log goes every time and the store skips ids it has, so one save that works catches up
     every turn of the session a failed one missed. `timeout`/`cold`: a retry inside a prompt's hook waits less and
-    never runs the CLI cold."""
+    never runs the CLI cold. A store served on a socket is a service: run cold, the CLI only says "Which store?"."""
+    if cold is None:
+        cold = not hook.SOCKET
     session = session_of(path)
     lines = conversation(read_log(path), session, last)
     if not lines:
@@ -155,6 +157,8 @@ def keep_log(path, last=None, timeout=120, cold=True):
     code, out, err = hook.call_store("keep-conversation", f"{session}.jsonl", "--transcript", "-", "--local-peer", peer,
                                      *hook.speaker_args(session), stdin="\n".join(lines) + "\n", timeout=timeout,
                                      cold=cold)
+    if code is None:
+        return f"failed: the store did not answer on {hook.WHERE}"
     return out.strip() if code == 0 else f"failed ({code}): {err.strip()}"
 
 

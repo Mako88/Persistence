@@ -124,6 +124,7 @@ class SaveFailures(unittest.TestCase):
         self.assertIn("saving to your store is failing", context)
         self.assertIn(f"session {SESSION}", context)
         self.assertIn("3 tries", context)  # two Stops and the prompt's own retry
+        self.assertIn("the store did not answer", context)  # a reason, not an empty one
         self.assertIn("the lighthouse", context)  # the recall still comes with it
         with mock.patch.object(hook, "call_store", return_value=(0, "kept 2 new utterances", "")) as store:
             self.assertIsNone(self.prompt())  # the retry works: nothing to say, and recall had nothing either
