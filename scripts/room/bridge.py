@@ -19,17 +19,39 @@ CONFIG_DIR = rc.CONFIG_DIR
 STATE = CONFIG_DIR / "state"
 
 
-def to_msg(m, me_id):
-    """discord.Message -> roomcore.Msg. The only place that knows discord.py's shapes (besides the client below)."""
+def to_msg(m, me_id, text=None):
+    """discord.Message -> roomcore.Msg. The only place that knows discord.py's shapes (besides the client below).
+    `text` is the message's text with its attachments described (Bridge.describe); without it, names only."""
     import discord
     ref = m.reference.resolved if m.reference and isinstance(m.reference.resolved, discord.Message) else None
+    if text is None:
+        text = rc.with_attachments(m.content, [a.filename for a in m.attachments], bool(getattr(m.flags, "voice", False)))
     return rc.Msg(
         id=str(m.id), channel_id=str(m.channel.id), author_id=str(m.author.id), author=m.author.display_name,
-        text=rc.with_attachments(m.content, [a.filename for a in m.attachments], bool(getattr(m.flags, "voice", False))),
+        text=text,
         is_bot=m.author.bot, is_dm=m.guild is None,
         mentions=[str(u.id) for u in m.mentions], role_mentions=[str(r.id) for r in m.role_mentions],
         mention_everyone=m.mention_everyone, reply_to_author_id=str(ref.author.id) if ref else None,
         channel_name=getattr(m.channel, "name", None) or "DM", ts=m.created_at.timestamp())
+
+
+def safe_name(name):
+    """An attachment's file name made safe to write: no directories, no leading dots."""
+    name = "".join(c if c.isalnum() or c in "._-" else "_" for c in Path(str(name)).name).lstrip(".")
+    return name or "attachment"
+
+
+def transcribe(path, model_name, model_dir):
+    """A voice message's text, by faster-whisper on the CPU. The model is loaded per message and let go after: voice
+    messages are rare, and a resident model would hold a gigabyte per bridge. None if faster-whisper is missing."""
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError:
+        return None
+    model = WhisperModel(model_name, device="cpu", compute_type="int8", cpu_threads=2,
+                         download_root=model_dir if model_dir and Path(model_dir).is_dir() else None)
+    segments, _ = model.transcribe(str(path), vad_filter=True)
+    return " ".join(seg.text.strip() for seg in segments).strip()
 
 
 class Bridge:
@@ -38,6 +60,44 @@ class Bridge:
         self.room = None
         self.client = None
         self.current_channel = None     # the channel of the wake that is running
+
+    # -- attachments: saved for the woken self to Read; a voice message transcribed
+    async def describe(self, m):
+        voice = bool(getattr(m.flags, "voice", False))
+        if not m.attachments:
+            return rc.with_attachments(m.content, [], voice)
+        folder = STATE / "attachments" / str(m.id)
+        saved, transcript = {}, None
+        for a in m.attachments:
+            if a.size and a.size > self.config["attachment_max_bytes"]:
+                continue
+            try:
+                folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+                path = folder / safe_name(a.filename)
+                await a.save(path)
+            except Exception as e:
+                print(f"could not save attachment {a.filename} of {m.id}: {e}", flush=True)
+                continue
+            kind = "image" if (a.content_type or "").startswith("image/") else "file"
+            saved[a.filename] = (kind, str(path))
+            if voice and transcript is None:
+                try:
+                    transcript = await asyncio.to_thread(
+                        transcribe, path, self.config["whisper_model"], self.config["whisper_dir"])
+                except Exception as e:
+                    print(f"could not transcribe {path}: {e}", flush=True)
+        return rc.with_attachments(m.content, [a.filename for a in m.attachments], voice, saved, transcript)
+
+    # -- turns: a reaction on the person's message when this self's turn starts and when it ends
+    async def mark(self, turns, which):
+        emoji = self.config["turn_marks"][which]
+        for t in turns:
+            try:
+                channel = self.client.get_channel(int(t["channel_id"])) or await self.client.fetch_channel(int(t["channel_id"]))
+                await channel.get_partial_message(int(t["id"])).add_reaction(emoji)
+            except Exception as e:     # the others pass this self over after turn_start_timeout
+                print(f"could not mark {t['id']} {which}: {e}", flush=True)
+            self.room.on_mark(t["id"], self.room.me_id, which, time.time())
 
     # -- the wake
     async def run_wake(self, wake):
@@ -48,6 +108,7 @@ class Bridge:
         cwd = self.config["cwd"] or (str(Path.home() / "work") if (Path.home() / "work").is_dir() else str(Path.home()))
         self.current_channel = wake.channel_id
         log = STATE / f"wake-{int(time.time())}.json"
+        await self.mark(wake.turns, "start")
         try:
             with log.open("w") as out:
                 proc = await asyncio.create_subprocess_exec(
@@ -65,6 +126,7 @@ class Bridge:
             print(f"wake could not start: {e}", flush=True)
         finally:
             self.current_channel = None
+            await self.mark(wake.turns, "done")
             self.room.finish(time.time())
 
     async def ticker(self):
@@ -137,8 +199,19 @@ class Bridge:
 
         @self.client.event
         async def on_message(m):
-            if bridge.room:
-                bridge.room.on_message(to_msg(m, bridge.client.user.id), time.time())
+            if bridge.room and m.author.id != bridge.client.user.id:
+                text = await bridge.describe(m)
+                bridge.room.on_message(to_msg(m, bridge.client.user.id, text), time.time())
+
+        @self.client.event
+        async def on_raw_reaction_add(payload):
+            # Another self's turn mark. Only listed selves count, so a person reacting cannot move the line.
+            if not bridge.room or str(payload.user_id) not in map(str, bridge.config["selves"]):
+                return
+            emoji = str(payload.emoji)
+            for which, mark in bridge.config["turn_marks"].items():
+                if emoji == mark:
+                    bridge.room.on_mark(str(payload.message_id), str(payload.user_id), which, time.time())
 
         self.client.run(token)
 

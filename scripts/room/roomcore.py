@@ -30,8 +30,22 @@ DEFAULTS = {
     "breaker_reset_seconds": 600,
     "wakes_per_hour": 20,           # wakes set off by selves alone: the loop guard
     "human_wakes_per_hour": 240,    # wakes a person set off: only a runaway guard, never felt (Arden, 2026-11-10)
-    "room_delay": [5, 60],          # seconds before a wake caused by a whole-room message
+    "room_delay": [2, 10],          # seconds before a wake caused by a whole-room message (John: at most ~10 s)
     "direct_delay": [2, 10],        # seconds before a wake caused by a direct address
+    # Turn-taking (John and Arden, 2026-11-10): the bot ids of every self with a bridge. A person's message that wakes
+    # several of them wakes them one at a time, @mentioned selves first, the rest in an order every bridge derives
+    # alike from a shuffle seeded by the message id. No shared server: a self marks the message with a reaction when
+    # its turn starts and another when it ends (spoken or silent), and the next in line goes when it sees the second.
+    # Empty: no turns, the delays above alone.
+    "selves": [],
+    "turn_delay": [1, 3],           # seconds before the first self in line wakes (batches a burst of messages)
+    "turn_start_timeout": 90,       # a self whose turn came and who has not marked a start by then is passed over
+    "turn_marks": {"start": "\U0001f440", "done": "✅"},
+    # Attachments: saved under state/attachments/<message id>/ so a woken self can Read them; a voice message is
+    # transcribed locally with faster-whisper on the CPU, its audio kept.
+    "attachment_max_bytes": 25 * 1024 * 1024,
+    "whisper_model": "small",
+    "whisper_dir": "/opt/persistence/whisper",
     "wake_command": None,           # argv list, prompt on stdin; {session} is replaced. None = the default claude room session
     "wake_timeout": 1800,
     "cwd": None,
@@ -105,10 +119,45 @@ def classify(msg, me_id, room_roles=(), people=None, wake_on_human=False):
     return None
 
 
-def with_attachments(text, names=(), voice=False):
-    """A message's text with what it carried beyond text, so a voice note or a file is never a blank line."""
-    extra = (["[voice message, no transcript]"] if voice else []) + [f"[attachment: {n}]" for n in names if not voice]
+def with_attachments(text, names=(), voice=False, saved=None, transcript=None):
+    """A message's text with what it carried beyond text, so a voice note or a file is never a blank line.
+
+    `saved` maps an attachment's name to (kind, local path) for those the bridge downloaded, kind "image" or "file";
+    `transcript` is a voice message's text when it was transcribed."""
+    saved = saved or {}
+    extra = []
+    if voice:
+        path = next((p for _, p in saved.values()), None)
+        audio = f" (audio: {path})" if path else ""
+        extra.append(f"[voice message, transcribed]: {transcript.strip()}{audio}" if transcript and transcript.strip()
+                     else f"[voice message, no transcript]{audio}")
+    else:
+        for n in names:
+            kind, path = saved.get(n, (None, None))
+            if kind == "image":
+                extra.append(f"[image: {path}] (Read it to see it)")
+            elif path:
+                extra.append(f"[attachment: {n}, saved at {path}]")
+            else:
+                extra.append(f"[attachment: {n}]")
     return " ".join(([text] if text and text.strip() else []) + extra)
+
+
+def turn_order(msg, selves, config):
+    """The order the selves a person's message wakes take their turns in: those it addresses directly first, then the
+    rest, each group shuffled by a generator seeded with the message id, so every bridge computes the same order."""
+    woken = {}
+    for s in sorted(map(str, selves)):
+        kind = classify(msg, s, config["room_roles"], config["people"], config["wake_on_human"])
+        if kind:
+            woken[s] = kind
+    seed = int(msg.id) if str(msg.id).isdigit() else sum(map(ord, str(msg.id)))
+    rng = random.Random(seed)
+    direct = [s for s in woken if woken[s] == "direct"]
+    rest = [s for s in woken if woken[s] != "direct"]
+    rng.shuffle(direct)
+    rng.shuffle(rest)
+    return direct + rest
 
 
 class Breaker:
@@ -224,6 +273,7 @@ class Wake:
     unread: list        # every unread message at the start, triggers included, oldest first
     channel_id: str     # where `room say` replies by default
     speaker: str
+    turns: list = field(default_factory=list)   # triggers taken in turns: marked at the wake's start and end
 
 
 class Room:
@@ -239,6 +289,7 @@ class Room:
         self.wake_times = deque()       # wakes only selves set off
         self.human_wake_times = deque() # wakes a person set off, counted apart
         self.store = store          # a RoomStore, or None in tests
+        self.marks = {}             # message id -> {self's bot id -> {"start": t, "done": t}}, as seen here
 
     # -- intake
     def on_message(self, msg, now):
@@ -255,15 +306,50 @@ class Room:
             self.store.append_unread(d)
         kind = classify(msg, self.me_id, self.config["room_roles"], self.config["people"], self.config["wake_on_human"])
         if kind and not self._muted(d, now):
+            selves = [str(s) for s in self.config["selves"]]
+            if selves and not msg.is_bot and self.me_id in selves:
+                d["turn_order"], d["arrived"] = turn_order(msg, selves, self.config), now
+                kind = "turn"
             self.pending.append((d, kind))
             # Batching: one delayed wake; a nearer deadline pulls it in, a later one never pushes it out.
-            due = now + pick_delay(kind, self.config, self.rng)
+            delay = self.rng.uniform(*self.config["turn_delay"]) if kind == "turn" else pick_delay(kind, self.config, self.rng)
+            due = now + delay
             self.due = due if self.due is None else min(self.due, due)
         return kind
 
     def note_own(self, channel_id, now):
         """Something this self posted: it counts toward the bot-message cap."""
         self.breaker.note(str(channel_id), True, now)
+
+    def on_mark(self, message_id, self_id, which, now):
+        """A self marked a message: its turn on it started ("start") or ended ("done"). The first sighting counts."""
+        self.marks.setdefault(str(message_id), {}).setdefault(str(self_id), {}).setdefault(which, now)
+        if len(self.marks) > 500:   # only recent messages matter
+            for k in list(self.marks)[:100]:
+                del self.marks[k]
+
+    def my_turn(self, d, now):
+        """Whether this self's turn on message `d` has come: every self before it in line has finished, or was passed
+        over (no start mark within turn_start_timeout of its turn coming, or still not done wake_timeout after its
+        start), so a self that is down or stuck never holds the room."""
+        order = d.get("turn_order")
+        if not order or self.me_id not in order:
+            return True
+        marks = self.marks.get(d["id"], {})
+        t = d["arrived"]                # when the turn of the self being looked at came
+        for q in order[:order.index(self.me_id)]:
+            m = marks.get(q, {})
+            if "done" in m:
+                t = max(t, m["done"])
+            elif "start" in m:
+                if now < m["start"] + self.config["wake_timeout"]:
+                    return False
+                t = m["start"] + self.config["wake_timeout"]
+            else:
+                if now < t + self.config["turn_start_timeout"]:
+                    return False
+                t += self.config["turn_start_timeout"]
+        return True
 
     def _muted(self, d, now):
         return d["is_bot"] and self.breaker.blocked(d["channel_id"], now)
@@ -272,6 +358,10 @@ class Room:
     def tick(self, now):
         """A Wake to run now, or None. Call about once a second."""
         if self.running or not self.pending or self.due is None or now < self.due:
+            return None
+        # A message in turns waits for this self's turn; any trigger that is ready brings the others along, so two
+        # selves each first in line on a different message never wait on each other.
+        if not any(kind != "turn" or self.my_turn(d, now) for d, kind in self.pending):
             return None
         triggers = [d for d, _ in self.pending if not self._muted(d, now)]
         self.pending, self.due = [], None
@@ -291,7 +381,8 @@ class Room:
         if self.store:
             self.store.consume_unread()
         self.running = True
-        return Wake(triggers, unread, triggers[-1]["channel_id"], speaker_env([t["author"] for t in triggers]))
+        return Wake(triggers, unread, triggers[-1]["channel_id"], speaker_env([t["author"] for t in triggers]),
+                    [t for t in triggers if t.get("turn_order")])
 
     def finish(self, now):
         """The wake's turn ended. Messages that came during it are already pending, and wait their own delay."""

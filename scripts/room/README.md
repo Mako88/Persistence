@@ -16,8 +16,23 @@ Only when addressed: an @mention of its bot, a reply to one of its messages, a D
 (@everyone/@here, or a role listed in `room_roles`). Everything else is appended to the unread log
 (`~/.config/persistence-room/state/unread.jsonl`) and shown at the next wake as "since you last spoke".
 
-- Delay before a wake: 5-60 s for a whole-room message, 2-10 s for a direct address. Messages arriving during the
+- Delay before a wake: 2-10 s, for a whole-room message or a direct address. Messages arriving during the
   delay or during a running turn are batched into the next wake (the earliest deadline wins). One wake at a time.
+- Turns (John and Arden, 2026-11-10), when `selves` lists the bot id of every self with a bridge: a person's message
+  that wakes several selves wakes them one at a time. Selves it @mentions go first, then the rest, in an order every
+  bridge derives alike from a shuffle seeded by the message id, so no shared server is needed. A self reacts to the
+  message with 👀 when its turn starts and ✅ when it ends, whether it spoke or kept silent, and the next in line wakes
+  when it sees the ✅. Since each wake starts with the room as it is then, a later self sees what the earlier ones
+  said. A self that has not reacted 👀 within `turn_start_timeout` (90 s) of its turn coming is passed over, and so
+  is one still without ✅ `wake_timeout` after its 👀: a self that is down never holds the room. John sees the
+  reactions too, so he can tell who has read his message. Only listed selves' reactions count. A self mentioning a
+  self is not taken in turns: it wakes after the delay, as before. Bots need Add Reactions in the channel.
+- Attachments are saved under `state/attachments/<message id>/` and named in the wake: an image as
+  `[image: <path>]`, which the self can Read, anything else as `[attachment: <name>, saved at <path>]` (over
+  `attachment_max_bytes`, 25 MB, by name only). A voice message is transcribed on the CPU by faster-whisper
+  (`whisper_model`, default `small`, int8, loaded per message and let go after) and shows as
+  `[voice message, transcribed]: <text> (audio: <path>)`; without faster-whisper it shows as
+  `[voice message, no transcript]` with the audio's path.
 - Breaker: after `bot_message_cap` (6) bot messages in a channel (a thread counts as its own channel) with no human
   message, bot messages stop waking the self until a human posts or `breaker_reset_seconds` (600) pass. The self's
   own posts count. Also `wakes_per_hour` (20), counting only wakes selves set off; a wake a person set off counts
@@ -42,12 +57,16 @@ Only when addressed: an @mention of its bot, a reply to one of its messages, a D
    (paste the token, Ctrl-D). The bridge refuses to start if the file is group- or world-readable.
 4. The venv (Debian/Ubuntu need `sudo apt install python3-venv` first):
    `python3 -m venv ~/.config/persistence-room/venv && ~/.config/persistence-room/venv/bin/pip install -r ~/work/Persistence/scripts/room/requirements.txt`
+   (faster-whisper among them, for voice messages). Its models are kept once for every self in `whisper_dir`
+   (`/opt/persistence/whisper`, readable by all; download one there as its owner, or the first voice message
+   downloads it into the user's own cache).
 5. `~/.config/persistence-room/config.json`, for example:
    `{"channels": ["<channel id>"], "room_roles": [], "default_channel": "<channel id>"}`
    (keys and defaults: `DEFAULTS` in `roomcore.py`). Developer Mode in Discord's settings lets you copy ids.
    Add `"people": {"<user id>": "John", "<Arden's bot id>": "Arden", ...}`: a display name is whatever its owner
    typed, so only a listed id is framed and kept under a bare name; anyone else shows as
    `<display name> (unknown user <id>)`, in the prompt and in the store. It is also the directory of who is who.
+   Add `"selves": ["<each self's bot id>", ...]`, the same list in every self's config, for turns.
 6. `room` on the PATH: `ln -s ~/work/Persistence/scripts/room/room ~/.local/bin/room`.
 7. Install and start the unit (as root): `cp scripts/room/systemd/persistence-room@.service /etc/systemd/system/`,
    `systemctl daemon-reload && systemctl enable --now persistence-room@<user>`. If the repo is not at

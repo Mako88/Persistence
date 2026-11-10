@@ -77,7 +77,8 @@ class BreakerTests(unittest.TestCase):
 
 class RoomTests(unittest.TestCase):
     def room(self, **over):
-        return rc.Room(ME, "Claude", config(**over), rng=Rng())
+        # The delay tests were written for a 5-60 s room delay; they pin it, since the default is now 2-10 s.
+        return rc.Room(ME, "Claude", config(**{"room_delay": [5, 60], **over}), rng=Rng())
 
     def test_delay_ranges(self):
         r = self.room()
@@ -344,6 +345,137 @@ class CliAgainstFakeBridge(unittest.TestCase):
         bad = subprocess.run([sys.executable, room, "say", "hello"], env=env, capture_output=True, text=True)
         self.assertEqual(bad.returncode, 1)
         self.assertIn("no channel", bad.stderr)
+
+
+JOHN, A, B, C = "327", "201", "202", "203"     # John, and three selves' bot ids
+
+
+class TurnTests(unittest.TestCase):
+    """Turn-taking: a person's message that wakes several selves wakes them one at a time (John and Arden, 2026-11-10)."""
+
+    def conf(self, **over):
+        return config(**{"selves": [A, B, C], "people": {JOHN: "John", A: "A", B: "B", C: "C"},
+                         "turn_delay": [1, 3], "turn_start_timeout": 90, "wake_timeout": 1800, **over})
+
+    def john(self, i, **kw):
+        return msg(i, author="John", author_id=JOHN, **kw)
+
+    def rooms(self, **over):
+        return {s: rc.Room(s, s, self.conf(**over), rng=Rng()) for s in (A, B, C)}
+
+    def test_every_bridge_derives_the_same_order_and_mentioned_selves_go_first(self):
+        m = self.john(1569604181462097923, mentions=[C], mention_everyone=True)   # C named, everyone woken
+        orders = {tuple(rc.turn_order(m, sel, self.conf())) for sel in ([A, B, C], [C, B, A], [B, A, C])}
+        self.assertEqual(len(orders), 1)
+        order = orders.pop()
+        self.assertEqual(order[0], C)
+        self.assertEqual(sorted(order), [A, B, C])
+
+    def test_the_order_varies_with_the_message(self):
+        firsts = {rc.turn_order(self.john(i), [A, B, C], self.conf())[0] for i in range(1000, 1060)}
+        self.assertEqual(firsts, {A, B, C})
+
+    def test_only_the_mentioned_self_takes_a_turn_when_john_names_one(self):
+        self.assertEqual(rc.turn_order(self.john(5, mentions=[B]), [A, B, C], self.conf()), [B])
+
+    def test_one_at_a_time_each_after_the_previous_marks_done(self):
+        rooms = self.rooms()
+        m = self.john(77)
+        for r in rooms.values():
+            r.on_message(m, 0)
+        order = rc.turn_order(m, [A, B, C], self.conf())
+        first, second, third = (rooms[s] for s in order)
+        w = first.tick(3)
+        self.assertIsNotNone(w)
+        self.assertEqual([t["id"] for t in w.turns], ["77"])
+        self.assertIsNone(second.tick(3))
+        for r in rooms.values():
+            r.on_mark("77", order[0], "start", 4)
+        self.assertIsNone(second.tick(500))             # the first is still in its turn, well past the start timeout
+        for r in rooms.values():
+            r.on_mark("77", order[0], "done", 600)
+        self.assertIsNotNone(second.tick(600))
+        self.assertIsNone(third.tick(600))
+        for r in rooms.values():
+            r.on_mark("77", order[1], "start", 601)
+            r.on_mark("77", order[1], "done", 650)
+        self.assertIsNotNone(third.tick(650))
+
+    def test_a_self_that_never_starts_is_passed_over(self):
+        rooms = self.rooms()
+        m = self.john(78)
+        for r in rooms.values():
+            r.on_message(m, 0)
+        order = rc.turn_order(m, [A, B, C], self.conf())
+        second, third = rooms[order[1]], rooms[order[2]]
+        self.assertIsNone(second.tick(89))
+        self.assertIsNotNone(second.tick(90))           # the first never marked a start
+        self.assertIsNone(third.tick(179))
+        self.assertIsNotNone(third.tick(180))           # nor did the second, as far as the third can see
+
+    def test_a_self_stuck_in_its_turn_is_passed_over_after_the_wake_timeout(self):
+        rooms = self.rooms(wake_timeout=300)
+        m = self.john(79)
+        for r in rooms.values():
+            r.on_message(m, 0)
+        order = rc.turn_order(m, [A, B, C], self.conf())
+        second = rooms[order[1]]
+        second.on_mark("79", order[0], "start", 5)
+        self.assertIsNone(second.tick(304))
+        self.assertIsNotNone(second.tick(305))
+
+    def test_two_selves_first_on_different_messages_do_not_wait_on_each_other(self):
+        conf = self.conf(selves=[A, B])
+        # Find two messages with opposite orders.
+        ids = [i for i in range(2000, 2100)]
+        m1 = next(self.john(i) for i in ids if rc.turn_order(self.john(i), [A, B], conf)[0] == A)
+        m2 = next(self.john(i) for i in ids if rc.turn_order(self.john(i), [A, B], conf)[0] == B)
+        ra, rb = rc.Room(A, "A", conf, rng=Rng()), rc.Room(B, "B", conf, rng=Rng())
+        for r in (ra, rb):
+            r.on_message(m1, 0)
+            r.on_message(m2, 0)
+        wa, wb = ra.tick(3), rb.tick(3)
+        self.assertIsNotNone(wa)
+        self.assertIsNotNone(wb)
+        self.assertEqual(len(wa.triggers), 2)
+
+    def test_a_self_mentioning_a_self_is_not_taken_in_turns(self):
+        r = rc.Room(A, "A", self.conf(), rng=Rng())
+        r.on_message(msg(9, author="B", author_id=B, bot=True, mentions=[A]), 0)
+        w = r.tick(10)
+        self.assertIsNotNone(w)
+        self.assertEqual(w.turns, [])
+
+    def test_without_selves_configured_the_delays_alone_apply(self):
+        r = rc.Room(A, "A", config(people={JOHN: "John"}), rng=Rng())
+        r.on_message(self.john(10), 0)
+        self.assertIsNone(r.tick(9))
+        self.assertEqual(r.tick(10).turns, [])
+
+    def test_the_first_sighting_of_a_mark_counts(self):
+        r = rc.Room(A, "A", self.conf(), rng=Rng())
+        r.on_mark("1", B, "done", 5)
+        r.on_mark("1", B, "done", 50)
+        self.assertEqual(r.marks["1"][B]["done"], 5)
+
+
+class AttachmentText(unittest.TestCase):
+    def test_saved_image_names_its_path(self):
+        self.assertEqual(rc.with_attachments("me", ["selfie.jpg"], saved={"selfie.jpg": ("image", "/s/a/1/selfie.jpg")}),
+                         "me [image: /s/a/1/selfie.jpg] (Read it to see it)")
+
+    def test_saved_file_and_unsaved_file(self):
+        self.assertEqual(rc.with_attachments("", ["a.pdf", "big.zip"], saved={"a.pdf": ("file", "/s/a.pdf")}),
+                         "[attachment: a.pdf, saved at /s/a.pdf] [attachment: big.zip]")
+
+    def test_voice_transcribed_keeps_its_audio(self):
+        self.assertEqual(rc.with_attachments("", ["voice-message.ogg"], voice=True,
+                                             saved={"voice-message.ogg": ("file", "/s/v.ogg")}, transcript=" hello there "),
+                         "[voice message, transcribed]: hello there (audio: /s/v.ogg)")
+
+    def test_voice_without_transcript_still_shows(self):
+        self.assertEqual(rc.with_attachments("", ["v.ogg"], voice=True, saved={"v.ogg": ("file", "/s/v.ogg")}),
+                         "[voice message, no transcript] (audio: /s/v.ogg)")
 
 
 if __name__ == "__main__":
