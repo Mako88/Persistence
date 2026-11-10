@@ -164,17 +164,37 @@ class RoomTests(unittest.TestCase):
         r.on_message(msg(3, "y", author="Other", bot=True), 2)
         self.assertIsNone(r.tick(100))
 
-    def test_hourly_cap(self):
-        r = self.room(wakes_per_hour=2)
+    def test_hourly_cap_on_wakes_selves_set_off(self):
+        r = self.room(wakes_per_hour=2, bot_message_cap=100)
         got = []
         for i in range(4):
-            r.on_message(msg(i, mentions=[ME]), i * 100)
+            r.on_message(msg(i, mentions=[ME], author="Arden", bot=True), i * 100)
             w = r.tick(i * 100 + 10)
             got.append(bool(w))
             if w: r.finish(0)
         self.assertEqual(got, [True, True, False, False])
-        r.on_message(msg(9, mentions=[ME]), 3700)
+        r.on_message(msg(9, mentions=[ME], author="Arden", bot=True), 3700)
         self.assertIsNotNone(r.tick(3710))
+
+    def test_a_person_never_meets_the_loop_cap(self):
+        r = self.room(wakes_per_hour=2)
+        got = []
+        for i in range(5):
+            r.on_message(msg(i, mentions=[ME]), i * 100)
+            w = r.tick(i * 100 + 10)
+            got.append(bool(w))
+            if w: r.finish(0)
+        self.assertEqual(got, [True] * 5)
+
+    def test_a_person_has_a_runaway_cap_of_its_own(self):
+        r = self.room(human_wakes_per_hour=2)
+        got = []
+        for i in range(3):
+            r.on_message(msg(i, mentions=[ME]), i * 100)
+            w = r.tick(i * 100 + 10)
+            got.append(bool(w))
+            if w: r.finish(0)
+        self.assertEqual(got, [True, True, False])
 
     def test_own_and_unlistened_channels_ignored(self):
         r = self.room(channels=["c1"])

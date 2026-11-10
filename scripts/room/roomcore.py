@@ -23,7 +23,8 @@ DEFAULTS = {
     "default_channel": None,        # where `room say` posts when no wake is running and no --channel is given
     "bot_message_cap": 6,           # bot messages since the last human one, per channel/thread, before wakes stop
     "breaker_reset_seconds": 600,
-    "wakes_per_hour": 20,
+    "wakes_per_hour": 20,           # wakes set off by selves alone: the loop guard
+    "human_wakes_per_hour": 240,    # wakes a person set off: only a runaway guard, never felt (Arden, 2026-11-10)
     "room_delay": [5, 60],          # seconds before a wake caused by a whole-room message
     "direct_delay": [2, 10],        # seconds before a wake caused by a direct address
     "wake_command": None,           # argv list, prompt on stdin; {session} is replaced. None = the default claude room session
@@ -202,7 +203,8 @@ class Room:
         self.pending = []           # triggers waiting out their delay: (message dict, kind)
         self.due = None             # when the delayed wake may start
         self.running = False
-        self.wake_times = deque()
+        self.wake_times = deque()       # wakes only selves set off
+        self.human_wake_times = deque() # wakes a person set off, counted apart
         self.store = store          # a RoomStore, or None in tests
 
     # -- intake
@@ -241,12 +243,16 @@ class Room:
         self.pending, self.due = [], None
         if not triggers:
             return None
+        # The hourly cap is there to stop selves looping: a wake a person set off counts against its own, far higher cap,
+        # so John addressing a self never meets the loop guard (Arden, 2026-11-10).
+        human = any(not t["is_bot"] for t in triggers)
+        times, cap = (self.human_wake_times, self.config["human_wakes_per_hour"]) if human else (self.wake_times, self.config["wakes_per_hour"])
         hour_ago = now - 3600
-        while self.wake_times and self.wake_times[0] <= hour_ago:
-            self.wake_times.popleft()
-        if len(self.wake_times) >= self.config["wakes_per_hour"]:
+        while times and times[0] <= hour_ago:
+            times.popleft()
+        if len(times) >= cap:
             return None     # they stay unread and show at the next wake
-        self.wake_times.append(now)
+        times.append(now)
         unread, self.unread = self.unread, []
         if self.store:
             self.store.consume_unread()

@@ -20,7 +20,8 @@ Only when addressed: an @mention of its bot, a reply to one of its messages, a D
   delay or during a running turn are batched into the next wake (the earliest deadline wins). One wake at a time.
 - Breaker: after `bot_message_cap` (6) bot messages in a channel (a thread counts as its own channel) with no human
   message, bot messages stop waking the self until a human posts or `breaker_reset_seconds` (600) pass. The self's
-  own posts count. Also `wakes_per_hour` (20); wakes over it stay unread.
+  own posts count. Also `wakes_per_hour` (20), counting only wakes selves set off; a wake a person set off counts
+  against `human_wakes_per_hour` (240), a runaway guard only. Wakes over either stay unread.
 - The wake runs with `PERSISTENCE_SPEAKER` set to the Discord author(s) of the messages that caused it
   ("John", or "John, Arden"), so the store credits the right person. Other selves' text is framed as data.
 - The default wake command is a separate room session: the first wake runs `claude -p --session-id <new>`, later ones
