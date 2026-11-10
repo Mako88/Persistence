@@ -9,6 +9,16 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-10 — messages between sessions
+
+### Added — `send <topic>` and the inbox: tell one session, the one that cares hears it
+John runs many sessions at once (up to ten at his work) and asked to be able to tell any of them something
+and have it reach the one it concerns, without any session pulling in another's conversation and without
+him tracking who heard what. `pstore send <topic> <text>` files a message under `inbox/<topic>`, headed with
+the sending session and time; `observe` shows a project's waiting messages once at the next turn of a
+session there, marked, then archives them, skipping the sender's own. Addressed to a topic, not a session:
+sessions come and go, projects stay, and one opened later still gets it. No broadcast, by design.
+
 ## 2026-11-09 — the sleep pass: the owner curates its own store at night, within limits it set
 
 ### Added — the nightly runner: the owner's own pass, in a fresh session (`hook.py sleep`)

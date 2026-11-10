@@ -235,18 +235,19 @@ def verified(where):
     return True
 
 
-def store(*args, timeout=60, stdin=None, serve=True, cold=True):
+def store(*args, timeout=60, stdin=None, serve=True, cold=True, quiet=False):
     """The CLI's output, or "" if it could not run: a hook must never break the session it serves.
     Asked of the served store when one is up; otherwise one is started and this call runs the CLI,
     unless `cold` is False: a cold CLI's recall took 38 s (2026-11-08), past the harness's 20 s, so the
     message waited and got nothing; better none this message and the started server's from the next."""
-    code, out, _ = call_store(*args, timeout=timeout, stdin=stdin, serve=serve, cold=cold)
+    code, out, _ = call_store(*args, timeout=timeout, stdin=stdin, serve=serve, cold=cold, quiet=quiet)
     return out if code == 0 else ""
 
 
-def call_store(*args, timeout=60, stdin=None, serve=True, cold=True):
+def call_store(*args, timeout=60, stdin=None, serve=True, cold=True, quiet=False):
     """`store`, with how it went: (exit code, output, error). The code is None when no store answered or the
-    CLI could not run; 1 is a usage error (an option this store does not know), 2 a refusal."""
+    CLI could not run; 1 is a usage error (an option this store does not know), 2 a refusal. `quiet`: a refusal
+    the caller expects (a tag nothing has used yet) is not logged as a failure."""
     exe = os.environ.get("PERSISTENCE_STORE_EXE", "persistence-store")
     where = remote()
     if where:
@@ -255,7 +256,7 @@ def call_store(*args, timeout=60, stdin=None, serve=True, cold=True):
             print(f"persistence hook: {args[0]} skipped: the store on {where['host']} did not answer", file=sys.stderr)
             return None, "", ""
         code, out, err = reply
-        if code != 0:
+        if code != 0 and not quiet:
             print(f"persistence hook: {args[0]} failed: {err.strip()}", file=sys.stderr)
         return code, out, err
     if serve:
@@ -265,7 +266,7 @@ def call_store(*args, timeout=60, stdin=None, serve=True, cold=True):
             return None, "", ""
         if reply is not None:
             code, out, err = reply
-            if code != 0:
+            if code != 0 and not quiet:
                 print(f"persistence hook: {args[0]} failed: {err.strip()}", file=sys.stderr)
             return code, out, err
         start_server(exe)
@@ -276,7 +277,7 @@ def call_store(*args, timeout=60, stdin=None, serve=True, cold=True):
     except (OSError, subprocess.SubprocessError) as e:
         print(f"persistence hook: {exe} did not run: {e}", file=sys.stderr)
         return None, "", ""
-    if out.returncode != 0:
+    if out.returncode != 0 and not quiet:
         print(f"persistence hook: {exe} {args[0]} failed: {out.stderr.strip()}", file=sys.stderr)
     return out.returncode, out.stdout, out.stderr
 
@@ -1414,7 +1415,7 @@ def observe(event):
 
 
 def observe_hook(event):
-    text = observe(event)
+    text = inbox(event) + observe(event)
     print(json.dumps({"hookSpecificOutput": {"hookEventName": event.get("hook_event_name", "UserPromptSubmit"),
                                              "additionalContext": text[:CAP]}}))
 
@@ -1780,6 +1781,66 @@ def speaker_command(args):
     return 0
 
 
+INBOX_HEAD = re.compile(r"^From session ([0-9a-f]{8})\b")  # the first line `send` writes: who it came from
+
+
+def send_command(args):
+    """`pstore send <topic> <text...>` (or `--content -` from stdin): a message for whichever session works on <topic>,
+    a project's name. John asked (2026-11-09) to tell any session something and have it reach the session that cares,
+    without any session pulling in another's conversation. It waits in the store, tagged inbox/<topic>, and is shown
+    once, marked, at the start of the next turn of a session in that project (`inbox`), then archived. One topic per
+    message, no broadcast: at ten sessions the failure is noise, not confusion."""
+    if not args or args[0].startswith("-"):
+        print("send: give a topic (a project's name) and the message: `send <topic> <text>` or `send <topic> --content -`.", file=sys.stderr)
+        return 1
+    topic, rest = args[0].strip().lower(), args[1:]
+    if rest[:1] == ["--content"]:
+        text = sys.stdin.read() if rest[1:2] == ["-"] else " ".join(rest[1:])
+    else:
+        text = " ".join(rest)
+    text = text.strip()
+    if not text:
+        print("send: the message is empty.", file=sys.stderr)
+        return 1
+    known = store("list", "--tag", f"project/{topic}", "--limit", "1", quiet=True).strip()  # before the message itself is filed there
+    session = os.environ.get("CLAUDE_CODE_SESSION_ID", "") or "unknown0"
+    here = project({"cwd": os.getcwd()}) or "home"
+    when = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%MZ")
+    body = f"From session {session[:8]} ({here}), {when}, for {topic}:\n{text}"
+    code, out, err = call_store("add", "--type", "Personal", "--tag", f"inbox/{topic}", "--project", topic, "--importance", "0.3",
+                                "--confidence", "1", "--summary", f"Message for {topic}: {text[:80]}", "--content", "-", stdin=body)
+    if code != 0:
+        print(f"send: not saved: {err.strip() or 'the store did not answer'}", file=sys.stderr)
+        return code or 3
+    saved = re.search(r"#(\d+)", out)
+    print(f"sent to {topic}{' as #' + saved.group(1) if saved else ''}: shown once at the next turn of a session in {topic}"
+          + ("" if known else f" (nothing is filed under project/{topic} yet: check the name; it waits for a session in a folder named {topic})"))
+    return 0
+
+
+def inbox(event):
+    """Messages other sessions sent to this session's project (`send`), shown once at a turn's start and then archived.
+    Never this session's own, and never another session's conversation: only what was addressed here."""
+    topic, session = project(event), (event.get("session_id") or "")[:8]
+    if not topic:
+        return ""
+    listed = store("list", "--tag", f"inbox/{topic}", "--limit", "20", cold=False, quiet=True)  # no tag until a first message
+    parts = re.split(r"^\[#(\d+) \|[^\n]*\]\n", listed, flags=re.M)
+    found = []
+    for i in range(1, len(parts) - 1, 2):
+        fid, content = parts[i], parts[i + 1].strip()
+        sender = INBOX_HEAD.match(content)
+        if sender and sender.group(1) == session:
+            continue
+        found.append((fid, content))
+    if not found:
+        return ""
+    for fid, _ in found:
+        store("archive", fid)
+    return (f"## For {topic}, from your other sessions (new since your last turn; shown once and archived, `show <id>` reads one again)\n\n"
+            + "\n\n".join(f"[#{fid}] {content}" for fid, content in reversed(found)) + "\n\n")
+
+
 def unmangled(arg):
     """An argument as typed, before Git Bash rewrote it: MSYS turns a leading-slash value (`--tag /pdf/rollout`)
     into a Windows path under its install (`C:/Program Files/Git/pdf/rollout`), and the store made a tag of
@@ -1793,6 +1854,8 @@ def cli(args):
     sent to the remote store, its output printed here; never a local store in its place."""
     if args[:1] == ["speaker"]:
         return speaker_command(args[1:])
+    if args[:1] == ["send"]:
+        return send_command(args[1:])
     args = [unmangled(a) for a in args]
     exe = os.environ.get("PERSISTENCE_STORE_EXE", "persistence-store")
     where = remote()

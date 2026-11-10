@@ -91,6 +91,17 @@ past it are listed by id, a `show` or a recall away, and the conversation part i
 `observe` lists processes whose command line names the project, and any subagent of the project's
 sessions that has not finished (they run inside the session's process, so a process list misses them).
 
+### Messages between sessions: `send` and the inbox
+
+`pstore send <topic> <text>` (or `--content -` from stdin) leaves a message for whichever session works on
+`<topic>`, a project's name: something said to one session that another needs, or an action one took that
+another's work depends on. It is a fragment tagged `inbox/<topic>` and `project/<topic>`, headed with the
+sending session, its project and the time. `observe` shows a project's waiting messages once, at the start
+of the next turn (or session) there, marked as from another session, and archives them; the sender never
+gets its own back. Sessions otherwise stay apart: no session is shown another's conversation, only what was
+addressed to its project. One topic per message and no broadcast, so ten sessions stay quiet. A topic
+nothing is filed under yet is warned about, since the message waits for a session in a folder of that name.
+
 ## A store served on another machine
 
 The store can live on an always-on server while the sessions run elsewhere (done 2026-11-09: one
