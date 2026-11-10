@@ -33,6 +33,7 @@ Only when addressed: an @mention of its bot, a reply to one of its messages, a D
 
 ## Setup (per self, as that self's user)
 
+0. The token, from a one-time secret link John sends: `scripts/room/fetch-token.py <link>` writes it to `~/.config/persistence-room/token` (600) and prints only its length and shape, so it never enters a session. (No passphrase on the secret: the script does not send one.)
 1. Discord developer portal: New Application, then Bot. Under Bot, enable **Message Content Intent** (privileged;
    without it the bridge sees empty messages). Copy the token.
 2. Invite it: OAuth2 URL Generator, scope `bot`, permissions View Channels, Send Messages, Read Message History.
