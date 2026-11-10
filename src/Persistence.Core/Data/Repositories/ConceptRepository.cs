@@ -41,13 +41,14 @@ public class ConceptRepository : IConceptRepository
             "SELECT Id, Name, Kind, KindConfirmed, Summary FROM Concepts WHERE Id = @id", new { id });
     }
 
-    public async Task<ConceptRow> AddConceptAsync(string name, string kind, string? summary)
+    public async Task<ConceptRow> AddConceptAsync(string name, string kind, string? summary, bool kindSaid = true)
     {
         await using var c = await SqliteConnectionString.OpenAsync(connectionString);
+        var confirmed = kindSaid ? 0L : -1L;
         var id = await c.ExecuteScalarAsync<long>(
-            "INSERT INTO Concepts (Name, Kind, KindConfirmed, Summary, CreatedUtc) VALUES (@name, @kind, 0, @summary, @now); SELECT last_insert_rowid();",
-            new { name = name.Trim(), kind, summary, now = Now() });
-        return new ConceptRow(id, name.Trim(), kind, 0, summary);
+            "INSERT INTO Concepts (Name, Kind, KindConfirmed, Summary, CreatedUtc) VALUES (@name, @kind, @confirmed, @summary, @now); SELECT last_insert_rowid();",
+            new { name = name.Trim(), kind, confirmed, summary, now = Now() });
+        return new ConceptRow(id, name.Trim(), kind, confirmed, summary);
     }
 
     public async Task SetKindAsync(long id, string kind)
@@ -74,7 +75,7 @@ public class ConceptRepository : IConceptRepository
     {
         await using var c = await SqliteConnectionString.OpenAsync(connectionString);
         return (await c.QueryAsync<ConceptRow>(
-            "SELECT Id, Name, Kind, KindConfirmed, Summary FROM Concepts WHERE KindConfirmed = 0 ORDER BY Name")).ToList();
+            "SELECT Id, Name, Kind, KindConfirmed, Summary FROM Concepts WHERE KindConfirmed <> 1 ORDER BY Name")).ToList();
     }
 
     public async Task<long> AddFactAsync(long subjectId, long? objectId, string text, bool isState, string? asOfUtc,

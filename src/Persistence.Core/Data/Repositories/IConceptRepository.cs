@@ -3,8 +3,12 @@ namespace Persistence.Data.Repositories;
 /// <summary>A concept in the graph: a thing, person, self or value that facts are about.</summary>
 public record ConceptRow(long Id, string Name, string Kind, long KindConfirmed, string? Summary)
 {
-    /// <summary>Whether the self has said what this concept is (SQLite keeps it as 0/1).</summary>
-    public bool Confirmed => KindConfirmed != 0;
+    /// <summary>Whether the self has said what this concept is. KindConfirmed: 1 confirmed by the self, 0 a kind said
+    /// when it was made but not confirmed, -1 no kind said at all (its Kind is the column's placeholder, "thing").</summary>
+    public bool Confirmed => KindConfirmed == 1;
+
+    /// <summary>Whether whoever made the concept said a kind; a review must not show "(said thing)" for one nobody said (Arden).</summary>
+    public bool KindSaid => KindConfirmed >= 0;
 }
 
 /// <summary>A fact about a concept (and, with an object, a link to another): a view of the fragments it cites.</summary>
@@ -29,7 +33,7 @@ public interface IConceptRepository
 
     Task<ConceptRow?> GetAsync(long id);
 
-    Task<ConceptRow> AddConceptAsync(string name, string kind, string? summary);
+    Task<ConceptRow> AddConceptAsync(string name, string kind, string? summary, bool kindSaid = true);
 
     Task SetKindAsync(long id, string kind);
 

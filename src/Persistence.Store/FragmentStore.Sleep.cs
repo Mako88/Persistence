@@ -46,6 +46,7 @@ internal sealed partial class FragmentStore
         // The pass may add facts (they wait as proposals when they are about who someone is); judging them is awake work.
         ["concept accept"] = "Accepting a fact is the waking self's: it stays a proposal for the morning's `concept review`.",
         ["concept reject"] = "Rejecting a fact is the waking self's; flag it (`concept flag`) for the morning's review.",
+        ["concept reopen"] = "Taking back a rejection is the waking self's; flag the fact for the morning's review.",
         ["concept kind"] = "What a concept is (a person, a self, a value) is decided awake; it counts as a person until then.",
     };
 

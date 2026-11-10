@@ -12,7 +12,9 @@ namespace Persistence.Store;
 /// source is an Identity or Relational fragment. A concept whose kind the self has not confirmed counts as a person.</item>
 /// <item>Change <b>supersedes</b>: a new fact names the one it replaces, which keeps its sources and points forward once
 /// the new one stands. A proposal replaces nothing until it is accepted.</item>
-/// <item>A <b>rejected</b> fact is kept, and the same text about the same concept is refused rather than proposed again.</item>
+/// <item>A <b>rejected</b> fact is kept, and the same text about the same concept is refused rather than proposed again,
+/// until the self reopens it (a "not yet" is not a "never", Arden).</item>
+/// <item>The same text about the same concept and object as a fact that stands is not added again: the add says which stands.</item>
 /// <item>Anyone may <b>flag</b> a fact; accepting, rejecting and confirming a kind are the self's, and never in a sleep pass.</item>
 /// </list>
 /// </summary>
@@ -36,7 +38,8 @@ internal sealed partial class FragmentStore
             throw new UsageException("A concept needs a name.");
         }
 
-        return await concepts.FindAsync(name) ?? await concepts.AddConceptAsync(name, KindOrRefuse(kind ?? "thing"), null);
+        return await concepts.FindAsync(name)
+            ?? (kind is null ? await concepts.AddConceptAsync(name, "thing", null, kindSaid: false) : await concepts.AddConceptAsync(name, KindOrRefuse(kind), null));
     }
 
     private static string KindOrRefuse(string kind) =>
@@ -50,8 +53,9 @@ internal sealed partial class FragmentStore
         bool isState = false, string? asOf = null, string? extractedBy = null, long? supersedes = null, string? kind = null) =>
         (await AddFactWhyAsync(subject, text, sources, @object, isState, asOf, extractedBy, supersedes, kind)).Fact;
 
-    /// <summary><see cref="AddFactAsync"/>, with why it is a proposal (null when it stands).</summary>
-    public async Task<(FactRow Fact, string? WhyProposed)> AddFactWhyAsync(string subject, string text, IReadOnlyCollection<long> sources, string? @object = null,
+    /// <summary><see cref="AddFactAsync"/>, with why it is a proposal (null when it stands), and whether it already stood:
+    /// then nothing was added and the fact returned is the one standing.</summary>
+    public async Task<(FactRow Fact, string? WhyProposed, bool AlreadyStood)> AddFactWhyAsync(string subject, string text, IReadOnlyCollection<long> sources, string? @object = null,
         bool isState = false, string? asOf = null, string? extractedBy = null, long? supersedes = null, string? kind = null)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -89,11 +93,20 @@ internal sealed partial class FragmentStore
         }
 
         var normal = Normal(text);
-        var rejected = (await concepts.FactsOfAsync(subj.Id, history: true))
+        var known = await concepts.FactsOfAsync(subj.Id, history: true);
+        // An exact copy of a fact that stands (accepted, or still a proposal) went in as a new proposal (Arden, 2026-11-10).
+        var standing = known.FirstOrDefault(f => f.SupersededById is null && f.Status is "active" or "proposed"
+            && f.SubjectId == subj.Id && f.ObjectId == obj?.Id && Normal(f.Text) == normal);
+        if (standing is not null && supersedes is null)
+        {
+            return (standing, null, true);
+        }
+
+        var rejected = known
             .FirstOrDefault(f => f.Status == "rejected" && Normal(f.Text) == normal && f.SubjectId == subj.Id);
         if (rejected is not null)
         {
-            throw new RefusedException($"This was rejected before as #{rejected.Id} ({rejected.Resolution ?? "no reason given"}); it is not proposed again.");
+            throw new RefusedException($"This was rejected before as #{rejected.Id} ({rejected.Resolution ?? "no reason given"}); it is not proposed again. `concept reopen {rejected.Id} --reason` makes it a proposal again.");
         }
 
         string? Why(ConceptRow c, string role) => !AboutWho(c) ? null
@@ -109,7 +122,7 @@ internal sealed partial class FragmentStore
             await concepts.SupersedeFactAsync(replaced.Id, id, $"superseded by #{id}");
         }
 
-        return ((await concepts.GetFactAsync(id))!, proposal ? string.Join("; ", whys) : null);
+        return ((await concepts.GetFactAsync(id))!, proposal ? string.Join("; ", whys) : null, false);
     }
 
     /// <summary>The self accepts a proposal: it stands, and replaces the fact it names, if any.</summary>
@@ -142,6 +155,24 @@ internal sealed partial class FragmentStore
         _ = await StandingFactAsync(id);
         await concepts.SetFactStatusAsync(id, "rejected", $"rejected {Today()}: {reason}");
         await concepts.ResolveFlagsAsync(id);
+        return (await concepts.GetFactAsync(id))!;
+    }
+
+    /// <summary>The self takes back a rejection: the fact is a proposal again, for a later `concept review`. Its rejection stays in its history.</summary>
+    public async Task<FactRow> ReopenFactAsync(long id, string reason)
+    {
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            throw new UsageException("Say why (--reason): what changed since it was rejected.");
+        }
+
+        var fact = await concepts.GetFactAsync(id) ?? throw new RefusedException($"There is no fact #{id}.");
+        if (fact.Status != "rejected")
+        {
+            throw new RefusedException($"Fact #{id} is {fact.Status}, not rejected: there is nothing to reopen.");
+        }
+
+        await concepts.SetFactStatusAsync(id, "proposed", $"{fact.Resolution}; reopened {Today()}: {reason.Trim()}");
         return (await concepts.GetFactAsync(id))!;
     }
 
@@ -202,7 +233,7 @@ internal sealed partial class FragmentStore
         var sources = await concepts.SourcesAsync(facts.Select(f => f.Id).ToList());
         var names = await NamesAsync(facts);
         var sb = new StringBuilder();
-        sb.Append($"{c.Name} ({c.Kind}{(c.Confirmed ? "" : ", kind unconfirmed: counts as a person")})");
+        sb.Append($"{c.Name} ({(c.Confirmed ? c.Kind : c.KindSaid ? $"{c.Kind}, kind unconfirmed: counts as a person" : "no kind said: counts as a person")})");
         if (aliases.Count > 0)
         {
             sb.Append(" aka " + string.Join(", ", aliases.Select(a => a.Note is null ? a.Alias : $"{a.Alias} ({a.Note})")));
@@ -247,7 +278,7 @@ internal sealed partial class FragmentStore
         var sb = new StringBuilder();
         if (proposed.Count > 0)
         {
-            sb.Append($"Proposed ({proposed.Count}): `concept accept <id>` or `concept reject <id> --reason`");
+            sb.Append($"Proposed ({proposed.Count}): `concept accept <id>` or `concept reject <id> --reason` (`concept reopen <id>` takes a rejection back)");
             foreach (var f in proposed)
             {
                 sb.Append("\n  " + RenderFact(f, null, names, sources.GetValueOrDefault(f.Id) ?? []));
@@ -267,7 +298,7 @@ internal sealed partial class FragmentStore
         if (unconfirmed.Count > 0)
         {
             sb.Append((sb.Length > 0 ? "\n\n" : "") + $"Kind unconfirmed ({unconfirmed.Count}), counted as people until `concept kind <name> <{string.Join("|", ConceptKinds)}>`:\n  "
-                + string.Join(", ", unconfirmed.Select(u => $"{u.Name} (said {u.Kind})")));
+                + string.Join(", ", unconfirmed.Select(u => u.KindSaid ? $"{u.Name} (said {u.Kind})" : $"{u.Name} (no kind said)")));
         }
 
         return sb.Length > 0 ? sb.ToString() : "Nothing waits: no proposals, flags or unconfirmed kinds.";

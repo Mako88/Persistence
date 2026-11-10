@@ -144,7 +144,22 @@ try
     store.Identity = $"{config.PeerName} {config.DatabasePath}";
     if (line.Command == "serve")
     {
-        return await Server.ServeAsync(store, config.DatabasePath, line.GetInt("port", Server.DefaultPort), Run);
+        var socket = line.Get("socket");
+        int? port = socket is not null && line.Get("port") is null ? null : line.GetInt("port", Server.DefaultPort);
+        if (port is not null && !OperatingSystem.IsWindows() && !line.Has("tcp-no-auth"))
+        {
+            // On a machine with other users a TCP port lets any of them run any command on this store (Arden, 2026-11-10).
+            throw new UsageException("serve wants --socket <path> (a unix socket that answers only its --allow-uid users); "
+                + "TCP checks no caller, so --port takes --tcp-no-auth to say that is meant.");
+        }
+
+        var allowed = new HashSet<uint>(line.GetAll("allow-uid").SelectMany(v => v.Split(',', StringSplitOptions.RemoveEmptyEntries)).Select(uint.Parse));
+        if (socket is not null)
+        {
+            allowed.Add(Server.CurrentUser());
+        }
+
+        return await Server.ServeAsync(store, config.DatabasePath, port, Run, socket is null ? null : Path.GetFullPath(socket), allowed);
     }
 
     // Run from a session's own shell, the command is that session's; a server serves every session, so
@@ -336,12 +351,13 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
                         Console.WriteLine(await store.ConceptShowAsync(Arg(1, "<name>"), line.Has("history")));
                         break;
                     case "add":
-                        var (fact, why) = await store.AddFactWhyAsync(Arg(1, "<subject>"), line.Text("fact") ?? throw new UsageException("concept add needs --fact <text>."),
+                        var (fact, why, stood) = await store.AddFactWhyAsync(Arg(1, "<subject>"), line.Text("fact") ?? throw new UsageException("concept add needs --fact <text>."),
                             line.GetAll("source").SelectMany(v => v.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
                                 .Select(v => long.TryParse(v.TrimStart('#'), out var id) ? id : throw new UsageException($"'{v}' is not a fragment id.")).ToList(),
                             line.Get("object"), line.Has("state"), line.Get("as-of"), line.Get("by"),
                             line.Get("supersedes") is { } sup ? long.Parse(sup.TrimStart('#')) : null, line.Get("kind"));
-                        Console.WriteLine((why is not null ? $"Proposed, waiting for `concept review` ({why}): " : "Added: ")
+                        Console.WriteLine((stood ? $"Already {(fact.Status == "proposed" ? "proposed" : "stands")}, nothing added: "
+                                : why is not null ? $"Proposed, waiting for `concept review` ({why}): " : "Added: ")
                             + await store.RenderFactAsync(fact));
                         break;
                     case "accept":
@@ -350,7 +366,11 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
                         break;
                     case "reject":
                         var rejected = await store.RejectFactAsync(FactId(1), line.Get("reason") ?? "");
-                        Console.WriteLine($"#{rejected.Id} is rejected and kept, so it isn't offered again.");
+                        Console.WriteLine($"#{rejected.Id} is rejected and kept, so it isn't offered again (`concept reopen {rejected.Id} --reason` takes it back).");
+                        break;
+                    case "reopen":
+                        var reopened = await store.ReopenFactAsync(FactId(1), line.Get("reason") ?? "");
+                        Console.WriteLine($"#{reopened.Id} is a proposal again; it waits in `concept review`.");
                         break;
                     case "flag":
                         var flagId = FactId(1);
@@ -369,7 +389,7 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
                         Console.WriteLine(await store.ConceptReviewAsync());
                         break;
                     default:
-                        throw new UsageException($"concept {line.Positional[0]}? It takes show, add, accept, reject, flag, kind, alias or review.");
+                        throw new UsageException($"concept {line.Positional[0]}? It takes show, add, accept, reject, reopen, flag, kind, alias or review.");
                 }
             }
 

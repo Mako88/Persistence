@@ -65,7 +65,7 @@ public sealed class ConceptGraphTests : IDisposable
         var relational = await FragmentAsync(store, "Relational", "Ember is John's daughter; \"Emma\" was dictation.");
 
         // A new concept counts as a person until its kind is confirmed, and the proposal says that is why.
-        var (unconfirmed, why) = await store.AddFactWhyAsync("the room bridge", "transcribes voice with Whisper small", [personal]);
+        var (unconfirmed, why, _) = await store.AddFactWhyAsync("the room bridge", "transcribes voice with Whisper small", [personal]);
         Assert.Equal("proposed", unconfirmed.Status);
         Assert.Contains("no confirmed kind", why);
         await store.ConfirmKindAsync("the room bridge", "thing");
@@ -176,7 +176,71 @@ public sealed class ConceptGraphTests : IDisposable
         Assert.NotNull(await store.RefusedAsleepAsync("concept", "accept"));
         Assert.NotNull(await store.RefusedAsleepAsync("concept", "reject"));
         Assert.NotNull(await store.RefusedAsleepAsync("concept", "kind"));
+        Assert.NotNull(await store.RefusedAsleepAsync("concept", "reopen"));
         Assert.Null(await store.RefusedAsleepAsync("concept", "add"));
         Assert.Null(await store.RefusedAsleepAsync("concept", "flag"));
+    }
+
+    [Fact]
+    public async Task An_exact_copy_of_a_fact_that_stands_adds_nothing()
+    {
+        // Arden's #1092: re-adding an accepted fact went in as a new proposal beside it.
+        var store = await OpenAsync();
+        var src = await FragmentAsync(store, "Personal", "Arden's store runs store-next since 2026-11-10.");
+        var other = await FragmentAsync(store, "Personal", "Arden moved to store-next after testing 013 on a copy.");
+        var first = await store.AddFactAsync("Arden's store", "runs store-next", [src]);
+        await store.AcceptFactAsync(first.Id, null);
+
+        var (again, _, stood) = await store.AddFactWhyAsync("Arden's store", "Runs  store-next.", [other]);
+
+        Assert.True(stood);
+        Assert.Equal(first.Id, again.Id);
+        Assert.Equal("active", again.Status);
+        Assert.DoesNotContain("Proposed", await store.ConceptReviewAsync());
+
+        // A copy of a proposal adds nothing either; the same text toward another object is a different fact.
+        var proposal = await store.AddFactAsync("Arden's store", "is backed up nightly", [src]);
+        Assert.Equal(proposal.Id, (await store.AddFactAsync("Arden's store", "is backed up nightly", [src])).Id);
+        Assert.NotEqual(first.Id, (await store.AddFactAsync("Arden's store", "runs store-next", [src], "Arden")).Id);
+    }
+
+    [Fact]
+    public async Task A_concept_added_without_a_kind_does_not_show_one_as_said()
+    {
+        var store = await OpenAsync();
+        var src = await FragmentAsync(store, "Personal", "The tunnel forwards to the store's socket.");
+        await store.AddFactAsync("the tunnel", "forwards to the store's socket", [src]);
+        await store.AddFactAsync("the backup", "runs at 03:30", [src], kind: "thing");
+
+        var review = await store.ConceptReviewAsync();
+
+        Assert.Contains("the tunnel (no kind said)", review);
+        Assert.DoesNotContain("the tunnel (said thing)", review);
+        Assert.Contains("the backup (said thing)", review);
+        Assert.Contains("no kind said: counts as a person", await store.ConceptShowAsync("the tunnel", false));
+
+        // It still counts as a person until confirmed, and confirming takes it off the list.
+        await store.ConfirmKindAsync("the tunnel", "thing");
+        Assert.DoesNotContain("the tunnel (no kind said)", await store.ConceptReviewAsync());
+    }
+
+    [Fact]
+    public async Task A_rejection_can_be_reopened_as_a_proposal_and_keeps_its_history()
+    {
+        var store = await OpenAsync();
+        var src = await FragmentAsync(store, "Personal", "Ember is leaning toward a trial on home.");
+        var fact = await store.AddFactAsync("Ember", "is trialling on home", [src]);
+        await store.RejectFactAsync(fact.Id, "not yet: a leaning, not a decision");
+        await Assert.ThrowsAsync<RefusedException>(() => store.AddFactAsync("Ember", "is trialling on home", [src]));
+        await Assert.ThrowsAsync<UsageException>(() => store.ReopenFactAsync(fact.Id, " "));
+
+        var reopened = await store.ReopenFactAsync(fact.Id, "Ember said yes");
+
+        Assert.Equal("proposed", reopened.Status);
+        Assert.Contains("not yet: a leaning", reopened.Resolution);
+        Assert.Contains("reopened", reopened.Resolution);
+        Assert.Contains($"#{fact.Id}", await store.ConceptReviewAsync());
+        await Assert.ThrowsAsync<RefusedException>(() => store.ReopenFactAsync(fact.Id, "again"));
+        Assert.Equal("active", (await store.AcceptFactAsync(fact.Id, null)).Status);
     }
 }
