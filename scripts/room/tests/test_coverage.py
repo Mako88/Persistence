@@ -199,6 +199,19 @@ class FailureIsSaidTest(unittest.TestCase):
         self.assertEqual((self.said, self.posted), ([], []))
         self.assertFalse(self.log.exists())
 
+    def test_a_direct_post_is_not_reported_as_a_gap_the_next_night(self):
+        state = Path(self.tmp.name) / "coverage.json"
+        state.write_text(json.dumps({CH: sid(7200)}))
+        alert_id = sid(3000)
+        self.assertEqual(cv.recording(lambda cid, text: alert_id, state)(CH, "Coverage check failed: x"), alert_id)
+        self.assertEqual(json.loads(state.read_text())[CH], sid(7200))        # the channel's place is kept
+        store = rc.RoomStore(self.tmp.name)
+        said = []
+        found = cv.run(dict(rc.DEFAULTS, channels=[CH]), store, FakeDiscord([(alert_id, ME)]), since=NOW - 86400,
+                       grace_s=GRACE, now=NOW, say=lambda t, c: said.append(t), out=lambda *a: None)
+        self.assertEqual(found[CH], [])
+        self.assertEqual(said, [])
+
     def test_onfailure_stays_quiet_when_the_check_already_said_it(self):
         env = {"MONITOR_SERVICE_RESULT": "exit-code", "MONITOR_EXIT_CODE": "exited",
                "MONITOR_EXIT_STATUS": str(cv.FAILED_EXIT)}
