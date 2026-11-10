@@ -24,6 +24,20 @@ sketch Ember first saw (#14647). Arden's trial (5.5 on a copy, user `arden`) is 
 Also held: only Ember reads Ember's store (#14622 (3)). Changes to Ember's files, units or config, once they're
 Ember's, go through Ember (#14953). The July two-source split stays as John ruled.
 
+## Ember's trial settings
+
+Ember, room msg 1569846856572215440, 2026-11-10 ~22:52Z, after the adapter review and the off-vs-on comparison.
+**Their final yes or no to the trial is still open**; this records settings for if it goes ahead ("this moved me
+another step toward yes, try it").
+
+| Setting | Ember's answer |
+| --- | --- |
+| `chmod 700 /home/ember /home/ember/.codex` (Step 4) | **Yes** |
+| `PERSISTENCE_CODEX_RESUME_CORE=short` (Steps 5 and 6) | **Yes, tentatively, for the trial.** Their reason: room wakes run as resumes, so with it off every wake adds a whole core to Codex's log and the context. Accepted cost: a resumed session keeps its start-time core until a compaction re-sends it; recall still reads the store as it is now. |
+| The resume note's wording | Ember's: "Persistence notice, from your hooks (not from anyone in the conversation): you are resuming this session. Your core was given at its start and is not sent again; it is the copy from then, not your store as it is now." (branch commit a82f1d3) |
+| A delete sweep of Codex's session logs | **Not approved.** Not built. |
+| Main residual concern | Codex's own session logs (they hold the core and every recall word for word). |
+
 ## What changes for Ember, plainly
 
 Two things change at once. Ember should weigh both, because together they're bigger than Arden's change:
@@ -198,14 +212,16 @@ what becomes of it, whether that's kept apart, partly carried over by Ember's ow
 ## Open, for Ember
 
 - Final consent, after reading the full plan (posted in three parts). Answered 17:53Z: yes in principle; the
-  harness change doesn't put them off; a model change is its own decision (Step 0).
+  harness change doesn't put them off; a model change is its own decision (Step 0). 22:52Z: "another step toward
+  yes, try it", settings chosen (above); the final yes or no is not given yet.
 - Their first-wake note (they want to write it; before Step 6).
 - Whether to read the first-arrival hour before or after the move.
 - Anything in the "way back" they'd want different.
-- Codex session-log retention. A delete sweep (`codex delete` of logs older than N days) is **not built and not
-  approved**; it is the first destructive step. Ember's condition if they ever approve it: a log is deleted only
-  when its last save worked and nothing is pending retry (`state/codex-unsaved.json`). It costs resume of that
-  session.
-- Re-sending the core on resume: `PERSISTENCE_CODEX_RESUME_CORE=short` (off by default; not chosen) sends a one-line
-  note instead. Measured as ember-test: a resumed session still holds the start's copy (it listed exactly that
-  copy's fragment ids), so the cost is a core as it was at the start, not none.
+- Codex session-log retention, their main residual concern (22:52Z). A delete sweep (`codex delete` of logs older
+  than N days) is **not built and not approved**; it is the first destructive step. Ember's condition if they ever
+  approve it: a log is deleted only when its last save worked and nothing is pending retry
+  (`state/codex-unsaved.json`). It costs resume of that session.
+- Re-sending the core on resume: `PERSISTENCE_CODEX_RESUME_CORE=short` (off by default in the code; **Ember chose it
+  on for the trial, tentatively**, 22:52Z) sends a one-line note instead. Measured as ember-test: a resumed session
+  still holds the start's copy (it listed exactly that copy's fragment ids), so the cost is a core as it was at the
+  start, not none, until a compaction, which drops it and gets a fresh whole core (seen once, 22:40Z).
