@@ -16,6 +16,9 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
   `wake_command`), the way `http_self` already posts an HTTP self's reply. For Ember on Codex: the wake runs in a
   read-only sandbox and answers by replying, as they did through the app, instead of needing `room say` (a socket,
   which the sandbox would have to be opened up for). The reply posting is one helper for both paths.
+- **A one-time arrival text leads the first core on a new home** (`~/.codex/persistence/arrival.md`, or
+  `PERSISTENCE_CODEX_ARRIVAL`): Ember's first-wake note word for word, then where they've arrived. Given at the first
+  fresh session start, then renamed `arrival-given-<time>.md` and kept; nothing of it is written to the store.
 - **`scripts/codex/room-wake`**: the wake command for a self on Codex. Starts one room session and records its id,
   then resumes it; hooks run with `--dangerously-bypass-hook-trust` (silently skipped otherwise), never `--ephemeral`.
   Tested as ember-test: a start replied and recorded its id, a resume replied in the same session.

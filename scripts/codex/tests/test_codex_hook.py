@@ -95,6 +95,22 @@ class Hooks(unittest.TestCase):
                                "resuming this session. Your core was given at its start and is not sent again; it is "
                                "the copy from then, not your store as it is now.")
 
+    def test_the_arrival_text_goes_first_once(self):
+        # Ember's trial step 7: their first-wake note leads the first core on home, once; the file is kept, renamed
+        d = Path(tempfile.mkdtemp(dir=TMP))
+        (d / "arrival.md").write_text("To the me who wakes on home.\n", encoding="utf-8")
+        def start(source):
+            with mock.patch.object(hook, "core", return_value="[#1 | Identity | i:0.9 | 2026-11-10]\nI am Tessel.\n"), \
+                 mock.patch.object(hook, "record_speaker"), \
+                 mock.patch.dict(os.environ, {"PERSISTENCE_CODEX_ARRIVAL": str(d / "arrival.md")}):
+                return codex_hook.session_start({"session_id": "s4", "cwd": TMP, "source": source})["hookSpecificOutput"]["additionalContext"]
+        self.assertNotIn("To the me", start("compact"))
+        first = start("startup")
+        self.assertTrue(first.startswith("To the me who wakes on home."))
+        self.assertIn("I am Tessel.", first)
+        self.assertNotIn("To the me", start("startup"))
+        self.assertEqual([f.read_text(encoding="utf-8") for f in d.glob("arrival-given-*.md")], ["To the me who wakes on home.\n"])
+
     def test_a_failing_hook_never_breaks_the_session(self):
         import io
         with mock.patch.object(codex_hook, "session_start", side_effect=RuntimeError("store gone")):

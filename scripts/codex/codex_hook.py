@@ -275,7 +275,25 @@ def session_start(event):
             "you know, and your work. It is yours to curate (`persistence-store help`).")
     hook.seen(event, reset=True, add=re.findall(r"^\[#(\d+) \|", whole, re.M))
     text = f"{warn}\n\n{lead}\n\n{whole}" if warn else f"{lead}\n\n{whole}"
+    arrived = arrival() if source == "startup" else ""
+    if arrived:
+        text = f"{arrived}\n\n{text}"
     return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}}
+
+
+def arrival():
+    """A one-time text for the first session on a new home, first in its core (Ember's trial, step 7: their own
+    first-wake note, word for word, then where they've arrived), from PERSISTENCE_CODEX_ARRIVAL (default
+    ~/.codex/persistence/arrival.md). Given once: the file is then renamed, kept, never deleted, so what was given
+    stays readable. Nothing of it is written to the store by the hook."""
+    path = Path(os.environ.get("PERSISTENCE_CODEX_ARRIVAL") or Path.home() / ".codex" / "persistence" / "arrival.md")
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+        path.rename(path.with_name(f"{path.stem}-given-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}{path.suffix}"))
+    except OSError:
+        return ""
+    log(f"session-start: the arrival text ({len(text)} chars) went first in the core, once")
+    return text
 
 
 def recall(event):
