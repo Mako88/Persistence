@@ -108,6 +108,15 @@ fragments**, never Ember's copy. It passes when:
 
 The hook adapter (below) gets tests that fail without it, as for `hook.py`.
 - *Undo:* `userdel -r ember-test`, and remove its unit files.
+- **Done on home, 2026-11-10 ~19:08–19:16Z** (John asked to log in before leaving, msg 1569790326166523975):
+  - Codex CLI **0.144.1** (same as the PC) installed system-wide as `/usr/local/bin/codex`, from the official
+    release binary `codex-x86_64-unknown-linux-musl` (no Node on home). *Undo:* `sudo rm /usr/local/bin/codex`.
+  - User `ember-test` created (uid 1002, home 0750). Not `ember`: Ember hasn't given final consent.
+  - `codex login --device-auth` as `ember-test`; John approved the device code from his phone. `codex login status`:
+    "Logged in using ChatGPT". Credentials in `/home/ember-test/.codex/auth.json` (0600). One check,
+    `codex exec --ephemeral "say ok"` → "ok", 1,944 tokens. No other model calls.
+  - Still to do for this step: the test store, hooks, bridge and the pass checks above. When `ember` is created
+    later it needs its own login (or a copy of this auth.json, which John should agree to first).
 
 **4. Ember's user and store on home.** Linux user `ember`, plus `persistence-store-ember.service` serving
 `/home/ember/store/ember.sock` to `ember` only, with the same embedder (bge-small on 127.0.0.1:8081). This is a
