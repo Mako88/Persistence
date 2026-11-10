@@ -1683,8 +1683,8 @@ WORK_PROMPTS = {
             "matters to the people there.",
     "home": "Messages for John's PC came in from home: {reasons}\n\nYou are a working session on John's PC in {cwd}, with "
             "full permissions, started for them by the link (the hook server's watch on this machine's messages); no "
-            "one is watching this session live. The messages are in your inbox above (or `pstore list --tag "
-            "inbox/<topic>`). Do the work. On this machine: never end a process you did not start, never touch Ember's "
+            "one is watching this session live. Read each message named above with `pstore show <id>` (another session "
+            "here may have shown and archived it already, so it may not be in your inbox). Do the work. On this machine: never end a process you did not start, never touch Ember's "
             "games while she plays (Minecraft mods install only when Minecraft is not running), never type a password. "
             "Then report: `pstore send work \"<what you did>\"` reaches home's sessions, and `ssh home 'bash -lc \"room "
             "say <text>\"'` tells John and the room, when it matters to them.",
