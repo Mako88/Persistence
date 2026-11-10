@@ -80,7 +80,7 @@ class Bridge:
             if req.get("op") == "say":
                 reply = await self.say(req)
             elif req.get("op") == "read":
-                reply = {"ok": True, "messages": self.store.history(int(req.get("limit") or 20), req.get("channel"))}
+                reply = {"ok": True, "messages": self.store.history(int(req.get("limit") or 20), req.get("channel"), req.get("id"))}
             else:
                 reply = {"ok": False, "error": "unknown request"}
         except Exception as e:  # report to the CLI rather than drop the connection
@@ -107,7 +107,7 @@ class Bridge:
         self.room.note_own(channel_id, time.time())
         self.store.append_history({
             "id": str(sent.id), "channel_id": str(channel_id), "author_id": str(self.client.user.id),
-            "author": self.client.user.display_name, "text": req["text"], "is_bot": True, "ts": time.time()})
+            "author": rc.name_of(self.client.user.id, self.client.user.display_name, self.config["people"]), "text": req["text"], "is_bot": True, "ts": time.time()})
         return {"ok": True, "id": str(sent.id), "link": sent.jump_url}
 
     # -- start

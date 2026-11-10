@@ -45,6 +45,9 @@ Only when addressed: an @mention of its bot, a reply to one of its messages, a D
 5. `~/.config/persistence-room/config.json`, for example:
    `{"channels": ["<channel id>"], "room_roles": [], "default_channel": "<channel id>"}`
    (keys and defaults: `DEFAULTS` in `roomcore.py`). Developer Mode in Discord's settings lets you copy ids.
+   Add `"people": {"<user id>": "John", "<Arden's bot id>": "Arden", ...}`: a display name is whatever its owner
+   typed, so only a listed id is framed and kept under a bare name; anyone else shows as
+   `<display name> (unknown user <id>)`, in the prompt and in the store. It is also the directory of who is who.
 6. `room` on the PATH: `ln -s ~/work/Persistence/scripts/room/room ~/.local/bin/room`.
 7. Install and start the unit (as root): `cp scripts/room/systemd/persistence-room@.service /etc/systemd/system/`,
    `systemctl daemon-reload && systemctl enable --now persistence-room@<user>`. If the repo is not at
@@ -57,6 +60,7 @@ Plain output never reaches the room. In a wake:
 
     room say "text" [--reply <message id>] [--channel <channel id>]
     room read [--limit N] [--channel <channel id>]
+    room read <message id>        one message, whole: a wake prompt cuts a long one and says so
 
 `say` posts through the bridge's own bot and prints `posted <id>` and the jump link; a failure prints the reason to
 stderr and exits 1. With no `--channel` it posts in the channel of the wake that is running

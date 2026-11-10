@@ -20,6 +20,10 @@ DEFAULTS = {
     "token_path": str(CONFIG_DIR / "token"),
     "channels": [],                 # channel ids to listen in; empty means every channel the bot can see (and DMs)
     "room_roles": [],               # role ids whose mention is a whole-room ping
+    # Discord user id -> the name a message is framed and kept under. A display name is whatever its owner typed, so
+    # anyone who joins could call themselves "John"; only a listed id gets a bare name (Arden's review, 2026-11-10).
+    # It is also the directory of who is who: John, and each self's bot.
+    "people": {},
     "default_channel": None,        # where `room say` posts when no wake is running and no --channel is given
     "bot_message_cap": 6,           # bot messages since the last human one, per channel/thread, before wakes stop
     "breaker_reset_seconds": 600,
@@ -126,6 +130,16 @@ def pick_delay(kind, config, rng=random):
     return rng.uniform(lo, hi)
 
 
+def name_of(author_id, display_name, people):
+    """The name a message is framed and kept under: the mapped one for a known Discord id, else the display name
+    marked as unverified with its id, so a stranger named "John" is never taken for John."""
+    known = (people or {}).get(str(author_id))
+    if known:
+        return known
+    shown = " ".join(str(display_name or "").split()) or "someone"
+    return f"{shown} (unknown user {author_id})"
+
+
 def speaker_env(authors):
     """PERSISTENCE_SPEAKER for a wake: the Discord author(s) of the messages that caused it."""
     names = []
@@ -142,7 +156,10 @@ def one_line(text, limit=MAX_SHOWN):
 
 
 def frame(msg):
-    return f"[{msg['id']}] {msg['author']}: {one_line(msg['text'])}"
+    shown = one_line(msg["text"])
+    if shown.endswith("more characters]"):
+        shown = shown[:-1] + f"; `room read {msg['id']}` shows it whole]"
+    return f"[{msg['id']}] {msg['author']}: {shown}"
 
 
 def build_prompt(unread, triggers, me_name, me_id):
@@ -216,6 +233,7 @@ class Room:
             return None
         self.breaker.note(msg.channel_id, msg.is_bot, now)
         d = asdict(msg)
+        d["display_name"], d["author"] = d["author"], name_of(msg.author_id, msg.author, self.config["people"])
         self.unread.append(d)
         if self.store:
             self.store.append_unread(d)
@@ -301,8 +319,9 @@ class RoomStore:
     def consume_unread(self):
         (self.dir / "unread.jsonl").write_text("", encoding="utf-8")
 
-    def history(self, limit=20, channel=None):
-        items = [m for m in self._lines("history.jsonl") if channel is None or m["channel_id"] == str(channel)]
+    def history(self, limit=20, channel=None, message_id=None):
+        items = [m for m in self._lines("history.jsonl") if (channel is None or m["channel_id"] == str(channel))
+                 and (message_id is None or m["id"] == str(message_id))]
         return items[-limit:]
 
     def session(self):

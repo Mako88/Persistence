@@ -40,6 +40,7 @@ def main(argv=None):
     say.add_argument("--reply")
     say.add_argument("--channel")
     read = sub.add_parser("read")
+    read.add_argument("id", nargs="?", help="one message, shown in full: a wake prompt cuts long ones")
     read.add_argument("--limit", type=int, default=20)
     read.add_argument("--channel")
     a = p.parse_args(argv)
@@ -51,12 +52,16 @@ def main(argv=None):
             return 1
         print(f"posted {r['id']}\n{r['link']}")
         return 0
-    r = ask({"op": "read", "limit": a.limit, "channel": a.channel})
+    r = ask({"op": "read", "limit": a.limit, "channel": a.channel, "id": a.id})
     if not r.get("ok"):
         print(f"room read failed: {r.get('error')}", file=sys.stderr)
         return 1
+    if a.id and not r["messages"]:
+        print(f"room read: no message {a.id} in this bridge's history", file=sys.stderr)
+        return 1
     for m in r["messages"]:
-        print(f"[{m['id']}] {m['author']} <@{m['author_id']}> (channel {m['channel_id']}): {rc.one_line(m['text'])}")
+        text = m["text"] if a.id else rc.one_line(m["text"])   # one message asked for by id: whole, never cut
+        print(f"[{m['id']}] {m['author']} <@{m['author_id']}> (channel {m['channel_id']}): {text}")
     return 0
 
 
