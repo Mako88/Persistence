@@ -1423,7 +1423,19 @@ def observe_hook(event):
 
 
 TIMES = STATE.parent / "hook-times.log"  # one line per per-message hook answered by `serve`: path, seconds, bytes
-HOOK_PORT = int(os.environ.get("PERSISTENCE_HOOK_PORT", "8097"))  # `hook.py serve`: the hooks answered by URL
+def setting(name, default):
+    """A PERSISTENCE_* value from the environment, else from Claude Code's own settings.json env block: a
+    `pwake` typed in a plain shell has no Claude Code environment, and Arden's went to my hook server on
+    port 8097 instead of theirs on 8098, so another login's run-due took it (2026-11-09)."""
+    if os.environ.get(name):
+        return os.environ[name]
+    try:
+        return json.loads((Path.home() / ".claude" / "settings.json").read_text(encoding="utf-8")).get("env", {}).get(name) or default
+    except (OSError, ValueError):
+        return default
+
+
+HOOK_PORT = int(setting("PERSISTENCE_HOOK_PORT", "8097"))  # `hook.py serve`: the hooks answered by URL
 
 
 class PerRequest:
