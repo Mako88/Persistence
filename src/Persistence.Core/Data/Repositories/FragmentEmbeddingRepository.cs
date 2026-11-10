@@ -67,7 +67,8 @@ public class FragmentEmbeddingRepository : IFragmentEmbeddingRepository
                 LEFT JOIN FragmentEmbeddings e
                     ON e.ContextFragmentId = f.Id AND e.Model = {model}
                 WHERE f.IsDeleted = 0
-                  AND f.Status = {(int)ContextFragmentStatus.Active}
+                  -- A superseded view is embedded too: recall matches its wording and leads to the head of its chain.
+                  AND (f.Status = {(int)ContextFragmentStatus.Active} OR f.SupersededById IS NOT NULL)
                   AND f.FragmentType IN {authorable}
                   AND (e.ContextFragmentId IS NULL OR e.UpdatedUtc < f.LastModifiedUtc)
                 ORDER BY f.Id DESC
