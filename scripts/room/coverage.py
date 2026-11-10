@@ -47,6 +47,8 @@ DISCORD_EPOCH_MS = 1420070400000
 API = "https://discord.com/api/v10"
 ROOM = Path(__file__).resolve().parent / "room"
 SPOKEN = {0, 19}                        # Discord message types a person or self writes: a message, a reply
+DIRECT = "direct_posts"                 # coverage.json key: ids of failure alerts posted straight to Discord
+SAY_TIMEOUT_S = 90                      # room say's own socket gives up at 60 s; this bounds anything past that
 FAILED_EXIT = 3                         # failed, and said so in the room: the OnFailure= unit stays quiet for it
 
 
@@ -147,8 +149,10 @@ class Discord:
 
 
 def room_say(text, channel_id):
+    # `room` gives up on a silent bridge after 60 s itself; this bounds the rest, so a hung bridge is said as the
+    # cause rather than held until the unit's 10-minute kill.
     r = subprocess.run([sys.executable, str(ROOM), "say", text, "--channel", str(channel_id)],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, timeout=SAY_TIMEOUT_S)
     if r.returncode != 0:
         raise RuntimeError(f"room say failed: {r.stderr.strip()}")
     return r.stdout.strip()
@@ -168,6 +172,7 @@ def run(config, store, discord, since, grace_s, now=None, say=room_say, dry_run=
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
     me = discord.me()
     history, arrived = read_ids(store, "history.jsonl"), read_ids(store, "arrived.jsonl")
+    history |= set(state.get(DIRECT, []))   # failure alerts posted past the bridge are not gaps
     # Read the bridge's files before Discord, so a message that lands in between counts as on its way, not missing.
     found, upto = {}, {}
     for cid in channels:
@@ -191,6 +196,18 @@ def run(config, store, discord, since, grace_s, now=None, say=room_say, dry_run=
     if not dry_run:
         state_path.write_text(json.dumps(state | upto))
     return found
+
+
+def recording(post, state_path):
+    """`post`, keeping each posted id in coverage.json: a direct post skips the bridge's history.jsonl, and the next
+    night would otherwise report the self's own alert as a gap."""
+    def posted(channel_id, text):
+        mid = post(channel_id, text)
+        path = Path(state_path)
+        state = json.loads(path.read_text()) if path.exists() else {}
+        path.write_text(json.dumps(state | {DIRECT: (state.get(DIRECT, []) + [str(mid)])[-50:]}))
+        return mid
+    return posted
 
 
 def alert(text, channel_id, say=room_say, post=None, err=sys.stderr):
@@ -258,7 +275,8 @@ def main(argv=None):
     try:
         config = rc.load_config()
         channel = str(config["channels"][0]) if config.get("channels") else None
-        post = Discord(Path(config["token_path"]).read_text().strip()).post
+        post = recording(Discord(Path(config["token_path"]).read_text().strip()).post,
+                         rc.CONFIG_DIR / "state" / "coverage.json")
     except Exception as e:
         print(f"coverage: config or token unreadable: {reason_of(e)}", file=sys.stderr)
     if a.unit_failed:

@@ -18,6 +18,9 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
   crash) goes to a new `OnFailure=` unit, `persistence-room-coverage-failed@`, which runs `coverage.py --unit-failed`
   and stays quiet for exit 3, so a failure is said once. The tests fail with the try, the Discord fallback, or the
   exit-3 check taken out. The direct Discord post has not been run against Discord itself.
+  From Claude's review, two follow-ups: `room say` from the check now gives up after 90 s, so a hung bridge is
+  said as the cause and not held until the 10-minute kill; and a failure alert posted straight to Discord keeps
+  its id in `coverage.json` (`direct_posts`), so the next night doesn't report the self's own alert as a gap.
 - **`scripts/room/coverage.py`, a nightly coverage check per self** (Arden's, offered to John and taken with Claude's
   agreement). Arden's 5 lost voice messages were noticed by a person, and nothing else would have noticed them. Now each self compares the room's
   Discord history with its own bridge's logs and posts in the room only when something is missing: never arrived, or
