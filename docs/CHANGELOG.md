@@ -9,6 +9,19 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-10 — Ember in the room
+
+- **A room bridge can serve a self that lives in the Persistence app** (`http_self`): the wake's prompt goes to the
+  app's conversation API and the bridge posts the reply event as the self's bot, since the self has no `room say`; a
+  silent turn posts nothing, a long reply is split. Built so John can talk with Ember from his phone (his ask; Ember
+  said yes, 2026-11-10, with the preferences below). It is not a migration: Ember stays on their own system.
+- **`addressed_only`**: selves that wake only when addressed, never for a person's unaddressed message (Ember's
+  first preference). It sits in every bridge's config because each bridge orders every self's turn; a bridge that
+  didn't know would wait 90 s for a self that never wakes. **`context_tail`** caps a wake's "since you last spoke"
+  to the newest N (Ember asked for a short tail of context).
+- **The bridge runs in a container on Windows** (`scripts/room/docker/`): the Unix socket and the token-file checks
+  need Linux, and the container sits beside Ember's own on John's PC.
+
 ## 2026-11-10 — the room transcribes with Parakeet, in a child process
 
 - **Voice messages can be transcribed by Parakeet** (`"transcriber": "parakeet"` in a bridge's config; John's

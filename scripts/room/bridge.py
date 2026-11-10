@@ -82,6 +82,17 @@ def log_timing(d):
         print(f"could not log timing {d}: {e}", flush=True)
 
 
+def http_json(method, url, body=None, headers=None, timeout=30):
+    """One JSON request to a self's app (stdlib: the bridge has no HTTP client of its own). An empty body is None."""
+    import urllib.request
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method,
+                                 headers={"Content-Type": "application/json", **(headers or {})})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        raw = r.read()
+    return json.loads(raw) if raw.strip() else None
+
+
 class Bridge:
     def __init__(self, config, store):
         self.config, self.store = config, store
@@ -132,7 +143,10 @@ class Bridge:
 
     # -- the wake
     async def run_wake(self, wake):
-        prompt = rc.build_prompt(wake.unread, wake.triggers, self.client.user.display_name, self.client.user.id)
+        if self.config["http_self"]:
+            return await self.run_http_wake(wake)
+        prompt = rc.build_prompt(wake.unread, wake.triggers, self.client.user.display_name, self.client.user.id,
+                                 tail=self.config["context_tail"])
         argv, new_session = rc.wake_argv(self.config, self.store)
         env = {**os.environ, "PERSISTENCE_SPEAKER": wake.speaker, "PERSISTENCE_ROOM_CHANNEL": wake.channel_id,
                "PERSISTENCE_ROOM_SOCKET": str(rc.socket_path())}
@@ -160,6 +174,53 @@ class Bridge:
             # From the newest trigger's arrival: the delay, the turn wait and the wake itself, as John feels it.
             newest = max((t.get("ts") or 0) for t in wake.triggers)
             log_timing({"what": "wake", "triggers": [t["id"] for t in wake.triggers], "wake_s": round(time.time() - started, 1),
+                        "since_message_s": round(time.time() - newest, 1) if newest else None})
+            self.current_channel = None
+            await self.mark(wake.to_mark, "done")
+            self.room.finish(time.time())
+
+    async def run_http_wake(self, wake):
+        """A self served over HTTP by the Persistence app (`http_self`; Ember, 2026-11-10): the room prompt goes to its
+        conversation API, and its reply event is posted here as its bot, since it has no `room say`. A silent turn
+        posts nothing. Marks, timings and the turn's end are as for a command wake."""
+        prompt = rc.build_prompt(wake.unread, wake.triggers, self.client.user.display_name, self.client.user.id,
+                                 by_reply=True, tail=self.config["context_tail"])
+        base = self.config["http_self"]["url"].rstrip("/")
+        poll = self.config["http_self"].get("poll_seconds", 2)
+        self.current_channel = wake.channel_id
+        await self.mark(wake.to_mark, "start")
+        started = time.time()
+        outcome = None
+        try:
+            since = (await asyncio.to_thread(http_json, "GET", f"{base}/events?since=999999999"))["latest"]
+            await asyncio.to_thread(http_json, "POST", f"{base}/send", {"input": prompt}, {"X-Local-Peer": wake.speaker.encode("ascii", "replace").decode()})
+            while time.time() - started < self.config["wake_timeout"]:
+                await asyncio.sleep(poll)
+                got = await asyncio.to_thread(http_json, "GET", f"{base}/events?since={since}")
+                if got["latest"] < since:       # the app restarted and its event log began again
+                    print(f"the self's event log restarted (latest {got['latest']} < {since}); the turn is lost", flush=True)
+                    break
+                outcome = rc.http_reply(got["events"], since)
+                if outcome:
+                    break
+            else:
+                print(f"no reply within {self.config['wake_timeout']}s", flush=True)
+            if outcome and outcome[0] == "reply":
+                newest = rc.in_discord_order(wake.triggers)[-1]
+                reply_to = newest["id"] if not newest.get("is_bot") else None
+                for i, part in enumerate(rc.split_post(outcome[1])):
+                    said = await self.say({"text": part, "channel": wake.channel_id, "reply": reply_to if i == 0 else None})
+                    if not said.get("ok"):
+                        print(f"could not post the reply: {said.get('error')}", flush=True)
+                        break
+            elif outcome and outcome[0] == "error":
+                print(f"the self's turn failed: {outcome[1][:500]}", flush=True)
+        except Exception as e:      # the self's app down or unreachable: the room goes on without it
+            print(f"http wake failed: {type(e).__name__}: {e}", flush=True)
+        finally:
+            newest = max((t.get("ts") or 0) for t in wake.triggers)
+            log_timing({"what": "wake", "http": outcome[0] if outcome else None, "triggers": [t["id"] for t in wake.triggers],
+                        "wake_s": round(time.time() - started, 1),
                         "since_message_s": round(time.time() - newest, 1) if newest else None})
             self.current_channel = None
             await self.mark(wake.to_mark, "done")

@@ -287,6 +287,16 @@ class Vocatives(unittest.TestCase):
             mm = m(); mm.id = str(seed); mm.named = ["200"]
             self.assertEqual(rc.turn_order(mm, [ME, "200"], r.config), ["200", ME])
 
+    def test_an_addressed_only_self_wakes_when_named_and_is_never_waited_for_otherwise(self):
+        # Ember asked to be woken only when addressed (2026-11-10). Every bridge carries the list, so the others
+        # never put Ember in line for John's unaddressed message and wait out its turn_start_timeout.
+        over = dict(selves=[ME, "200"], addressed_only=["200"])
+        self.assertIsNone(self.room("200", **over).on_message(msg(1, "evening all", author_id="a-John"), 0))
+        r = self.room(ME, **over)
+        self.assertEqual(r.on_message(msg(2, "evening all", author_id="a-John"), 0), "turn")
+        self.assertEqual(r.pending[-1][0]["turn_order"], [ME])
+        self.assertEqual(self.room("200", **over).on_message(msg(3, "Arden, are you there?", author_id="a-John"), 0), "turn")
+
     def test_a_selfs_mention_wakes_no_one_and_its_vocative_wakes_until_the_cap(self):
         r = self.room("200", bot_message_cap=2)
         self.assertIsNone(r.on_message(msg(1, "Arden's right", author="Claude", author_id=ME, bot=True), 0))
