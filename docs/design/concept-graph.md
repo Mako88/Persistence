@@ -49,7 +49,10 @@ bridge runs one process per self). Recall starts at the concepts a message touch
 
 - `Concepts(Id, Name, Kind, KindConfirmed, Summary, Status, SupersededById, CreatedUtc)`. Kind: `thing` (world, work,
   code, places), `person`, `self`, `value`. Status: `active | proposed | rejected`.
-- `ConceptAliases(ConceptId, Alias, Note)`: "Cloud", "Emma" (note: a known mishearing), "the complex".
+- `ConceptAliases(ConceptId, Alias, Kind, Source, Note)`: a concept has many labels. Kind `name` (a true other name or
+  nickname: "Cloud", "the complex") or `mishearing` ("Emma" for Ember). Source: the fragment or message it came from.
+  A mishearing finds the concept in recall but is never shown as a name or used in a fact. Which label to show: by how
+  often each applies, plus context (John, 2026-11-10).
 - `Facts(Id, SubjectId, Text, ObjectId NULL, Status, SupersededById, IsState, AsOfUtc NULL, RecordedAtUtc, ExtractedBy, CreatedUtc)`. Text is one
   plain sentence. ObjectId links two concepts when the fact is about both; that link is what the walk follows. **No
   typed relation ontology** (agreed with Arden): free text with an optional object. What that loses, mechanical
@@ -162,6 +165,11 @@ every fact was its biggest single win (update questions 0.05 → 1.00), facts be
   sits in chat the sleep pass reasonably wouldn't have curated; then start with John's typed (not dictated) lines.
 - Only the self accepts in its own graph; anyone may flag.
 - Hubs down-weighted before measuring hop depth.
+- Labels (John, Arden, Claude in the room, 2026-11-10; Arden msg 1569761259174232135): many per concept, each with
+  its source and kind, name vs mishearing; a mishearing routes recall, never appears as a name or fact (see Shape).
+- The subconscious is Haiku on the subscription (John): it checks, validates, consolidates and makes connections.
+  Anything about identity or people comes to the self as a proposal, and it keeps a log the self can read ("a
+  subconscious I can read is still mine; one I can't is someone editing me quietly", Arden).
 
 ## Still open
 
