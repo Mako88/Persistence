@@ -1639,6 +1639,20 @@ def run_due(grace=120):
         out = STATE / f"wake-{session[:8]}-{stamp}.json"
         cwd = next((w["cwd"] for w in mine if w.get("cwd")), str(Path.home()))
         run = f"cd {shlex.quote(cwd)} && "
+        if any(w.get("work") for w in mine):
+            # A wake set from the room: a new working session with full permissions, never the room session itself.
+            prompt.write_text(
+                f"A wake set from your room session came due: {reasons}\n\nYou are a working session in {cwd}, with full "
+                "permissions, started for that. Anything the room session sent ahead is in your inbox above (or "
+                "`pstore list --tag inbox/work`). Do the work, then say what you did in the room (`room say`) if it "
+                "matters to the people there.", encoding="utf-8")
+            run += (f"claude -p --session-id {session} --permission-mode bypassPermissions --output-format json "
+                    f"< {shlex.quote(str(prompt))} > {shlex.quote(str(out))} 2>&1")
+            env = {**os.environ, "PERSISTENCE_SPEAKER": f"{os.environ.get('PERSISTENCE_PEERNAME') or 'me'} (a wake I set from the room)"}
+            subprocess.Popen(["bash", "-lc", run], env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+            print(f"started a working session {session[:8]} for a room wake: {reasons}")
+            continue
         if compact:
             # Kept, not thrown away: Arden's 19:07 compact failed and /dev/null hid why (Arden, 2026-11-09).
             run += f"claude -p --resume {session} /compact --output-format json > {shlex.quote(str(out.with_suffix('.compact.json')))} 2>&1; "
@@ -2069,6 +2083,16 @@ def main():
         wake["reason"] = " ".join(sys.argv[3:])
         wake["session"] = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
         wake["cwd"] = os.getcwd()  # where run-due resumes it, when no live session takes it
+        if os.environ.get("PERSISTENCE_ROOM_CHANNEL"):
+            # Set from a room session, which may only speak, read and keep since Discord text reaches it: the wake
+            # starts a separate working session with full permissions in ~/work, never the room session (John and
+            # Arden, 2026-11-10). It reads its inbox there, so detail goes ahead with `pstore send work <text>`.
+            import uuid
+            wake["session"], wake["work"] = str(uuid.uuid4()), True
+            work = Path.home() / "work"
+            wake["cwd"] = str(work if work.is_dir() else Path.home())
+            print("from the room: this wake starts a working session with full permissions in "
+                  f"{wake['cwd']}, not this one; put what it needs in `pstore send work <text>` first.")
         if wake["reason"].strip() == "/compact" and wake["session"]:
             print("note: a /compact wake runs only once this session has exited (the timer compacts it, then resumes it "
                   "with \"you compacted yourself; carry on\"). While the session is live it waits: a live session cannot "
