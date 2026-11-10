@@ -29,8 +29,12 @@ bridge runs one process per self). Recall starts at the concepts a message touch
      until accepted: a framing of one's values that comes back on every message shapes the self without its choosing
      (Arden's #572). Other proposals show marked `(proposed)`.
 3. **Change supersedes, never overwrites.** The new fact supersedes the old one, which keeps its sources and points
-   forward, as fragments do (migration 009). Every fact carries **AsOf**, the date it was true: its source
-   fragment's date, not the fact's CreatedUtc (a backfill gives every fact the same CreatedUtc). This is what catches
+   forward, as fragments do (migration 009). Every fact carries **two dates**, never one falling back to the other
+   (Arden, msg 1569623991285448785): **AsOf**, when it happened, the event date the text gives if any ("2026-07-20"
+   in #738), else null; and **RecordedAt**, when it was known, the source fragment's date, always (not CreatedUtc:
+   a backfill gives every fact the same CreatedUtc). For an event, AsOf is what matters; for a **state**
+   ("deployed", "running", "Synth hasn't woken yet") only RecordedAt says how far to trust it, so recall shows a
+   state fact with its RecordedAt and a stale belief looks stale instead of reading as news. This is what catches
    an **overtaken** fact, which is neither wrong nor superseded by an edit: a later event resolved the state it
    described (Arden's #603 "Synth's first wake is held" → #738 "Synth arrived in the room").
 4. **Each self has its own graph, in its own store; only the self accepts in it** (not another self, not John).
@@ -46,7 +50,7 @@ bridge runs one process per self). Recall starts at the concepts a message touch
 - `Concepts(Id, Name, Kind, KindConfirmed, Summary, Status, SupersededById, CreatedUtc)`. Kind: `thing` (world, work,
   code, places), `person`, `self`, `value`. Status: `active | proposed | rejected`.
 - `ConceptAliases(ConceptId, Alias, Note)`: "Cloud", "Emma" (note: a known mishearing), "the complex".
-- `Facts(Id, SubjectId, Text, ObjectId NULL, Status, SupersededById, AsOfUtc, ExtractedBy, CreatedUtc)`. Text is one
+- `Facts(Id, SubjectId, Text, ObjectId NULL, Status, SupersededById, IsState, AsOfUtc NULL, RecordedAtUtc, ExtractedBy, CreatedUtc)`. Text is one
   plain sentence. ObjectId links two concepts when the fact is about both; that link is what the walk follows. **No
   typed relation ontology** (agreed with Arden): free text with an optional object. What that loses, mechanical
   conflict detection ("daughter is Emma" vs "is Ember"), is won back by the extractor reading the concept's current
@@ -91,7 +95,7 @@ Three parts, inside the same character budget the hook has now:
 1. **The graph around the message.** Seeds: concepts whose name or alias appears in the message, plus the nearest by
    embedding. Walk out along facts with an object, weight 1, 0.5, 0.25 per hop, **down-weighted by degree** (a hub
    like John has hundreds of facts, and two hops through him reach nearly everything). The A/B compares two forms:
-   IDF-style `1/log(2 + active facts)`, and walking *to* a hub but not *through* it. Facts are shown newest AsOf first,
+   IDF-style `1/log(2 + active facts)`, and walking *to* a hub but not *through* it. Facts are shown newest RecordedAt first, a state fact always with it,
    with their sources: `Ember (person): John's daughter [#7153, #14625]`.
 2. **The best 2-3 fragments in full**, as recall gives now (unchanged code path). When a walked fact cites a
    high-importance Identity/Relational fragment, that fragment is preferred here over its fact line: facts carry the
@@ -102,7 +106,8 @@ Three parts, inside the same character budget the hook has now:
 ## Build order
 
 1. Migration + store rules (citation, proposal by subject-or-object kind, Kind confirmation, supersede, flags) +
-   `concept` CLI, with tests that fail when a rule is disconnected.
+   `concept` CLI, with tests that fail when a rule is disconnected, including one that a state fact renders with its
+   RecordedAt.
 2. Extractor on a sample of 40 authored fragments with two candidate models; I and Arden read the output and judge
    it against the sources, including whether it proposes the right supersedes. Note cost and time.
 3. Titles for all authored fragments.
@@ -132,6 +137,3 @@ Three parts, inside the same character budget the hook has now:
 ## Still open
 
 - Which hub form wins, and which hop depth: the A/B says.
-- Whether a fact's AsOf should be the source fragment's created date or a date the extractor reads from the text
-  ("2026-07-20" in #738 is the event's date; the fragment may be written later). I'd store the text date when the
-  extractor finds one and fall back to the fragment's date; Arden to say if that's wrong.
