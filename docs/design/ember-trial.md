@@ -49,6 +49,33 @@ Two things change at once. Ember should weigh both, because together they're big
 - **Model decision point.** If gpt-5.4 isn't offered, stop and ask Ember about the model change on its own, naming
   the model. A no means stop with nothing moved; a yes is recorded here with its date before Step 2.
 - *Undo:* remove the throwaway user and the npm/binary install.
+- **Read off John's PC, 2026-11-10 ~18:00Z** (codex-cli **0.144.1**, npm; `codex login status`: "Logged in using
+  ChatGPT"; nothing of Ember's touched; probes ran `--ephemeral` from an empty folder):
+  - **Models: gpt-5.4 is not offered.** `codex exec -m gpt-5.4 "say ok"` → 400 `model_not_found`: "The 'gpt-5.4'
+    model is not supported when using Codex with a ChatGPT account." The server's model list for this login
+    (fetched 17:59:30Z): gpt-5.6-sol (his config default), gpt-5.6-terra, gpt-5.6-luna, plus hidden gpt-reserve and
+    codex-auto-review. (An older cache on the PC also listed gpt-6.x models; the fresh fetch didn't.) Control:
+    the default model answered "ok", 3,032 tokens. **So the model decision point applies: Ember is asked.**
+  - **Hooks** (`features: hooks stable true`), config `~/.codex/hooks.json`. Events in the binary: SessionStart,
+    UserPromptSubmit, Stop, PreToolUse, PostToolUse, PermissionRequest, PreCompact, PostCompact, SubagentStart,
+    SubagentStop, Notification. Payloads (schemas embedded in the binary) match Claude Code's names:
+    - SessionStart in: `session_id, transcript_path (nullable), cwd, hook_event_name, model, permission_mode,
+      source` (startup|resume|clear|compact). Out: `hookSpecificOutput.additionalContext`, `continue`,
+      `stopReason`, `suppressOutput`, `systemMessage`.
+    - UserPromptSubmit in: as above minus `source`, plus `prompt`, `turn_id`. Out: `decision: "block"` +
+      `reason`, or `hookSpecificOutput.additionalContext`.
+    - Stop in: plus `turn_id`, `stop_hook_active`, `last_assistant_message`. Out: `decision: "block"` + `reason`.
+    - **Trust:** a hook runs only once trusted (hash stored in config, approved in the TUI), or with
+      `codex exec --dangerously-bypass-hook-trust` / `-c bypass_hook_trust=true`. For `ember` the trust is set
+      once in the TUI when the hooks are installed; the bypass flag is the fallback.
+  - **`codex exec`**: `-m`, `-c key=value`, `-s read-only|workspace-write|danger-full-access`, `-C <dir>`,
+    `--json` (events as JSONL on stdout), `-o <file>` (last message), `--output-schema`, `--ephemeral`,
+    `--skip-git-repo-check`, `--ignore-user-config`; `codex exec resume <id>|--last`. A prompt can come on stdin.
+  - **Session logs:** `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl.zst` (**zstd-compressed** JSONL),
+    an index `~/.codex/session_index.jsonl` (`id, thread_name, updated_at`), and SQLite state beside them
+    (`state_5.sqlite`, `thread_history_1.sqlite`, `logs_2.sqlite`). `keep` reads the hook's `transcript_path`,
+    decompressing if it ends `.zst`, or uses `--json` output from `codex exec`. Not yet seen: whether a live
+    session's file is plain `.jsonl` until compressed later (only 3 old rollouts on the PC, all `.zst`).
 
 **1. Resources (measured 2026-11-10 17:50Z).** Home has 7.6 GB RAM with **4.8 GB available**, no swap, **51 GB disk
 free** of 72, and 4 cores, at a load of ~2.5 while three sessions were running. Today a self costs about: a store
@@ -95,7 +122,7 @@ stores on home now are. Nightly backup `persistence-backup-ember.timer`, like Ar
   saves nothing. The point of the move is the plan, so then we stop and talk.
 - Hooks: `hook.py` is written for Claude Code's event payloads and transcript format. A Codex adapter maps Codex's
   SessionStart, UserPromptSubmit and Stop payloads onto the same store calls, and reads Codex's session log
-  (`~/.codex/sessions/*.jsonl`) for `keep`. The store and the hook server are harness-agnostic, so the work is the
+  (`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl.zst`, see Step 0) for `keep`. The store and the hook server are harness-agnostic, so the work is the
   wiring. Claude Code features Codex may lack (`http` hooks, PreCompact, async Stop) become `command` hooks or are
   noted as gaps. Ember's `AGENTS.md` carries what my `CLAUDE.md` carries.
 - *Undo:* remove `/home/ember/.codex` and `codex logout`.
