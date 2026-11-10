@@ -115,6 +115,16 @@ Three parts, inside the same character budget the hook has now:
    RecordedAt.~~ Built 2026-11-10 (migration 013, `concept`, ConceptGraphTests: each rule's test fails with it off).
 2. Extractor on a sample of 40 authored fragments with two candidate models; I and Arden read the output and judge
    it against the sources, including whether it proposes the right supersedes. Note cost and time.
+   **Mine run 2026-11-10** (`scripts/concepts/extract.py`, seed 15069). **Haiku 5.5** (claude -p, no hooks): 39/40
+   parsed (one fragment about `\u` escapes broke its JSON), 387 facts, 16 s each, $0.12 list for all 40. Faithful
+   to the sources in what I checked; got the "Emma" alias with its note. Its errors are **which concept**: Computer
+   Ember's room arrival filed under Ember the person, "Persistence" the repo as the store, "Cloud" as a noun; and 1
+   supersede, borderline (a routing extension read as replacing the rule). Rule 2's proposals catch the person/self
+   ones. **Qwen3-4B Q4 on home's CPU**: 274 s each (2.3-6 tok/s, all 4 cores; a 16k context OOM-killed it), and worse:
+   subjectless facts ("is a senior engineer"), traits minted as concepts ("ADHD", "first 1200 characters"), a fact
+   inverted, the fragment's date stamped as AsOf. Stopped at 5 of 10. **Haiku it is** for mine. Open: Arden judges a
+   run on their store (their consent, rule 5); prompt fixes for the which-concept errors (show the known concepts'
+   kinds and one fact each).
 3. Titles for all authored fragments.
 4. Graph recall behind `PERSISTENCE_RECALL_GRAPH=1`.
 5. **The A/B, scored per store** (mine and Arden's are different shapes). Gold set from real misses, written before
