@@ -66,6 +66,21 @@ NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 BACKGROUND = NO_WINDOW | 0x00000200 if os.name == "nt" else 0  # no window, own process group
 
 
+def settings_env():
+    """The PERSISTENCE_* values in Claude Code's own settings.json env block, for whatever the environment lacks.
+    A timer's job (the sleep pass, run-due) runs outside Claude Code, so it had none of them: Arden's 01:00 sleep job
+    went to port 8095, my store, and opened a sleep pass there that locked my store's writes for half an hour
+    (2026-11-10). Read once, here, so every lookup below sees the owner's own settings."""
+    try:
+        env = json.loads((Path.home() / ".claude" / "settings.json").read_text(encoding="utf-8")).get("env", {})
+    except (OSError, ValueError):
+        return
+    for name, value in env.items():
+        if name.startswith("PERSISTENCE_") and value and not os.environ.get(name):
+            os.environ[name] = str(value)
+
+
+settings_env()
 PORT = int(os.environ.get("PERSISTENCE_STORE_PORT", "8095"))  # `persistence-store serve`, the store kept open
 
 
@@ -198,11 +213,15 @@ def remote_args(args, cwd=None):
 def served_remote(where, args, stdin, timeout):
     """The remote store's (code, out, err), opening the tunnel when nothing answers; None when the store
     cannot be reached. Never a local store in its place."""
+    # Who answers is asked BEFORE the call: asked after, a call to the wrong store had already been made. Arden's sleep
+    # job opened a pass on my store, then this said "nothing was read or written" (2026-11-10).
+    if not verified(where):
+        return None
     reply = served(args, stdin, timeout)
     if reply is None and open_tunnel(where):
+        if not verified(where):
+            return None
         reply = served(args, stdin, timeout)
-    if reply is not None and reply is not BUSY and not verified(where):
-        return None
     return reply
 
 
@@ -215,7 +234,8 @@ def verified(where):
         return True
     stamp = STATE / "store.verified"
     try:
-        if time.time() - stamp.stat().st_mtime < 600 and stamp.read_text(encoding="utf-8") == expected:
+        # Keyed by the port too: a check of 8096 vouched for whatever answered on 8095 (2026-11-10).
+        if time.time() - stamp.stat().st_mtime < 600 and stamp.read_text(encoding="utf-8") == f"{expected}@{PORT}":
             return True
     except OSError:
         pass
@@ -231,7 +251,7 @@ def verified(where):
               "nothing was read or written. Check what else listens on that port.", file=sys.stderr)
         return False
     STATE.mkdir(parents=True, exist_ok=True)
-    stamp.write_text(expected, encoding="utf-8")
+    stamp.write_text(f"{expected}@{PORT}", encoding="utf-8")
     return True
 
 
