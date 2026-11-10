@@ -249,6 +249,13 @@ class Bridge:
         await writer.drain()
         writer.close()
 
+    def own_record(self, message_id, channel_id, text):
+        """A history line for this self's own post."""
+        me = self.client.user
+        return {"id": str(message_id), "channel_id": str(channel_id), "author_id": str(me.id),
+                "author": rc.name_of(me.id, me.display_name, self.config["people"]), "text": text, "is_bot": True,
+                "ts": time.time()}
+
     async def say(self, req):
         import discord
         bad = rc.validate_post(req.get("text", ""))
@@ -265,9 +272,7 @@ class Bridge:
         sent = await channel.send(req["text"], reference=ref,
                                   allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=True, replied_user=True))
         self.room.note_own(channel_id, time.time())
-        self.store.append_history({
-            "id": str(sent.id), "channel_id": str(channel_id), "author_id": str(self.client.user.id),
-            "author": rc.name_of(self.client.user.id, self.client.user.display_name, self.config["people"]), "text": req["text"], "is_bot": True, "ts": time.time()})
+        self.store.append_history(self.own_record(sent.id, channel_id, req["text"]))
         return {"ok": True, "id": str(sent.id), "link": sent.jump_url}
 
     # -- start
@@ -297,7 +302,13 @@ class Bridge:
         @self.client.event
         async def on_message(m):
             # Described side by side, handed to the room in the order they were sent (rc.InOrder).
-            if bridge.room and m.author.id != bridge.client.user.id:
+            if bridge.room and m.author.id == bridge.client.user.id:
+                # This self's own post made some other way than `room say` (an image upload, 2026-11-10 14:17Z, was
+                # in Discord and missing from history). say() records its own once send() returns; give it that time.
+                await asyncio.sleep(3)
+                if not bridge.store.history(1, message_id=m.id):
+                    bridge.store.append_history(bridge.own_record(m.id, m.channel.id, m.content))
+            elif bridge.room:
                 await bridge.in_order.run(str(m.channel.id), lambda: bridge.describe(m),
                                           lambda text: bridge.room.on_message(to_msg(m, bridge.client.user.id, text), time.time()))
 

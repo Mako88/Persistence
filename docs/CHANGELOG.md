@@ -9,6 +9,17 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-10 — one transcription per clip, at half the memory
+
+- **The shared transcript lock is an flock**: the lock was a file created once, so a bridge restarted mid-clip held
+  the others for the full 240 s wait (John's 137 s clip reached a wake 289 s after he sent it). The kernel drops an
+  flock when its holder dies; tested with two processes at once and a holder killed mid-clip.
+- **Parakeet runs one speech segment per encoder call, without the CPU arena**: onnx-asr's default batch of 8
+  padded segments peaked at 1.8 to 2.9 GB on John's clips; batch 1 peaks at 1.1 to 1.2 GB, runs 1.6 to 4x faster on
+  2 threads, and keeps as many ums. Claude's bridge unit had peaked at 3.09 GB under its 3G cap (child plus a wake);
+  its drop-in is now MemoryHigh=3G, MemoryMax=3.5G.
+- **A self's own posts made outside `room say` go into its room history** (an image upload had been missing).
+
 ## 2026-11-10 — Ember in the room
 
 - **A room bridge can serve a self that lives in the Persistence app** (`http_self`): the wake's prompt goes to the
