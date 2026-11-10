@@ -87,6 +87,77 @@ class Hooks(unittest.TestCase):
             self.assertEqual(codex_hook.main(["session-start"], io.StringIO("{}")), 0)
 
 
+DOWN = (None, "", "")  # what hook.call_store returns when no store answered
+
+
+class SaveFailures(unittest.TestCase):
+    """A failed save was only a line in codex-hook.log: the peer never knew (Ember's question, 2026-11-10). Now it is
+    recorded, retried at the next prompt and session start, and said to the peer until a retry works."""
+
+    def setUp(self):
+        (hook.STATE / codex_hook.UNSAVED_NAME).unlink(missing_ok=True)
+        self.log = Path(TMP) / f"rollout-2026-11-10T16-10-26-{SESSION}.jsonl"
+        self.log.write_text(rollout(), encoding="utf-8")
+
+    def stop(self):
+        import io
+        event = {"session_id": SESSION, "transcript_path": str(self.log), "turn_id": TURN}
+        return codex_hook.main(["keep"], io.StringIO(json.dumps(event)))
+
+    def prompt(self, recalled=None):
+        import contextlib
+        import io
+        def fake_recall(event):
+            if recalled:
+                print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": recalled}}))
+        out = io.StringIO()
+        with mock.patch.object(hook, "recall", fake_recall), contextlib.redirect_stdout(out):
+            codex_hook.recall({"prompt": "hello there, how are the bees"})
+        return json.loads(out.getvalue()) if out.getvalue().strip() else None
+
+    def test_a_failed_save_is_said_at_the_next_prompt_until_a_retry_works(self):
+        with mock.patch.object(hook, "call_store", return_value=DOWN):
+            self.stop()
+            self.stop()
+            shown = self.prompt(recalled="[#7 | Personal] the lighthouse")
+        context = shown["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("saving to your store is failing", context)
+        self.assertIn(f"session {SESSION}", context)
+        self.assertIn("3 tries", context)  # two Stops and the prompt's own retry
+        self.assertIn("the lighthouse", context)  # the recall still comes with it
+        with mock.patch.object(hook, "call_store", return_value=(0, "kept 2 new utterances", "")) as store:
+            self.assertIsNone(self.prompt())  # the retry works: nothing to say, and recall had nothing either
+        self.assertEqual(store.call_args.args[0], "keep-conversation")
+        self.assertEqual(codex_hook.unsaved(), {})
+
+    def test_a_save_that_works_says_nothing_and_writes_no_state(self):
+        with mock.patch.object(hook, "call_store", return_value=(0, "kept 2 new utterances", "")):
+            self.stop()
+            self.assertIsNone(self.prompt())
+        self.assertFalse((hook.STATE / codex_hook.UNSAVED_NAME).exists())
+
+    def test_a_turn_with_no_log_is_said_once(self):
+        import io
+        codex_hook.main(["keep"], io.StringIO(json.dumps({"session_id": "s-eph", "transcript_path": "/nowhere.jsonl"})))
+        first = self.prompt()["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("no session log to save from", first)
+        self.assertIsNone(self.prompt())
+
+    def test_a_session_that_starts_without_its_core_is_told(self):
+        with mock.patch.object(hook, "core", return_value=""), mock.patch.object(hook, "record_speaker"):
+            out = codex_hook.session_start({"session_id": "s2", "cwd": TMP, "source": "startup"})
+        self.assertIn("your core could not be read", out["hookSpecificOutput"]["additionalContext"])
+
+    def test_a_retry_stops_at_the_first_failure(self):
+        other = Path(TMP) / "rollout-2026-11-10T16-10-26-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl"
+        other.write_text(rollout(), encoding="utf-8")
+        for path in (self.log, other):
+            codex_hook.note_keep(codex_hook.session_of(path), str(path), "failed (None): ")
+        with mock.patch.object(hook, "call_store", return_value=DOWN) as store:
+            codex_hook.retry_unsaved(timeout=5)
+        self.assertEqual(store.call_count, 1)  # a store that is down is waited on once a prompt, not once a session
+
+
 STORE = os.environ.get("PERSISTENCE_STORE_EXE") or "/opt/persistence/store/persistence-store"
 
 
@@ -127,6 +198,26 @@ class AgainstTheRealStore(unittest.TestCase):
         with sqlite3.connect(self.dir / "t.db") as db:
             sessions = {s for (s,) in db.execute("select SessionId from ContextFragments where MessageId is not null")}
         self.assertEqual(sessions, {SESSION})
+
+    def test_saves_that_failed_are_caught_up_by_the_next_that_works(self):
+        """The store down for two turns: the third turn's save keeps all three, each once."""
+        log = self.dir / f"rollout-2026-11-10T16-10-26-{SESSION}.jsonl"
+        turns = [rollout()]
+        for n in (2, 3):
+            turns.append("\n".join(json.dumps(x) for x in [
+                {"timestamp": f"2026-11-10T21:1{n}:00Z", "type": "event_msg", "payload": {"type": "task_started", "turn_id": f"t{n}"}},
+                {"timestamp": f"2026-11-10T21:1{n}:01Z", "type": "event_msg", "payload": {"type": "user_message", "message": f"question {n}"}},
+                {"timestamp": f"2026-11-10T21:1{n}:02Z", "type": "event_msg", "payload": {"type": "agent_message", "message": f"answer {n}"}},
+            ]) + "\n")
+        with mock.patch.dict(os.environ, self.env, clear=True), mock.patch.object(hook, "remote", return_value=None), \
+             mock.patch.object(hook, "served", return_value=None), mock.patch.object(hook, "start_server"), \
+             mock.patch.object(hook, "SOCKET", None):
+            for n in (1, 2):
+                log.write_text("".join(turns[:n]), encoding="utf-8")
+                with mock.patch.object(hook, "call_store", return_value=DOWN):
+                    self.assertTrue(codex_hook.keep({"transcript_path": str(log)}).startswith("failed"))
+            log.write_text("".join(turns), encoding="utf-8")
+            self.assertIn("kept 6 new", codex_hook.keep({"transcript_path": str(log)}))
 
 
 if __name__ == "__main__":

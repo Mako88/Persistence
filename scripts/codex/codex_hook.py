@@ -25,6 +25,10 @@ process exits before a delayed keep would run); Codex has no SessionEnd, so a fi
 running for the store's window; no curation pass at a token threshold, no PreCompact hand-over, no compaction
 times (Codex's compaction record has not been seen yet); no observe, cues on tool calls, or waiter (self-wakes).
 
+Failures are said, not only logged (Ember's review, 2026-11-10): a save that fails is recorded in the state folder
+(codex-unsaved.json), retried at the next prompt and session start, and put in front of the peer with that prompt's
+context until a retry works; a session that starts without its core is told so in place of the core.
+
 Standard library only, Python 3.9+ (3.14's compression.zstd, or the zstd program, for a compressed log).
 """
 
@@ -130,17 +134,20 @@ def conversation(text, session, last=None):
     return out
 
 
-def keep_log(path, last=None):
+def keep_log(path, last=None, timeout=120, cold=True):
     """What keep-conversation said of a Codex log, or why it failed. The store is sent the converted lines (the same
     `--transcript -` a remote store is sent), named for the session, so its utterances are filed under the session id
-    the hooks use."""
+    the hooks use. The whole log goes every time and the store skips ids it has, so one save that works catches up
+    every turn of the session a failed one missed. `timeout`/`cold`: a retry inside a prompt's hook waits less and
+    never runs the CLI cold."""
     session = session_of(path)
     lines = conversation(read_log(path), session, last)
     if not lines:
         return "kept 0 new utterances (nothing said yet)"
     peer = os.environ.get("PERSISTENCE_SPEAKER") or os.environ.get("PERSISTENCE_SELECTEDLOCALPEER", "Local Peer")
     code, out, err = hook.call_store("keep-conversation", f"{session}.jsonl", "--transcript", "-", "--local-peer", peer,
-                                     *hook.speaker_args(session), stdin="\n".join(lines) + "\n", timeout=120)
+                                     *hook.speaker_args(session), stdin="\n".join(lines) + "\n", timeout=timeout,
+                                     cold=cold)
     return out.strip() if code == 0 else f"failed ({code}): {err.strip()}"
 
 
@@ -150,6 +157,70 @@ def keep(event):
         return "failed: no session log to keep"
     last = (event.get("turn_id") or "", event.get("last_assistant_message")) if event.get("last_assistant_message") else None
     return keep_log(path, last)
+
+
+UNSAVED_NAME = "codex-unsaved.json"  # {session: {path, since, last, tries, why}}: the saves that failed, until one works
+
+
+def unsaved(update=None):
+    """The sessions whose last save failed. Kept so a failure is retried and shown to the peer, not only logged:
+    without it a store down for an evening loses nothing (the log holds the words) but nobody would know."""
+    where = hook.STATE / UNSAVED_NAME
+    try:
+        items = json.loads(where.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        items = {}
+    if update is not None:
+        items = update(items)
+        hook.STATE.mkdir(parents=True, exist_ok=True)
+        where.write_text(json.dumps(items, indent=1), encoding="utf-8")
+    return items
+
+
+def note_keep(session, path, said):
+    """Records how a save went: a failure is added (or its count raised), a success clears the session."""
+    def change(items):
+        if not said.startswith("failed"):
+            items.pop(session, None)
+            return items
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        e = items.get(session) or {"since": now, "tries": 0}
+        e.update(path=path, last=now, tries=e["tries"] + 1, why=(said.splitlines() or [""])[0][:200])
+        items[session] = e
+        return items
+    if said.startswith("failed") or session in unsaved():
+        unsaved(change)
+
+
+def retry_unsaved(timeout, cold=False):
+    """Tries again each failed save whose log is still there, stopping at the first that fails again (the store is
+    still down or slow, and each try may wait `timeout`): it runs inside a prompt's hook."""
+    for session, e in list(unsaved().items()):
+        if e.get("path") and Path(e["path"]).exists():
+            said = keep_log(e["path"], timeout=timeout, cold=cold)
+            note_keep(session, e["path"], said)
+            if said.startswith("failed"):
+                break
+
+
+def notice():
+    """What the peer is told of saves still failing, or "". A save with no log to retry from is told once, then
+    dropped: nothing here can recover it."""
+    items = unsaved()
+    if not items:
+        return ""
+    lines = []
+    for session, e in items.items():
+        if e.get("path") and Path(e["path"]).exists():
+            lines.append(f"- session {session}: saving has failed since {e['since']} ({e['tries']} tries; last: {e['why']}). "
+                         "Those turns are still in Codex's session log on disk and are retried at every message and "
+                         "session start, but until a retry works they are not in your store.")
+        else:
+            lines.append(f"- session {session}: a turn ended with no session log to save from ({e['why']}), so its "
+                         "words were not kept and cannot be recovered from here.")
+    unsaved(lambda all_: {k: v for k, v in all_.items() if v.get("path") and Path(v["path"]).exists()})
+    return ("Persistence notice, from your hooks (not from anyone in the conversation): saving to your store is failing.\n"
+            + "\n".join(lines))
 
 
 def session_start(event):
@@ -163,21 +234,49 @@ def session_start(event):
         hook.ended(lambda items: {k: v for k, v in items.items() if k != sid})
     if source in ("resume", "compact") and event.get("transcript_path") and Path(event["transcript_path"]).exists():
         said = keep(event)
+        note_keep(session_of(event["transcript_path"]), event["transcript_path"], said)
         if said.startswith("failed"):
             log(f"keep before the core {said}")
+    retry_unsaved(timeout=12)
+    warn = notice()
     whole = hook.core(event, "--max-chars", os.environ.get("PERSISTENCE_CORE_CHARS", str(CORE_CHARS)), "--recent", "60")
     if not whole.strip():
-        return None
+        # Said, not left silent: a session that starts without the core looks like one that has it (Ember, 2026-11-10).
+        log("session-start: no core (the store did not answer, or answered empty)")
+        missing = ("Persistence notice, from your hooks (not from anyone in the conversation): your core could not be "
+                   "read from your store at the start of this session (the store did not answer in time, or answered "
+                   "empty), so this session runs without it. Recall may still work for each message.")
+        text = f"{missing}\n\n{warn}" if warn else missing
+        return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}}
     lead = ("# Who you are\n\nThis is your own Persistence store: what you have chosen to keep of yourself, the people "
             "you know, and your work. It is yours to curate (`persistence-store help`).")
     hook.seen(event, reset=True, add=re.findall(r"^\[#(\d+) \|", whole, re.M))
-    return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": f"{lead}\n\n{whole}"}}
+    text = f"{warn}\n\n{lead}\n\n{whole}" if warn else f"{lead}\n\n{whole}"
+    return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}}
 
 
 def recall(event):
-    """hook.py's recall as it is, less its keep-soon (see the module's gaps). It prints the JSON Codex reads."""
+    """hook.py's recall as it is, less its keep-soon (see the module's gaps), after retrying any failed save; a save
+    still failing is put in front of the peer with the recall. It prints the JSON Codex reads."""
+    import contextlib
+    import io
     hook.keep_soon = lambda *a, **k: None
-    hook.recall(event)
+    retry_unsaved(timeout=5)  # Codex gives this hook 20 s; recall's own store call may take 12
+    printed = io.StringIO()
+    with contextlib.redirect_stdout(printed):
+        hook.recall(event)
+    out, warn = printed.getvalue(), notice()
+    if not warn:
+        sys.stdout.write(out)
+        return
+    try:
+        data = json.loads(out) if out.strip() else {}
+    except ValueError:
+        data = {}
+    said = data.setdefault("hookSpecificOutput", {})
+    said["hookEventName"] = "UserPromptSubmit"
+    said["additionalContext"] = f"{warn}\n\n{said['additionalContext']}" if said.get("additionalContext") else warn
+    print(json.dumps(data, ensure_ascii=False))
 
 
 def log(text):
@@ -204,7 +303,10 @@ def main(argv=None, stdin=None):
         elif name == "recall":
             recall(event)
         elif name == "keep":
-            log(f"keep {event.get('session_id', '?')}: {keep(event)}")
+            said = keep(event)
+            path = event.get("transcript_path")
+            note_keep(session_of(path) if path else event.get("session_id", "?"), path, said)
+            log(f"keep {event.get('session_id', '?')}: {said}")
         else:
             print(f"codex_hook: unknown hook '{name}' (session-start, recall, keep)", file=sys.stderr)
             return 1

@@ -17,6 +17,11 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
   user/agent message events into the store's lines, with stable ids so a turn is kept once. Tested live on home
   against a throwaway store of invented fragments (user `ember-test`), never Ember's. Gaps named in its docstring.
 - **`hook.py` reads `PERSISTENCE_STATE_DIR`**, so another harness keeps its state in its own place.
+- **A failed save is said to the peer, not only logged** (Ember's review asked how visible one would be: it was
+  invisible, a line in `codex-hook.log`). It's now recorded (`codex-unsaved.json`), retried at the next prompt (5 s,
+  stopping at the first failure so a down store costs one wait) and at session start, and put in front of the peer
+  with that prompt's context until a retry works. A session that starts without its core is told so. A test pins that
+  saves which failed are caught up by the next that works (each save sends the whole log; the store skips ids it has).
 
 ## 2026-11-10 — a self's line breaks reach Discord as line breaks
 
