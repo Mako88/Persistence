@@ -1403,7 +1403,9 @@ def observe(event):
         if w["what"].isdigit() and not any(str(p.get("ProcessId")) == w["what"] for p in found):
             lines.append(f"- watched pid {w['what']} ({w.get('label') or 'no label'}) has exited")
 
-    head, *changes = (status.result() or "").splitlines()
+    # Outside a repository git prints nothing, and an unguarded unpack raised: a session in a plain folder (~/work on
+    # home) got no observed block at all, every message, with nothing said (2026-11-10).
+    head, *changes = (status.result() or "").splitlines() or [""]
     if head:
         ahead = re.search(r"ahead (\d+)", head)
         lines.append(f"- git: {head[3:].split('...')[0]}, {len(changes)} uncommitted"
