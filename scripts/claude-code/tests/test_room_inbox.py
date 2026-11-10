@@ -26,12 +26,14 @@ class RoomInbox(unittest.TestCase):
         self.store.start()
         self.project = mock.patch.object(hook, "project", return_value="work")
         self.project.start()
+        self.remote = mock.patch.object(hook, "remote", return_value=None)  # no machine topic, whatever this box has
+        self.remote.start()
         env = {k: v for k, v in os.environ.items() if k != "PERSISTENCE_ROOM_CHANNEL"}
         self.env = mock.patch.dict(os.environ, env, clear=True)
         self.env.start()
 
     def tearDown(self):
-        for p in (self.env, self.project, self.store, self.state):
+        for p in (self.env, self.remote, self.project, self.store, self.state):
             p.stop()
         self.tmp.cleanup()
 

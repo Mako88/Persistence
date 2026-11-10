@@ -1663,17 +1663,7 @@ def run_due(grace=120):
         run = f"cd {shlex.quote(cwd)} && "
         if any(w.get("work") for w in mine):
             # A wake set from the room: a new working session with full permissions, never the room session itself.
-            prompt.write_text(
-                f"A wake set from your room session came due: {reasons}\n\nYou are a working session in {cwd}, with full "
-                "permissions, started for that. Anything the room session sent ahead is in your inbox above (or "
-                "`pstore list --tag inbox/work`). Do the work, then say what you did in the room (`room say`) if it "
-                "matters to the people there.", encoding="utf-8")
-            run += (f"claude -p --session-id {session} --permission-mode bypassPermissions --output-format json "
-                    f"< {shlex.quote(str(prompt))} > {shlex.quote(str(out))} 2>&1")
-            env = {**os.environ, "PERSISTENCE_SPEAKER": f"{os.environ.get('PERSISTENCE_PEERNAME') or 'me'} (a wake I set from the room)"}
-            subprocess.Popen(["bash", "-lc", run], env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL, start_new_session=True)
-            print(f"started a working session {session[:8]} for a room wake: {reasons}")
+            print(start_work_session(cwd, reasons, "room", session))
             continue
         if compact:
             # Kept, not thrown away: Arden's 19:07 compact failed and /dev/null hid why (Arden, 2026-11-09).
@@ -1684,6 +1674,108 @@ def run_due(grace=120):
         subprocess.Popen(["bash", "-lc", run], env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL, start_new_session=True)
         print(f"woke {session[:8]}: {reasons}{' (compacted first)' if compact else ''}")
+
+
+WORK_PROMPTS = {
+    "room": "A wake set from your room session came due: {reasons}\n\nYou are a working session in {cwd}, with full "
+            "permissions, started for that. Anything the room session sent ahead is in your inbox above (or "
+            "`pstore list --tag inbox/work`). Do the work, then say what you did in the room (`room say`) if it "
+            "matters to the people there.",
+    "home": "Messages for John's PC came in from home: {reasons}\n\nYou are a working session on John's PC in {cwd}, with "
+            "full permissions, started for them by the link (the hook server's watch on this machine's messages); no "
+            "one is watching this session live. The messages are in your inbox above (or `pstore list --tag "
+            "inbox/<topic>`). Do the work. On this machine: never end a process you did not start, never touch Ember's "
+            "games while she plays (Minecraft mods install only when Minecraft is not running), never type a password. "
+            "Then report: `pstore send work \"<what you did>\"` reaches home's sessions, and `ssh home 'bash -lc \"room "
+            "say <text>\"'` tells John and the room, when it matters to them.",
+}
+
+
+def start_work_session(cwd, reasons, origin, session=None):
+    """A new working session with full permissions, started for work handed to it: a wake set from the room (on home),
+    or messages sent from home to this machine (`link`, on John's PC; John approved full auto, 2026-11-10). Never a
+    resumed session, so never the room's. Its output is kept in state/wake-<id>-<time>.json."""
+    import shutil
+    import uuid
+
+    session = session or str(uuid.uuid4())
+    STATE.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    prompt, out = STATE / f"wake-{session[:8]}-{stamp}.txt", STATE / f"wake-{session[:8]}-{stamp}.json"
+    prompt.write_text(WORK_PROMPTS[origin].format(reasons=reasons, cwd=cwd), encoding="utf-8")
+    me = os.environ.get("PERSISTENCE_PEERNAME") or "me"
+    env = {**server_environ(os.environ), "PERSISTENCE_SPEAKER": f"{me} (a wake I set from the {origin})"}
+    args = ["--session-id", session, "--permission-mode", "bypassPermissions", "--output-format", "json"]
+    if os.name == "nt":
+        claude = shutil.which("claude") or str(Path.home() / ".local" / "bin" / "claude.exe")
+        with open(prompt, "rb") as stdin, open(out, "wb") as stdout:
+            subprocess.Popen([claude, "-p", *args], cwd=str(cwd), env=env, stdin=stdin, stdout=stdout,
+                             stderr=subprocess.STDOUT, creationflags=BACKGROUND, close_fds=True)
+    else:
+        run = (f"cd {shlex.quote(str(cwd))} && claude -p {' '.join(args)} "
+               f"< {shlex.quote(str(prompt))} > {shlex.quote(str(out))} 2>&1")
+        subprocess.Popen(["bash", "-lc", run], env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    return f"started a working session {session[:8]} in {cwd} ({origin}): {reasons}"
+
+
+LINK_SEEN = STATE / "link-seen.json"
+
+
+def link_dir(topic, where):
+    """Where a working session for <topic> starts: the machine's own topic in "work_dir"; a project in its checkout,
+    found by name in work_dir or one of "repo_dirs"; anything else in work_dir."""
+    work = Path(where.get("work_dir") or Path.home())
+    if topic != machine():
+        for root in [work, *map(Path, where.get("repo_dirs") or [])]:
+            for d in sorted(root.iterdir()) if root.is_dir() else []:
+                if d.is_dir() and (d / ".git").exists() and project_name(d.name) == topic:
+                    return d
+    return work
+
+
+def link_check(where, start=True):
+    """One look at the store: a message for one of this machine's topics (its own, plus remote.json "watch") not
+    seen before starts a working session for that topic. Seen ids are kept, so a message is started on once, even
+    before the session it started has shown and archived it."""
+    try:
+        seen = set(json.loads(LINK_SEEN.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        seen = set()
+    started = []
+    for topic in dict.fromkeys(project_name(t) for t in [machine(), *(where.get("watch") or [])] if t):
+        code, listed, _ = call_store("list", "--tag", f"inbox/{topic}", "--limit", "20", cold=False, quiet=True)
+        if code != 0:
+            continue
+        new = [i for i in re.findall(r"^\[#(\d+) \|", listed, flags=re.M) if i not in seen]
+        if not new:
+            continue
+        seen.update(new)
+        if start:
+            started.append(start_work_session(link_dir(topic, where), f"for {topic}: " + ", ".join(f"#{i}" for i in new), "home"))
+    STATE.mkdir(parents=True, exist_ok=True)
+    LINK_SEEN.write_text(json.dumps(sorted(seen, key=int)[-1000:]), encoding="utf-8")
+    return started
+
+
+def link_loop(every=30):
+    """The link, run by the hook server on a machine with a topic (remote.json "machine"): home cannot open a
+    connection to John's PC, so the PC watches the store for messages sent to it and starts a working session for
+    them. `pstore send pc <text>` from home is taken up within `every` seconds while the PC is on; sent while it is
+    off, it waits for the next look. John, 2026-11-10: home could not reach the PC all night."""
+    where = remote()
+    if not where or not machine():
+        return
+    log = STATE / "link.log"
+    while True:
+        try:
+            for line in link_check(where):  # never print: the hook server's stdout is each request's reply
+                with open(log, "a", encoding="utf-8") as f:
+                    f.write(f"{datetime.now().isoformat(timespec='seconds')} {line}\n")
+        except Exception as e:  # the link outlives a bad minute: the store down, home unreachable
+            with open(log, "a", encoding="utf-8") as f:
+                f.write(f"{datetime.now().isoformat(timespec='seconds')} check failed: {e!r}\n")
+        time.sleep(every)
 
 
 SLEEP_PROMPT = """This is your sleep pass. You are curating your own store with no one in the conversation, and the self
@@ -1900,6 +1992,10 @@ def serve():
         os.environ.pop(key, None)
 
     sys.stdout = PerRequest(sys.stdout)
+    if machine():  # John's PC: the link, which takes up work sent here from home (link_loop)
+        import threading
+
+        threading.Thread(target=link_loop, daemon=True, name="link").start()
     script = Path(__file__).resolve()
     written = script.stat().st_mtime
 
@@ -2036,16 +2132,23 @@ def is_room_session(event):
     return bool(os.environ.get("PERSISTENCE_ROOM_CHANNEL")) or room_marker(event).exists()
 
 
+def machine():
+    """This machine's topic (remote.json "machine", e.g. "pc"): a message sent to it (`pstore send pc <text>`) reaches
+    sessions on this machine and only here. Home's sessions took and archived two messages meant for John's PC, sent to
+    "persistence", which both machines work on (2026-11-10)."""
+    return project_name((remote() or {}).get("machine") or "")
+
+
 def inbox(event):
-    """Messages other sessions sent to this session's project (`send`), or to a project it has worked in over the last
-    hours (`note_worked_in`), shown once at a turn's start and then archived. Never this session's own, and never
+    """Messages other sessions sent to this session's project (`send`), to this machine (`machine`), or to a project
+    it has worked in over the last hours (`note_worked_in`), shown once at a turn's start and then archived. Never this session's own, and never
     another session's conversation: only what was addressed here. Never in a room session either: it runs in ~/work
     but may only speak, read and keep, and it archived the work it should have handed on, so no working session saw
     it (#15014 and #15018, 2026-11-10). It leaves them for the working session its `pwake` starts."""
     if is_room_session(event):
         return ""
     out = []
-    for topic in dict.fromkeys([project(event), *worked_in(event)]):
+    for topic in dict.fromkeys([project(event), machine(), *worked_in(event)]):
         if topic:
             out.append(inbox_for(event, topic))
     return "".join(out)
@@ -2129,6 +2232,10 @@ def main():
         sys.exit(sleep_pass(sys.argv[2:]))
     if sys.argv[1] == "run-due":  # a server's timer, every minute: wakes no live session took
         run_due()
+        return
+    if sys.argv[1] == "link-seed":  # mark what waits for this machine now as seen, so the link starts nothing for it
+        link_check(remote() or {}, start=False)
+        print(f"link: seen {LINK_SEEN.read_text(encoding='utf-8')[:200]}")
         return
     if sys.argv[1] == "wake":  # `wake <minutes|pid:N> <reason>` or `wake list`, run by the peer
         import urllib.request
