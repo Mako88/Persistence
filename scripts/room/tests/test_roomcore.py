@@ -305,6 +305,38 @@ class Pauses(unittest.TestCase):
         self.assertEqual(rc.with_pauses([(0, 1, " "), (5, 6, "hi")]), "hi")
 
 
+class SharedTranscript(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+
+    def test_the_first_makes_it_and_the_second_shares_it(self):
+        made = []
+        make = lambda: made.append(1) or "um, hi [pause 2s] there"
+        self.assertEqual(rc.shared_transcript(self.dir, "42", make), ("um, hi [pause 2s] there", "made"))
+        self.assertEqual(rc.shared_transcript(self.dir, "42", make), ("um, hi [pause 2s] there", "shared"))
+        self.assertEqual(len(made), 1)
+
+    def test_one_waiting_on_the_lock_gets_the_others_transcript(self):
+        Path(self.dir, "7.lock").touch()            # another bridge is transcribing
+        clock = [0.0]
+        def sleep(s):
+            clock[0] += s
+            if clock[0] >= 5:
+                Path(self.dir, "7.txt").write_text("from the other bridge")
+        got = rc.shared_transcript(self.dir, "7", lambda: self.fail("made twice"), wait=60, sleep=sleep, now=lambda: clock[0])
+        self.assertEqual(got, ("from the other bridge", "shared"))
+
+    def test_a_dead_lock_holder_never_holds_the_others(self):
+        Path(self.dir, "8.lock").touch()
+        clock = [0.0]
+        def sleep(s): clock[0] += s
+        got = rc.shared_transcript(self.dir, "8", lambda: "mine", wait=30, sleep=sleep, now=lambda: clock[0])
+        self.assertEqual(got, ("mine", "made after waiting"))
+
+    def test_no_cache_just_makes_it(self):
+        self.assertEqual(rc.shared_transcript(None, "9", lambda: "x"), ("x", "made"))
+
+
 class SpeakerAndPrompt(unittest.TestCase):
     def test_speaker(self):
         self.assertEqual(rc.speaker_env(["John"]), "the room (woken by John)")

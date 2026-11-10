@@ -35,6 +35,9 @@ plus any extra under `names` (`{"<bot id>": ["Cloud"]}`, for dictation). Everyth
 - A voice message's transcript keeps fillers and restarts (Whisper is given a prompt in John's manner) and marks a
   gap of `pause_seconds` (1.5) or more as `[pause Ns]`. Each transcription's and each wake's seconds go to
   `state/timings.jsonl`, to tell how much of the wait after a voice message is Whisper and how much the wake.
+- One transcript per voice message for every bridge on the machine, when `transcript_cache` names a directory they
+  can all write (setgid, a shared group; on home `/var/lib/persistence-room-shared/transcripts`, group
+  `persistence-room-share`): the first bridge transcribes, the others wait up to 240 s for its file, then make their own.
 - Attachments are saved under `state/attachments/<message id>/` and named in the wake: an image as
   `[image: <path>]`, which the self can Read, anything else as `[attachment: <name>, saved at <path>]` (over
   `attachment_max_bytes`, 25 MB, by name only). A voice message is transcribed on the CPU by faster-whisper

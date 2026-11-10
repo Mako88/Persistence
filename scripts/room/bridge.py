@@ -103,9 +103,11 @@ class Bridge:
             saved[a.filename] = (kind, str(path))
             if voice and transcript is None:
                 try:
-                    transcript = await asyncio.to_thread(
-                        transcribe, path, self.config["whisper_model"], self.config["whisper_dir"],
-                        self.config["pause_seconds"])
+                    make = lambda: transcribe(path, self.config["whisper_model"], self.config["whisper_dir"],
+                                              self.config["pause_seconds"])
+                    transcript, how = await asyncio.to_thread(
+                        rc.shared_transcript, self.config["transcript_cache"], m.id, make)
+                    log_timing({"what": "transcript", "message": str(m.id), "how": how})
                 except Exception as e:
                     print(f"could not transcribe {path}: {e}", flush=True)
         return rc.with_attachments(m.content, [a.filename for a in m.attachments], voice, saved, transcript)

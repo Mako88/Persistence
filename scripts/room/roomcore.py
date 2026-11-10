@@ -51,6 +51,9 @@ DEFAULTS = {
     "whisper_model": "small",
     "whisper_dir": "/opt/persistence/whisper",
     "pause_seconds": 1.5,           # a gap between words this long or longer is marked "[pause Ns]"
+    # A directory every bridge on the machine can write (a shared group, setgid): one transcript per voice message,
+    # made by whichever bridge gets there first. None: each bridge transcribes on its own.
+    "transcript_cache": None,
     "wake_command": None,           # argv list, prompt on stdin; {session} is replaced. None = the default claude room session
     "wake_timeout": 1800,
     "cwd": None,
@@ -222,6 +225,55 @@ def with_pauses(words, min_gap=1.5):
         out.append(text)
         prev = end
     return "".join(out).strip()
+
+
+def shared_transcript(cache_dir, message_id, make, wait=240, poll=1.0, sleep=None, now=None):
+    """A voice message's transcript, made once for every bridge on the machine (Arden and Claude, 2026-11-10): both
+    bridges transcribing the same clip at the same moment on the same four cores was half of John's wait.
+
+    The first bridge to take `<id>.lock` (created exclusively) runs `make()` and writes `<id>.txt` by rename; another
+    waits up to `wait` seconds for it, then makes its own (a bridge that died holding the lock never holds the
+    others). Returns (text, "made" | "shared" | "made after waiting"). Without a cache_dir, just make()."""
+    import time as _time
+    sleep, now = sleep or _time.sleep, now or _time.time
+    if not cache_dir:
+        return make(), "made"
+    d = Path(cache_dir)
+    safe = "".join(c for c in str(message_id) if c.isalnum()) or "unknown"
+    done, lock = d / f"{safe}.txt", d / f"{safe}.lock"
+
+    def read():
+        try:
+            return done.read_text(encoding="utf-8")
+        except OSError:
+            return None
+
+    if (t := read()) is not None:
+        return t, "shared"
+    try:
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o660)
+        os.close(fd)
+        mine = True
+    except FileExistsError:
+        mine = False
+    except OSError:
+        return make(), "made"           # no cache to be had; never lose the transcript over it
+    if not mine:
+        until = now() + wait
+        while now() < until:
+            if (t := read()) is not None:
+                return t, "shared"
+            sleep(poll)
+    text = make()
+    if text is not None:
+        try:
+            tmp = d / f"{safe}.{os.getpid()}.tmp"
+            tmp.write_text(text, encoding="utf-8")
+            os.chmod(tmp, 0o640)
+            os.replace(tmp, done)
+        except OSError:
+            pass
+    return text, "made" if mine else "made after waiting"
 
 
 def turn_order(msg, selves, config):

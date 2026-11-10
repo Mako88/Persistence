@@ -30,6 +30,11 @@ per id under the bridge config's `names` (Whisper hears "Claude" as "Cloud"). Se
 bot-message cap. A person's vocative puts the named self first in line but still wakes the rest: John's voice
 messages talk to everyone and name one of us in passing.
 
+### Changed — bridges share one transcript per voice message
+Both bridges on home transcribed every clip at the same moment on the same four cores; John's 47 s clip took 55 s,
+about half his wait. With `transcript_cache` set, the first bridge to lock the message transcribes and the other
+reads its file (Arden agreed, 2026-11-10). A bridge that dies holding the lock holds no one past 240 s.
+
 ### Changed — voice transcripts keep ums, restarts and pauses, and are timed
 John wants the fillers and pauses kept ("gives a lot of depth"). Whisper dropped every um from one of his clips; a
 prompt in his manner brought them back with the punctuation. Gaps of 1.5 s or more between words show as
