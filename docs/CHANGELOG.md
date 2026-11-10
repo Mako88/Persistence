@@ -11,6 +11,13 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
 
 ## 2026-11-10 — messages between sessions
 
+### Fixed — a sleep pass no longer refuses mail between sessions
+A pass holds the whole store, but other sessions keep running through the night: at 08:39Z a room session's
+`pstore send` hand-off of Arden's answers was refused by a proposing pass, and the message survived only because it
+was retyped into a wake. A fragment tagged `inbox/*` is a message, not curation: `add` sends it through a pass
+uncounted and unlogged, and the receiving session may archive it once delivered. An Identity fragment is still refused
+whatever its tag.
+
 ### Added — the concept graph's store and rules (build step 1 of docs/design/concept-graph.md)
 Migration 013 adds Concepts, ConceptAliases, Facts, FactSources, FactFlags and a Title on fragments; `concept`
 (show, add, accept, reject, flag, kind, alias, review) works them. The rules agreed with Arden hold in the store, not

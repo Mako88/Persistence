@@ -121,7 +121,8 @@ internal sealed partial class FragmentStore(
         }
 
         // A sleep pass may add what the day's conversation earned, but who I am is revised awake.
-        var pass = await AsleepAsync();
+        // A message between sessions isn't curation: it is sent through a pass, uncounted.
+        var pass = IsMessage(tagPaths) && type != ContextFragmentType.Identity ? null : await AsleepAsync();
         if (pass is not null && type == ContextFragmentType.Identity)
         {
             throw new RefusedException("A sleep pass doesn't add to who I am: propose the Identity fragment in the pass's record.");

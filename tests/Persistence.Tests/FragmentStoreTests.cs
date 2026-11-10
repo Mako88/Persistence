@@ -315,6 +315,12 @@ public sealed class FragmentStoreTests : IDisposable
         await Assert.ThrowsAsync<RefusedException>(() => store.AddAsync("Personal", "From the day.", null, 0.5f, null, [], false));
         await Assert.ThrowsAsync<RefusedException>(() => store.SleepBeginAsync(false, 12, 4));
 
+        // Mail between sessions goes through a pass: a room session's hand-off was lost to one (2026-11-10).
+        var sent = await store.AddAsync("Personal", "From session ab12cd34: act on Arden's answers.", null, 0.3f, 1f, ["inbox/work"], false, "work");
+        Assert.Null(await store.RefusedAsleepAsync("archive", sent.Id.ToString()));
+        Assert.NotNull(await store.RefusedAsleepAsync("archive", fresh.Id.ToString()));
+        await Assert.ThrowsAsync<RefusedException>(() => store.AddAsync("Identity", "Who I am, slipped in as mail.", null, 0.5f, null, ["inbox/work"], false));
+
         // A pass that runs out of time stops holding the store, and the next one closes its record.
         store.Now = () => DateTimeOffset.UtcNow + TimeSpan.FromDays(8) + TimeSpan.FromHours(5);
         Assert.Null(await store.SleepStatusAsync());

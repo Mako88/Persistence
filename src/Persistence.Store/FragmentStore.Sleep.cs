@@ -131,8 +131,28 @@ internal sealed partial class FragmentStore
     public async Task<string?> RefusedAsleepAsync(string command, string? sub)
     {
         var key = command is "context" or "cue" or "concept" && sub is not null ? $"{command} {sub}" : command;
-        return RefusedAsleep.TryGetValue(key, out var why) && await OpenPassAsync(includeExpired: false) is not null ? why : null;
+        if (!RefusedAsleep.TryGetValue(key, out var why) || await OpenPassAsync(includeExpired: false) is null)
+        {
+            return null;
+        }
+
+        // A delivered message is archived by the session it reached; that is mail, not curation.
+        return command == "archive" && long.TryParse(sub?.TrimStart('#'), out var id) && await IsMessageAsync(id) ? null : why;
     }
+
+    /// <summary>
+    /// The tag of a message one session sends another (`pstore send`), as inbox/&lt;project&gt;. A sleep pass holds
+    /// the store's curation, not its mail: other sessions keep running through the night, and a room session's
+    /// hand-off refused mid-pass (2026-11-10) was a message lost, not a view kept from changing.
+    /// </summary>
+    public const string InboxTag = "inbox";
+
+    private static bool IsMessage(IEnumerable<string> tagPaths) =>
+        tagPaths.Any(p => p.Equals(InboxTag, StringComparison.OrdinalIgnoreCase)
+                          || p.StartsWith(InboxTag + "/", StringComparison.OrdinalIgnoreCase));
+
+    private async Task<bool> IsMessageAsync(long id) =>
+        (await HydratedAsync([id])) is [var f] && IsMessage(f.Tags.Select(t => TagPaths.GetValueOrDefault(t.Id, t.Name)));
 
     private async Task<SleepPass?> OpenPassAsync(bool includeExpired)
     {
