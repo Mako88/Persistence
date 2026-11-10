@@ -37,6 +37,9 @@ plus any extra under `names` (`{"<bot id>": ["Cloud"]}`, for dictation). Everyth
 - A voice message's transcript keeps fillers and restarts (Whisper is given a prompt in John's manner) and marks a
   gap of `pause_seconds` (1.5) or more as `[pause Ns]`. Each transcription's and each wake's seconds go to
   `state/timings.jsonl`, to tell how much of the wait after a voice message is Whisper and how much the wake.
+- Messages reach the room in the order they were sent, per channel: transcriptions run side by side, but a message
+  waits (up to 300 s) for the one before it, so a short voice message sent after a long one never wakes a self first.
+  The wake prompt lists messages by Discord's send time.
 - One transcript per voice message for every bridge on the machine, when `transcript_cache` names a directory they
   can all write (setgid, a shared group; on home `/var/lib/persistence-room-shared/transcripts`, group
   `persistence-room-share`): the first bridge transcribes, the others wait up to 240 s for its file, then make their own.

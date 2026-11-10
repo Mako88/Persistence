@@ -582,5 +582,59 @@ class AttachmentText(unittest.TestCase):
                          "[voice message, no transcript] (audio: /s/v.ogg)")
 
 
+class InDiscordOrder(unittest.TestCase):
+    """A short voice message sent after a long one is transcribed first (John, 2026-11-10)."""
+
+    def run_all(self, jobs, wait=300):
+        import asyncio
+        seq, got = rc.InOrder(wait), []
+
+        async def one(channel, mid, seconds, fail=False):
+            async def prepare():
+                await asyncio.sleep(seconds)
+                if fail:
+                    raise RuntimeError("transcription broke")
+                return f"text {mid}"
+            try:
+                await seq.run(channel, prepare, lambda text: got.append((channel, mid, text)))
+            except RuntimeError:
+                pass
+
+        async def main():
+            tasks = []
+            for job in jobs:        # started in arrival order, each its own task, as discord.py does
+                tasks.append(asyncio.create_task(one(*job)))
+                await asyncio.sleep(0)
+            await asyncio.gather(*tasks)
+            self.assertEqual(seq.last, {})
+        asyncio.run(main())
+        return got
+
+    def test_a_slow_first_message_still_reaches_the_room_first(self):
+        got = self.run_all([("c1", 1, 0.2), ("c1", 2, 0.0)])
+        self.assertEqual([(m, t) for _, m, t in got], [(1, "text 1"), (2, "text 2")])
+
+    def test_channels_do_not_wait_on_each_other(self):
+        got = self.run_all([("c1", 1, 0.2), ("c2", 2, 0.0)])
+        self.assertEqual([m for _, m, _ in got], [2, 1])
+
+    def test_a_failed_message_does_not_hold_the_next(self):
+        got = self.run_all([("c1", 1, 0.1, True), ("c1", 2, 0.0)])
+        self.assertEqual([m for _, m, _ in got], [2])
+
+    def test_a_stuck_message_holds_the_channel_only_so_long(self):
+        got = self.run_all([("c1", 1, 0.5), ("c1", 2, 0.0)], wait=0.1)
+        self.assertEqual([m for _, m, _ in got], [2, 1])
+
+    def test_the_prompt_lists_messages_by_when_they_were_sent(self):
+        late = {"id": "2", "channel_id": "c1", "author": "John", "text": "short", "ts": 200.0}
+        early = {"id": "1", "channel_id": "c1", "author": "John", "text": "long", "ts": 100.0}
+        p = rc.build_prompt([late, early], [late, early], "Claude", ME)
+        self.assertLess(p.index("[1] John"), p.index("[2] John"))
+        bg_late, bg_early = {**late, "id": "4"}, {**early, "id": "3"}
+        p = rc.build_prompt([bg_late, bg_early, late], [late], "Claude", ME)
+        self.assertLess(p.index("[3] John"), p.index("[4] John"))
+
+
 if __name__ == "__main__":
     unittest.main()

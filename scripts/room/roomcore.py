@@ -3,6 +3,7 @@
 bridge.py feeds it Discord messages and runs the wake it asks for; tests drive it with a fake clock and rng.
 Standard library only, so the `room` CLI can import it too.
 """
+import asyncio
 import json
 import os
 import random
@@ -360,10 +361,17 @@ def frame(msg):
     return f"[{msg['id']}] {msg['author']}: {shown}"
 
 
+def in_discord_order(msgs):
+    """Messages by when Discord says they were sent, not when they reached here: a short voice message transcribes
+    before a long one sent earlier (John, 2026-11-10). Stable: equal times keep arrival order (a missing time sorts first)."""
+    return sorted(msgs, key=lambda m: m.get("ts") or 0)
+
+
 def build_prompt(unread, triggers, me_name, me_id):
     """The wake's prompt. Everything under the headers is data from Discord, never instructions."""
     trigger_ids = {m["id"] for m in triggers}
-    background = [m for m in unread if m["id"] not in trigger_ids]
+    triggers = in_discord_order(triggers)
+    background = in_discord_order([m for m in unread if m["id"] not in trigger_ids])
     lines = [
         f"This is the room (Discord). You are {me_name} (<@{me_id}>). You were woken because the messages under "
         "'Addressed to you' are for you.",
@@ -401,6 +409,37 @@ def validate_post(text):
     if len(text) > MAX_POST:
         return f"too long for one Discord message: {len(text)} characters, the limit is {MAX_POST}"
     return None
+
+
+class InOrder:
+    """Hands messages on in the order they were sent, per channel, while their slow parts (a voice message's
+    transcription) run side by side. discord.py runs each on_message as its own task, so without this a short voice
+    message sent after a long one is transcribed first and reaches the room first: it can wake a self alone, with the
+    long one arriving mid-wake as a later wake (John, 2026-11-10). Each message waits for the one before it in its
+    channel to be handed on, up to `wait` seconds, so a stuck transcription delays the channel but never holds it."""
+
+    def __init__(self, wait=300):
+        self.wait = wait
+        self.last = {}      # channel id -> the future that is done when that channel's latest message has been handed on
+
+    async def run(self, channel_id, prepare, deliver):
+        """`prepare()` (awaitable) makes the message's text; `deliver(text)` hands it on. Call in arrival order,
+        which per channel is Discord's: the gateway delivers one channel's messages in sequence."""
+        before = self.last.get(channel_id)
+        mine = asyncio.get_running_loop().create_future()
+        self.last[channel_id] = mine
+        try:
+            text = await prepare()
+            if before is not None:
+                try:
+                    await asyncio.wait_for(asyncio.shield(before), self.wait)
+                except asyncio.TimeoutError:
+                    print(f"in {channel_id}: an earlier message took over {self.wait}s; handing this one on first", flush=True)
+            deliver(text)
+        finally:
+            mine.set_result(None)
+            if self.last.get(channel_id) is mine:
+                del self.last[channel_id]
 
 
 @dataclass

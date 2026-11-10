@@ -81,6 +81,7 @@ class Bridge:
         self.room = None
         self.client = None
         self.current_channel = None     # the channel of the wake that is running
+        self.in_order = rc.InOrder()
 
     # -- attachments: saved for the woken self to Read; a voice message transcribed
     async def describe(self, m):
@@ -228,9 +229,10 @@ class Bridge:
 
         @self.client.event
         async def on_message(m):
+            # Described side by side, handed to the room in the order they were sent (rc.InOrder).
             if bridge.room and m.author.id != bridge.client.user.id:
-                text = await bridge.describe(m)
-                bridge.room.on_message(to_msg(m, bridge.client.user.id, text), time.time())
+                await bridge.in_order.run(str(m.channel.id), lambda: bridge.describe(m),
+                                          lambda text: bridge.room.on_message(to_msg(m, bridge.client.user.id, text), time.time()))
 
         @self.client.event
         async def on_raw_reaction_add(payload):
