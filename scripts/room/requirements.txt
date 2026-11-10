@@ -2,3 +2,5 @@ discord.py>=2.4,<3
 faster-whisper>=1.0,<2
 # PyAV 16 dropped open(metadata_errors=), which faster-whisper 1.2 still passes
 av<16
+# Parakeet transcription ("transcriber": "parakeet"); faster-whisper's PyAV decodes its audio
+onnx-asr>=0.12,<0.13

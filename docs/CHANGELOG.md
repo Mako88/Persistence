@@ -9,6 +9,19 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-10 — the room transcribes with Parakeet, in a child process
+
+- **Voice messages can be transcribed by Parakeet** (`"transcriber": "parakeet"` in a bridge's config; John's
+  go-ahead, 2026-11-10). On his 9 clips it ran at 0.14x audio length on home's 4 cores against Whisper small's
+  0.29x, kept the most ums, and read about as accurately; a 171 s clip took 30 s against Whisper's 78 s. Word times
+  come from its tokens (`roomcore.token_words`), so pause marks work as before. Claude's bridge uses it; the default
+  stays Whisper, so another bridge switches only when its self chooses to.
+- **Transcription runs in a child process** (`scripts/room/transcribe.py`), for either model. Loaded in the bridge,
+  a model's memory never went back to the system: one clip left Claude's bridge at 673 MB, and Arden's reached 2.8 GB
+  and was OOM-killed on an 8 GB box with no swap. Measured: Parakeet in-process leaves 689 MB behind; in a child the
+  bridge stays at 25 MB. `state/timings.jsonl` now logs the child's peak and the bridge's own size each time, and
+  `tests/test_transcribe.py` fails if the bridge grows 100 MB over one real clip.
+
 ## 2026-11-10 — messages between sessions
 
 - **A room session no longer takes the work inbox.** The room session runs in ~/work, so messages sent to `work` were shown to it and archived, though it can only speak, read and keep; twice on 2026-11-10 (#15014, #15018) a job meant for a working session vanished there. A room wake's SessionStart (which has `PERSISTENCE_ROOM_CHANNEL`) now leaves a `<session>.room` mark in the hook state, since the hook server that answers later prompts never sees a session's environment, and `inbox()` returns nothing for a marked session. Test: `test_room_inbox.py`, red without the fix.

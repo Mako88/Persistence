@@ -305,6 +305,22 @@ class Pauses(unittest.TestCase):
         self.assertEqual(rc.with_pauses([(0, 1, " "), (5, 6, "hi")]), "hi")
 
 
+class TokenWords(unittest.TestCase):
+    def test_tokens_join_into_words_with_times_across_segments(self):
+        # Shapes as onnx-asr gives them for John's clip 1569611056102506627: timestamps relative to each VAD segment.
+        segs = [(0.322, [" So", " w", "a", "it", "."], [0.16, 0.4, 0.48, 0.56, 1.2]),
+                (7.874, [" Like", ",", " um"], [0.24, 0.4, 1.04]),
+                (16.034, [" U", "m"], [0.16, 0.4])]
+        words = rc.token_words(segs)
+        self.assertEqual([w[2] for w in words], [" So", " wait.", " Like,", " um", " Um"])
+        self.assertAlmostEqual(words[1][0], 0.722)
+        self.assertAlmostEqual(words[1][1], 0.322 + 1.2 + 0.08)
+        self.assertEqual(rc.with_pauses(words, 1.5), "So wait. [pause 7s] Like, um [pause 7s] Um")
+
+    def test_a_segment_starting_mid_word_still_makes_a_word(self):
+        self.assertEqual([w[2] for w in rc.token_words([(0, ["es", " the"], [0.0, 0.2])])], ["es", " the"])
+
+
 class SharedTranscript(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()

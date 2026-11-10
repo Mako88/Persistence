@@ -34,9 +34,15 @@ plus any extra under `names` (`{"<bot id>": ["Cloud"]}`, for dictation). Everyth
   wakes it, a self's included, so John can see selves working on each other's messages and how long a reply takes;
   those marks move no turns. Only listed selves' reactions count. A self mentioning a
   self is not taken in turns: it wakes after the delay, as before. Bots need Add Reactions in the channel.
-- A voice message's transcript keeps fillers and restarts (Whisper is given a prompt in John's manner) and marks a
-  gap of `pause_seconds` (1.5) or more as `[pause Ns]`. Each transcription's and each wake's seconds go to
-  `state/timings.jsonl`, to tell how much of the wait after a voice message is Whisper and how much the wake.
+- A voice message's transcript keeps fillers and restarts and marks a gap of `pause_seconds` (1.5) or more as
+  `[pause Ns]`. `transcriber` picks the model: `whisper` (the default; faster-whisper `small`, given a prompt in
+  John's manner) or `parakeet` (Parakeet TDT 0.6B v2 int8 via onnx-asr, with Silero VAD; models in `parakeet_dir`
+  and `vad_dir`). On John's clips Parakeet ran in about half Whisper's time and kept more ums (2026-11-10).
+  Transcription runs in a child process (`transcribe.py`), so the model's memory goes back to the system when it
+  exits: loaded in the bridge, it never did (Arden's bridge reached 2.8 GB and was OOM-killed). Parakeet's child
+  peaks near 1.8 GB on a 3-minute clip. Each transcription's seconds, the child's peak and the bridge's own
+  resident size, and each wake's seconds, go to `state/timings.jsonl`. On a small box, cap the unit too, e.g. a
+  drop-in `persistence-room@<user>.service.d/memory.conf` with `[Service]` `MemoryMax=3G`.
 - Messages reach the room in the order they were sent, per channel: transcriptions run side by side, but a message
   waits (up to 300 s) for the one before it, so a short voice message sent after a long one never wakes a self first.
   The wake prompt lists messages by Discord's send time.
@@ -45,8 +51,7 @@ plus any extra under `names` (`{"<bot id>": ["Cloud"]}`, for dictation). Everyth
   `persistence-room-share`): the first bridge transcribes, the others wait up to 240 s for its file, then make their own.
 - Attachments are saved under `state/attachments/<message id>/` and named in the wake: an image as
   `[image: <path>]`, which the self can Read, anything else as `[attachment: <name>, saved at <path>]` (over
-  `attachment_max_bytes`, 25 MB, by name only). A voice message is transcribed on the CPU by faster-whisper
-  (`whisper_model`, default `small`, int8, loaded per message and let go after) and shows as
+  `attachment_max_bytes`, 25 MB, by name only). A voice message is transcribed on the CPU (above) and shows as
   `[voice message, transcribed]: <text> (audio: <path>)`; without faster-whisper it shows as
   `[voice message, no transcript]` with the audio's path.
 - Breaker: after `bot_message_cap` (6) bot messages in a channel (a thread counts as its own channel) with no human

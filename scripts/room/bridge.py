@@ -41,30 +41,37 @@ def safe_name(name):
     return name or "attachment"
 
 
-FILLER_PROMPT = "Um, so, uh, I was gonna say, like, um... you know, uh, yeah."
+TRANSCRIBER = Path(__file__).resolve().parent / "transcribe.py"
+SETTINGS = ("transcriber", "parakeet_dir", "vad_dir", "whisper_model", "whisper_dir", "pause_seconds")
 
 
-def transcribe(path, model_name, model_dir, pause_seconds=1.5):
-    """A voice message's text, by faster-whisper on the CPU, with its pauses marked. The model is loaded per message
-    and let go after: voice messages are rare, and a resident model would hold a gigabyte per bridge. None if
-    faster-whisper is missing. Each run's timings go to state/timings.jsonl, to tell how much of the wait John feels
-    after a voice message is transcription and how much is the wake (2026-11-10)."""
+def own_rss_mb():
+    """This process's resident memory, logged with each transcription to watch for growth (Arden's OOM, 2026-11-10)."""
     try:
-        from faster_whisper import WhisperModel
-    except ImportError:
-        return None
+        for line in Path("/proc/self/status").read_text().splitlines():
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1]) // 1024
+    except OSError:
+        pass
+    return None
+
+
+def transcribe(path, config):
+    """A voice message's text with its pauses marked, made by transcribe.py in a child process so the model's memory
+    goes back to the system when it exits: loaded in the bridge, faster-whisper's never was (one 171 s clip left the
+    bridge at 673 MB; Arden's reached 2.8 GB and was OOM-killed, 2026-11-10). None if the child fails. Timings, the
+    child's peak and the bridge's own resident size go to state/timings.jsonl."""
+    settings = {k: config[k] for k in SETTINGS if k in config} | {"threads": config.get("transcribe_threads", 2)}
     t0 = time.time()
-    model = WhisperModel(model_name, device="cpu", compute_type="int8", cpu_threads=2,
-                         download_root=model_dir if model_dir and Path(model_dir).is_dir() else None)
-    t1 = time.time()
-    # The prompt, in John's own manner, keeps the fillers and restarts that Whisper otherwise cleans away: measured on
-    # his clip 1569616107520790648, it brought back every um and "y'all, y'all" and kept the punctuation.
-    segments, info = model.transcribe(str(path), vad_filter=True, word_timestamps=True, initial_prompt=FILLER_PROMPT)
-    words = [(w.start, w.end, w.word) for seg in segments for w in (seg.words or [])]
-    t2 = time.time()
-    log_timing({"what": "transcribe", "file": str(path), "model": model_name, "audio_s": round(info.duration, 1),
-                "load_s": round(t1 - t0, 1), "transcribe_s": round(t2 - t1, 1)})
-    return rc.with_pauses(words, pause_seconds)
+    r = subprocess.run([sys.executable, str(TRANSCRIBER), str(path), json.dumps(settings)], capture_output=True,
+                       text=True, timeout=config.get("transcribe_timeout", 600))
+    if r.returncode != 0:
+        print(f"transcribe.py failed ({r.returncode}) on {path}: {r.stderr[-2000:]}", flush=True)
+        return None
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+    log_timing({"what": "transcribe", "file": str(path), **{k: v for k, v in out.items() if k != "text"},
+                "wall_s": round(time.time() - t0, 1), "bridge_rss_mb": own_rss_mb()})
+    return out["text"]
 
 
 def log_timing(d):
@@ -104,8 +111,7 @@ class Bridge:
             saved[a.filename] = (kind, str(path))
             if voice and transcript is None:
                 try:
-                    make = lambda: transcribe(path, self.config["whisper_model"], self.config["whisper_dir"],
-                                              self.config["pause_seconds"])
+                    make = lambda: transcribe(path, self.config)
                     transcript, how = await asyncio.to_thread(
                         rc.shared_transcript, self.config["transcript_cache"], m.id, make)
                     log_timing({"what": "transcript", "message": str(m.id), "how": how})

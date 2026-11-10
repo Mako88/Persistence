@@ -47,8 +47,13 @@ DEFAULTS = {
     "turn_start_timeout": 90,       # a self whose turn came and who has not marked a start by then is passed over
     "turn_marks": {"start": "\U0001f440", "done": "✅"},
     # Attachments: saved under state/attachments/<message id>/ so a woken self can Read them; a voice message is
-    # transcribed locally with faster-whisper on the CPU, its audio kept.
+    # transcribed locally on the CPU in a child process (scripts/room/transcribe.py), its audio kept.
     "attachment_max_bytes": 25 * 1024 * 1024,
+    "transcriber": "whisper",       # or "parakeet": faster and keeps more ums on John's voice (2026-11-10)
+    "transcribe_threads": 2,
+    "transcribe_timeout": 600,
+    "parakeet_dir": "/opt/persistence/parakeet",
+    "vad_dir": "/opt/persistence/silero",
     "whisper_model": "small",
     "whisper_dir": "/opt/persistence/whisper",
     "pause_seconds": 1.5,           # a gap between words this long or longer is marked "[pause Ns]"
@@ -226,6 +231,21 @@ def with_pauses(words, min_gap=1.5):
         out.append(text)
         prev = end
     return "".join(out).strip()
+
+
+def token_words(segments, token_s=0.08):
+    """(start, end, text) words from Parakeet's VAD segments, each (segment start, tokens, timestamps), the token
+    timestamps relative to the segment. A token with a leading space starts a word (SentencePiece, as onnx-asr gives
+    it); a word ends one frame (`token_s`, 80 ms) after its last token, which is when that token was emitted."""
+    words = []
+    for seg_start, tokens, stamps in segments:
+        for tok, ts in zip(tokens, stamps):
+            t = seg_start + ts
+            if tok.startswith(" ") or not words:
+                words.append([t, t + token_s, tok])
+            else:
+                words[-1][1], words[-1][2] = t + token_s, words[-1][2] + tok
+    return [tuple(w) for w in words]
 
 
 def shared_transcript(cache_dir, message_id, make, wait=240, poll=1.0, sleep=None, now=None):
