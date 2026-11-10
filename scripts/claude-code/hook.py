@@ -1656,13 +1656,17 @@ def wait_for_wake(event, poll=10):
     while time.time() < deadline and WAITING[session] == mine and (not holder or alive(holder)):
         now, due = datetime.now().timestamp(), []
 
+        # A /compact wake is never taken here: a live session cannot compact itself, and given to one it arrived as
+        # text and nothing compacted (Arden, 2026-11-10). It waits for run-due, which compacts once the session has exited.
+        mine_now = lambda w: ours(w) and w.get("reason", "").strip() != "/compact"
+
         def take(items):
             keep = []
             for w in items:
-                (due if ours(w) and (("at" in w and w["at"] <= now) or ("pid" in w and not alive(w["pid"]))) else keep).append(w)
+                (due if mine_now(w) and (("at" in w and w["at"] <= now) or ("pid" in w and not alive(w["pid"]))) else keep).append(w)
             return keep
 
-        if any(ours(w) and ("at" in w and w["at"] <= now or "pid" in w) for w in wakes()):
+        if any(mine_now(w) and ("at" in w and w["at"] <= now or "pid" in w) for w in wakes()):
             wakes(take)
         if due:
             return {"wake": "; ".join(w["reason"] + (f" (pid {w['pid']} ended)" if "pid" in w else "") for w in due)}
@@ -1955,6 +1959,10 @@ def main():
         wake["reason"] = " ".join(sys.argv[3:])
         wake["session"] = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
         wake["cwd"] = os.getcwd()  # where run-due resumes it, when no live session takes it
+        if wake["reason"].strip() == "/compact" and wake["session"]:
+            print("note: a /compact wake runs only once this session has exited (the timer compacts it, then resumes it "
+                  "with \"you compacted yourself; carry on\"). While the session is live it waits: a live session cannot "
+                  "compact itself, and auto-compact still applies.")
         ensure()
         request = urllib.request.Request(f"http://127.0.0.1:{HOOK_PORT}/wake", json.dumps(wake).encode("utf-8"), {"Content-Type": "application/json"})
         print(urllib.request.urlopen(request, timeout=10).read().decode("utf-8"))
