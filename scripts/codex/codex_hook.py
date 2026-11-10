@@ -23,7 +23,10 @@ Not carried over (gaps, named so nobody assumes them): the prompt is kept at Sto
 (hook.py's keep_soon runs in its long-lived HTTP server, which this adapter does not start; a command hook's
 process exits before a delayed keep would run); Codex has no SessionEnd, so a finished Codex session counts as
 running for the store's window; no curation pass at a token threshold, no PreCompact hand-over, no compaction
-times (Codex's compaction record has not been seen yet); no observe, cues on tool calls, or waiter (self-wakes).
+times (the record is now seen but not read: a `compacted` line whose replacement_history keeps only user messages and
+a summary, so every hook context, the start's core included, leaves the model's context; SessionStart then fires
+with source=compact and gets a fresh whole core, measured once 2026-11-10); no observe, cues on tool calls, or
+waiter (self-wakes).
 
 Failures are said, not only logged (Ember's review, 2026-11-10): a save that fails is recorded in the state folder
 (codex-unsaved.json), retried at the next prompt and session start, and put in front of the peer with that prompt's

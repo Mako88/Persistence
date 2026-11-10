@@ -32,7 +32,11 @@ calls, wired to Codex CLI's hooks (0.144.1). Its docstring says what each hook d
 The store is a service of its own: the adapter never starts one (see the comment after `import hook`).
 
 `PERSISTENCE_CODEX_RESUME_CORE=short` (off by default) sends a one-line note on resume instead of the whole core
-again; the resumed session still has the copy from its start (measured 2026-11-10).
+again; the resumed session still has the copy from its start (measured 2026-11-10), until a compaction drops it
+and SessionStart (source=compact) sends a fresh whole core, which the setting doesn't affect.
+
+Testing with `codex exec`: it runs no hooks unless they're trusted (`--dangerously-bypass-hook-trust`, or trust
+given in the TUI), and says nothing about skipping them, so a run without it has no core and looks normal.
 
 Don't run a kept session with `codex exec --ephemeral`: it writes no session log, so `keep` has nothing to read.
 
