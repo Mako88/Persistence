@@ -160,7 +160,22 @@ Three parts, inside the same character budget the hook has now:
    arms. The pawsitivity miss was the project filter, not ranking (same question from minecraft-mods: rank 1; from
    pawsitivity: only as the wander). Two filler prompts ("ok sounds good, thanks!", "brb, grabbing coffee") each
    brought 3 fragments, ~4k characters: **recall has no relevance floor**, so intrusion is the thing to measure.
-   Next: the ~30 sampled prompts per store, then step 4 as an arm.
+   **Sampled set and step 4, 2026-11-10 ~18:40Z.** 30 real prompts (John's own and room wakes, from 2026-11-07
+   06:00Z, when authored fragments existed; a first sample across all history had none to find for 27 of 30), stratified
+   by day, seed 15412; gold judged by a separate agent that never saw recall's output, 28 with gold, **15 marked unsure**,
+   generic fragments (#6935, #7010) recurring: a rough instrument. Results:
+   - `today@3` 15/28, `today@5` 16/28 (one more, at 1.8x the characters).
+   - `rerank@3` (step 4: the store's pool of 20, re-scored by bge-reranker-v2-m3 Q8, 4 threads) **15/28, a tie**: 4 made
+     right, 4 made wrong, noise at this size. It cost **~40 s a prompt** on home (19 min for 30), too slow for the live
+     hook on this box.
+   - **A relevance floor is the cheaper win**: on the re-ranker's scores, a floor of -6.6 halves what no-gold prompts
+     are shown (9.1k to 4.9k chars) for one lost hit; -5.7 cuts it to 0.8k for two. Only 2 no-gold prompts in the set,
+     so this needs more of them before it is set.
+   - **Missed by both arms (the graph's brief, rule 7):** 9, of which 3 the judge was sure of: s14138 (#14126, #14061,
+     cue + sleep-pass idea), s14432 (#14330, #14320, the home server), s13956 (#13946, Pawsitivity repos). All three are
+     short or oblique prompts ("Logged in", "Yes, new repo") whose meaning is in the conversation, not the message:
+     recall on the prompt alone can't reach them. That points at querying with recent turns, not at a graph.
+   Next: more no-gold prompts, then a floor arm on today's own scores (no re-ranker), and recall on prompt + last turn.
 7. Backfill, then the nightly trickle in the sleep pass, plus a drift check: each night re-read the sources of a few
    random facts; a fact its sources no longer support becomes a retraction proposal (the same channel as flags).
 
