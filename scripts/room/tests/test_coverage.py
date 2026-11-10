@@ -1,10 +1,12 @@
 """The coverage check: each self compares the room's Discord history with its own bridge's logs and speaks only when
 something is missing. Arden's bridge missed 5 of John's voice messages on 2026-11-10 and nothing noticed but a
 person; this is the thing that notices. Run here against a fake Discord and a fake `room say`."""
+import io
 import json
 import sys
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -129,6 +131,84 @@ class CoverageTest(unittest.TestCase):
         self.assertGreater(len(self.said), 1)
         self.assertTrue(all(len(t) <= 2000 for t, _ in self.said))
         self.assertTrue(all(g in "".join(t for t, _ in self.said) for g in gaps))
+
+
+class FailureIsSaidTest(unittest.TestCase):
+    """If the check itself fails, it says so in the room instead of leaving only a failed unit nobody reads."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.log = Path(self.tmp.name) / "coverage.log"
+        self.said, self.posted, self.err = [], [], io.StringIO()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def say(self, text, cid):
+        self.said.append((text, cid))
+
+    def post(self, cid, text):
+        self.posted.append((text, cid))
+
+    @staticmethod
+    def down(*a):
+        raise RuntimeError("room say failed: cannot reach the room bridge")
+
+    @staticmethod
+    def discord_error():
+        raise urllib.error.HTTPError("https://discord.com/api/v10/users/@me", 503, "Service Unavailable", {}, None)
+
+    def guarded(self, check, say=None):
+        return cv.guarded(check, CH, self.log, say=say or self.say, post=self.post, now=NOW, err=self.err)
+
+    def test_a_failing_check_says_why_in_the_room(self):
+        code = self.guarded(self.discord_error)
+        self.assertEqual(code, cv.FAILED_EXIT)
+        self.assertEqual(len(self.said), 1)
+        text, cid = self.said[0]
+        self.assertEqual(cid, CH)
+        self.assertTrue(text.startswith("Coverage check failed: "))
+        self.assertIn("503", text)
+        self.assertEqual(self.posted, [])
+        self.assertIn("FAILED", self.log.read_text())
+        self.assertIn("said with room say", self.log.read_text())
+
+    def test_with_room_say_down_it_posts_straight_to_discord(self):
+        code = self.guarded(self.discord_error, say=self.down)
+        self.assertEqual(code, cv.FAILED_EXIT)
+        self.assertEqual(len(self.posted), 1)
+        self.assertIn("Coverage check failed", self.posted[0][0])
+        self.assertIn("said with discord", self.log.read_text())
+
+    def test_when_nothing_can_say_it_the_unit_fails_for_onfailure(self):
+        def no_post(*a):
+            raise OSError("network unreachable")
+        code = cv.guarded(self.discord_error, CH, self.log, say=self.down, post=no_post, now=NOW, err=self.err)
+        self.assertEqual(code, 1)
+        self.assertIn("not said", self.log.read_text())
+        self.assertIn("503", self.err.getvalue())
+
+    def test_a_config_with_no_channels_is_said_too(self):
+        def check():
+            raise SystemExit("coverage: config lists no channels")
+        self.assertEqual(self.guarded(check), cv.FAILED_EXIT)
+        self.assertIn("lists no channels", self.said[0][0])
+
+    def test_a_clean_check_says_nothing(self):
+        self.assertEqual(self.guarded(lambda: None), 0)
+        self.assertEqual((self.said, self.posted), ([], []))
+        self.assertFalse(self.log.exists())
+
+    def test_onfailure_stays_quiet_when_the_check_already_said_it(self):
+        env = {"MONITOR_SERVICE_RESULT": "exit-code", "MONITOR_EXIT_CODE": "exited",
+               "MONITOR_EXIT_STATUS": str(cv.FAILED_EXIT)}
+        self.assertEqual(cv.unit_failed(env, CH, say=self.say, post=self.post, err=self.err), 0)
+        self.assertEqual(self.said, [])
+
+    def test_onfailure_says_a_timeout_the_check_could_not(self):
+        env = {"MONITOR_SERVICE_RESULT": "timeout", "MONITOR_EXIT_CODE": "killed", "MONITOR_EXIT_STATUS": "TERM"}
+        self.assertEqual(cv.unit_failed(env, CH, say=self.down, post=self.post, err=self.err), 0)
+        self.assertIn("service_result timeout", self.posted[0][0])
 
 
 class DiscordReadTest(unittest.TestCase):

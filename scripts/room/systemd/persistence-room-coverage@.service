@@ -2,6 +2,8 @@
 Description=%i's room coverage check: did %i's bridge get every message the room has (scripts/room/coverage.py)
 After=network-online.target persistence-room@%i.service
 Wants=network-online.target
+# A failure the check could not say itself (killed at the timeout, a crash before it could try) is said by this one.
+OnFailure=persistence-room-coverage-failed@%i.service
 
 [Service]
 Type=oneshot

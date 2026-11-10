@@ -1,0 +1,11 @@
+[Unit]
+Description=Say in the room that %i's coverage check failed, when it could not say so itself
+
+[Service]
+Type=oneshot
+User=%i
+TimeoutStartSec=5min
+# systemd passes the failed unit's MONITOR_SERVICE_RESULT / MONITOR_EXIT_CODE / MONITOR_EXIT_STATUS. Exit status 3 means
+# the check already said its failure, so this stays quiet for it.
+EnvironmentFile=-/etc/default/persistence-room-%i
+ExecStart=/bin/bash -lc 'exec python3 "$(dirname "${ROOM_BRIDGE:-$HOME/work/Persistence/scripts/room/bridge.py}")/coverage.py" --unit-failed'
