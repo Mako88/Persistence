@@ -21,9 +21,17 @@ state/coverage.json, so each gap is reported once.
 
 --since sets the start for a channel not yet checked (default: 24 hours ago). --dry-run prints the report and
 changes nothing: no post, no log line, no state.
+
+If the check itself fails (Discord refuses, the config is broken, `room say` is down), it says so too, rather than
+leave only a failed unit in the journal that nobody reads (Claude's review, 2026-11-10): "Coverage check failed:
+<reason>" with `room say`, or, if the bridge is the thing that's down, posted straight to Discord with the bot token.
+It then exits FAILED_EXIT (3), so the unit still shows failed. What a try can't catch (a timeout kill, a crash before
+main) is left to the unit's OnFailure=, which runs this with --unit-failed and stays quiet for FAILED_EXIT, since
+that failure was already said.
 """
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -39,6 +47,7 @@ DISCORD_EPOCH_MS = 1420070400000
 API = "https://discord.com/api/v10"
 ROOM = Path(__file__).resolve().parent / "room"
 SPOKEN = {0, 19}                        # Discord message types a person or self writes: a message, a reply
+FAILED_EXIT = 3                         # failed, and said so in the room: the OnFailure= unit stays quiet for it
 
 
 def snowflake_ts(mid):
@@ -94,10 +103,12 @@ class Discord:
     def __init__(self, token):
         self.token = token
 
+    def _headers(self):
+        return {"Authorization": f"Bot {self.token}",
+                "User-Agent": "DiscordBot (https://github.com/Mako88/Persistence, 1) persistence-room-coverage"}
+
     def get(self, path):
-        req = urllib.request.Request(API + path, headers={
-            "Authorization": f"Bot {self.token}",
-            "User-Agent": "DiscordBot (https://github.com/Mako88/Persistence, 1) persistence-room-coverage"})
+        req = urllib.request.Request(API + path, headers=self._headers())
         for _ in range(5):
             try:
                 with urllib.request.urlopen(req, timeout=30) as r:
@@ -107,6 +118,14 @@ class Discord:
                     raise
                 time.sleep(float(json.loads(e.read() or b"{}").get("retry_after", 2)) + 0.5)
         raise RuntimeError(f"rate limited 5 times on {path}")
+
+    def post(self, channel_id, text):
+        """The one write, used only to say the check failed when the bridge (and so `room say`) is down."""
+        body = json.dumps({"content": text[:rc.MAX_POST], "allowed_mentions": {"parse": []}}).encode()
+        req = urllib.request.Request(f"{API}/channels/{channel_id}/messages", data=body, method="POST",
+                                     headers=self._headers() | {"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return str(json.loads(r.read())["id"])
 
     def me(self):
         return str(self.get("/users/@me")["id"])
@@ -174,19 +193,88 @@ def run(config, store, discord, since, grace_s, now=None, say=room_say, dry_run=
     return found
 
 
+def alert(text, channel_id, say=room_say, post=None, err=sys.stderr):
+    """Say in the room that the check failed: with `room say`, else straight to Discord. Returns which way it was
+    said, or None if neither worked (then only stderr, the journal, has it)."""
+    try:
+        say(text, channel_id)
+        return "room say"
+    except Exception as e:
+        print(f"coverage: could not say the failure with room say: {e}", file=err)
+    if post is not None:
+        try:
+            post(channel_id, text)
+            return "discord"
+        except Exception as e:
+            print(f"coverage: could not post the failure to Discord either: {e}", file=err)
+    return None
+
+
+def reason_of(e):
+    if isinstance(e, SystemExit):
+        return str(e.code)
+    return (f"{type(e).__name__}: {e}" if str(e) else type(e).__name__)[:300]
+
+
+def guarded(check, channel_id, log_path, say=room_say, post=None, now=None, err=sys.stderr):
+    """Run the check; if it fails, say so (alert) and log it. Returns the process's exit code."""
+    try:
+        check()
+        return 0
+    except (Exception, SystemExit) as e:
+        if isinstance(e, SystemExit) and not e.code:
+            return 0
+        reason = reason_of(e)
+        print(f"coverage: failed: {reason}", file=err)
+        said = alert(f"Coverage check failed: {reason}", channel_id, say, post, err) if channel_id else None
+        line = f"{hhmm(time.time() if now is None else now)} FAILED: {reason} ({'said with ' + said if said else 'not said'})"
+        try:
+            with Path(log_path).open("a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except OSError as le:
+            print(f"coverage: could not log the failure: {le}", file=err)
+        return FAILED_EXIT if said else 1
+
+
+def unit_failed(env, channel_id, say=room_say, post=None, err=sys.stderr):
+    """For the OnFailure= unit: say a failure the check could not say itself, unless it already did."""
+    if env.get("MONITOR_EXIT_STATUS") == str(FAILED_EXIT):
+        return 0
+    how = ", ".join(f"{k.removeprefix('MONITOR_').lower()} {env[k]}" for k in
+                    ("MONITOR_SERVICE_RESULT", "MONITOR_EXIT_CODE", "MONITOR_EXIT_STATUS") if env.get(k))
+    text = f"Coverage check failed under systemd ({how or 'no detail'}); its journal has the rest."
+    return 0 if alert(text, channel_id, say, post, err) else 1
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="coverage.py", description=__doc__.split("\n")[0])
     p.add_argument("--since", help="ISO time to start a channel not yet checked (default: 24 hours ago)")
     p.add_argument("--grace-minutes", type=float, default=15)
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--unit-failed", action="store_true", help="run by the OnFailure= unit: say the unit failed")
     a = p.parse_args(argv)
-    since = (datetime.fromisoformat(a.since.replace("Z", "+00:00")).timestamp() if a.since
-             else time.time() - 86400)
-    config = rc.load_config()
-    token = Path(config["token_path"]).read_text().strip()
-    run(config, rc.RoomStore(rc.CONFIG_DIR / "state"), Discord(token), since, a.grace_minutes * 60,
-        dry_run=a.dry_run)
-    return 0
+    # What the failure path needs is read first and on its own, so a broken config or token still gets said.
+    channel, post = None, None
+    try:
+        config = rc.load_config()
+        channel = str(config["channels"][0]) if config.get("channels") else None
+        post = Discord(Path(config["token_path"]).read_text().strip()).post
+    except Exception as e:
+        print(f"coverage: config or token unreadable: {reason_of(e)}", file=sys.stderr)
+    if a.unit_failed:
+        return unit_failed(os.environ, channel, post=post)
+
+    def check():
+        since = (datetime.fromisoformat(a.since.replace("Z", "+00:00")).timestamp() if a.since
+                 else time.time() - 86400)
+        cfg = rc.load_config()
+        token = Path(cfg["token_path"]).read_text().strip()
+        run(cfg, rc.RoomStore(rc.CONFIG_DIR / "state"), Discord(token), since, a.grace_minutes * 60,
+            dry_run=a.dry_run)
+    if a.dry_run:
+        check()
+        return 0
+    return guarded(check, channel, rc.CONFIG_DIR / "state" / "coverage.log", post=post)
 
 
 if __name__ == "__main__":

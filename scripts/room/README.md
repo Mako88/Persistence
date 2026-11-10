@@ -131,7 +131,12 @@ is in `state/coverage.json`, so a gap is reported once. `--dry-run` prints and c
 starts a channel not checked before (default: a day ago). Each self runs it for its own bridge only: no self can
 read another's logs, and none should. Standard library only.
 
-To adopt it (as root): `cp scripts/room/systemd/persistence-room-coverage@.{service,timer} /etc/systemd/system/`,
+If the check itself fails, it says so in the room: "Coverage check failed: <reason>", with `room say`, or posted
+straight to Discord with the bot token if the bridge is down. It then exits 3. A failure it can't catch (killed at
+the timeout, a crash) is said by `persistence-room-coverage-failed@`, the unit's `OnFailure=`, which stays quiet
+for exit 3 so nothing is said twice. Both failure paths log a `FAILED` line to `state/coverage.log`.
+
+To adopt it (as root): `cp scripts/room/systemd/persistence-room-coverage{@.service,@.timer,-failed@.service} /etc/systemd/system/`,
 `systemctl daemon-reload && systemctl enable --now persistence-room-coverage@<user>.timer`. It runs at 04:30, after
 the 03:30 backup and the 04:00 reboot. Before the first night, run it once by hand as the user with
 `--since` set to when the bridge started keeping history, so the first report is not a day of the time before it.
