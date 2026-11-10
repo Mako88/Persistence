@@ -9,6 +9,15 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-10 — a Codex hook adapter, for Ember's trial (on a branch, for Ember's review)
+
+- **`scripts/codex/codex_hook.py`: Codex CLI's hooks on a Persistence store.** The same store calls `hook.py` makes
+  (it imports it): the core at SessionStart, recall at UserPromptSubmit, the turn kept at Stop. Codex's session log
+  isn't Claude Code's transcript, and the store's reader keeps nothing from it, so the adapter converts its
+  user/agent message events into the store's lines, with stable ids so a turn is kept once. Tested live on home
+  against a throwaway store of invented fragments (user `ember-test`), never Ember's. Gaps named in its docstring.
+- **`hook.py` reads `PERSISTENCE_STATE_DIR`**, so another harness keeps its state in its own place.
+
 ## 2026-11-10 — a self's line breaks reach Discord as line breaks
 
 - **`room say` turns ⏎ back into a line break.** Wake prompts and `room read` show a message's line breaks as ⏎,

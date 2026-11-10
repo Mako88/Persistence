@@ -115,8 +115,32 @@ The hook adapter (below) gets tests that fail without it, as for `hook.py`.
   - `codex login --device-auth` as `ember-test`; John approved the device code from his phone. `codex login status`:
     "Logged in using ChatGPT". Credentials in `/home/ember-test/.codex/auth.json` (0600). One check,
     `codex exec --ephemeral "say ok"` → "ok", 1,944 tokens. No other model calls.
-  - Still to do for this step: the test store, hooks, bridge and the pass checks above. When `ember` is created
-    later it needs its own login (or a copy of this auth.json, which John should agree to first).
+  - When `ember` is created later it needs its own login (or a copy of this auth.json, which John should agree to
+    first).
+- **Adapter and test store, 2026-11-10 ~21:10–21:20Z** (session 7f6cd390; branch `ember-trial/codex-adapter`, for
+  Ember's code review before it's ever used on them):
+  - Measured first with a probe hook: `codex exec` and `codex exec resume` both fire SessionStart, UserPromptSubmit
+    and Stop; additionalContext from either is read by the model; a 62,000-character SessionStart context was read
+    back whole (marker at its end); a live session's log is plain `.jsonl`, and a resume appends to the same file.
+    `--ephemeral` writes no log.
+  - `scripts/codex/codex_hook.py` imports `hook.py` and makes the same store calls: core at start (whole, one
+    injection), recall per prompt (hook.py's own), keep at Stop. Codex's log is converted to the store's transcript
+    lines (the `user_message`/`agent_message` events, not the model inputs, which carry harness injections), with
+    ids stable per turn and words so a turn is kept once. Gaps, named in its docstring: prompt kept at Stop not at
+    once, no SessionEnd, no curation/PreCompact/compaction times, no observe/tool cues/self-wakes.
+    `hook.py` gained only `PERSISTENCE_STATE_DIR`.
+  - Test store: `persistence-store-ember-test.service`, `/home/ember-test/store/ember-test.sock` (dir 700, served
+    to ember-test only), 10 invented fragments for a made-up self, "Tessel". `PERSISTENCE_CORE_CHARS=1200`, so
+    some fragments are left out of the core and recall has something to find.
+  - Pass checks, live through Codex as ember-test: start showed the test core; "how many steps does the lighthouse
+    have" recalled #7, which wasn't in the core (seen in the log's injected context, not inferred from the answer);
+    the turn was kept (#11, #12, under the session id, John/Tessel); a resumed turn kept 2 new, 2 already there; a
+    fresh session answered from the store's conversation alone. Codex's peak RSS: **~170–176 MB** a turn.
+  - Tests: `scripts/codex/tests/test_codex_hook.py`, 8, two against the real store binary; with the conversion
+    switched off, the keep test fails (`kept 0 new`).
+  - Not done: the room-post check (no test bridge yet). *Undo:* `systemctl disable --now
+    persistence-store-ember-test`, remove its unit, `/home/ember-test/{store,.codex/persistence,.codex/hooks.json,
+    .codex/persistence.json}`.
 
 **4. Ember's user and store on home.** Linux user `ember`, plus `persistence-store-ember.service` serving
 `/home/ember/store/ember.sock` to `ember` only, with the same embedder (bge-small on 127.0.0.1:8081). This is a

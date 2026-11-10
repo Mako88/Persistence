@@ -56,7 +56,8 @@ from pathlib import Path
 
 CAP = 9500  # Claude Code replaces injected context over 10,000 characters with a file path and a preview
 WHOLE = 200_000  # the core as a file the peer reads after a session starts: bounded only by what one read takes
-STATE = Path.home() / ".claude" / "persistence" / "state"
+# PERSISTENCE_STATE_DIR: another harness's own place (the Codex adapter keeps it under ~/.codex), never a Claude's.
+STATE = Path(os.environ.get("PERSISTENCE_STATE_DIR") or Path.home() / ".claude" / "persistence" / "state")
 
 
 # Windows: a process started detached has no console, so every console program it then starts (git,
