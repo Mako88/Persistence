@@ -25,7 +25,8 @@ def to_msg(m, me_id):
     ref = m.reference.resolved if m.reference and isinstance(m.reference.resolved, discord.Message) else None
     return rc.Msg(
         id=str(m.id), channel_id=str(m.channel.id), author_id=str(m.author.id), author=m.author.display_name,
-        text=m.content, is_bot=m.author.bot, is_dm=m.guild is None,
+        text=rc.with_attachments(m.content, [a.filename for a in m.attachments], bool(getattr(m.flags, "voice", False))),
+        is_bot=m.author.bot, is_dm=m.guild is None,
         mentions=[str(u.id) for u in m.mentions], role_mentions=[str(r.id) for r in m.role_mentions],
         mention_everyone=m.mention_everyone, reply_to_author_id=str(ref.author.id) if ref else None,
         channel_name=getattr(m.channel, "name", None) or "DM", ts=m.created_at.timestamp())

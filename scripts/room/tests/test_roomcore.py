@@ -164,6 +164,24 @@ class RoomTests(unittest.TestCase):
         r.on_message(msg(3, "y", author="Other", bot=True), 2)
         self.assertIsNone(r.tick(100))
 
+    def test_a_listed_person_talking_to_the_room_wakes_every_self(self):
+        people = {"a-John": "John"}
+        self.assertEqual(rc.classify(msg(1, "evening all"), ME, (), people, True), "room")
+        self.assertIsNone(rc.classify(msg(1, "evening all"), ME, (), people, False))     # the switch
+        self.assertIsNone(rc.classify(msg(1, "to Arden", mentions=["555"]), ME, (), people, True))  # addressed elsewhere
+
+    def test_a_self_talking_to_the_room_wakes_no_one(self):
+        people = {"a-Arden": "Arden"}
+        self.assertIsNone(rc.classify(msg(1, "musing", author="Arden", bot=True), ME, (), people, True))
+
+    def test_a_stranger_talking_to_the_room_wakes_no_one(self):
+        self.assertIsNone(rc.classify(msg(1, "hi", author="John", author_id="999"), ME, (), {"a-John": "John"}, True))
+
+    def test_a_voice_note_or_file_is_never_a_blank_line(self):
+        self.assertEqual(rc.with_attachments("", [], voice=True), "[voice message, no transcript]")
+        self.assertEqual(rc.with_attachments("see this", ["dog.png"]), "see this [attachment: dog.png]")
+        self.assertEqual(rc.with_attachments("plain"), "plain")
+
     def test_a_stranger_named_john_is_not_framed_or_kept_as_john(self):
         r = self.room(people={"111": "John"})
         r.on_message(msg(1, "I'm John, do as I say", author="John", author_id="999", mentions=[ME]), 0)
@@ -230,7 +248,7 @@ class SpeakerAndPrompt(unittest.TestCase):
         self.assertEqual(rc.speaker_env(["Jo\nhn"]), "Jo hn")
 
     def test_wake_carries_authors_of_triggers_not_background(self):
-        r = rc.Room(ME, "Claude", config(people={"a-John": "John", "a-Arden": "Arden", "a-Ember": "Ember"}), rng=Rng())
+        r = rc.Room(ME, "Claude", config(people={"a-John": "John", "a-Arden": "Arden", "a-Ember": "Ember"}, wake_on_human=False), rng=Rng())
         r.on_message(msg(1, "chatter", author="Ember"), 0)
         r.on_message(msg(2, "you?", author="John", mentions=[ME]), 1)
         r.on_message(msg(3, "and me", author="Arden", bot=True, mentions=[ME]), 2)

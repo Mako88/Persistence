@@ -24,6 +24,7 @@ DEFAULTS = {
     # anyone who joins could call themselves "John"; only a listed id gets a bare name (Arden's review, 2026-11-10).
     # It is also the directory of who is who: John, and each self's bot.
     "people": {},
+    "wake_on_human": True,          # a listed person's unaddressed message wakes every self, after room_delay
     "default_channel": None,        # where `room say` posts when no wake is running and no --channel is given
     "bot_message_cap": 6,           # bot messages since the last human one, per channel/thread, before wakes stop
     "breaker_reset_seconds": 600,
@@ -87,14 +88,27 @@ class Msg:
     ts: float = 0.0
 
 
-def classify(msg, me_id, room_roles=()):
-    """'direct' (a DM, a mention of me, a reply to me), 'room' (@everyone/@here or a configured role), or None."""
+def classify(msg, me_id, room_roles=(), people=None, wake_on_human=False):
+    """'direct' (a DM, a mention of me, a reply to me), 'room' (@everyone/@here or a configured role, or with
+    `wake_on_human` a listed person's message that addresses no one), or None."""
     me = str(me_id)
     if msg.is_dm or me in map(str, msg.mentions) or (msg.reply_to_author_id is not None and str(msg.reply_to_author_id) == me):
         return "direct"
     if msg.mention_everyone or set(map(str, msg.role_mentions)) & set(map(str, room_roles)):
         return "room"
+    # A person talking to the room wakes every self (John, 2026-11-10): the random room delay makes it safe, since a
+    # self that wakes later sees what the others said and may keep silent. Only a listed person and never a bot, so
+    # selves cannot loop without a mention and a stranger cannot run up anyone's wakes (Arden's rules 1, 3, 4).
+    addressed = msg.mentions or msg.role_mentions or msg.reply_to_author_id is not None
+    if wake_on_human and not addressed and not msg.is_bot and str(msg.author_id) in (people or {}):
+        return "room"
     return None
+
+
+def with_attachments(text, names=(), voice=False):
+    """A message's text with what it carried beyond text, so a voice note or a file is never a blank line."""
+    extra = (["[voice message, no transcript]"] if voice else []) + [f"[attachment: {n}]" for n in names if not voice]
+    return " ".join(([text] if text and text.strip() else []) + extra)
 
 
 class Breaker:
@@ -237,7 +251,7 @@ class Room:
         self.unread.append(d)
         if self.store:
             self.store.append_unread(d)
-        kind = classify(msg, self.me_id, self.config["room_roles"])
+        kind = classify(msg, self.me_id, self.config["room_roles"], self.config["people"], self.config["wake_on_human"])
         if kind and not self._muted(d, now):
             self.pending.append((d, kind))
             # Batching: one delayed wake; a nearer deadline pulls it in, a later one never pushes it out.
