@@ -1,8 +1,11 @@
 import json
+import fcntl
 import os
 import random
+import signal
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -342,8 +345,15 @@ class SharedTranscript(unittest.TestCase):
         self.assertEqual(rc.shared_transcript(self.dir, "42", make), ("um, hi [pause 2s] there", "shared"))
         self.assertEqual(len(made), 1)
 
+    def hold(self, name):
+        """Another bridge holding the lock on this clip: a separate open file, so flock conflicts even in-process."""
+        fd = os.open(Path(self.dir, name), os.O_RDONLY | os.O_CREAT)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        self.addCleanup(os.close, fd)
+        return fd
+
     def test_one_waiting_on_the_lock_gets_the_others_transcript(self):
-        Path(self.dir, "7.lock").touch()            # another bridge is transcribing
+        self.hold("7.lock")                         # another bridge is transcribing
         clock = [0.0]
         def sleep(s):
             clock[0] += s
@@ -352,12 +362,63 @@ class SharedTranscript(unittest.TestCase):
         got = rc.shared_transcript(self.dir, "7", lambda: self.fail("made twice"), wait=60, sleep=sleep, now=lambda: clock[0])
         self.assertEqual(got, ("from the other bridge", "shared"))
 
-    def test_a_dead_lock_holder_never_holds_the_others(self):
-        Path(self.dir, "8.lock").touch()
+    def test_a_stuck_lock_holder_never_holds_the_others(self):
+        self.hold("8.lock")
         clock = [0.0]
         def sleep(s): clock[0] += s
         got = rc.shared_transcript(self.dir, "8", lambda: "mine", wait=30, sleep=sleep, now=lambda: clock[0])
         self.assertEqual(got, ("mine", "made after waiting"))
+
+    def test_a_lock_file_nobody_holds_costs_no_wait(self):
+        Path(self.dir, "10.lock").touch()           # left by a bridge that died, or by the create-once lock before
+        got = rc.shared_transcript(self.dir, "10", lambda: "mine", wait=30,
+                                   sleep=lambda s: self.fail("waited on a dead lock"))
+        self.assertEqual(got, ("mine", "made"))
+
+    def test_a_holder_killed_mid_clip_frees_the_lock_at_once(self):
+        started = Path(self.dir, "started")
+        pid = os.fork()
+        if pid == 0:                                # the holder: takes the lock, then is killed while making
+            try:
+                rc.shared_transcript(self.dir, "11", lambda: started.touch() or time.sleep(60) or "never")
+            finally:
+                os._exit(0)
+        while not started.exists():
+            time.sleep(0.01)
+        def kill_then_sleep(s, done=[]):
+            if not done:
+                os.kill(pid, signal.SIGKILL); os.waitpid(pid, 0); done.append(1)
+            time.sleep(s)
+        t0 = time.time()
+        got = rc.shared_transcript(self.dir, "11", lambda: "mine", wait=60, sleep=kill_then_sleep)
+        self.assertEqual(got, ("mine", "made after waiting"))
+        self.assertLess(time.time() - t0, 5)
+
+    def test_two_bridges_at_once_transcribe_once(self):
+        """Two processes asking for the same clip at the same moment: one makes it, the other shares it."""
+        made, out = Path(self.dir, "made.log"), Path(self.dir, "out.log")
+        def make():
+            with made.open("a") as f:
+                f.write("x\n")
+            time.sleep(1.0)
+            return "um, the clip"
+        go = time.time() + 0.3
+        pids = []
+        for _ in range(2):
+            pid = os.fork()
+            if pid == 0:
+                try:
+                    time.sleep(max(0, go - time.time()))
+                    text, how = rc.shared_transcript(self.dir, "12", make)
+                    with out.open("a") as f:
+                        f.write(f"{text}|{how}\n")
+                finally:
+                    os._exit(0)
+            pids.append(pid)
+        for pid in pids:
+            os.waitpid(pid, 0)
+        self.assertEqual(made.read_text().count("x"), 1)
+        self.assertEqual(sorted(out.read_text().splitlines()), ["um, the clip|made", "um, the clip|shared"])
 
     def test_no_cache_just_makes_it(self):
         self.assertEqual(rc.shared_transcript(None, "9", lambda: "x"), ("x", "made"))

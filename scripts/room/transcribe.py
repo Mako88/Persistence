@@ -46,9 +46,13 @@ def parakeet_words(path, s):
     t0 = time.time()
     so = ort.SessionOptions()
     so.intra_op_num_threads, so.inter_op_num_threads = s["threads"], 1
+    so.enable_cpu_mem_arena = False     # the arena keeps its high-water mark; ~170 MB less at peak without it
     model = onnx_asr.load_model("nemo-parakeet-tdt-0.6b-v2", s["parakeet_dir"], quantization="int8", sess_options=so)
     vad = onnx_asr.load_vad("silero", s["vad_dir"], sess_options=so)
-    asr = model.with_vad(vad, max_speech_duration_s=25, min_silence_duration_ms=300).with_timestamps()
+    # One speech segment per encoder call. onnx-asr's default puts 8 segments of up to 25 s through at once, padded
+    # to the longest: on John's 4 clips (2026-11-10) that peaked at 1.8 to 2.9 GB, and batch 1 with no arena peaked
+    # at 1.1 to 1.2 GB, ran 1.6 to 4x faster on 2 threads (43 s clip: 28 s to 6.6 s), and kept as many ums (72 to 69).
+    asr = model.with_vad(vad, max_speech_duration_s=25, min_silence_duration_ms=300, batch_size=1).with_timestamps()
     t1 = time.time()
     audio = decode_audio(str(path), sampling_rate=SAMPLE_RATE)
     segs = [(seg.start, seg.tokens or [], seg.timestamps or []) for seg in asr.recognize(audio, sample_rate=SAMPLE_RATE)]

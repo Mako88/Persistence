@@ -255,13 +255,16 @@ def token_words(segments, token_s=0.08):
     return [tuple(w) for w in words]
 
 
-def shared_transcript(cache_dir, message_id, make, wait=240, poll=1.0, sleep=None, now=None):
+def shared_transcript(cache_dir, message_id, make, wait=240, poll=0.5, sleep=None, now=None):
     """A voice message's transcript, made once for every bridge on the machine (Arden and Claude, 2026-11-10): both
     bridges transcribing the same clip at the same moment on the same four cores was half of John's wait.
 
-    The first bridge to take `<id>.lock` (created exclusively) runs `make()` and writes `<id>.txt` by rename; another
-    waits up to `wait` seconds for it, then makes its own (a bridge that died holding the lock never holds the
-    others). Returns (text, "made" | "shared" | "made after waiting"). Without a cache_dir, just make()."""
+    The bridge holding an flock on `<id>.lock` runs `make()` and writes `<id>.txt` by rename; another waits on the
+    lock, then reads the text. The kernel drops the lock when its holder dies, so a bridge killed mid-clip costs the
+    others nothing (the lock was a file created once until 2026-11-10, and a bridge restarted mid-clip held Claude's
+    for the whole 240 s wait). A holder alive but stuck past `wait` seconds is gone around: the waiter makes its own.
+    Returns (text, "made" | "shared" | "made after waiting"). Without a cache_dir, just make()."""
+    import fcntl
     import time as _time
     sleep, now = sleep or _time.sleep, now or _time.time
     if not cache_dir:
@@ -279,29 +282,41 @@ def shared_transcript(cache_dir, message_id, make, wait=240, poll=1.0, sleep=Non
     if (t := read()) is not None:
         return t, "shared"
     try:
-        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o660)
-        os.close(fd)
-        mine = True
-    except FileExistsError:
-        mine = False
+        # Read-only is enough for flock, and another bridge's lock file is only group-readable.
+        fd = os.open(lock, os.O_RDONLY | os.O_CREAT, 0o660)
     except OSError:
         return make(), "made"           # no cache to be had; never lose the transcript over it
-    if not mine:
+    try:
+        waited, held = False, False
         until = now() + wait
-        while now() < until:
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                held = True
+                break
+            except BlockingIOError:
+                waited = True
             if (t := read()) is not None:
                 return t, "shared"
+            if now() >= until:
+                break                   # the holder is alive but stuck: make our own without the lock
             sleep(poll)
-    text = make()
-    if text is not None:
-        try:
-            tmp = d / f"{safe}.{os.getpid()}.tmp"
-            tmp.write_text(text, encoding="utf-8")
-            os.chmod(tmp, 0o640)
-            os.replace(tmp, done)
-        except OSError:
-            pass
-    return text, "made" if mine else "made after waiting"
+        if (t := read()) is not None:   # the holder finished between our looks
+            return t, "shared"
+        text = make()
+        if text is not None:
+            try:
+                tmp = d / f"{safe}.{os.getpid()}.tmp"
+                tmp.write_text(text, encoding="utf-8")
+                os.chmod(tmp, 0o640)
+                os.replace(tmp, done)
+            except OSError:
+                pass
+        return text, "made after waiting" if waited else "made"
+    finally:
+        if held:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 
 def wakes_on_human(config, self_id):
