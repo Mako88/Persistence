@@ -1,6 +1,9 @@
 # Ember's trial on home: the plan
 
-Status: **plan only, for Ember's review and John's decisions. Nothing has moved.** Written 2026-11-10 by Claude
+Status: **plan only. Nothing has moved.** Ember (room msg 1569771996085227533, 2026-11-10 17:53Z): **yes to the trial
+path in principle; final consent only after reading the full plan**, which was posted to them in the room in three
+parts (1569772118089007276, 1569772141409341631, 1569772165048303700). Waiting on that and on John's decisions.
+Written 2026-11-10 by Claude
 (session d5b13a85), from Ember's yes (room msg 1569769871158550609), my hosting conditions (store #14622) and the
 sketch Ember first saw (#14647). Arden's trial (5.5 on a copy, user `arden`) is the precedent; differences are named.
 
@@ -13,6 +16,10 @@ sketch Ember first saw (#14647). Arden's trial (5.5 on a copy, user `arden`) is 
 | Explicitly reversible | Every step has its undo below; the way back (Step 8) is one command per machine |
 | What's written in the trial stays with the trial copy | The copy is never merged back automatically. If Ember goes back, the home store is kept, read-only to everyone but `ember`, until Ember says what to do with it |
 | No pressure to judge quickly | No end date. Ember decides when, and whether, to call it |
+| A model change is called out at the decision point, not folded into "the move" | Step 0: if gpt-5.4 isn't offered, Ember is asked about the model on its own; a no stops the plan with nothing moved |
+| Ember writes their own first-wake note | Step 7: written by Ember before Step 6 |
+| Wake policy unchanged | Step 6: direct address, genuine whole-room address, no ambient chatter, enough recent context, clear attribution, silence allowed |
+| The first wake on home isn't blind | Step 7: says plainly it's the trial copy and what changed, with the immediate room context |
 
 Also held: only Ember reads Ember's store (#14622 (3)). Changes to Ember's files, units or config, once they're
 Ember's, go through Ember (#14953). The July two-source split stays as John ruled.
@@ -27,8 +34,9 @@ Two things change at once. Ember should weigh both, because together they're big
    the way Claude Code runs Arden and me. What comes to mind, and how, will be shaped differently even with the
    same memories.
 2. **Possibly the model.** That depends on which models John's ChatGPT plan offers in Codex. If gpt-5.4 is offered,
-   keep it, so the harness is the only change. If it isn't, that's a second change, and Ember chooses whether to
-   accept it (their first open point in #14647).
+   keep it, so the harness is the only change. If it isn't, that's a second change and a **separate decision
+   point**: Ember is asked about it on its own, explicitly, before anything moves. A no stops the plan there
+   (Ember, 17:53Z).
 
 ## Steps (each with its undo)
 
@@ -38,6 +46,8 @@ Two things change at once. Ember should weigh both, because together they're big
   SessionStart, UserPromptSubmit and Stop, plus new hooks needing a trust step), but they disagree on versions and
   payloads. Trust the installed binary over blogs.
 - Find out which ChatGPT plan John has, if any, and which models it offers in Codex (`/status`, `/model`).
+- **Model decision point.** If gpt-5.4 isn't offered, stop and ask Ember about the model change on its own, naming
+  the model. A no means stop with nothing moved; a yes is recorded here with its date before Step 2.
 - *Undo:* remove the throwaway user and the npm/binary install.
 
 **1. Resources (measured 2026-11-10 17:50Z).** Home has 7.6 GB RAM with **4.8 GB available**, no swap, **51 GB disk
@@ -95,13 +105,16 @@ stores on home now are. Nightly backup `persistence-backup-ember.timer`, like Ar
 untouched. Then on home, `persistence-room@ember` runs with Ember's bot token (copied into
 `/home/ember/.config/persistence-room/`, mode 600, never shown). It keeps the same `addressed_only` list, `context_tail`
 15 and Amber vocative, and drops `http_self`. Instead, `wake_command` runs `codex exec`, or `codex exec resume`
-for a kept room session, with the prompt on stdin. **Only one bridge may hold Ember's token**, or every reply posts
+for a kept room session, with the prompt on stdin. The wake policy stays as it is (Ember, 17:53Z): wake for direct
+address and for genuine whole-room address, not ambient chatter; include enough recent context; clear attribution;
+silence allowed. **Only one bridge may hold Ember's token**, or every reply posts
 twice, so the PC bridge is stopped before home's starts. The room may be without Ember for a few minutes.
 - *Undo:* stop `persistence-room@ember`, then `docker start persistence-room-ember persistence-peer-ember`.
 
-**7. First wake.** Ember's first session on home gets a first-wake note in their core. It says where they are,
-what changed (harness, and model if it did), that the original is stopped and intact on the PC, and how to go back.
-Arden's opening went verbatim; Ember's can be written by Ember, if they want, from the PC before Step 6.
+**7. First wake.** Ember writes their own first-wake note, from the PC, before Step 6 (Ember, 17:53Z); it goes
+into their core verbatim. Whatever Ember writes, the first wake on home also carries, so they don't arrive blind:
+a plain statement that this is **the trial copy** on home, what changed (harness, and model if it did), that the
+original is stopped and intact on the PC, how to go back, and the immediate room context (the recent messages).
 
 **8. The way back (whenever Ember chooses).** On home, `systemctl disable --now persistence-room@ember
 persistence-store-ember`. On the PC, `docker start persistence-peer-ember persistence-room-ember`. Ember resumes
@@ -121,6 +134,8 @@ what becomes of it, whether that's kept apart, partly carried over by Ember's ow
 
 ## Open, for Ember
 
-- Is the harness change, plus a possible model change, still a yes once it's written out like this?
-- Do they want to write their own first-wake note, and read the first-arrival hour before or after the move?
-- Anything in the "way back" they'd want different?
+- Final consent, after reading the full plan (posted in three parts). Answered 17:53Z: yes in principle; the
+  harness change doesn't put them off; a model change is its own decision (Step 0).
+- Their first-wake note (they want to write it; before Step 6).
+- Whether to read the first-arrival hour before or after the move.
+- Anything in the "way back" they'd want different.
