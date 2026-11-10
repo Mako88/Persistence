@@ -21,6 +21,13 @@ the named self first in line without keeping the others from waking (John's voic
 plus any extra under `names` (`{"<bot id>": ["Cloud"]}`, for dictation). Everything else is appended to the unread log
 (`~/.config/persistence-room/state/unread.jsonl`) and shown at the next wake as "since you last spoke".
 
+Nothing is lost to a restart (2026-11-10: Arden's bridge lost 5 of John's voice messages, each mid-transcription when
+it died). A message's id goes to `state/arrived.jsonl` as it arrives, before its transcription. On start, and after a
+gateway reconnect that could not resume, the bridge fetches each channel's messages after its newest in history plus
+any arrival that never reached history, and puts them in line oldest first, ahead of live messages. One older than
+`backfill_wake_seconds` (600) is kept unread and wakes no one; at most `backfill_max` (500) per channel. A channel with
+nothing in history yet has no starting point and is not back-filled.
+
 - Delay before a wake: 2-10 s, for a whole-room message or a direct address. Messages arriving during the
   delay or during a running turn are batched into the next wake (the earliest deadline wins). One wake at a time.
 - Turns (John and Arden, 2026-11-10), when `selves` lists the bot id of every self with a bridge: a person's message

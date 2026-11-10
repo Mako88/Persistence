@@ -100,6 +100,63 @@ class Bridge:
         self.client = None
         self.current_channel = None     # the channel of the wake that is running
         self.in_order = rc.InOrder()
+        self.taken = set()              # ids of messages taken in this run, so catching up and live never take one twice
+        self.caught_up = None           # an asyncio.Event: set once the catch-up's messages are in line
+
+    # -- intake: every message from someone else, live or found on catching up
+    def take(self, m, wake=True):
+        """Put message `m` in its channel's line now and record its arrival before the slow part (a voice message's
+        transcription), so a bridge that dies mid-way finds it on start (Arden lost 5 of John's voice messages that
+        way, 2026-11-10). Returns the coroutine that describes and hands it on, or None if it was already taken."""
+        mid, cid = str(m.id), str(m.channel.id)
+        if mid in self.taken or not rc.listens(self.config, cid, m.guild is None):
+            return None
+        self.taken.add(mid)
+        self.store.append_arrived(mid, cid)
+        place = self.in_order.enter(cid)
+        return self.in_order.run(cid, lambda: self.describe(m), place=place, deliver=lambda text: self.room.on_message(
+            to_msg(m, self.client.user.id, text), time.time(), wake=wake))
+
+    async def catch_up(self):
+        """On start (and after a reconnect that lost the session): fetch what was missed, each channel's messages after
+        its newest in history and any taken in but never finished, and put them in line oldest first before any live
+        message. One older than backfill_wake_seconds goes to unread and wakes no one. This self's own posts that
+        history lacks are recorded."""
+        found = []
+        try:
+            last, owed = self.store.catch_up_state()
+            for a in owed:
+                try:
+                    ch = self.client.get_channel(int(a["channel_id"])) or await self.client.fetch_channel(int(a["channel_id"]))
+                    found.append(await ch.fetch_message(int(a["id"])))
+                except Exception as e:
+                    print(f"catch-up: could not fetch {a['id']}: {type(e).__name__}: {e}", flush=True)
+            for cid, after in last.items():     # a channel with nothing in history yet has no point to start from
+                try:
+                    ch = self.client.get_channel(int(cid)) or await self.client.fetch_channel(int(cid))
+                    if not rc.listens(self.config, cid, getattr(ch, "guild", None) is None):
+                        continue
+                    import discord
+                    found += [m async for m in ch.history(after=discord.Object(id=int(after)), oldest_first=True,
+                                                          limit=self.config["backfill_max"])]
+                except Exception as e:
+                    print(f"catch-up: could not read {cid}: {type(e).__name__}: {e}", flush=True)
+            now, old = time.time(), 0
+            runs = []
+            for m in rc.catch_up_order(found):
+                if m.author.id == self.client.user.id:
+                    if not self.store.history(1, message_id=m.id):
+                        self.store.append_history(self.own_record(m.id, m.channel.id, m.content) | {"ts": m.created_at.timestamp()})
+                    continue
+                wake = now - m.created_at.timestamp() < self.config["backfill_wake_seconds"]
+                old += not wake
+                run = self.take(m, wake)
+                if run:
+                    runs.append(asyncio.create_task(run))
+            if found:
+                print(f"catch-up: {len(runs)} missed messages in line ({old} too old to wake for)", flush=True)
+        finally:
+            self.caught_up.set()
 
     # -- attachments: saved for the woken self to Read; a voice message transcribed
     async def describe(self, m):
@@ -285,8 +342,13 @@ class Bridge:
 
         @self.client.event
         async def on_ready():
+            # on_ready comes again after a reconnect that could not resume, and what was sent meanwhile is never
+            # delivered: catch up then too. Live messages wait at caught_up until the missed ones are in line.
             if bridge.room:
+                bridge.caught_up.clear()
+                await bridge.catch_up()
                 return
+            bridge.caught_up = asyncio.Event()
             bridge.room = rc.Room(bridge.client.user.id, bridge.client.user.display_name, bridge.config, store=bridge.store)
             bridge.room.unread = bridge.store.load_unread()
             sock = rc.socket_path()
@@ -298,6 +360,7 @@ class Bridge:
                 os.umask(old)
             asyncio.create_task(bridge.ticker())
             print(f"room bridge up as {bridge.client.user} ({bridge.client.user.id})", flush=True)
+            await bridge.catch_up()
 
         @self.client.event
         async def on_message(m):
@@ -309,8 +372,10 @@ class Bridge:
                 if not bridge.store.history(1, message_id=m.id):
                     bridge.store.append_history(bridge.own_record(m.id, m.channel.id, m.content))
             elif bridge.room:
-                await bridge.in_order.run(str(m.channel.id), lambda: bridge.describe(m),
-                                          lambda text: bridge.room.on_message(to_msg(m, bridge.client.user.id, text), time.time()))
+                await bridge.caught_up.wait()
+                run = bridge.take(m)
+                if run:
+                    await run
 
         @self.client.event
         async def on_raw_reaction_add(payload):

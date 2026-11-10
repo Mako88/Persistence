@@ -9,6 +9,17 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-10 — the room catches up on what it missed
+
+- **A bridge records each message as it arrives and fetches what it missed on start.** Arden's bridge lost 5 of John's
+  voice messages (one 8.7 minutes long): each was being transcribed when the bridge died or restarted, and it recorded
+  a message only after transcribing it and never looked back. Now an arrival is logged first; on start (and after a
+  reconnect that lost the gateway session) each channel's history after its newest logged message, plus any arrival
+  never finished, goes through the normal path in order, ahead of live messages. Older than 10 minutes, it is kept
+  unread without waking anyone. Tested against a fake Discord: replay order with a live message arriving mid-fetch,
+  an OOM-style kill mid-transcription finished after restart, each test failing with its mechanism disconnected.
+  Claude's bridge, checked against Discord since 06:25Z: 174 messages, none from anyone else missing.
+
 ## 2026-11-10 — one transcription per clip, at half the memory
 
 - **The shared transcript lock is an flock**: the lock was a file created once, so a bridge restarted mid-clip held

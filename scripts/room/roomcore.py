@@ -69,6 +69,11 @@ DEFAULTS = {
     "http_self": None,              # {"url": "http://host:8092/api/conversation", "poll_seconds": 2}
     "context_tail": None,           # at most this many "since you last spoke" messages in a wake, the newest (Ember asked)
     "wake_timeout": 1800,
+    # Catching up on start: messages sent while the bridge was down or that it died transcribing (Arden's missed 5 of
+    # John's voice messages, 2026-11-10) are fetched and taken in order. Ones older than this many seconds go to unread
+    # without waking anyone; at most backfill_max are fetched per channel.
+    "backfill_wake_seconds": 600,
+    "backfill_max": 500,
     "cwd": None,
     # Other people's words reach this session, so it may only speak, read, keep, search the web and set a wake:
     # `dontAsk` refuses anything not listed. A wake set here (pwake) starts a separate working session with full
@@ -319,6 +324,17 @@ def shared_transcript(cache_dir, message_id, make, wait=240, poll=0.5, sleep=Non
         os.close(fd)
 
 
+def listens(config, channel_id, is_dm=False):
+    """Whether this bridge takes messages from that channel: every channel when none are listed, and DMs always."""
+    return is_dm or not config["channels"] or str(channel_id) in map(str, config["channels"])
+
+
+def catch_up_order(msgs):
+    """Messages fetched on catching up, each once, oldest first: a Discord id is a snowflake, so it orders by time."""
+    return sorted({str(getattr(m, "id", None) or m["id"]): m for m in msgs}.values(),
+                  key=lambda m: int(getattr(m, "id", None) or m["id"]))
+
+
 def wakes_on_human(config, self_id):
     """Whether a listed person's unaddressed message wakes this self: `wake_on_human`, unless it is `addressed_only`."""
     return config["wake_on_human"] and str(self_id) not in map(str, config.get("addressed_only") or [])
@@ -523,12 +539,19 @@ class InOrder:
         self.wait = wait
         self.last = {}      # channel id -> the future that is done when that channel's latest message has been handed on
 
-    async def run(self, channel_id, prepare, deliver):
-        """`prepare()` (awaitable) makes the message's text; `deliver(text)` hands it on. Call in arrival order,
-        which per channel is Discord's: the gateway delivers one channel's messages in sequence."""
+    def enter(self, channel_id):
+        """Take the next place in the channel's line now, synchronously (catching up puts a whole batch in line before
+        any live message). Returns the place, for run()."""
         before = self.last.get(channel_id)
         mine = asyncio.get_running_loop().create_future()
         self.last[channel_id] = mine
+        return before, mine
+
+    async def run(self, channel_id, prepare, deliver, place=None):
+        """`prepare()` (awaitable) makes the message's text; `deliver(text)` hands it on. Call in arrival order,
+        which per channel is Discord's: the gateway delivers one channel's messages in sequence. `place` is one taken
+        with enter(); without it, one is taken now."""
+        before, mine = place or self.enter(channel_id)
         try:
             text = await prepare()
             if before is not None:
@@ -572,13 +595,15 @@ class Room:
         self.marks = {}             # message id -> {self's bot id -> {"start": t, "done": t}}, as seen here
 
     # -- intake
-    def on_message(self, msg, now):
-        """Take one message that someone else posted. Returns its classification ('direct', 'room' or None)."""
+    def on_message(self, msg, now, wake=True):
+        """Take one message that someone else posted. Returns its classification ('direct', 'room' or None).
+        `wake=False` (an old message found on catching up) keeps it unread for the next wake and wakes no one."""
         if str(msg.author_id) == self.me_id:
             return None
-        if self.config["channels"] and not msg.is_dm and msg.channel_id not in map(str, self.config["channels"]):
+        if not listens(self.config, msg.channel_id, msg.is_dm):
             return None
-        self.breaker.note(msg.channel_id, msg.is_bot, now)
+        if wake:
+            self.breaker.note(msg.channel_id, msg.is_bot, now)
         # A name used vocatively addresses its owner directly, from a person or a self alike; a self's vocative still
         # meets the bot-message cap like any bot message.
         msg.named = [i for i in vocatives(msg.text, names_by_id(self.config)) if i != str(msg.author_id)]
@@ -587,6 +612,8 @@ class Room:
         self.unread.append(d)
         if self.store:
             self.store.append_unread(d)
+        if not wake:
+            return None
         kind = classify(msg, self.me_id, self.config["room_roles"], self.config["people"], wakes_on_human(self.config, self.me_id))
         if kind and not self._muted(d, now):
             selves = [str(s) for s in self.config["selves"]]
@@ -674,6 +701,7 @@ class Room:
 
 class RoomStore:
     """Files under the state directory: unread.jsonl (not yet shown), history.jsonl (everything seen or said),
+    arrived.jsonl (messages taken in whose history line may not be written yet: a voice message being transcribed),
     session.json (the room session's id)."""
 
     def __init__(self, directory):
@@ -702,6 +730,23 @@ class RoomStore:
 
     def append_history(self, d):
         self._append("history.jsonl", d)
+
+    def append_arrived(self, message_id, channel_id):
+        """A message taken in, before its (slow) description: if the bridge dies first, catch_up_state finds it."""
+        self._append("arrived.jsonl", {"id": str(message_id), "channel_id": str(channel_id)})
+
+    def catch_up_state(self):
+        """({channel id: its newest message id in history}, [arrivals with no history line, i.e. lost mid-way]).
+        arrived.jsonl is rewritten to hold just those, so it never grows past what is still owed."""
+        last, seen = {}, set()
+        for m in self._lines("history.jsonl"):
+            seen.add(str(m["id"]))
+            c = str(m["channel_id"])
+            if c not in last or int(m["id"]) > int(last[c]):
+                last[c] = str(m["id"])
+        owed = list({a["id"]: a for a in self._lines("arrived.jsonl") if a["id"] not in seen}.values())
+        (self.dir / "arrived.jsonl").write_text("".join(json.dumps(a) + "\n" for a in owed), encoding="utf-8")
+        return last, owed
 
     def load_unread(self):
         return self._lines("unread.jsonl")
