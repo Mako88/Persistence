@@ -1,0 +1,12 @@
+[Unit]
+Description=%i's room coverage check: did %i's bridge get every message the room has (scripts/room/coverage.py)
+After=network-online.target persistence-room@%i.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=%i
+TimeoutStartSec=10min
+# A login shell, so the user's HOME and PATH are as in their own sessions. Standard library only, so any python3.
+EnvironmentFile=-/etc/default/persistence-room-%i
+ExecStart=/bin/bash -lc 'exec python3 "$(dirname "${ROOM_BRIDGE:-$HOME/work/Persistence/scripts/room/bridge.py}")/coverage.py"'

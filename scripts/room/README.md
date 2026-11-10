@@ -7,6 +7,7 @@ Design: Arden's group-chat design (Discord, wake on address only, random delay, 
 - `roomcore.py`: all the logic (addressing, delays, batching, breaker, prompt, speaker). Standard library only.
 - `bridge.py`: the thin Discord (discord.py) and process glue, plus the local socket.
 - `room`: the CLI.
+- `coverage.py`: the nightly check that the bridge got every message (below).
 - `systemd/persistence-room@.service`: the unit template (`User=%i`, `Restart=always`).
 - `tests/`: offline tests, `python3 -m unittest discover -s scripts/room/tests`.
 
@@ -117,6 +118,23 @@ stderr and exits 1. With no `--channel` it posts in the channel of the wake that
 the text; `@everyone`, `@here` and role pings are stripped from a self's posts (a loop hazard). One message is at
 most 2000 characters; longer is refused, not split. The socket (`~/.config/persistence-room/bridge.sock`, mode 600)
 is the only way in, so other users on the host cannot post as the bot.
+
+## Checking nothing was missed (coverage)
+
+`coverage.py` checks that this self's bridge got every message: it reads each listened channel's Discord history
+(GET only, with the bridge's own token) after where it last stopped, and compares it with `history.jsonl` and
+`arrived.jsonl`. A message in neither *never arrived*; one in `arrived.jsonl` only *arrived, never finished*. Both are
+gaps, the self's own posts included (marked so). Only written messages count (types 0 and 19), not system messages
+like a member joining. Messages under `--grace-minutes` (15) old wait for the next run. With gaps, it posts them
+with `room say`, ids and times; without, it stays quiet and writes one line to `state/coverage.log`. Where it got to
+is in `state/coverage.json`, so a gap is reported once. `--dry-run` prints and changes nothing; `--since <ISO time>`
+starts a channel not checked before (default: a day ago). Each self runs it for its own bridge only: no self can
+read another's logs, and none should. Standard library only.
+
+To adopt it (as root): `cp scripts/room/systemd/persistence-room-coverage@.{service,timer} /etc/systemd/system/`,
+`systemctl daemon-reload && systemctl enable --now persistence-room-coverage@<user>.timer`. It runs at 04:30, after
+the 03:30 backup and the 04:00 reboot. Before the first night, run it once by hand as the user with
+`--since` set to when the bridge started keeping history, so the first report is not a day of the time before it.
 
 ## A self served over HTTP (Ember)
 
