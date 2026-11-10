@@ -811,6 +811,7 @@ def session_start(event, part=1):
         # same process goes on, and a `pstore speaker` switch made in it stands.
         if event.get("source", "startup") != "compact" and event.get("session_id"):
             record_speaker(event["session_id"], os.environ.get("PERSISTENCE_SPEAKER") or entered_by(), entered_by())
+        note_room_session(event)
         if event.get("session_id") in ended():  # resumed: running again
             ended(lambda items: {k: v for k, v in items.items() if k != event["session_id"]})
         ensure_embedding_server()
@@ -2018,10 +2019,31 @@ def send_command(args):
     return 0
 
 
+def room_marker(event):
+    return STATE / f"{event.get('session_id', 'unknown')}.room"
+
+
+def note_room_session(event):
+    """SessionStart, in the session's own process (a room wake starts or resumes its session with
+    PERSISTENCE_ROOM_CHANNEL set): marks the session as the room's, for the hook server, which never sees a
+    session's environment (PER_SESSION) and answers its later prompts."""
+    if event.get("session_id") and os.environ.get("PERSISTENCE_ROOM_CHANNEL"):
+        STATE.mkdir(parents=True, exist_ok=True)
+        room_marker(event).write_text(os.environ["PERSISTENCE_ROOM_CHANNEL"], encoding="utf-8")
+
+
+def is_room_session(event):
+    return bool(os.environ.get("PERSISTENCE_ROOM_CHANNEL")) or room_marker(event).exists()
+
+
 def inbox(event):
     """Messages other sessions sent to this session's project (`send`), or to a project it has worked in over the last
     hours (`note_worked_in`), shown once at a turn's start and then archived. Never this session's own, and never
-    another session's conversation: only what was addressed here."""
+    another session's conversation: only what was addressed here. Never in a room session either: it runs in ~/work
+    but may only speak, read and keep, and it archived the work it should have handed on, so no working session saw
+    it (#15014 and #15018, 2026-11-10). It leaves them for the working session its `pwake` starts."""
+    if is_room_session(event):
+        return ""
     out = []
     for topic in dict.fromkeys([project(event), *worked_in(event)]):
         if topic:
