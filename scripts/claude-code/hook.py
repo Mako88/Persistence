@@ -1609,6 +1609,8 @@ def add_wake(event):
         item["cwd"] = event["cwd"]
     if event.get("session"):
         item["session"] = event["session"]  # only this session's waiter takes it: one session's wake fired in another (2026-11-09)
+    if event.get("work"):
+        item["work"] = True  # set from a room session: run-due starts a working session for it, never resumes the room's
     if event.get("pid"):
         item["pid"] = int(event["pid"])
     else:
