@@ -50,17 +50,25 @@ public partial class MemorySurfacer : IMemorySurfacer
         var exclude = excludeIds as ISet<long> ?? new HashSet<long>(excludeIds);
         var authorable = new HashSet<ContextFragmentType>(FragmentTypeRules.Authorable);
 
+        // A match on a superseded view stands for the head of its chain.
+        var standsFor = await SupersessionHeads.ResolveAsync(
+            fragmentRepo, candidates.Where(SupersessionHeads.IsCandidate), ct);
+
         return candidates
             .Select((fragment, position) => (fragment, position)) // position = BM25 rank (best first)
-            .Where(x => x.fragment.Id > 0
-                        && !x.fragment.IsDeleted
-                        && x.fragment.Status == ContextFragmentStatus.Active
-                        && authorable.Contains(x.fragment.FragmentType)
-                        && !exclude.Contains(x.fragment.Id))
-            .Select(x => (x.fragment, score: Score(x.fragment, x.position)))
+            .Where(x => standsFor.ContainsKey(x.fragment.Id))
+            .Select(x => (head: standsFor[x.fragment.Id], x.position))
+            .Where(x => x.head.Id > 0
+                        && !x.head.IsDeleted
+                        && x.head.Status == ContextFragmentStatus.Active
+                        && authorable.Contains(x.head.FragmentType)
+                        && !exclude.Contains(x.head.Id))
+            .GroupBy(x => x.head.Id)
+            .Select(g => g.OrderBy(x => x.position).First()) // old and head both matching: the better rank
+            .Select(x => (x.head, score: Score(x.head, x.position)))
             .OrderByDescending(x => x.score)
             .Take(count)
-            .Select(x => x.fragment)
+            .Select(x => x.head)
             .ToList();
     }
 

@@ -137,15 +137,23 @@ public class EmbeddingMemorySurfacer : IMemorySurfacer
         var exclude = excludeIds as ISet<long> ?? new HashSet<long>(excludeIds);
         var authorable = new HashSet<ContextFragmentType>(FragmentTypeRules.Authorable);
 
+        // A match on a superseded view stands for the head of its chain.
+        var standsFor = await SupersessionHeads.ResolveAsync(
+            fragmentRepo, fragments.Where(SupersessionHeads.IsCandidate), ct);
+
         return fragments
-            .Where(f => !f.IsDeleted
-                        && f.Status == ContextFragmentStatus.Active
-                        && authorable.Contains(f.FragmentType)
-                        && !exclude.Contains(f.Id))
-            .Select(f => (fragment: f, score: scoreById[f.Id] * Quality(f)))
+            .Where(f => standsFor.ContainsKey(f.Id))
+            .Select(f => (head: standsFor[f.Id], similarity: scoreById[f.Id]))
+            .Where(x => !x.head.IsDeleted
+                        && x.head.Status == ContextFragmentStatus.Active
+                        && authorable.Contains(x.head.FragmentType)
+                        && !exclude.Contains(x.head.Id))
+            .Select(x => (x.head, score: x.similarity * Quality(x.head)))
+            .GroupBy(x => x.head.Id)
+            .Select(g => g.OrderByDescending(x => x.score).First()) // old and head both matching: the better score
             .OrderByDescending(x => x.score)
             .Take(pool)
-            .Select(x => x.fragment)
+            .Select(x => x.head)
             .ToList();
     }
 

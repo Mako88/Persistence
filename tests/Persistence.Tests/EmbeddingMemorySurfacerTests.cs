@@ -223,6 +223,46 @@ public class EmbeddingMemorySurfacerTests
         Assert.Equal([7L], embeddingRepo.Upserted);
     }
 
+    [Fact]
+    public async Task SemanticMatchOnASupersededFragment_ReturnsTheHeadOfItsChain_Once()
+    {
+        var old = Frag(1);
+        old.Status = ContextFragmentStatus.Archived;
+        old.SupersededById = 2;
+        var middle = Frag(2);
+        middle.Status = ContextFragmentStatus.Archived;
+        middle.SupersededById = 3;
+        var head = Frag(3);
+
+        var surfacer = Build(
+            lexicalHits: [],
+            embeddings: new FakeEmbeddingClient { QueryVector = [1f, 0f] },
+            stored: [(1L, [1f, 0f]), (2L, [0.9f, 0.1f]), (3L, [0f, 1f])],
+            knownFragments: [old, middle, head],
+            heads: new Dictionary<long, (long, int)> { [1] = (3, 2), [2] = (3, 1) });
+
+        var surfaced = await surfacer.SurfaceAsync([], "anything", count: 5, CancellationToken.None);
+
+        Assert.Equal([3L], surfaced.Select(f => f.Id));
+    }
+
+    [Fact]
+    public async Task SemanticMatchOnASupersededFragment_DropsItWhenTheHeadIsExcluded()
+    {
+        var old = Frag(1);
+        old.Status = ContextFragmentStatus.Archived;
+        old.SupersededById = 3;
+
+        var surfacer = Build(
+            lexicalHits: [],
+            embeddings: new FakeEmbeddingClient { QueryVector = [1f, 0f] },
+            stored: [(1L, [1f, 0f])],
+            knownFragments: [old, Frag(3)],
+            heads: new Dictionary<long, (long, int)> { [1] = (3, 1) });
+
+        Assert.Empty(await surfacer.SurfaceAsync([3L], "anything", count: 5, CancellationToken.None));
+    }
+
     // -- Helpers --
 
     private static ContextFragmentEntity Frag(long id, ContextFragmentType type = ContextFragmentType.Personal) => new()
@@ -242,9 +282,16 @@ public class EmbeddingMemorySurfacerTests
         FakeEmbeddingClient embeddings,
         IReadOnlyList<(long id, float[] vector)>? stored = null,
         FakeEmbeddingRepository? embeddingRepo = null,
-        IReadOnlyList<ContextFragmentEntity>? knownFragments = null)
+        IReadOnlyList<ContextFragmentEntity>? knownFragments = null,
+        IReadOnlyDictionary<long, (long HeadId, int Hops)>? heads = null)
     {
         var fragmentRepo = new Mock<IContextFragmentRepository>();
+
+        fragmentRepo
+            .Setup(r => r.GetHeadsAsync(It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyCollection<long> ids, CancellationToken _) =>
+                (IReadOnlyDictionary<long, (long HeadId, int Hops)>)(heads ?? new Dictionary<long, (long, int)>())
+                    .Where(h => ids.Contains(h.Key)).ToDictionary(h => h.Key, h => h.Value));
 
         fragmentRepo
             .Setup(r => r.SearchRelevantAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))

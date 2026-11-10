@@ -79,6 +79,87 @@ public sealed class FragmentStoreTests : IDisposable
         Assert.Equal(["curation"], retagged.Tags.Select(t => t.Name));
     }
 
+    private static async Task<List<ContextFragmentEntity>> ChainAsync(FragmentStore store, params string[] views)
+    {
+        var chain = new List<ContextFragmentEntity> { await store.AddAsync("Personal", views[0], null, 0.5f, null, [], false) };
+        foreach (var view in views.Skip(1))
+        {
+            chain.Add(await store.SupersedeAsync([chain[^1].Id], view, null, null, null, [], $"moved on to {chain.Count + 1}"));
+        }
+
+        return chain;
+    }
+
+    [Fact]
+    public async Task Show_on_a_superseded_view_names_the_head_and_how_many_supersessions_later()
+    {
+        var store = await OpenAsync();
+        var chain = await ChainAsync(store, "Quokka ledger lives in alpha.", "Quokka ledger lives in beta.",
+            "Quokka ledger lives in gamma.", "Quokka ledger lives in delta.");
+
+        var shown = await store.ShowAsync(chain[0].Id);
+
+        Assert.Contains($"the current view is #{chain[3].Id}, 3 supersessions later; next was #{chain[1].Id}: moved on to 2", shown);
+        Assert.Contains($"`show {chain[3].Id}` reads it", shown);
+        Assert.Contains($"superseded, current #{chain[3].Id}", shown);
+        Assert.Contains($"Supersedes #{chain[1].Id}", await store.ShowAsync(chain[2].Id));
+    }
+
+    [Fact]
+    public async Task Search_flags_a_superseded_view_with_the_current_head()
+    {
+        var store = await OpenAsync();
+        var chain = await ChainAsync(store, "Marmoset cache is old.", "Marmoset cache is newer.", "Marmoset cache is newest.");
+
+        var found = await store.SearchAsync("marmoset", 10);
+
+        Assert.Contains($"superseded, current #{chain[2].Id}", FragmentStore.Render(found.Single(f => f.Id == chain[0].Id)));
+    }
+
+    [Fact]
+    public async Task Recall_on_the_oldest_views_wording_returns_the_head_of_its_chain()
+    {
+        var store = await OpenAsync();
+        var chain = await ChainAsync(store, "The wombat harvest runs at dawn.", "Picking happens at dusk.",
+            "Picking happens at noon.", "Picking happens at midnight.");
+
+        var recalled = (await store.RecallAsync("the wombat harvest runs at dawn", 5, [])).Here.Select(f => f.Id).ToList();
+
+        Assert.Equal([chain[3].Id], recalled);
+    }
+
+    [Fact]
+    public async Task Recall_does_not_return_the_head_when_it_is_already_in_front_of_the_peer()
+    {
+        var store = await OpenAsync();
+        var chain = await ChainAsync(store, "The wombat harvest runs at dawn.", "Picking happens at dusk.", "Picking happens at noon.");
+
+        var recalled = (await store.RecallAsync("the wombat harvest runs at dawn", 5, [chain[2].Id])).Here;
+
+        Assert.Empty(recalled);
+    }
+
+    [Fact]
+    public async Task Recall_returns_the_head_once_when_the_old_view_and_the_head_both_match()
+    {
+        var store = await OpenAsync();
+        var chain = await ChainAsync(store, "Wombat harvest runs at dawn.", "Wombat harvest runs at dusk.", "Wombat harvest runs at noon.");
+
+        var recalled = (await store.RecallAsync("wombat harvest runs", 5, [])).Here.Select(f => f.Id).ToList();
+
+        Assert.Equal([chain[2].Id], recalled);
+    }
+
+    [Fact]
+    public async Task Recall_does_not_follow_a_forgotten_old_view_to_its_head()
+    {
+        var store = await OpenAsync();
+        var chain = await ChainAsync(store, "The wombat harvest runs at dawn.", "Picking happens at dusk.");
+        await store.SetForgottenAsync(chain[0].Id, forgotten: true, "test");
+
+        Assert.Empty((await store.RecallAsync("the wombat harvest runs at dawn", 5, [])).Here);
+    }
+
     [Fact]
     public async Task Recall_leaves_out_other_projects_fragments()
     {

@@ -101,6 +101,35 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
     public async Task<IEnumerable<ContextFragmentEntity>> GetSupersededByAsync(long id) =>
         await QueryAsync($"SELECT * FROM ContextFragments WHERE SupersededById = {id} AND IsDeleted = 0");
 
+    /// <summary>Longest chain of supersessions followed: a guard against a cycle, far past any real chain.</summary>
+    private const int MaxHops = 1000;
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyDictionary<long, (long HeadId, int Hops)>> GetHeadsAsync(
+        IReadOnlyCollection<long> ids, CancellationToken ct = default)
+    {
+        if (ids.Count == 0)
+        {
+            return new Dictionary<long, (long, int)>();
+        }
+
+        // Walks SupersededById from each start to the end of its line in one query; the row with the most hops
+        // per start is its head. A merge is fine: each start still has one line.
+        var rows = await QueryAsync<(long StartId, long HeadId, int Hops)>($"""
+            WITH RECURSIVE chain(StartId, CurId, Hops) AS (
+                SELECT Id, Id, 0 FROM ContextFragments WHERE Id IN {ids.ToList()}
+                UNION ALL
+                SELECT chain.StartId, cf.SupersededById, chain.Hops + 1
+                FROM chain JOIN ContextFragments cf ON cf.Id = chain.CurId
+                WHERE cf.SupersededById IS NOT NULL AND chain.Hops < {MaxHops}
+            )
+            SELECT StartId, CurId AS HeadId, Hops FROM chain c
+            WHERE Hops > 0 AND Hops = (SELECT MAX(Hops) FROM chain c2 WHERE c2.StartId = c.StartId)
+            """, ct);
+
+        return rows.GroupBy(r => r.StartId).ToDictionary(g => g.Key, g => (g.First().HeadId, g.First().Hops));
+    }
+
     /// <summary>
     /// Returns up to <paramref name="limit"/> results ordered best-match first.
     /// </summary>

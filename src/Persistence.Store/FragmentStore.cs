@@ -355,10 +355,15 @@ internal sealed partial class FragmentStore(
     public async Task<string> ShowAsync(long id)
     {
         var fragment = await GetAsync(id);
+        var heads = await NoteHeadsAsync([fragment]);
         var text = new StringBuilder(Render(fragment));
         if (fragment.SupersededById is { } by)
         {
-            text.Append($"\n(Superseded by #{by}{(fragment.Notes is { Length: > 0 } why ? $": {why}" : "")}. `show {by}` reads the current view.)");
+            var reason = fragment.Notes is { Length: > 0 } why ? $": {why}" : "";
+            var (head, hops) = heads.TryGetValue(id, out var found) ? found : (by, 1);
+            text.Append(hops > 1
+                ? $"\n(Superseded: the current view is #{head}, {hops} supersessions later; next was #{by}{reason}. `show {head}` reads it.)"
+                : $"\n(Superseded by #{by}{reason}. `show {by}` reads the current view.)");
         }
 
         foreach (var earlier in (await fragments.GetSupersededByAsync(id)).OrderBy(f => f.CreatedUtc))
@@ -464,7 +469,9 @@ internal sealed partial class FragmentStore(
         var ids = found.Where(f => !f.IsDeleted && f.Status == wanted)
             .OrderByDescending(f => f.Importance).ThenByDescending(f => f.LastModifiedUtc)
             .Take(limit).Select(f => f.Id).ToList();
-        return await HydratedAsync(ids);
+        var listed = await HydratedAsync(ids);
+        await NoteHeadsAsync(listed);
+        return listed;
     }
 
     /// <summary>Full-text search over every fragment the store keeps, conversation included.</summary>
@@ -474,7 +481,9 @@ internal sealed partial class FragmentStore(
         var terms = query.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Select(w => $"\"{w.Replace("\"", "")}\"").Where(w => w.Length > 2);
         var match = string.Join(" OR ", terms);
-        return match.Length == 0 ? [] : (await fragments.SearchRelevantAsync(match, limit)).ToList();
+        var results = match.Length == 0 ? [] : (await fragments.SearchRelevantAsync(match, limit)).ToList();
+        await NoteHeadsAsync(results);
+        return results;
     }
 
     /// <summary>
@@ -1008,6 +1017,21 @@ internal sealed partial class FragmentStore(
     /// </summary>
     private static IReadOnlyDictionary<long, string> TagPaths = new Dictionary<long, string>();
 
+    /// <summary>
+    /// The head of each superseded fragment's chain, by id, as of the last fragments looked up
+    /// (<see cref="NoteHeadsAsync"/>): a rendered flag names the current view, not only the next hop.
+    /// </summary>
+    private static IReadOnlyDictionary<long, (long Head, int Hops)> Heads = new Dictionary<long, (long, int)>();
+
+    /// <summary>Looks up the heads of the superseded ones among <paramref name="found"/>, for rendering them and for the caller.</summary>
+    private async Task<IReadOnlyDictionary<long, (long Head, int Hops)>> NoteHeadsAsync(IEnumerable<ContextFragmentEntity> found)
+    {
+        var superseded = found.Where(f => f.SupersededById is not null).Select(f => f.Id).Distinct().ToList();
+        var heads = (await fragments.GetHeadsAsync(superseded)).ToDictionary(h => h.Key, h => (h.Value.HeadId, h.Value.Hops));
+        Heads = heads;
+        return heads;
+    }
+
     /// <summary>Reads the tags' paths afresh, before a command renders anything.</summary>
     public async Task RefreshTagPathsAsync() => TagPaths = (await GroupsAsync(heads: false)).Paths;
 
@@ -1016,7 +1040,8 @@ internal sealed partial class FragmentStore(
         var flags = new List<string>();
         if (self is not null && f.SessionId is not null && f.SessionId != self) flags.Add($"session {Short(f.SessionId)}");
         if (f.IsProtected) flags.Add("protected");
-        if (f.SupersededById is { } by) flags.Add($"superseded by #{by}");
+        if (f.SupersededById is { } by)
+            flags.Add(Heads.TryGetValue(f.Id, out var head) && head.Hops >= 1 ? $"superseded, current #{head.Head}" : $"superseded by #{by}");
         else if (f.Status == ContextFragmentStatus.Archived) flags.Add("archived");
         if (f.IsDeleted) flags.Add("forgotten");
         if (f.Tags.Count > 0) flags.Add("tags: " + string.Join(", ", f.Tags.Select(t => TagPaths.GetValueOrDefault(t.Id, t.Name))));

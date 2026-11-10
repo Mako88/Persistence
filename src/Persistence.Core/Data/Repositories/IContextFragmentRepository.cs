@@ -24,6 +24,13 @@ public interface IContextFragmentRepository : IEntityRepository<ContextFragmentE
     Task<IEnumerable<ContextFragmentEntity>> GetSupersededByAsync(long id);
 
     /// <summary>
+    /// For each of <paramref name="ids"/> that has been superseded, the head of its chain (the view nobody has
+    /// replaced) and how many supersessions away it is, resolved in one recursive query however long the chain.
+    /// An id that was never superseded is left out. The head may itself be archived or forgotten: the caller decides.
+    /// </summary>
+    Task<IReadOnlyDictionary<long, (long HeadId, int Hops)>> GetHeadsAsync(IReadOnlyCollection<long> ids, CancellationToken ct = default);
+
+    /// <summary>
     /// The ids of the newest <paramref name="count"/> active fragments of <paramref name="type"/>, newest first,
     /// leaving out those said in <paramref name="leaveOut"/> sessions. Ids only: the caller loads the few it shows,
     /// where a whole-type load read every row twice and wrote each one's last-accessed time back.

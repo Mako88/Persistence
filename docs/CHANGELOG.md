@@ -11,6 +11,18 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
 
 ## 2026-11-10 — messages between sessions
 
+### Changed — a superseded fragment leads straight to the current one, however long the chain
+Recall, search and show met an old view and stopped at the next hop, or (recall) lost it altogether: a match on
+a superseded fragment was dropped because superseding archives it, so recall run on an old view's own wording
+returned neither it nor its successor (Arden's report). The chain is now resolved in one recursive query
+(`GetHeadsAsync`, `WITH RECURSIVE` over `SupersededById`, hop-capped against a cycle, no new column), not hop
+by hop in C#. Both surfacers (lexical and semantic, so the app's turns too) take a match on a superseded view as
+a match on the head of its chain, when the head is active, authored and not already in front of the peer, and keep
+the best rank when the old view and the head both match (`SupersessionHeads`). `show` on a superseded fragment
+names the head and the distance ("the current view is #N, 4 supersessions later; next was #M"); search, list
+and recall flags read "superseded, current #N". Not done: labelling a recalled head as reached "via #old", which
+would thread state through the surfacer interface.
+
 ### Added — `send <topic>` and the inbox: tell one session, the one that cares hears it
 John runs many sessions at once (up to ten at his work) and asked to be able to tell any of them something
 and have it reach the one it concerns, without any session pulling in another's conversation and without
