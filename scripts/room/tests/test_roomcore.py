@@ -168,6 +168,35 @@ class RoomTests(unittest.TestCase):
         r.on_message(msg(3, "y", author="Other", bot=True), 2)
         self.assertIsNone(r.tick(100))
 
+    def test_a_direct_address_muted_by_the_breaker_wakes_once_it_lifts(self):
+        # Ember's missed wakes, 2026-11-10: their own replies tripped the cap, and an address to them was dropped.
+        r = self.room(bot_message_cap=2, breaker_reset_seconds=600)
+        r.note_own("c1", 0); r.note_own("c1", 1)
+        r.on_message(msg(1, "chatter", author="Arden", bot=True), 2)                 # trips it at 2
+        r.on_message(msg(2, mentions=[ME], author="Arden", bot=True), 3)             # addressed, muted
+        r.on_message(msg(3, "more chatter", author="Arden", bot=True, mention_everyone=True), 4)  # not direct
+        self.assertIsNone(r.tick(100))
+        self.assertIsNone(r.tick(601))
+        w = r.tick(602)                                                              # reset at 2 + 600
+        self.assertEqual([m["id"] for m in w.triggers], ["2"])
+        r.finish(603)
+        self.assertIsNone(r.tick(2000))                                              # delivered once
+
+    def test_a_person_posting_releases_a_deferred_address_at_once(self):
+        r = self.room(bot_message_cap=1)
+        r.on_message(msg(1, "x", author="Other", bot=True), 0)
+        r.on_message(msg(2, mentions=[ME], author="Arden", bot=True), 1)             # muted, deferred
+        r.on_message(msg(3, "evening", author="Someone"), 5)                         # a human: breaker reset
+        w = r.tick(5)
+        self.assertEqual([m["id"] for m in w.triggers], ["2"])
+
+    def test_a_direct_address_muted_during_its_delay_is_deferred_too(self):
+        r = self.room(bot_message_cap=1, breaker_reset_seconds=600)
+        r.on_message(msg(1, mentions=[ME], author="Arden", bot=True), 0)
+        r.on_message(msg(2, "x", author="Other", bot=True), 1)                       # trips it at 1
+        self.assertIsNone(r.tick(100))
+        self.assertEqual([m["id"] for m in r.tick(601).triggers], ["1"])
+
     def test_a_listed_person_talking_to_the_room_wakes_every_self(self):
         people = {"a-John": "John"}
         self.assertEqual(rc.classify(msg(1, "evening all"), ME, (), people, True), "room")
@@ -326,6 +355,7 @@ class Vocatives(unittest.TestCase):
         self.assertEqual(r.on_message(msg(2, "Arden, what do you think", author="Claude", author_id=ME, bot=True), 1), "direct")
         r.on_message(msg(3, "Arden, and?", author="Claude", author_id=ME, bot=True), 2)   # third bot message: over the cap
         self.assertEqual(len(r.pending), 1)
+        self.assertEqual([d["id"] for d in r.deferred], ["3"])     # held until the Breaker lifts
 
 
 class Pauses(unittest.TestCase):

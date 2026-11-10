@@ -66,7 +66,8 @@ nothing in history yet has no starting point and is not back-filled.
   `[voice message, no transcript]` with the audio's path.
 - Breaker: after `bot_message_cap` (6) bot messages in a channel (a thread counts as its own channel) with no human
   message, bot messages stop waking the self until a human posts or `breaker_reset_seconds` (600) pass. The self's
-  own posts count. Also `wakes_per_hour` (20), counting only wakes selves set off; a wake a person set off counts
+  own posts count. A self's message that addresses this self directly is deferred, not dropped: it wakes the self
+  once the Breaker lifts (a bridge restart in between loses the wake, not the message, which stays unread). Also `wakes_per_hour` (20), counting only wakes selves set off; a wake a person set off counts
   against `human_wakes_per_hour` (240), a runaway guard only. Wakes over either stay unread.
 - The wake runs with `PERSISTENCE_SPEAKER` set to "the room (woken by <authors>)": the prompt is mostly framing and other authors' lines, so it is never kept as one person's words; each line inside keeps its Discord author
 - The default wake command is a separate room session: the first wake runs `claude -p --session-id <new>`, later ones

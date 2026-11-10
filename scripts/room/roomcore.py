@@ -606,6 +606,7 @@ class Room:
         self.breaker = Breaker(config["bot_message_cap"], config["breaker_reset_seconds"])
         self.unread = []            # message dicts not yet shown at a wake
         self.pending = []           # triggers waiting out their delay: (message dict, kind)
+        self.deferred = []          # direct addresses from selves that met the Breaker: wake once it lifts
         self.due = None             # when the delayed wake may start
         self.running = False
         self.wake_times = deque()       # wakes only selves set off
@@ -634,7 +635,9 @@ class Room:
         if not wake:
             return None
         kind = classify(msg, self.me_id, self.config["room_roles"], self.config["people"], wakes_on_human(self.config, self.me_id))
-        if kind and not self._muted(d, now):
+        if kind == "direct" and self._muted(d, now):
+            self.deferred.append(d)
+        elif kind and not self._muted(d, now):
             selves = [str(s) for s in self.config["selves"]]
             if selves and not msg.is_bot and self.me_id in selves:
                 d["turn_order"], d["arrived"] = turn_order(msg, selves, self.config), now
@@ -683,16 +686,32 @@ class Room:
     def _muted(self, d, now):
         return d["is_bot"] and self.breaker.blocked(d["channel_id"], now)
 
+    def _release_deferred(self, now):
+        """Direct addresses held by the Breaker become triggers once it lifts (a person posts or the reset passes), so a
+        self addressed by name is woken late rather than never; chatter not addressed to it is still dropped. Each is
+        delivered once, and the wake still counts against wakes_per_hour (Ember chose this, 2026-11-10)."""
+        ready = [d for d in self.deferred if not self._muted(d, now)]
+        if not ready:
+            return
+        self.deferred = [d for d in self.deferred if self._muted(d, now)]
+        self.pending.extend((d, "direct") for d in ready)
+        self.due = now if self.due is None else min(self.due, now)
+
     # -- the wake
     def tick(self, now):
         """A Wake to run now, or None. Call about once a second."""
-        if self.running or not self.pending or self.due is None or now < self.due:
+        if self.running:
+            return None
+        self._release_deferred(now)
+        if not self.pending or self.due is None or now < self.due:
             return None
         # A message in turns waits for this self's turn; any trigger that is ready brings the others along, so two
         # selves each first in line on a different message never wait on each other.
         if not any(kind != "turn" or self.my_turn(d, now) for d, kind in self.pending):
             return None
         triggers = [d for d, _ in self.pending if not self._muted(d, now)]
+        # A direct address that met the Breaker during its delay waits for it to lift, like one that met it on arrival.
+        self.deferred += [d for d, kind in self.pending if kind == "direct" and self._muted(d, now)]
         self.pending, self.due = [], None
         if not triggers:
             return None
