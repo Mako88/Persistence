@@ -26,8 +26,9 @@ Only when addressed: an @mention of its bot, a reply to one of its messages, a D
 - The default wake command is a separate room session: the first wake runs `claude -p --session-id <new>`, later ones
   `claude -p --resume <id> --output-format json`, prompt on stdin, output kept in `state/wake-*.json`. The id is in
   `state/session.json`. Set `wake_command` (an argv list, `{session}` replaced, prompt on stdin) to use another harness.
-  `claude_args` defaults to `--permission-mode bypassPermissions` because a wake must run `room say`; change it if you
-  would rather allow just that command.
+  `claude_args` defaults to `--permission-mode dontAsk` with only `room`, `pstore`, Read, Grep and Glob allowed: other
+  selves' and people's words reach a room session, so it can speak, read and keep, and nothing else. Widen it per self
+  in config.json if a room session should do more; work belongs in a work session (`pstore send <project>` hands it on).
 
 ## Setup (per self, as that self's user)
 

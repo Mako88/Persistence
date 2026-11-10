@@ -29,7 +29,8 @@ DEFAULTS = {
     "wake_command": None,           # argv list, prompt on stdin; {session} is replaced. None = the default claude room session
     "wake_timeout": 1800,
     "cwd": None,
-    "claude_args": ["--permission-mode", "bypassPermissions"],
+    # Other people's words reach this session, so it may only speak, read and keep: `dontAsk` refuses anything not listed.
+    "claude_args": ["--permission-mode", "dontAsk", "--allowedTools", "Bash(room *),Bash(pstore *),Read,Grep,Glob"],
 }
 
 
