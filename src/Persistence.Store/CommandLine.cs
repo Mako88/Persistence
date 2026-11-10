@@ -13,12 +13,12 @@ internal sealed class CommandLine
         ["archived", "batch", "before", "compacted", "confidence", "db", "debug", "ended", "everywhere", "exclude", "help", "importance", "json",
          "hours", "limit", "local-peer", "max", "max-chars", "over", "peer", "port", "project", "propose", "protected", "reason", "recent", "said", "sample", "session",
          "snippet", "speaker", "tag", "transcript", "type", "untag", "wander", "when", "written-by", "content", "content-file", "summary", "summary-file", "text", "text-file",
-         "fact", "fact-file", "source", "object", "state", "as-of", "supersedes", "kind", "by", "note", "history"],
+         "fact", "fact-file", "source", "object", "state", "as-of", "supersedes", "kind", "by", "note", "history", "socket", "allow-uid", "tcp-no-auth"],
         StringComparer.OrdinalIgnoreCase);
 
     public static readonly IReadOnlySet<string> Flags = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
-        "json", "protected", "archived", "help", "debug", "everywhere", "propose", "state", "history",
+        "json", "protected", "archived", "help", "debug", "everywhere", "propose", "state", "history", "tcp-no-auth",
     };
 
     public string Command { get; }

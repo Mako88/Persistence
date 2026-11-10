@@ -35,13 +35,14 @@ const string Usage = """
                                             `edit <id> --tag cue/<moment>/<name>` puts an existing one on it
       concept [review] | show <name> [--history] | add <subject> --fact <text> --source <id>[,<id>]... [--object <name>]
               [--state] [--as-of <date>] [--supersedes <fact id>] [--kind <thing|person|self|value>] [--by <extractor>]
-              | accept <fact id> [--reason] | reject <fact id> --reason | flag <fact id> --reason [--by]
+              | accept <fact id> [--reason] | reject <fact id> --reason | reopen <fact id> --reason | flag <fact id> --reason [--by]
               | kind <name> <thing|person|self|value> | alias <name> <alias> [--note]
                                             the concept graph (docs/design/concept-graph.md): facts about concepts,
                                             each citing its fragments. A fact about a person, a self or a value (or
                                             from an Identity/Relational fragment) is a proposal only the owner
                                             accepts; a concept counts as a person until its kind is confirmed.
-                                            Change supersedes; a rejection is kept and not offered again
+                                            Change supersedes; a rejection is kept and not offered again until
+                                            reopened; adding a fact that already stands adds nothing
       nearest <words...> [--text <text|->] [--limit 3]
                                             the authored fragments nearest a text, with their scores: what `add`
                                             checks for a view written twice (it names a near one after saving)
@@ -81,7 +82,10 @@ const string Usage = """
                                             --ended "<session>|<time>" (repeatable, on any command): sessions the
                                             harness saw end; one silent since is not listed as running
       rescore-conversation                 score the salience of utterances stored at the old flat 0.3
-      serve [--port 8095]                   stay up with the store open and run the commands sent to it
+      serve --socket <path> [--allow-uid <uid>]  stay up with the store open and run the commands sent to it, answering only
+                                            its own user and the --allow-uid ones (a unix socket says who calls)
+      serve --port 8095 [--tcp-no-auth]     the same on 127.0.0.1 TCP, which cannot say who calls: Windows, or --tcp-no-auth
+                                            (both, --socket and --port: while a tunnel still forwards to the port)
                                             (POST /run {"args": [...], "stdin": "..."}): a hook's call costs
                                             milliseconds, not the seconds a new process takes to start
       keep-conversation <transcript.jsonl> [--local-peer <name>] [--transcript -]

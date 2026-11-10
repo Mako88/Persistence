@@ -76,4 +76,98 @@ public sealed class StoreServerTests : IDisposable
 
         Assert.Equal("answered", await AskAsync(port, TimeSpan.FromSeconds(10)));
     }
+
+    private async Task<string> ServeOnSocketAsync(IReadOnlySet<uint> allowed, int? port = null)
+    {
+        var config = new AppConfig { PeerName = "Claude" };
+        config.DatabasePath = db;
+        var store = await FragmentStore.OpenAsync(config);
+        var socket = Path.Combine(Path.GetTempPath(), $"store-{Guid.NewGuid():N}.sock");
+        _ = Task.Run(() => Server.ServeAsync(store, db, port, async (_, _) =>
+        {
+            System.Console.Out.Write("answered");
+            return 0;
+        }, socket, allowed));
+        await Task.Delay(300);
+        return socket;
+    }
+
+    private static async Task<(int Code, string Out, string Err)> AskSocketAsync(string path)
+    {
+        using var client = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        await client.ConnectAsync(new UnixDomainSocketEndPoint(path));
+        await using var stream = new NetworkStream(client);
+        await stream.WriteAsync(Encoding.UTF8.GetBytes("{\"args\": [\"help\"], \"stdin\": \"\"}\n"));
+        using var reader = new StreamReader(stream);
+        var reply = JsonDocument.Parse(await reader.ReadLineAsync() ?? "{}").RootElement;
+        return (reply.GetProperty("code").GetInt32(), reply.GetProperty("out").GetString()!, reply.GetProperty("err").GetString()!);
+    }
+
+    [Fact]
+    public async Task A_caller_whose_user_is_not_allowed_is_refused_on_the_socket()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        // Every user but this test's own: the caller is "another self's" user, as Arden's sessions are to my store.
+        var socket = await ServeOnSocketAsync(new HashSet<uint> { Server.CurrentUser() + 1 });
+
+        var (code, output, errors) = await AskSocketAsync(socket);
+
+        Assert.Equal(2, code);
+        Assert.Equal("", output);
+        Assert.Contains($"user {Server.CurrentUser()} may not use this store", errors);
+    }
+
+    [Fact]
+    public async Task An_allowed_user_is_answered_on_the_socket_and_the_socket_is_not_open_to_others()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        var socket = await ServeOnSocketAsync(new HashSet<uint> { Server.CurrentUser() });
+
+        Assert.Equal((0, "answered", ""), await AskSocketAsync(socket));
+        Assert.Equal(UnixFileMode.None, File.GetUnixFileMode(socket) & (UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute));
+    }
+
+    [Fact]
+    public async Task A_socket_left_by_an_ended_server_is_replaced_and_a_live_one_is_not_taken()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        var socket = await ServeOnSocketAsync(new HashSet<uint> { Server.CurrentUser() });
+        var config = new AppConfig { PeerName = "Claude", DatabasePath = db };
+        var second = Server.ServeAsync(await FragmentStore.OpenAsync(config), db, null, (_, _) => Task.FromResult(0), socket, new HashSet<uint>());
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => second);
+        Assert.Equal(0, (await AskSocketAsync(socket)).Code);
+    }
+
+    [Fact]
+    public async Task Socket_and_port_together_check_the_socket_and_answer_the_port()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        // A remote machine's tunnel still forwards to the port while every local caller has moved to the socket.
+        var free = new TcpListener(IPAddress.Loopback, 0);
+        free.Start();
+        var port = ((IPEndPoint)free.LocalEndpoint).Port;
+        free.Stop();
+        var socket = await ServeOnSocketAsync(new HashSet<uint> { Server.CurrentUser() + 1 }, port);
+
+        Assert.Equal(2, (await AskSocketAsync(socket)).Code);
+        Assert.Equal("answered", await AskAsync(port, TimeSpan.FromSeconds(5)));
+        Assert.Equal(2, (await AskSocketAsync(socket)).Code);
+    }
 }

@@ -22,12 +22,13 @@ hooks, one script:
                                   their last line that says something, git's state, and whatever is watched
                                   (`hook.py watch <pid|file> [label]`, `unwatch`, `watching`)
 
-Every call but `keep` goes to `persistence-store serve`, the store kept open on PERSISTENCE_STORE_PORT
-(default 8095), started from a copy of the published CLI the first time nothing answers, and ending
+Every call but `keep` goes to `persistence-store serve`, the store kept open on PERSISTENCE_STORE_SOCKET (a unix
+socket that answers only its owner's users; on Linux, where other users share the machine) or PERSISTENCE_STORE_PORT
+(default 8095, TCP: Windows), started from a copy of the published CLI the first time nothing answers, and ending
 itself when a new build is published; until it is up, the call runs the CLI as before.
 
 A store served on another machine: `~/.claude/persistence/remote.json`, {"host": "<ssh host>", "port":
-8095}. Every call then goes to that machine's `serve` through an SSH tunnel (`ssh -N -L`) that the hook
+8095, "socket": "<the store's unix socket there>"}. Every call then goes to that machine's `serve` through an SSH tunnel (`ssh -N -L`) that the hook
 opens when nothing answers; `keep` sends the transcript's new lines rather than a path; and nothing ever
 falls back to a local store, so two copies never drift apart. `hook.py cli <args>` is the CLI by the
 same route, for the peer's own shell (the `pstore` wrapper).
@@ -82,6 +83,10 @@ def settings_env():
 
 settings_env()
 PORT = int(os.environ.get("PERSISTENCE_STORE_PORT", "8095"))  # `persistence-store serve`, the store kept open
+# On a machine with other users the store is served on a unix socket that answers only its owner's user (SO_PEERCRED):
+# on a TCP port any local user's process could run any command on it, accept included (Arden, 2026-11-10).
+SOCKET = os.environ.get("PERSISTENCE_STORE_SOCKET") or None
+WHERE = SOCKET or f"port {PORT}"
 
 
 def served(args, stdin, timeout):
@@ -92,7 +97,16 @@ def served(args, stdin, timeout):
     try:
         # Windows lets a connect to a port nobody listens on time out rather than be refused, so only a
         # timeout once connected means busy: the OS accepts for a server that is up, however busy it is.
-        connection = socket.create_connection(("127.0.0.1", PORT), timeout=1)
+        if SOCKET:
+            connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            connection.settimeout(1)
+            try:
+                connection.connect(SOCKET)
+            except OSError:
+                connection.close()
+                raise
+        else:
+            connection = socket.create_connection(("127.0.0.1", PORT), timeout=1)
     except OSError:
         return None
     try:
@@ -135,7 +149,8 @@ def start_server(exe):
                 shutil.rmtree(old, ignore_errors=True)  # a copy still running stays until it ends
         flags = BACKGROUND
         log = open(home / "serve.log", "a", encoding="utf-8")  # why it ended, when it does: an exception lands here
-        subprocess.Popen([str(copy / Path(exe).name), "serve", "--port", str(PORT)], creationflags=flags,
+        where = ["--socket", SOCKET] if SOCKET else ["--port", str(PORT)]  # TCP off Windows is refused by serve itself
+        subprocess.Popen([str(copy / Path(exe).name), "serve", *where], creationflags=flags,
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=log, close_fds=True)
     except OSError as e:
         print(f"persistence hook: the store server did not start: {e}", file=sys.stderr)
@@ -165,7 +180,9 @@ def open_tunnel(where, wait=8):
     except OSError:
         pass
     stamp.touch()
-    forward = f"127.0.0.1:{PORT}:127.0.0.1:{int(where.get('port', 8095))}"
+    # "socket": the store's unix socket on that machine; sshd connects to it as the SSH user, whom the store checks.
+    target = where["socket"] if where.get("socket") else f"127.0.0.1:{int(where.get('port', 8095))}"
+    forward = f"127.0.0.1:{PORT}:{target}"
     try:
         subprocess.Popen(["ssh", "-N", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes",
                           "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "-L", forward, where["host"]],
@@ -235,7 +252,7 @@ def verified(where):
     stamp = STATE / "store.verified"
     try:
         # Keyed by the port too: a check of 8096 vouched for whatever answered on 8095 (2026-11-10).
-        if time.time() - stamp.stat().st_mtime < 600 and stamp.read_text(encoding="utf-8") == f"{expected}@{PORT}":
+        if time.time() - stamp.stat().st_mtime < 600 and stamp.read_text(encoding="utf-8") == f"{expected}@{WHERE}":
             return True
     except OSError:
         pass
@@ -247,11 +264,11 @@ def verified(where):
         return True  # a store from before `whoami`: it cannot say, so it is not refused
     name = out.split(" ", 1)[0].strip() if code == 0 else ""
     if name != expected:
-        print(f"persistence hook: the store on port {PORT} is {out.strip() or 'unknown'}, not {expected}'s; "
-              "nothing was read or written. Check what else listens on that port.", file=sys.stderr)
+        print(f"persistence hook: the store on {WHERE} is {out.strip() or 'unknown'}, not {expected}'s; "
+              "nothing was read or written. Check what else listens there.", file=sys.stderr)
         return False
     STATE.mkdir(parents=True, exist_ok=True)
-    stamp.write_text(f"{expected}@{PORT}", encoding="utf-8")
+    stamp.write_text(f"{expected}@{WHERE}", encoding="utf-8")
     return True
 
 
