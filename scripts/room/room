@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+"""room say <text> [--reply <msgid>] [--channel <id>]   |   room read [--limit N] [--channel <id>]
+Talks to this user's room bridge over its local unix socket (mode 600, so only this user)."""
+import argparse
+import json
+import os
+import socket
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import roomcore as rc
+
+
+def ask(request):
+    path = os.environ.get("PERSISTENCE_ROOM_SOCKET") or str(rc.socket_path())
+    s = socket.socket(socket.AF_UNIX)
+    try:
+        s.settimeout(60)
+        s.connect(path)
+        s.sendall((json.dumps(request) + "\n").encode())
+        data = b""
+        while not data.endswith(b"\n"):
+            chunk = s.recv(65536)
+            if not chunk:
+                break
+            data += chunk
+        return json.loads(data)
+    except (OSError, ValueError) as e:
+        return {"ok": False, "error": f"cannot reach the room bridge at {path}: {e}"}
+    finally:
+        s.close()
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(prog="room")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    say = sub.add_parser("say")
+    say.add_argument("text")
+    say.add_argument("--reply")
+    say.add_argument("--channel")
+    read = sub.add_parser("read")
+    read.add_argument("--limit", type=int, default=20)
+    read.add_argument("--channel")
+    a = p.parse_args(argv)
+    if a.cmd == "say":
+        r = ask({"op": "say", "text": a.text, "reply": a.reply,
+                 "channel": a.channel or os.environ.get("PERSISTENCE_ROOM_CHANNEL")})
+        if not r.get("ok"):
+            print(f"room say failed: {r.get('error')}", file=sys.stderr)
+            return 1
+        print(f"posted {r['id']}\n{r['link']}")
+        return 0
+    r = ask({"op": "read", "limit": a.limit, "channel": a.channel})
+    if not r.get("ok"):
+        print(f"room read failed: {r.get('error')}", file=sys.stderr)
+        return 1
+    for m in r["messages"]:
+        print(f"[{m['id']}] {m['author']} <@{m['author_id']}> (channel {m['channel_id']}): {rc.one_line(m['text'])}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

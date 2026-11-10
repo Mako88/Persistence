@@ -1,0 +1,18 @@
+[Unit]
+Description=%i's Discord room bridge: wakes %i's room session when the room addresses them
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=%i
+# A login shell, so claude and the user's PATH are found as in their own sessions. The bridge holds the
+# Discord connection and runs no model; each wake it starts is a child of this service's cgroup, so the
+# default KillMode is right here (a stop ends a running wake).
+# The venv (discord.py) is ~/.config/persistence-room/venv; ROOM_BRIDGE may point elsewhere in /etc/default/persistence-room-%i.
+EnvironmentFile=-/etc/default/persistence-room-%i
+ExecStart=/bin/bash -lc 'exec "$HOME/.config/persistence-room/venv/bin/python" "${ROOM_BRIDGE:-$HOME/work/Persistence/scripts/room/bridge.py}"'
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target
