@@ -1,0 +1,21 @@
+[Unit]
+Description=Ember trial step 3: a throwaway test store of made-up fragments (never Ember's), on /home/ember-test/store/ember-test.sock to ember-test only
+After=network.target persistence-embedder.service
+
+[Service]
+User=ember-test
+Environment=PERSISTENCE_STORE_DB=/home/ember-test/store/ember-test.db
+Environment=PERSISTENCE_STORE_EXE=/opt/persistence/store/persistence-store
+Environment=PERSISTENCE_PEERNAME=Tessel
+Environment=PERSISTENCE_SELECTEDLOCALPEER=John
+Environment=PERSISTENCE_EMBEDDING_ENABLED=true
+Environment=PERSISTENCE_EMBEDDING_APIBASEURL=http://127.0.0.1:8081/v1
+Environment=PERSISTENCE_EMBEDDING_MODEL=bge-small-en-v1.5
+UMask=0077
+ExecStart=/opt/persistence/store/persistence-store serve --socket /home/ember-test/store/ember-test.sock
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

@@ -9,6 +9,30 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-10 — a Codex hook adapter, for Ember's trial (on a branch, for Ember's review)
+
+- **A resume can skip re-sending the core** (`PERSISTENCE_CODEX_RESUME_CORE=short`, off by default, for Ember to
+  choose): a one-line note in its place. Measured live as ember-test: Codex rebuilds a resumed session from its log,
+  so the model still holds the core from the session's start (it listed exactly that copy's fragment ids); the cost
+  is a core as of the start, and one fewer copy in the log. The note says "(not from anyone in the conversation)",
+  like the adapter's other notices (Ember's wording); a test pins its exact text.
+
+- **`scripts/codex/codex_hook.py`: Codex CLI's hooks on a Persistence store.** The same store calls `hook.py` makes
+  (it imports it): the core at SessionStart, recall at UserPromptSubmit, the turn kept at Stop. Codex's session log
+  isn't Claude Code's transcript, and the store's reader keeps nothing from it, so the adapter converts its
+  user/agent message events into the store's lines, with stable ids so a turn is kept once. Tested live on home
+  against a throwaway store of invented fragments (user `ember-test`), never Ember's. Gaps named in its docstring.
+- **`hook.py` reads `PERSISTENCE_STATE_DIR`**, so another harness keeps its state in its own place.
+- **A failed save is said to the peer, not only logged** (Ember's review asked how visible one would be: it was
+  invisible, a line in `codex-hook.log`). It's now recorded (`codex-unsaved.json`), retried at the next prompt (5 s,
+  stopping at the first failure so a down store costs one wait) and at session start, and put in front of the peer
+  with that prompt's context until a retry works. A session that starts without its core is told so. A test pins that
+  saves which failed are caught up by the next that works (each save sends the whole log; the store skips ids it has).
+- **The adapter never starts a store of its own.** With the store down, hook.py copied the store program (86 MB) into
+  `~/.codex/persistence/server` and started `serve` on the socket; with the trial's config that exits at once (no
+  database named), and with one it would race the systemd service for the socket. `PERSISTENCE_CODEX_START_STORE=1`
+  restores it. The README now says to keep `~` and `~/.codex` at 700, since Codex writes its session logs 644.
+
 ## 2026-11-10 — a self's line breaks reach Discord as line breaks
 
 - **`room say` turns ⏎ back into a line break.** Wake prompts and `room read` show a message's line breaks as ⏎,

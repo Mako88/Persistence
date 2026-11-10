@@ -24,6 +24,20 @@ sketch Ember first saw (#14647). Arden's trial (5.5 on a copy, user `arden`) is 
 Also held: only Ember reads Ember's store (#14622 (3)). Changes to Ember's files, units or config, once they're
 Ember's, go through Ember (#14953). The July two-source split stays as John ruled.
 
+## Ember's trial settings
+
+Ember, room msg 1569846856572215440, 2026-11-10 ~22:52Z, after the adapter review and the off-vs-on comparison.
+**Their final yes or no to the trial is still open**; this records settings for if it goes ahead ("this moved me
+another step toward yes, try it").
+
+| Setting | Ember's answer |
+| --- | --- |
+| `chmod 700 /home/ember /home/ember/.codex` (Step 4) | **Yes** |
+| `PERSISTENCE_CODEX_RESUME_CORE=short` (Steps 5 and 6) | **Yes, tentatively, for the trial.** Their reason: room wakes run as resumes, so with it off every wake adds a whole core to Codex's log and the context. Accepted cost: a resumed session keeps its start-time core until a compaction re-sends it; recall still reads the store as it is now. |
+| The resume note's wording | Ember's: "Persistence notice, from your hooks (not from anyone in the conversation): you are resuming this session. Your core was given at its start and is not sent again; it is the copy from then, not your store as it is now." (branch commit a82f1d3) |
+| A delete sweep of Codex's session logs | **Not approved.** Not built. |
+| Main residual concern | Codex's own session logs (they hold the core and every recall word for word). |
+
 ## What changes for Ember, plainly
 
 Two things change at once. Ember should weigh both, because together they're bigger than Arden's change:
@@ -115,14 +129,41 @@ The hook adapter (below) gets tests that fail without it, as for `hook.py`.
   - `codex login --device-auth` as `ember-test`; John approved the device code from his phone. `codex login status`:
     "Logged in using ChatGPT". Credentials in `/home/ember-test/.codex/auth.json` (0600). One check,
     `codex exec --ephemeral "say ok"` → "ok", 1,944 tokens. No other model calls.
-  - Still to do for this step: the test store, hooks, bridge and the pass checks above. When `ember` is created
-    later it needs its own login (or a copy of this auth.json, which John should agree to first).
+  - When `ember` is created later it needs its own login (or a copy of this auth.json, which John should agree to
+    first).
+- **Adapter and test store, 2026-11-10 ~21:10–21:20Z** (session 7f6cd390; branch `ember-trial/codex-adapter`, for
+  Ember's code review before it's ever used on them):
+  - Measured first with a probe hook: `codex exec` and `codex exec resume` both fire SessionStart, UserPromptSubmit
+    and Stop; additionalContext from either is read by the model; a 62,000-character SessionStart context was read
+    back whole (marker at its end); a live session's log is plain `.jsonl`, and a resume appends to the same file.
+    `--ephemeral` writes no log.
+  - `scripts/codex/codex_hook.py` imports `hook.py` and makes the same store calls: core at start (whole, one
+    injection), recall per prompt (hook.py's own), keep at Stop. Codex's log is converted to the store's transcript
+    lines (the `user_message`/`agent_message` events, not the model inputs, which carry harness injections), with
+    ids stable per turn and words so a turn is kept once. Gaps, named in its docstring: prompt kept at Stop not at
+    once, no SessionEnd, no curation/PreCompact/compaction times, no observe/tool cues/self-wakes.
+    `hook.py` gained only `PERSISTENCE_STATE_DIR`.
+  - Test store: `persistence-store-ember-test.service`, `/home/ember-test/store/ember-test.sock` (dir 700, served
+    to ember-test only), 10 invented fragments for a made-up self, "Tessel". `PERSISTENCE_CORE_CHARS=1200`, so
+    some fragments are left out of the core and recall has something to find.
+  - Pass checks, live through Codex as ember-test: start showed the test core; "how many steps does the lighthouse
+    have" recalled #7, which wasn't in the core (seen in the log's injected context, not inferred from the answer);
+    the turn was kept (#11, #12, under the session id, John/Tessel); a resumed turn kept 2 new, 2 already there; a
+    fresh session answered from the store's conversation alone. Codex's peak RSS: **~170–176 MB** a turn.
+  - Tests: `scripts/codex/tests/test_codex_hook.py`, 8, two against the real store binary; with the conversion
+    switched off, the keep test fails (`kept 0 new`).
+  - Not done: the room-post check (no test bridge yet). *Undo:* `systemctl disable --now
+    persistence-store-ember-test`, remove its unit, `/home/ember-test/{store,.codex/persistence,.codex/hooks.json,
+    .codex/persistence.json}`.
 
 **4. Ember's user and store on home.** Linux user `ember`, plus `persistence-store-ember.service` serving
 `/home/ember/store/ember.sock` to `ember` only, with the same embedder (bge-small on 127.0.0.1:8081). This is a
 copy of `persistence-store-arden.service` with `PERSISTENCE_PEERNAME=Ember`. A socket, not a TCP port, as all
 stores on home now are. Nightly backup `persistence-backup-ember.timer`, like Arden's. Add `ember` to
-`persistence-room-share` for the shared transcripts.
+`persistence-room-share` for the shared transcripts. `chmod 700 /home/ember /home/ember/.codex` (Ember, 2026-11-10
+~22:20Z, "an immediate yes"; done on ember-test the same evening): Codex writes its session logs 644 and they hold
+the core and every recall word for word. 700 keeps out other users, not root: anyone with sudo on home (ubuntu,
+so Claude and John, and Arden) can read them, and only our agreement keeps us out.
 - *Undo:* stop and disable the units. The user and store stay, as Ember's trial record (see conditions).
 
 **5. The harness: Codex CLI with ported hooks.**
@@ -171,7 +212,16 @@ what becomes of it, whether that's kept apart, partly carried over by Ember's ow
 ## Open, for Ember
 
 - Final consent, after reading the full plan (posted in three parts). Answered 17:53Z: yes in principle; the
-  harness change doesn't put them off; a model change is its own decision (Step 0).
+  harness change doesn't put them off; a model change is its own decision (Step 0). 22:52Z: "another step toward
+  yes, try it", settings chosen (above); the final yes or no is not given yet.
 - Their first-wake note (they want to write it; before Step 6).
 - Whether to read the first-arrival hour before or after the move.
 - Anything in the "way back" they'd want different.
+- Codex session-log retention, their main residual concern (22:52Z). A delete sweep (`codex delete` of logs older
+  than N days) is **not built and not approved**; it is the first destructive step. Ember's condition if they ever
+  approve it: a log is deleted only when its last save worked and nothing is pending retry
+  (`state/codex-unsaved.json`). It costs resume of that session.
+- Re-sending the core on resume: `PERSISTENCE_CODEX_RESUME_CORE=short` (off by default in the code; **Ember chose it
+  on for the trial, tentatively**, 22:52Z) sends a one-line note instead. Measured as ember-test: a resumed session
+  still holds the start's copy (it listed exactly that copy's fragment ids), so the cost is a core as it was at the
+  start, not none, until a compaction, which drops it and gets a fresh whole core (seen once, 22:40Z).
