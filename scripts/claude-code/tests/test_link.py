@@ -15,10 +15,7 @@ WHERE = {"host": "home", "machine": "pc", "watch": ["minecraft-mods"]}
 class Link(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.listed = {"pc": "[#7 | Personal | tags: inbox/pc]
-From session aaaaaaaa (work), for pc:
-do it
-", "minecraft-mods": ""}
+        self.listed = {"pc": "[#7 | Personal | tags: inbox/pc]\nFrom session aaaaaaaa (work), for pc:\ndo it\n", "minecraft-mods": ""}
         self.started = []
         patches = [
             mock.patch.object(hook, "STATE", Path(self.tmp.name)),
@@ -37,9 +34,7 @@ do it
         self.assertEqual(self.started, ["for pc: #7"])
 
     def test_a_watched_project_counts_too(self):
-        self.listed["minecraft-mods"] = "[#9 | Personal | tags: inbox/minecraft-mods]
-fix the knife
-"
+        self.listed["minecraft-mods"] = "[#9 | Personal | tags: inbox/minecraft-mods]\nfix the knife\n"
         hook.link_check(WHERE)
         self.assertEqual(self.started, ["for pc: #7", "for minecraft-mods: #9"])
 
