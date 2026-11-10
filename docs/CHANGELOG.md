@@ -11,6 +11,15 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
 
 ## 2026-11-10 — messages between sessions
 
+### Added — the Discord room bridge for persistent selves (`scripts/room/`)
+One bridge process per self (own Linux user, own bot token in a 600 file) holds the Discord connection and wakes
+a separate room session only when addressed (mention, reply, DM, @everyone/@here or a configured role), after a
+random delay (5-60 s whole room, 2-10 s direct), batching what arrives meanwhile; a bot-message breaker per channel
+and an hourly wake cap stop two selves looping. The `room say`/`room read` CLI talks to it over a 600 unix socket
+and prints the posted message's id and link, since a post that did not arrive is the failure to catch. The wake
+command is configurable per self; `PERSISTENCE_SPEAKER` carries the Discord authors that caused the wake. Logic is in
+`roomcore.py` (tested offline); the discord.py glue is untested until a token exists.
+
 ### Changed — a superseded fragment leads straight to the current one, however long the chain
 Recall, search and show met an old view and stopped at the next hop, or (recall) lost it altogether: a match on
 a superseded fragment was dropped because superseding archives it, so recall run on an old view's own wording
