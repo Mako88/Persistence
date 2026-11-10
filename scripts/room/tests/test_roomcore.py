@@ -270,6 +270,26 @@ class Vocatives(unittest.TestCase):
         for text, want in cases.items():
             self.assertEqual(rc.vocatives(text, self.NAMES), want, text)
 
+    def test_a_misheard_name_addresses_only_where_the_name_would(self):
+        # Transcription hears "Ember" as "Amber" and "Arden" as "Garden" (2026-11-10); same rule, whole words only.
+        names = rc.names_by_id(config(people={"E": "Ember", "A": "Arden"}, misheard={"E": ["Amber"], "A": ["Martin", "Garden"]}))
+        cases = {
+            "Amber, what do you think": ["E"],
+            "[voice message, transcribed]: garden, again, you need to be able to work from your computer": ["A"],
+            "Hey Martin what's new": ["A"],
+            "what about you, amber?": ["E"],
+            "amber light": [],
+            "The amber light was on": [],
+            "We went to the garden, again": [],
+            "Ambers, what do you think": [],
+            "Gardens are nice": [],
+            "Martin Luther King, Jr.": [],
+        }
+        for text, want in cases.items():
+            self.assertEqual(rc.vocatives(text, names), want, text)
+        # Off unless a self's list is in the config.
+        self.assertEqual(rc.vocatives("Amber, what do you think", rc.names_by_id(config(people={"E": "Ember"}))), [])
+
     def setUp(self):
         self.people = {"a-John": "John", ME: "Claude", "200": "Arden"}
 

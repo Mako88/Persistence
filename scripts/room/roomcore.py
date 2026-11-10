@@ -29,6 +29,11 @@ DEFAULTS = {
     # Discord user id -> other names it answers to beyond its `people` name (dictation hears "Claude" as "Cloud").
     # A name addresses someone only when used vocatively (vocatives()); a name mid-sentence is a mention.
     "names": {},
+    # Discord user id -> how speech transcription mishears its name ("Ember" as "Amber", "Arden" as "Garden"; John
+    # and Ember, 2026-11-10). Held to the same vocative rule as `names`, so "Amber, what do you think" addresses Ember
+    # and "an amber light" addresses no one. Each self opts in for its own name (Ember asked for it conservative); a
+    # self's list belongs in every bridge's config, so all bridges agree on who a message addresses and the turn order.
+    "misheard": {},
     "wake_on_human": True,          # a listed person's unaddressed message wakes every self, after room_delay
     # Bot ids of selves that wake only when addressed, never for a person's unaddressed message (Ember asked,
     # 2026-11-10). The same list in every self's config: each bridge works out every self's place in line.
@@ -176,12 +181,13 @@ def vocatives(text, names_by_id):
 
 
 def names_by_id(config):
-    """Every listed id's names: its `people` name and any others under `names`."""
+    """Every listed id's names: its `people` name and any others under `names` and `misheard`."""
     out = {}
     for i, n in (config.get("people") or {}).items():
         out.setdefault(str(i), []).append(n)
-    for i, ns in (config.get("names") or {}).items():
-        out.setdefault(str(i), []).extend(ns)
+    for key in ("names", "misheard"):
+        for i, ns in (config.get(key) or {}).items():
+            out.setdefault(str(i), []).extend(ns)
     return out
 
 
