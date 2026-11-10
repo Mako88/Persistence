@@ -1626,7 +1626,9 @@ def run_due(grace=120):
     such session is resumed with its reasons. A reason of exactly "/compact" compacts it first: a peer's own
     compaction. The grace leaves a live waiter time to take its wake first."""
     now = datetime.now().timestamp()
-    due = [w for w in wakes() if w.get("session") and "at" in w and w["at"] + grace <= now]
+    # A room wake has no live session whose waiter could take it, so it gets no grace: it waited two minutes for
+    # nothing, and John thought it had failed (2026-11-10).
+    due = [w for w in wakes() if w.get("session") and "at" in w and w["at"] + (0 if w.get("work") else grace) <= now]
     for session in {w["session"] for w in due}:
         if run_quiet(["pgrep", "-f", f"claude.*{session}"]).strip():
             continue  # a run of it is going: its wake waits for the next minute
