@@ -1369,6 +1369,31 @@ def running_agents(transcript, now, within=6 * 3600):
     return [line for _, line in sorted(found, reverse=True)]
 
 
+def linux_processes(name, pids, now):
+    """The Linux side of observe's process list, as the JSON Windows' query gives: this user's processes whose command
+    line names the project folder, or that are watched. Windows-only before, so on home it always read "nothing of X
+    is running", even beside a running room bridge (Arden, 2026-11-10)."""
+    out = run_quiet(["ps", "-u", str(os.getuid()), "-o", "pid=,etimes=,comm=,args="], None, 10)
+    found = []
+    for line in out.splitlines():
+        parts = line.split(None, 3)
+        if len(parts) < 4 or int(parts[0]) == os.getpid():
+            continue
+        pid, elapsed, comm, args = parts
+        if (name and name in args) or pid in pids:
+            found.append({"ProcessId": int(pid), "Name": comm, "CreationDate": str(int((now - int(elapsed)) * 1000)), "CommandLine": args})
+    return json.dumps(found)
+
+
+def own_services():
+    """This user's own persistence-*@<user> units that are active: the room bridge, Remote Control, a running timer's
+    job. They run from the home folder, so a project's process list never names them."""
+    import getpass
+
+    out = run_quiet(["systemctl", "list-units", "--no-legend", "--plain", "--state=active", f"persistence-*@{getpass.getuser()}.service"], None, 10)
+    return [line.split()[0].removesuffix(".service") for line in out.splitlines() if line.strip()]
+
+
 def observe(event):
     """What is so now, read off the machine every message rather than written down: the processes
     running from this project, its sessions' unfinished subagents, logs written in the last hour with their last line, git's state, and
@@ -1382,7 +1407,9 @@ def observe(event):
              f"@({','.join(pids) or '-1'}) -contains $_.ProcessId }} | Select-Object ProcessId,Name,CreationDate,CommandLine | "
              "ConvertTo-Json -Compress")
     with ThreadPoolExecutor(4) as pool:
-        procs = pool.submit(run_quiet, ["powershell", "-NoProfile", "-Command", query], None, 15)
+        procs = pool.submit(run_quiet, ["powershell", "-NoProfile", "-Command", query], None, 15) if os.name == "nt" else \
+            pool.submit(linux_processes, cwd.name, pids, now)
+        units = pool.submit(own_services) if os.name != "nt" else None
         status = pool.submit(run_quiet, ["git", "status", "--porcelain", "--branch"], cwd)
         last = pool.submit(run_quiet, ["git", "log", "-1", "--format=%h %cr: %s"], cwd)
     lines = [f"## Observed now ({datetime.now().strftime('%H:%M')} local, read off the machine, not written)"]
@@ -1405,6 +1432,9 @@ def observe(event):
         lines.append(f"- running {since}: pid {p['ProcessId']} {cmd[:150]}")
     agents = running_agents(event.get("transcript_path", ""), now)
     lines += agents
+    services = units.result() if units else []
+    if services:
+        lines.append("- my services up: " + ", ".join(services))
     if not shown and not agents:
         lines.append(f"- nothing of {name} is running")
 
