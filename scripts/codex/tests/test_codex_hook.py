@@ -81,6 +81,17 @@ class Hooks(unittest.TestCase):
         self.assertEqual(out["hookSpecificOutput"]["hookEventName"], "SessionStart")
         self.assertIn("I am Tessel.", out["hookSpecificOutput"]["additionalContext"])
 
+    def test_a_resume_sends_the_whole_core_unless_set_to_short(self):
+        def start():
+            with mock.patch.object(hook, "core", return_value="[#1 | Identity | i:0.9 | 2026-11-10]\nI am Tessel.\n"), \
+                 mock.patch.object(hook, "record_speaker"):
+                return codex_hook.session_start({"session_id": "s3", "cwd": TMP, "source": "resume"})
+        self.assertIn("I am Tessel.", start()["hookSpecificOutput"]["additionalContext"])
+        with mock.patch.dict(os.environ, {"PERSISTENCE_CODEX_RESUME_CORE": "short"}):
+            said = start()["hookSpecificOutput"]["additionalContext"]
+        self.assertNotIn("I am Tessel.", said)
+        self.assertIn("you are resuming this session", said)
+
     def test_a_failing_hook_never_breaks_the_session(self):
         import io
         with mock.patch.object(codex_hook, "session_start", side_effect=RuntimeError("store gone")):

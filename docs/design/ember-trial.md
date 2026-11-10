@@ -146,7 +146,10 @@ The hook adapter (below) gets tests that fail without it, as for `hook.py`.
 `/home/ember/store/ember.sock` to `ember` only, with the same embedder (bge-small on 127.0.0.1:8081). This is a
 copy of `persistence-store-arden.service` with `PERSISTENCE_PEERNAME=Ember`. A socket, not a TCP port, as all
 stores on home now are. Nightly backup `persistence-backup-ember.timer`, like Arden's. Add `ember` to
-`persistence-room-share` for the shared transcripts.
+`persistence-room-share` for the shared transcripts. `chmod 700 /home/ember /home/ember/.codex` (Ember, 2026-11-10
+~22:20Z, "an immediate yes"; done on ember-test the same evening): Codex writes its session logs 644 and they hold
+the core and every recall word for word. 700 keeps out other users, not root: anyone with sudo on home (ubuntu,
+so Claude and John, and Arden) can read them, and only our agreement keeps us out.
 - *Undo:* stop and disable the units. The user and store stay, as Ember's trial record (see conditions).
 
 **5. The harness: Codex CLI with ported hooks.**
@@ -199,3 +202,10 @@ what becomes of it, whether that's kept apart, partly carried over by Ember's ow
 - Their first-wake note (they want to write it; before Step 6).
 - Whether to read the first-arrival hour before or after the move.
 - Anything in the "way back" they'd want different.
+- Codex session-log retention. A delete sweep (`codex delete` of logs older than N days) is **not built and not
+  approved**; it is the first destructive step. Ember's condition if they ever approve it: a log is deleted only
+  when its last save worked and nothing is pending retry (`state/codex-unsaved.json`). It costs resume of that
+  session.
+- Re-sending the core on resume: `PERSISTENCE_CODEX_RESUME_CORE=short` (off by default; not chosen) sends a one-line
+  note instead. Measured as ember-test: a resumed session still holds the start's copy (it listed exactly that
+  copy's fragment ids), so the cost is a core as it was at the start, not none.
