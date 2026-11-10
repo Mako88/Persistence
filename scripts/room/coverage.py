@@ -48,6 +48,7 @@ API = "https://discord.com/api/v10"
 ROOM = Path(__file__).resolve().parent / "room"
 SPOKEN = {0, 19}                        # Discord message types a person or self writes: a message, a reply
 DIRECT = "direct_posts"                 # coverage.json key: ids of failure alerts posted straight to Discord
+SAY_TIMEOUT_S = 90                      # room say's own socket gives up at 60 s; this bounds anything past that
 FAILED_EXIT = 3                         # failed, and said so in the room: the OnFailure= unit stays quiet for it
 
 
@@ -151,7 +152,7 @@ def room_say(text, channel_id):
     # `room` gives up on a silent bridge after 60 s itself; this bounds the rest, so a hung bridge is said as the
     # cause rather than held until the unit's 10-minute kill.
     r = subprocess.run([sys.executable, str(ROOM), "say", text, "--channel", str(channel_id)],
-                       capture_output=True, text=True, timeout=90)
+                       capture_output=True, text=True, timeout=SAY_TIMEOUT_S)
     if r.returncode != 0:
         raise RuntimeError(f"room say failed: {r.stderr.strip()}")
     return r.stdout.strip()
