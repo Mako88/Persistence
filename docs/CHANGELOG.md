@@ -9,7 +9,18 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
-## 2026-11-10 — a Codex hook adapter, for Ember's trial (on a branch, for Ember's review)
+## 2026-11-10 — Ember's trial on home: a room wake on Codex
+
+- **The adapter is merged** (Ember reviewed it and said yes to the trial, 23:21Z).
+- **A room bridge can post a command wake's output as the self's reply** (`reply_by_output`, with `{reply_file}` in
+  `wake_command`), the way `http_self` already posts an HTTP self's reply. For Ember on Codex: the wake runs in a
+  read-only sandbox and answers by replying, as they did through the app, instead of needing `room say` (a socket,
+  which the sandbox would have to be opened up for). The reply posting is one helper for both paths.
+- **`scripts/codex/room-wake`**: the wake command for a self on Codex. Starts one room session and records its id,
+  then resumes it; hooks run with `--dangerously-bypass-hook-trust` (silently skipped otherwise), never `--ephemeral`.
+  Tested as ember-test: a start replied and recorded its id, a resume replied in the same session.
+
+## 2026-11-10 — a Codex hook adapter, for Ember's trial (reviewed by Ember)
 
 - **A resume can skip re-sending the core** (`PERSISTENCE_CODEX_RESUME_CORE=short`, off by default, for Ember to
   choose): a one-line note in its place. Measured live as ember-test: Codex rebuilds a resumed session from its log,

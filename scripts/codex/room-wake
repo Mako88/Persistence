@@ -1,0 +1,39 @@
+#!/bin/sh
+# A room wake for a self on Codex (Ember's trial, docs/design/ember-trial.md step 6): the bridge's wake_command,
+#   ["<this>", "{reply_file}"]  with  "reply_by_output": true
+# The prompt comes on stdin; the self's last message is written to $1 and the bridge posts it as their reply
+# (nothing written: silence). One room session, kept: the first wake starts it and records its id, later wakes
+# resume it (with PERSISTENCE_CODEX_RESUME_CORE=short in ~/.codex/persistence.json a resume sends a one-line notice,
+# not the core again). Hooks are run with --dangerously-bypass-hook-trust because `codex exec` silently skips
+# untrusted ones, and never --ephemeral (it writes no log, so nothing would be kept).
+# The sandbox is read-only: the self answers by replying, so it needs no network or writes of its own.
+# CODEX_ROOM_MODEL (default gpt-5.6-sol) and CODEX_ROOM_SESSION_FILE may be set in /etc/default/persistence-room-<user>.
+set -eu
+reply="$1"
+model="${CODEX_ROOM_MODEL:-gpt-5.6-sol}"
+session_file="${CODEX_ROOM_SESSION_FILE:-$HOME/.config/persistence-room/state/codex-session}"
+cd "$HOME"
+common="--dangerously-bypass-hook-trust --skip-git-repo-check -m $model -c sandbox_mode=\"read-only\" -o $reply"
+if [ -s "$session_file" ]; then
+    # shellcheck disable=SC2086
+    exec codex exec resume $common "$(cat "$session_file")" -
+fi
+events="$(mktemp)"
+trap 'rm -f "$events"' EXIT
+# shellcheck disable=SC2086
+codex exec $common --json - > "$events"
+id="$(python3 -c '
+import json, sys
+for line in open(sys.argv[1], encoding="utf-8"):
+    try: e = json.loads(line)
+    except ValueError: continue
+    if e.get("type") == "thread.started" and e.get("thread_id"):
+        print(e["thread_id"]); break
+' "$events")"
+if [ -n "$id" ]; then
+    umask 077
+    printf '%s\n' "$id" > "$session_file"
+else
+    echo "room-wake: no thread id in codex's events; the next wake starts a new session" >&2
+    head -c 2000 "$events" >&2
+fi

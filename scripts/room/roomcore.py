@@ -69,6 +69,10 @@ DEFAULTS = {
     # made by whichever bridge gets there first. None: each bridge transcribes on its own.
     "transcript_cache": None,
     "wake_command": None,           # argv list, prompt on stdin; {session} is replaced. None = the default claude room session
+    # The wake command's self speaks by replying, not with `room say` (Ember on Codex, sandboxed, 2026-11-10): the prompt
+    # says so, "{reply_file}" in wake_command is replaced by a path, and what the command writes there is posted as the
+    # self's reply after it exits 0. Nothing written, or only whitespace: silence.
+    "reply_by_output": False,
     # A self served over HTTP by the Persistence app (Ember, 2026-11-10) instead of a command: the wake's prompt goes to
     # "<url>/send" and the bridge posts the self's reply event for it, since the self has no `room say`. None: a command.
     "http_self": None,              # {"url": "http://host:8092/api/conversation", "poll_seconds": 2}
@@ -805,10 +809,11 @@ class RoomStore:
         (self.dir / "session.json").write_text(json.dumps(d), encoding="utf-8")
 
 
-def wake_argv(config, store, session_id=None):
+def wake_argv(config, store, session_id=None, reply_file=None):
     """(argv, session_to_record_or_None) for the wake command; the prompt goes on stdin."""
     if config["wake_command"]:
-        return [a.replace("{session}", session_id or "") for a in config["wake_command"]], None
+        return [a.replace("{session}", session_id or "").replace("{reply_file}", str(reply_file or ""))
+                for a in config["wake_command"]], None
     saved = store.session()
     if saved.get("created"):
         return ["claude", "-p", "--resume", saved["id"], "--output-format", "json", *config["claude_args"]], None

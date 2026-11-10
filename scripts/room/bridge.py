@@ -202,9 +202,11 @@ class Bridge:
     async def run_wake(self, wake):
         if self.config["http_self"]:
             return await self.run_http_wake(wake)
+        by_output = self.config["reply_by_output"]
         prompt = rc.build_prompt(wake.unread, wake.triggers, self.client.user.display_name, self.client.user.id,
-                                 tail=self.config["context_tail"])
-        argv, new_session = rc.wake_argv(self.config, self.store)
+                                 by_reply=by_output, tail=self.config["context_tail"])
+        reply_file = STATE / f"reply-{int(time.time() * 1000)}.txt"
+        argv, new_session = rc.wake_argv(self.config, self.store, reply_file=reply_file)
         env = {**os.environ, "PERSISTENCE_SPEAKER": wake.speaker, "PERSISTENCE_ROOM_CHANNEL": wake.channel_id,
                "PERSISTENCE_ROOM_SOCKET": str(rc.socket_path())}
         cwd = self.config["cwd"] or (str(Path.home() / "work") if (Path.home() / "work").is_dir() else str(Path.home()))
@@ -225,9 +227,12 @@ class Bridge:
                 self.store.save_session({"id": new_session, "created": True})
             elif proc.returncode:
                 print(f"wake exited {proc.returncode}; see {log}", flush=True)
+            if by_output and proc.returncode == 0 and reply_file.exists():
+                await self.post_reply(wake, reply_file.read_text(encoding="utf-8").strip())
         except OSError as e:
             print(f"wake could not start: {e}", flush=True)
         finally:
+            reply_file.unlink(missing_ok=True)
             # From the newest trigger's arrival: the delay, the turn wait and the wake itself, as John feels it.
             newest = max((t.get("ts") or 0) for t in wake.triggers)
             log_timing({"what": "wake", "triggers": [t["id"] for t in wake.triggers], "wake_s": round(time.time() - started, 1),
@@ -235,6 +240,17 @@ class Bridge:
             self.current_channel = None
             await self.mark(wake.to_mark, "done")
             self.room.finish(time.time())
+
+    async def post_reply(self, wake, text):
+        """A self that speaks by replying (`http_self`, `reply_by_output`): its reply is posted as its bot, in reply to
+        the newest message that woke it (unless a bot sent it). An empty reply is silence and posts nothing."""
+        newest = rc.in_discord_order(wake.triggers)[-1]
+        reply_to = newest["id"] if not newest.get("is_bot") else None
+        for i, part in enumerate(rc.split_post(text) if text else []):
+            said = await self.say({"text": part, "channel": wake.channel_id, "reply": reply_to if i == 0 else None})
+            if not said.get("ok"):
+                print(f"could not post the reply: {said.get('error')}", flush=True)
+                break
 
     async def run_http_wake(self, wake):
         """A self served over HTTP by the Persistence app (`http_self`; Ember, 2026-11-10): the room prompt goes to its
@@ -263,13 +279,7 @@ class Bridge:
             else:
                 print(f"no reply within {self.config['wake_timeout']}s", flush=True)
             if outcome and outcome[0] == "reply":
-                newest = rc.in_discord_order(wake.triggers)[-1]
-                reply_to = newest["id"] if not newest.get("is_bot") else None
-                for i, part in enumerate(rc.split_post(outcome[1])):
-                    said = await self.say({"text": part, "channel": wake.channel_id, "reply": reply_to if i == 0 else None})
-                    if not said.get("ok"):
-                        print(f"could not post the reply: {said.get('error')}", flush=True)
-                        break
+                await self.post_reply(wake, outcome[1])
             elif outcome and outcome[0] == "error":
                 print(f"the self's turn failed: {outcome[1][:500]}", flush=True)
         except Exception as e:      # the self's app down or unreachable: the room goes on without it

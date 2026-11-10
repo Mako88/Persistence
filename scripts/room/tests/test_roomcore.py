@@ -535,6 +535,12 @@ class WakeCommand(unittest.TestCase):
         argv, new = rc.wake_argv(config(wake_command=["codex", "{session}"]), None, "s1")
         self.assertEqual(argv, ["codex", "s1"])
 
+    def test_reply_file_is_passed_to_the_command(self):
+        # reply_by_output (Ember on Codex): the bridge posts what the command writes to this path
+        argv, _ = rc.wake_argv(config(wake_command=["w", "{reply_file}"], reply_by_output=True), None,
+                               reply_file=Path("/s/reply-1.txt"))
+        self.assertEqual(argv, ["w", "/s/reply-1.txt"])
+
     def test_post_validation(self):
         self.assertIsNotNone(rc.validate_post("  "))
         self.assertIsNotNone(rc.validate_post("x" * 2001))
