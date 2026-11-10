@@ -50,6 +50,7 @@ DEFAULTS = {
     "attachment_max_bytes": 25 * 1024 * 1024,
     "whisper_model": "small",
     "whisper_dir": "/opt/persistence/whisper",
+    "pause_seconds": 1.5,           # a gap between words this long or longer is marked "[pause Ns]"
     "wake_command": None,           # argv list, prompt on stdin; {session} is replaced. None = the default claude room session
     "wake_timeout": 1800,
     "cwd": None,
@@ -103,6 +104,7 @@ class Msg:
     is_dm: bool = False
     mentions: list = field(default_factory=list)        # user ids mentioned
     role_mentions: list = field(default_factory=list)   # role ids mentioned
+    named: list = field(default_factory=list)           # ids addressed by name, used vocatively (vocatives())
     mention_everyone: bool = False                      # @everyone or @here
     reply_to_author_id: str = None                      # author of the message this replies to
     channel_name: str = ""
@@ -166,13 +168,15 @@ def classify(msg, me_id, room_roles=(), people=None, wake_on_human=False):
     """'direct' (a DM, a mention of me, a reply to me), 'room' (@everyone/@here or a configured role, or with
     `wake_on_human` a listed person's message that addresses no one), or None."""
     me = str(me_id)
-    if msg.is_dm or me in map(str, msg.mentions) or (msg.reply_to_author_id is not None and str(msg.reply_to_author_id) == me):
+    if msg.is_dm or me in map(str, msg.mentions) or me in map(str, msg.named) or (msg.reply_to_author_id is not None and str(msg.reply_to_author_id) == me):
         return "direct"
     if msg.mention_everyone or set(map(str, msg.role_mentions)) & set(map(str, room_roles)):
         return "room"
     # A person talking to the room wakes every self (John, 2026-11-10): the random room delay makes it safe, since a
     # self that wakes later sees what the others said and may keep silent. Only a listed person and never a bot, so
     # selves cannot loop without a mention and a stranger cannot run up anyone's wakes (Arden's rules 1, 3, 4).
+    # A name in a person's message does not count here: John's voice messages talk to everyone and name one self in
+    # passing ("I was gonna say, Arden, ..."), so the named self goes first in line and the rest still wake.
     addressed = msg.mentions or msg.role_mentions or msg.reply_to_author_id is not None
     if wake_on_human and not addressed and not msg.is_bot and str(msg.author_id) in (people or {}):
         return "room"
@@ -201,6 +205,23 @@ def with_attachments(text, names=(), voice=False, saved=None, transcript=None):
             else:
                 extra.append(f"[attachment: {n}]")
     return " ".join(([text] if text and text.strip() else []) + extra)
+
+
+def with_pauses(words, min_gap=1.5):
+    """A transcript from (start, end, text) words, with "[pause Ns]" where the speaker stopped for min_gap seconds or
+    more. John wants his ums, uhs and pauses kept ("gives a lot of depth", 2026-11-10); Whisper keeps the ums, the
+    pauses only show in its word timestamps (Arden's suggestion)."""
+    # Whisper's words carry their own leading space ("y" + "'all"), so they are joined as given.
+    out, prev = [], None
+    for start, end, text in words:
+        if not (text or "").strip():
+            continue
+        if prev is not None and start - prev >= min_gap:
+            out.append(f" [pause {round(start - prev)}s]")
+            text = " " + text.lstrip()
+        out.append(text)
+        prev = end
+    return "".join(out).strip()
 
 
 def turn_order(msg, selves, config):
@@ -362,11 +383,9 @@ class Room:
         if self.config["channels"] and not msg.is_dm and msg.channel_id not in map(str, self.config["channels"]):
             return None
         self.breaker.note(msg.channel_id, msg.is_bot, now)
-        # A name used vocatively addresses its owner as an @mention does, from a person or a self alike; a self's
-        # vocative still meets the bot-message cap like any bot message.
-        for i in vocatives(msg.text, names_by_id(self.config)):
-            if i not in map(str, msg.mentions) and i != str(msg.author_id):
-                msg.mentions = list(msg.mentions) + [i]
+        # A name used vocatively addresses its owner directly, from a person or a self alike; a self's vocative still
+        # meets the bot-message cap like any bot message.
+        msg.named = [i for i in vocatives(msg.text, names_by_id(self.config)) if i != str(msg.author_id)]
         d = asdict(msg)
         d["display_name"], d["author"] = d["author"], name_of(msg.author_id, msg.author, self.config["people"])
         self.unread.append(d)

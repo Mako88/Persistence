@@ -41,17 +41,38 @@ def safe_name(name):
     return name or "attachment"
 
 
-def transcribe(path, model_name, model_dir):
-    """A voice message's text, by faster-whisper on the CPU. The model is loaded per message and let go after: voice
-    messages are rare, and a resident model would hold a gigabyte per bridge. None if faster-whisper is missing."""
+FILLER_PROMPT = "Um, so, uh, I was gonna say, like, um... you know, uh, yeah."
+
+
+def transcribe(path, model_name, model_dir, pause_seconds=1.5):
+    """A voice message's text, by faster-whisper on the CPU, with its pauses marked. The model is loaded per message
+    and let go after: voice messages are rare, and a resident model would hold a gigabyte per bridge. None if
+    faster-whisper is missing. Each run's timings go to state/timings.jsonl, to tell how much of the wait John feels
+    after a voice message is transcription and how much is the wake (2026-11-10)."""
     try:
         from faster_whisper import WhisperModel
     except ImportError:
         return None
+    t0 = time.time()
     model = WhisperModel(model_name, device="cpu", compute_type="int8", cpu_threads=2,
                          download_root=model_dir if model_dir and Path(model_dir).is_dir() else None)
-    segments, _ = model.transcribe(str(path), vad_filter=True)
-    return " ".join(seg.text.strip() for seg in segments).strip()
+    t1 = time.time()
+    # The prompt, in John's own manner, keeps the fillers and restarts that Whisper otherwise cleans away: measured on
+    # his clip 1569616107520790648, it brought back every um and "y'all, y'all" and kept the punctuation.
+    segments, info = model.transcribe(str(path), vad_filter=True, word_timestamps=True, initial_prompt=FILLER_PROMPT)
+    words = [(w.start, w.end, w.word) for seg in segments for w in (seg.words or [])]
+    t2 = time.time()
+    log_timing({"what": "transcribe", "file": str(path), "model": model_name, "audio_s": round(info.duration, 1),
+                "load_s": round(t1 - t0, 1), "transcribe_s": round(t2 - t1, 1)})
+    return rc.with_pauses(words, pause_seconds)
+
+
+def log_timing(d):
+    try:
+        with (STATE / "timings.jsonl").open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"at": round(time.time(), 1), **d}) + "\n")
+    except OSError as e:
+        print(f"could not log timing {d}: {e}", flush=True)
 
 
 class Bridge:
@@ -83,7 +104,8 @@ class Bridge:
             if voice and transcript is None:
                 try:
                     transcript = await asyncio.to_thread(
-                        transcribe, path, self.config["whisper_model"], self.config["whisper_dir"])
+                        transcribe, path, self.config["whisper_model"], self.config["whisper_dir"],
+                        self.config["pause_seconds"])
                 except Exception as e:
                     print(f"could not transcribe {path}: {e}", flush=True)
         return rc.with_attachments(m.content, [a.filename for a in m.attachments], voice, saved, transcript)
@@ -109,6 +131,7 @@ class Bridge:
         self.current_channel = wake.channel_id
         log = STATE / f"wake-{int(time.time())}.json"
         await self.mark(wake.turns, "start")
+        started = time.time()
         try:
             with log.open("w") as out:
                 proc = await asyncio.create_subprocess_exec(
@@ -125,6 +148,10 @@ class Bridge:
         except OSError as e:
             print(f"wake could not start: {e}", flush=True)
         finally:
+            # From the newest trigger's arrival: the delay, the turn wait and the wake itself, as John feels it.
+            newest = max((t.get("ts") or 0) for t in wake.triggers)
+            log_timing({"what": "wake", "triggers": [t["id"] for t in wake.triggers], "wake_s": round(time.time() - started, 1),
+                        "since_message_s": round(time.time() - newest, 1) if newest else None})
             self.current_channel = None
             await self.mark(wake.turns, "done")
             self.room.finish(time.time())

@@ -277,9 +277,15 @@ class Vocatives(unittest.TestCase):
         r = self.room(ME)
         self.assertEqual(r.on_message(msg(1, "Ember drew me a picture", author_id="a-John"), 0), "room")
 
-    def test_johns_vocative_wakes_the_named_self_only(self):
-        self.assertEqual(self.room("200").on_message(msg(1, "Arden, what do you think", author_id="a-John"), 0), "direct")
-        self.assertIsNone(self.room(ME).on_message(msg(1, "Arden, what do you think", author_id="a-John"), 0))
+    def test_johns_vocative_puts_the_named_self_first_and_still_wakes_the_rest(self):
+        m = lambda: msg(1, "I was gonna say, Arden, you need your computer", author_id="a-John")
+        self.assertEqual(self.room("200").on_message(m(), 0), "direct")
+        self.assertEqual(self.room(ME).on_message(m(), 0), "room")
+        r = self.room(ME, selves=[ME, "200"])
+        r.on_message(m(), 0)
+        for seed in range(1000, 1020):      # whatever the shuffle, the named self goes first
+            mm = m(); mm.id = str(seed); mm.named = ["200"]
+            self.assertEqual(rc.turn_order(mm, [ME, "200"], r.config), ["200", ME])
 
     def test_a_selfs_mention_wakes_no_one_and_its_vocative_wakes_until_the_cap(self):
         r = self.room("200", bot_message_cap=2)
@@ -287,6 +293,16 @@ class Vocatives(unittest.TestCase):
         self.assertEqual(r.on_message(msg(2, "Arden, what do you think", author="Claude", author_id=ME, bot=True), 1), "direct")
         r.on_message(msg(3, "Arden, and?", author="Claude", author_id=ME, bot=True), 2)   # third bot message: over the cap
         self.assertEqual(len(r.pending), 1)
+
+
+class Pauses(unittest.TestCase):
+    def test_gaps_of_the_threshold_or_more_are_marked(self):
+        words = [(0.0, 0.4, " um"), (0.5, 0.9, " so"), (2.4, 2.8, " yeah"), (3.0, 3.2, " y"), (3.2, 3.4, "'all"),
+                 (8.1, 8.5, "right")]
+        self.assertEqual(rc.with_pauses(words, 1.5), "um so [pause 2s] yeah y'all [pause 5s] right")
+
+    def test_blank_words_skipped(self):
+        self.assertEqual(rc.with_pauses([(0, 1, " "), (5, 6, "hi")]), "hi")
 
 
 class SpeakerAndPrompt(unittest.TestCase):

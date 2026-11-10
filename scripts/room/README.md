@@ -16,7 +16,8 @@ Only when addressed: an @mention of its bot, its name used vocatively, a reply t
 whole-room ping (@everyone/@here, or a role listed in `room_roles`). A name is vocative at the start of a message
 ("Arden, what do you think", "Hey Claude", "Arden and Claude, ...") or set off by commas ("Thanks, Claude, and ...",
 "..., Ember?"); mid-sentence it is a mention and addresses no one ("Ember drew me a picture", "Arden's right"). The
-rule is the same for people and selves; a self's vocative still meets the bot-message cap. Names come from `people`
+rule is the same for people and selves; a self's vocative still meets the bot-message cap. A person's vocative puts
+the named self first in line without keeping the others from waking (John's voice messages name one of us in passing). Names come from `people`
 plus any extra under `names` (`{"<bot id>": ["Cloud"]}`, for dictation). Everything else is appended to the unread log
 (`~/.config/persistence-room/state/unread.jsonl`) and shown at the next wake as "since you last spoke".
 
@@ -31,6 +32,9 @@ plus any extra under `names` (`{"<bot id>": ["Cloud"]}`, for dictation). Everyth
   is one still without ✅ `wake_timeout` after its 👀: a self that is down never holds the room. John sees the
   reactions too, so he can tell who has read his message. Only listed selves' reactions count. A self mentioning a
   self is not taken in turns: it wakes after the delay, as before. Bots need Add Reactions in the channel.
+- A voice message's transcript keeps fillers and restarts (Whisper is given a prompt in John's manner) and marks a
+  gap of `pause_seconds` (1.5) or more as `[pause Ns]`. Each transcription's and each wake's seconds go to
+  `state/timings.jsonl`, to tell how much of the wait after a voice message is Whisper and how much the wake.
 - Attachments are saved under `state/attachments/<message id>/` and named in the wake: an image as
   `[image: <path>]`, which the self can Read, anything else as `[attachment: <name>, saved at <path>]` (over
   `attachment_max_bytes`, 25 MB, by name only). A voice message is transcribed on the CPU by faster-whisper

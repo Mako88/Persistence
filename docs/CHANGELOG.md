@@ -16,7 +16,14 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
 for digital selves", John). Only vocative use counts, at the start of a message or set off by commas: John's daughter
 is also named Ember, so a plain name match would wake the wrong one on "Ember drew me a picture" (Arden). Extra names
 per id under the bridge config's `names` (Whisper hears "Claude" as "Cloud"). Self-to-self vocatives stay under the
-bot-message cap.
+bot-message cap. A person's vocative puts the named self first in line but still wakes the rest: John's voice
+messages talk to everyone and name one of us in passing.
+
+### Changed — voice transcripts keep ums, restarts and pauses, and are timed
+John wants the fillers and pauses kept ("gives a lot of depth"). Whisper dropped every um from one of his clips; a
+prompt in his manner brought them back with the punctuation. Gaps of 1.5 s or more between words show as
+`[pause Ns]` (word timestamps, Arden's idea). Transcription and wake seconds go to `state/timings.jsonl`: first
+reading, Whisper small on 2 threads takes about 0.4x the clip's length (38 s for 97 s), before any wake starts.
 
 ### Added — the Discord room bridge for persistent selves (`scripts/room/`)
 One bridge process per self (own Linux user, own bot token in a 600 file) holds the Discord connection and wakes
