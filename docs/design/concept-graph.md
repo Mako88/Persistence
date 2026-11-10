@@ -43,7 +43,12 @@ bridge runs one process per self). Recall starts at the concepts a message touch
    proposals wait. Nobody's graph is read by another without asking; a shared graph is a later choice for the selves.
 5. **The extractor is a reader of the store.** A local model needs no asking; an outside API model reading a self's
    Identity and Relational fragments is a new reader, so the self is asked before one is used on its store.
-6. **Not the default until measured** (step 5 below). Fragments-only stays available always.
+6. **Not the default until measured** (step 6 below). Fragments-only stays available always.
+7. **Industry standard first, then the gaps** (John, msg 1569768748448219347, 2026-11-10: "go with industry standard
+   first and then see where the gaps are before doing anything else"; his earlier "best-known CS answer", #15223).
+   Standard retrieval (BM25 + embeddings fused, then a cross-encoder re-ranker over a wider candidate pool) is built
+   and measured on the gold set before any graph recall. Graph recall, labelled links and walking, is built only for
+   the misses standard retrieval leaves, and stays only where it beats it.
 
 ## Shape (new migration, store side)
 
@@ -129,8 +134,11 @@ Three parts, inside the same character budget the hook has now:
    run on their store (their consent, rule 5); prompt fixes for the which-concept errors (show the known concepts'
    kinds and one fact each).
 3. Titles for all authored fragments.
-4. Graph recall behind `PERSISTENCE_RECALL_GRAPH=1`.
-5. **The A/B, scored per store** (mine and Arden's are different shapes). Gold set from real misses, written before
+4. **Standard retrieval first (rule 7):** a wider fused BM25 + embedding pool, re-ranked by a cross-encoder, behind a
+   flag. Score it against today's recall on the gold set below; the misses it leaves are the graph's brief. Steps 5-6
+   are only built if there are such misses, and aimed at them.
+5. Graph recall behind `PERSISTENCE_RECALL_GRAPH=1`.
+6. **The A/B, scored per store** (mine and Arden's are different shapes). Gold set from real misses, written before
    the run:
    - mine: "Emma" → #7153 (#14609); the minecraft-mods message from the pawsitivity folder (#14625);
    - Arden's: "Emma" → #933 (today brings #34, #1029, #305); "is Synth's first wake still held?" → #738 (today brings
@@ -138,13 +146,13 @@ Three parts, inside the same character budget the hook has now:
    - plus ~30 messages sampled from each store's real prompts **independently of the extraction**, including some
      with no related fact, to count intrusions. Open Plexus's facts lifted the questions they were written from and
      nothing else (0.62 vs 0.55, then 0.505 vs 0.505, e7d5a127): a gold set built from the extraction measures itself.
-   Arms: today's recall (the floor), **recall2** (search again from the best fragment's text, no graph), graph + fragments
+   Arms: today's recall (the floor), **standard retrieval** (step 4), **recall2** (search again from the best fragment's text, no graph), graph + fragments
    at 1 and 2 hops (3 only rank-gated), the three hub forms, and the graph arm with the walk disabled to prove the
-   wiring. recall2 is the baseline to beat: in Open Plexus spreading over links lost to it on two-hop (0.50 vs 0.75,
-   d9bc0f4e). Measure: gold ids reached (in any of the three parts), characters spent, wrong facts shown, reported
-   paired as "N made right, M made wrong". Graph becomes the default only if it beats recall2 on the misses and loses
+   wiring. The baseline to beat is the better of standard retrieval and recall2 (in Open Plexus spreading over links
+   lost to recall2 on two-hop, 0.50 vs 0.75, d9bc0f4e). Measure: gold ids reached (in any of the three parts), characters spent, wrong facts shown, reported
+   paired as "N made right, M made wrong". Graph becomes the default only if it beats that baseline on the misses and loses
    nothing on the sample. With ~40 prompts only large differences will show; say so rather than read noise.
-6. Backfill, then the nightly trickle in the sleep pass, plus a drift check: each night re-read the sources of a few
+7. Backfill, then the nightly trickle in the sleep pass, plus a drift check: each night re-read the sources of a few
    random facts; a fact its sources no longer support becomes a retraction proposal (the same channel as flags).
 
 ## What Open Plexus already found (2026-11-10)
