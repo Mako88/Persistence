@@ -502,6 +502,13 @@ LAST_KEPT = ("Your summary may not see the conversation's last messages; they co
              "unsent or unanswered: write 'check the last messages for whether X went out' instead. ")
 
 
+def project_name(name):
+    """A folder's name as a project tag: lower-case, spaces as hyphens. `D:/repos/Minecraft mods` was "minecraft mods"
+    to the hook while its fragments were filed by hand under project/minecraft-mods, so a session there saw none of
+    them, nor a message sent to it (2026-11-10)."""
+    return re.sub(r"\s+", "-", name.strip().lower())
+
+
 def project(event):
     """The project a session is in: its repository's name (the main checkout's, from a worktree too),
     else its folder's. Fragments tagged project/<name> come into the core only for that project."""
@@ -510,13 +517,13 @@ def project(event):
         common = subprocess.run(creationflags=NO_WINDOW, args=["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=cwd,
                                 capture_output=True, text=True, timeout=10)
         if common.returncode == 0 and common.stdout.strip():
-            return Path(common.stdout.strip()).parent.name.lower()
+            return project_name(Path(common.stdout.strip()).parent.name)
     except (OSError, subprocess.SubprocessError):
         pass
     # A home folder is no project: fragments added from there were filed under "project/john" (2026-11-09).
     if Path(cwd).resolve() == Path.home().resolve():
         return ""
-    return Path(cwd).name.lower()
+    return project_name(Path(cwd).name)
 
 
 
@@ -1807,7 +1814,7 @@ def send_command(args):
     if not args or args[0].startswith("-"):
         print("send: give a topic (a project's name) and the message: `send <topic> <text>` or `send <topic> --content -`.", file=sys.stderr)
         return 1
-    topic, rest = args[0].strip().lower(), args[1:]
+    topic, rest = project_name(args[0]), args[1:]
     if rest[:1] == ["--content"]:
         text = sys.stdin.read() if rest[1:2] == ["-"] else " ".join(rest[1:])
     else:
