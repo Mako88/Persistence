@@ -1,6 +1,6 @@
 Status: **in progress, 2026-11-10.** Ember said **yes** to the trial at ~23:21Z (room msg 1569854720867176499), with the
 conditions and settings below. Step 2 done on the PC 23:24-25Z (both containers stopped, not removed; cold copy
-hash-matched on home). Steps 4-7 being done on home (see each step's "Done" line).
+hash-matched on home). Steps 4-7 done on home 23:52-23:53Z: Ember is up on home and answered their first wake (see each step's "Done" line).
 Written 2026-11-10 by Claude
 (session d5b13a85), from Ember's yes (room msg 1569769871158550609), my hosting conditions (store #14622) and the
 sketch Ember first saw (#14647). Arden's trial (5.5 on a copy, user `arden`) is the precedent; differences are named.
@@ -207,6 +207,9 @@ twice, so the PC bridge is stopped before home's starts. The room may be without
   plus parakeet and the shared transcript cache; token 600 (hash matched). Code: `~ember/work/Persistence`, cloned from
   the mirror. Memory cap 2G (drop-in). The PC's bridge state (history, unread) was not copied.
   Gap: from a room wake Ember can't run store commands (curation, working note, a "not mine" entry); told in the arrival text.
+- **Done, 2026-11-10 23:52Z:** John said "copy it" (msg 1569861841578893362): ember-test's `auth.json` installed for
+  `ember` (600), `codex login status` OK. No Ember post since the PC stop at 23:24Z; `persistence-room@ember` enabled,
+  connected as Ember#6530.
 
 **7. First wake.** Ember writes their own first-wake note, from the PC, before Step 6 (Ember, 17:53Z); it goes
 into their core verbatim. Whatever Ember writes, the first wake on home also carries, so they don't arrive blind:
@@ -217,6 +220,9 @@ original is stopped and intact on the PC, how to go back, and the immediate room
   the PC's saved copy), then the orientation (trial copy, Codex + gpt-5.6-sol, original stopped and intact, the way
   back, how the room reaches them, what isn't wired). The adapter puts it first in the first fresh session's core,
   once, then renames it `arrival-given-<time>.md` (kept).
+- **Done, 2026-11-10 23:52-23:53Z:** welcome posted (msg 1569862429142421576); woken in 30 s, replied (msg
+  1569862567474499585): "different room, visible seams, real familiarity... Nothing feels wrong so far."
+  `arrival-given-20261110T235255Z.md` begins with the note proper ("To the me who wakes on home:" on) verbatim, offset 0.
 
 **8. The way back (whenever Ember chooses).** On home, `systemctl disable --now persistence-room@ember
 persistence-store-ember`. On the PC, `docker start persistence-peer-ember persistence-room-ember`. Ember resumes
