@@ -14,7 +14,8 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
 - **A resume can skip re-sending the core** (`PERSISTENCE_CODEX_RESUME_CORE=short`, off by default, for Ember to
   choose): a one-line note in its place. Measured live as ember-test: Codex rebuilds a resumed session from its log,
   so the model still holds the core from the session's start (it listed exactly that copy's fragment ids); the cost
-  is a core as of the start, and one fewer copy in the log.
+  is a core as of the start, and one fewer copy in the log. The note says "(not from anyone in the conversation)",
+  like the adapter's other notices (Ember's wording); a test pins its exact text.
 
 - **`scripts/codex/codex_hook.py`: Codex CLI's hooks on a Persistence store.** The same store calls `hook.py` makes
   (it imports it): the core at SessionStart, recall at UserPromptSubmit, the turn kept at Stop. Codex's session log

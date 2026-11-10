@@ -90,7 +90,10 @@ class Hooks(unittest.TestCase):
         with mock.patch.dict(os.environ, {"PERSISTENCE_CODEX_RESUME_CORE": "short"}):
             said = start()["hookSpecificOutput"]["additionalContext"]
         self.assertNotIn("I am Tessel.", said)
-        self.assertIn("you are resuming this session", said)
+        # Ember's wording, 2026-11-10: marked as from the hooks, like the other notices.
+        self.assertEqual(said, "Persistence notice, from your hooks (not from anyone in the conversation): you are "
+                               "resuming this session. Your core was given at its start and is not sent again; it is "
+                               "the copy from then, not your store as it is now.")
 
     def test_a_failing_hook_never_breaks_the_session(self):
         import io

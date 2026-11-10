@@ -251,11 +251,12 @@ def session_start(event):
     retry_unsaved(timeout=12)
     warn = notice()
     if source == "resume" and os.environ.get("PERSISTENCE_CODEX_RESUME_CORE") == "short":
-        # Off unless set (Ember hasn't decided, 2026-11-10). Codex rebuilds a resumed session from its log, which holds
+        # Off unless set; Ember chose it on for the trial, tentatively (2026-11-10). Codex rebuilds a resumed session from its log, which holds
         # the core given at the session's start, so the model still has that copy (as it was then); the recall dedupe
         # set is left as it is for the same reason.
-        short = ("Persistence notice, from your hooks: you are resuming this session. Your core was given at its start "
-                 "and is not sent again; it is the copy from then, not your store as it is now.")
+        short = ("Persistence notice, from your hooks (not from anyone in the conversation): you are resuming this "
+                 "session. Your core was given at its start and is not sent again; it is the copy from then, not your "
+                 "store as it is now.")
         return {"hookSpecificOutput": {"hookEventName": "SessionStart",
                                        "additionalContext": f"{warn}\n\n{short}" if warn else short}}
     whole = hook.core(event, "--max-chars", os.environ.get("PERSISTENCE_CORE_CHARS", str(CORE_CHARS)), "--recent", "60")
