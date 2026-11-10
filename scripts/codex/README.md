@@ -25,6 +25,11 @@ calls, wired to Codex CLI's hooks (0.144.1). Its docstring says what each hook d
 ```
 
 4. Trust the hooks once in the Codex TUI, or run `codex exec --dangerously-bypass-hook-trust`.
+5. `chmod 700 ~ ~/.codex`: Codex writes its session logs (`~/.codex/sessions`, every model input word for word, the
+   core and each recall included) mode 644, and keeps them until `codex delete <id>`; only the home folder's mode
+   keeps other users out.
+
+The store is a service of its own: the adapter never starts one (see the comment after `import hook`).
 
 Don't run a kept session with `codex exec --ephemeral`: it writes no session log, so `keep` has nothing to read.
 

@@ -22,6 +22,10 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
   stopping at the first failure so a down store costs one wait) and at session start, and put in front of the peer
   with that prompt's context until a retry works. A session that starts without its core is told so. A test pins that
   saves which failed are caught up by the next that works (each save sends the whole log; the store skips ids it has).
+- **The adapter never starts a store of its own.** With the store down, hook.py copied the store program (86 MB) into
+  `~/.codex/persistence/server` and started `serve` on the socket; with the trial's config that exits at once (no
+  database named), and with one it would race the systemd service for the socket. `PERSISTENCE_CODEX_START_STORE=1`
+  restores it. The README now says to keep `~` and `~/.codex` at 700, since Codex writes its session logs 644.
 
 ## 2026-11-10 — a self's line breaks reach Discord as line breaks
 

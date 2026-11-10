@@ -67,6 +67,13 @@ for where in (HERE, HERE.parent / "claude-code"):  # deployed side by side, or r
         break
 import hook  # noqa: E402  (after configure: hook.py reads its environment at import)
 
+# The store is a service of its own (systemd on home), never started by a hook. hook.py, finding no store on the
+# socket, copies the store program (86 MB) into the state folder's parent and starts `serve` on that socket: measured
+# on home, 2026-11-10, with the trial's config that server exits at once ("Which store?", no PERSISTENCE_STORE_DB),
+# and with one it would race the service for the socket. PERSISTENCE_CODEX_START_STORE=1 keeps hook.py's way.
+if not os.environ.get("PERSISTENCE_CODEX_START_STORE"):
+    hook.start_server = lambda exe: None
+
 
 SESSION_IN_NAME = re.compile(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$")
 

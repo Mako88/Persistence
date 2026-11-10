@@ -158,6 +158,15 @@ class SaveFailures(unittest.TestCase):
         self.assertEqual(store.call_count, 1)  # a store that is down is waited on once a prompt, not once a session
 
 
+class StoreDown(unittest.TestCase):
+    def test_a_store_that_is_down_is_never_started_by_the_hook(self):
+        with mock.patch.object(hook, "remote", return_value=None), mock.patch.object(hook, "served", return_value=None), \
+             mock.patch("subprocess.Popen") as started:
+            self.assertEqual(hook.call_store("version", cold=False), DOWN)
+        started.assert_not_called()
+        self.assertFalse((hook.STATE.parent / "server").exists())
+
+
 STORE = os.environ.get("PERSISTENCE_STORE_EXE") or "/opt/persistence/store/persistence-store"
 
 
