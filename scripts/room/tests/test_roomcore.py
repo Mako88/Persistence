@@ -510,6 +510,12 @@ class WakeCommand(unittest.TestCase):
         self.assertIsNotNone(rc.validate_post("x" * 2001))
         self.assertIsNone(rc.validate_post("x" * 2000))
 
+    def test_outgoing_text_turns_the_mark_back_into_line_breaks(self):
+        self.assertEqual(rc.outgoing_text("a ⏎ b⏎c"), "a\nb\nc")
+        self.assertEqual(rc.outgoing_text("a\nb"), "a\nb")              # real breaks pass through
+        shown = rc.one_line("one\ntwo\n\nthree")
+        self.assertEqual(rc.outgoing_text(shown), "one\ntwo\nthree")    # what a self reads, said back, breaks again
+
 
 class StoreTests(unittest.TestCase):
     def test_unread_roundtrip_and_history(self):

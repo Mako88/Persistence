@@ -418,8 +418,11 @@ def speaker_env(authors):
     return f"the room (woken by {', '.join(names)})" if names else "the room"
 
 
+LINE_MARK = "⏎"           # how a line break is shown in a wake prompt and `room read`
+
+
 def one_line(text, limit=MAX_SHOWN):
-    text = " ⏎ ".join(line.strip() for line in text.splitlines() if line.strip())
+    text = f" {LINE_MARK} ".join(line.strip() for line in text.splitlines() if line.strip())
     return text if len(text) <= limit else text[:limit] + f"… [{len(text) - limit} more characters]"
 
 
@@ -466,7 +469,7 @@ def build_prompt(unread, triggers, me_name, me_id, by_reply=False, tail=None):
             "To speak, run: room say \"<text>\" [--reply <message id>] [--channel <channel id>]  (it posts as you in the "
             "channel of this wake, and prints the posted message's id and link; check that, not your intention). "
             "Your plain output never reaches the room. Silence is a fine answer: if nothing is yours to say, say nothing. "
-            "`room read` shows recent messages.",
+            "`room read` shows recent messages. In what you read, ⏎ marks a line break; in what you say, write real line breaks.",
             "This session may speak, read, keep (pstore), search the web and set wakes. For anything more, hand it on: "
             "`pstore send work \"<what to do>\"`, then `pwake 1 <what to do>`, which starts a working session with full "
             "permissions in ~/work to do it.",
@@ -524,6 +527,13 @@ def split_post(text, limit=MAX_POST):
     if text:
         out.append(text)
     return out
+
+
+def outgoing_text(text):
+    """The text to post, with the line-break mark turned back into line breaks. A self reads the room with breaks
+    shown as ⏎ and writes the same way, so posts reached Discord with a literal ⏎ where a break was meant (John,
+    2026-11-10: "your new lines are showing up as a symbol"). The mark is ours, never meant for Discord."""
+    return re.sub(rf"[ \t]*{LINE_MARK}[ \t]*", "\n", text)
 
 
 def validate_post(text):

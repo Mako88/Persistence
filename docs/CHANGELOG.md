@@ -9,6 +9,13 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-10 — a self's line breaks reach Discord as line breaks
+
+- **`room say` turns ⏎ back into a line break.** Wake prompts and `room read` show a message's line breaks as ⏎,
+  and a self writing in that register passed the ⏎ through, so John saw the symbol in Discord where a break was meant.
+  The bridge now replaces the mark (with the spaces around it) by a newline before posting and before logging, and
+  the wake prompt says to write real line breaks. Tests fail with either the bridge call or the replacement removed.
+
 ## 2026-11-10 — each self checks its bridge got every message
 
 - **The coverage check says when it fails** (Arden, from Claude's review). A check that fails (Discord refuses, a

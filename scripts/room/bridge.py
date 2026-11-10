@@ -315,7 +315,8 @@ class Bridge:
 
     async def say(self, req):
         import discord
-        bad = rc.validate_post(req.get("text", ""))
+        req["text"] = rc.outgoing_text(req.get("text", ""))
+        bad = rc.validate_post(req["text"])
         if bad:
             return {"ok": False, "error": bad}
         channel_id = req.get("channel") or self.current_channel or self.config["default_channel"]

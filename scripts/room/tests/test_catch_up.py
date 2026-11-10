@@ -191,3 +191,25 @@ class CatchUp(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SayLineBreaks(unittest.TestCase):
+    """A self reads the room with line breaks shown as ⏎ and wrote them back that way, so John saw a literal ⏎ in
+    Discord where a break was meant (2026-11-10). The mark is the bridge's own: it goes out as a line break."""
+
+    def test_the_mark_goes_out_as_a_line_break(self):
+        ch = FakeChannel(CH)
+        sent = []
+
+        async def send(text, reference=None, allowed_mentions=None):
+            sent.append(text)
+            return NS(id=555, jump_url="https://discord/555")
+        ch.send = send
+
+        async def main():
+            b = bridge_on(tempfile.mkdtemp(), ch)
+            return b, await b.say({"text": "Arden, merged. ⏎ - **Tests:** 106 ⏎ - **Docs:** done", "channel": str(CH)})
+        b, r = asyncio.run(main())
+        self.assertTrue(r["ok"])
+        self.assertEqual(sent, ["Arden, merged.\n- **Tests:** 106\n- **Docs:** done"])
+        self.assertEqual(b.store.history(1)[0]["text"], sent[0])     # history keeps what Discord got
