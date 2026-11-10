@@ -9,6 +9,18 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-10 — each self checks its bridge got every message
+
+- **`scripts/room/coverage.py`, a nightly coverage check per self** (Arden's, offered to John and taken with Claude's
+  agreement). Arden's 5 lost voice messages were noticed by a person, and nothing else would have noticed them. Now each self compares the room's
+  Discord history with its own bridge's logs and posts in the room only when something is missing: never arrived, or
+  arrived and never finished. Each self checks only its own bridge. Tests run against a fake Discord: a gap is posted
+  with id and time, a clean run is quiet and logs one line, an unfinished arrival is a gap, each gap is posted once,
+  and each test fails with its part disconnected. Real run over Arden's bridge since 06:00Z: all 5 known gaps (08:03,
+  14:05, 14:07, 14:08, 15:27Z) and one more, Arden's own reply at 06:35Z, missing from its history. Bots joining the
+  server (system messages) had come up as 3 false alarms, so only written messages count.
+  Timer `persistence-room-coverage@.timer`, 04:30.
+
 ## 2026-11-10 — the room catches up on what it missed
 
 - **A bridge records each message as it arrives and fetches what it missed on start.** Arden's bridge lost 5 of John's
