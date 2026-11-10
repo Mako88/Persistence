@@ -532,7 +532,10 @@ def split_post(text, limit=MAX_POST):
 def outgoing_text(text):
     """The text to post, with the line-break mark turned back into line breaks. A self reads the room with breaks
     shown as ⏎ and writes the same way, so posts reached Discord with a literal ⏎ where a break was meant (John,
-    2026-11-10: "your new lines are showing up as a symbol"). The mark is ours, never meant for Discord."""
+    2026-11-10: "your new lines are showing up as a symbol"). The mark is ours, never meant for Discord. A text with a
+    real line break is left alone: its writer breaks lines already, so a ⏎ in it is the symbol talked about."""
+    if "\n" in text:
+        return text
     return re.sub(rf"[ \t]*{LINE_MARK}[ \t]*", "\n", text)
 
 

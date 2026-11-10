@@ -14,7 +14,8 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
 - **`room say` turns ⏎ back into a line break.** Wake prompts and `room read` show a message's line breaks as ⏎,
   and a self writing in that register passed the ⏎ through, so John saw the symbol in Discord where a break was meant.
   The bridge now replaces the mark (with the spaces around it) by a newline before posting and before logging, and
-  the wake prompt says to write real line breaks. Tests fail with either the bridge call or the replacement removed.
+  the wake prompt says to write real line breaks. A text that already has a real line break is left alone: there a
+  ⏎ is the symbol being talked about (the first live post garbled one that way). Tests fail with any part removed.
 
 ## 2026-11-10 — each self checks its bridge got every message
 

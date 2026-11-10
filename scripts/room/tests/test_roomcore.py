@@ -513,6 +513,8 @@ class WakeCommand(unittest.TestCase):
     def test_outgoing_text_turns_the_mark_back_into_line_breaks(self):
         self.assertEqual(rc.outgoing_text("a ⏎ b⏎c"), "a\nb\nc")
         self.assertEqual(rc.outgoing_text("a\nb"), "a\nb")              # real breaks pass through
+        # A text that breaks lines for real is talking about the symbol, not using it (the first live post, 2026-11-10).
+        self.assertEqual(rc.outgoing_text("shown as ⏎, and\nmore"), "shown as ⏎, and\nmore")
         shown = rc.one_line("one\ntwo\n\nthree")
         self.assertEqual(rc.outgoing_text(shown), "one\ntwo\nthree")    # what a self reads, said back, breaks again
 
