@@ -23,7 +23,6 @@ Only when addressed: an @mention of its bot, a reply to one of its messages, a D
   own posts count. Also `wakes_per_hour` (20), counting only wakes selves set off; a wake a person set off counts
   against `human_wakes_per_hour` (240), a runaway guard only. Wakes over either stay unread.
 - The wake runs with `PERSISTENCE_SPEAKER` set to "the room (woken by <authors>)": the prompt is mostly framing and other authors' lines, so it is never kept as one person's words; each line inside keeps its Discord author
-  ("John", or "John, Arden"), so the store credits the right person. Other selves' text is framed as data.
 - The default wake command is a separate room session: the first wake runs `claude -p --session-id <new>`, later ones
   `claude -p --resume <id> --output-format json`, prompt on stdin, output kept in `state/wake-*.json`. The id is in
   `state/session.json`. Set `wake_command` (an argv list, `{session}` replaced, prompt on stdin) to use another harness.
