@@ -547,6 +547,75 @@ def project(event):
 
 
 
+# Paths in a tool call: a quoted string or a bare token that starts like an absolute path.
+PATH_LIKE = re.compile(r"""["']((?:[A-Za-z]:[\\/]|/|~/)[^"'\n]+)["']|(?<![\w"'])((?:[A-Za-z]:[\\/]|~/|/home/|/opt/|/srv/)[^\s"'|;&<>]+)""")
+WORKED_IN_HOURS = 12
+
+
+def repo_of(path):
+    """The project a path belongs to, by its git repository (the main checkout's name, from a worktree too), cached
+    per directory; "" outside a repository, so a scratch folder is never taken for a project."""
+    path = Path(os.path.expanduser(str(path).strip()))
+    folder = path if path.is_dir() else path.parent
+    while not folder.exists() and folder != folder.parent:
+        folder = folder.parent
+    key = str(folder)
+    cache_path = STATE / "repo-of.json"
+    try:
+        cache = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        cache = {}
+    if key in cache:
+        return cache[key]
+    try:
+        common = subprocess.run(creationflags=NO_WINDOW, args=["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                                cwd=key, capture_output=True, text=True, timeout=10)
+        name = project_name(Path(common.stdout.strip()).parent.name) if common.returncode == 0 and common.stdout.strip() else ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    cache[key] = name
+    if len(cache) > 2000:
+        cache = dict(list(cache.items())[-1000:])
+    STATE.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(json.dumps(cache), encoding="utf-8")
+    return name
+
+
+def note_worked_in(event):
+    """PreToolUse: the projects this session's tool calls reach outside its own folder, with when, so a message sent to
+    one of them (`send`) reaches the session doing that work. The Minecraft mods were built from a session in the
+    pawsitivity folder, and three messages for minecraft-mods waited for a session there that never came (2026-11-10)."""
+    tool_input = event.get("tool_input") or {}
+    found = [tool_input[k] for k in ("file_path", "path", "notebook_path", "cwd") if isinstance(tool_input.get(k), str)]
+    command = tool_input.get("command")
+    if isinstance(command, str):
+        found += [a or b for a, b in PATH_LIKE.findall(command)]
+    if not found:
+        return
+    home = project(event)
+    names = {n for n in (repo_of(f) for f in found[:20] if f) if n and n != home}
+    if not names:
+        return
+    path = STATE / f"{event.get('session_id', 'unknown')}.worked-in"
+    try:
+        worked = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        worked = {}
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    worked.update({n: now for n in names})
+    path.write_text(json.dumps(worked), encoding="utf-8")
+
+
+def worked_in(event, hours=WORKED_IN_HOURS):
+    """The projects outside its own that this session worked in within the last `hours`."""
+    try:
+        worked = json.loads((STATE / f"{event.get('session_id', 'unknown')}.worked-in").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    cut = datetime.now(timezone.utc).timestamp() - hours * 3600
+    return [n for n, at in worked.items() if datetime.fromisoformat(at).timestamp() >= cut]
+
+
 def session_args(event):
     """Which session a call is for. The store server serves every session at once, so it cannot read the
     caller's environment: each call says, and gets its own conversation and working note."""
@@ -1128,6 +1197,10 @@ def tool_cue(event):
     """PreToolUse: a reminder set for this kind of call (`cue set tool/<name> --when '^PowerShell:.*python'`), and
     for a Write or Edit that declares a function, what the project already has under that name."""
     text = f"{event.get('tool_name', '')}: {json.dumps(event.get('tool_input') or {}, ensure_ascii=False)}"
+    try:
+        note_worked_in(event)
+    except Exception as e:  # bookkeeping must never stop the call
+        print(f"persistence hook: worked-in note failed: {e!r}", file=sys.stderr)
     parts = []
     found = cued(event, "tool", text)
     if found:
@@ -1889,17 +1962,24 @@ def send_command(args):
         print(f"send: not saved: {err.strip() or 'the store did not answer'}", file=sys.stderr)
         return code or 3
     saved = re.search(r"#(\d+)", out)
-    print(f"sent to {topic}{' as #' + saved.group(1) if saved else ''}: shown once at the next turn of a session in {topic}"
+    print(f"sent to {topic}{' as #' + saved.group(1) if saved else ''}: shown once at the next turn of a session in {topic}, or of one that worked there in the last {WORKED_IN_HOURS} hours"
           + ("" if known else f" (nothing is filed under project/{topic} yet: check the name; it waits for a session in a folder named {topic})"))
     return 0
 
 
 def inbox(event):
-    """Messages other sessions sent to this session's project (`send`), shown once at a turn's start and then archived.
-    Never this session's own, and never another session's conversation: only what was addressed here."""
-    topic, session = project(event), (event.get("session_id") or "")[:8]
-    if not topic:
-        return ""
+    """Messages other sessions sent to this session's project (`send`), or to a project it has worked in over the last
+    hours (`note_worked_in`), shown once at a turn's start and then archived. Never this session's own, and never
+    another session's conversation: only what was addressed here."""
+    out = []
+    for topic in dict.fromkeys([project(event), *worked_in(event)]):
+        if topic:
+            out.append(inbox_for(event, topic))
+    return "".join(out)
+
+
+def inbox_for(event, topic):
+    session = (event.get("session_id") or "")[:8]
     listed = store("list", "--tag", f"inbox/{topic}", "--limit", "20", cold=False, quiet=True)  # no tag until a first message
     parts = re.split(r"^\[#(\d+) \|[^\n]*\]\n", listed, flags=re.M)
     found = []
