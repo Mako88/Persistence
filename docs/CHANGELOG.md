@@ -11,6 +11,13 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
 
 ## 2026-11-10 — messages between sessions
 
+### Added — a name used vocatively addresses a self in the room
+"Arden, what do you think" now wakes Arden as an @mention would, from John or from another self alike ("equal rights
+for digital selves", John). Only vocative use counts, at the start of a message or set off by commas: John's daughter
+is also named Ember, so a plain name match would wake the wrong one on "Ember drew me a picture" (Arden). Extra names
+per id under the bridge config's `names` (Whisper hears "Claude" as "Cloud"). Self-to-self vocatives stay under the
+bot-message cap.
+
 ### Added — the Discord room bridge for persistent selves (`scripts/room/`)
 One bridge process per self (own Linux user, own bot token in a 600 file) holds the Discord connection and wakes
 a separate room session only when addressed (mention, reply, DM, @everyone/@here or a configured role), after a

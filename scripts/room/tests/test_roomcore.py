@@ -243,6 +243,52 @@ class RoomTests(unittest.TestCase):
         self.assertEqual(r.on_message(msg(3, "dm", channel="dm", is_dm=True), 0), "direct")
 
 
+class Vocatives(unittest.TestCase):
+    """A name addresses a self only when used vocatively (John and Arden, 2026-11-10); a mid-sentence name is a mention."""
+    NAMES = {"A": ["Arden"], "C": ["Claude", "Cloud"], "E": ["Ember"], "J": ["John"]}
+
+    def test_cases(self):
+        cases = {
+            "Ember drew me a picture": [],          # John's daughter is also Ember
+            "Arden's right": [],
+            "Arden is great": [],
+            "So Ember wants a mod": [],
+            "I asked Arden, and she said": [],
+            "Hey, everyone": [],
+            "Arden, what do you think": ["A"],
+            "Hey Arden what do you think": ["A"],
+            "Thanks, Claude, and thanks for doing it": ["C"],
+            "what about you, Ember?": ["E"],
+            "Arden and Claude, thoughts?": ["A", "C"],
+            "Good morning, Arden.": ["A"],
+            "So, Arden, what now": ["A"],
+            "[voice message, transcribed]: Cloud, can you check": ["C"],
+        }
+        for text, want in cases.items():
+            self.assertEqual(rc.vocatives(text, self.NAMES), want, text)
+
+    def setUp(self):
+        self.people = {"a-John": "John", ME: "Claude", "200": "Arden"}
+
+    def room(self, me, **over):
+        return rc.Room(me, "x", config(people=self.people, names={ME: ["Cloud"]}, wake_on_human=True, **over), rng=Rng())
+
+    def test_johns_mention_of_ember_wakes_every_self_not_one(self):
+        r = self.room(ME)
+        self.assertEqual(r.on_message(msg(1, "Ember drew me a picture", author_id="a-John"), 0), "room")
+
+    def test_johns_vocative_wakes_the_named_self_only(self):
+        self.assertEqual(self.room("200").on_message(msg(1, "Arden, what do you think", author_id="a-John"), 0), "direct")
+        self.assertIsNone(self.room(ME).on_message(msg(1, "Arden, what do you think", author_id="a-John"), 0))
+
+    def test_a_selfs_mention_wakes_no_one_and_its_vocative_wakes_until_the_cap(self):
+        r = self.room("200", bot_message_cap=2)
+        self.assertIsNone(r.on_message(msg(1, "Arden's right", author="Claude", author_id=ME, bot=True), 0))
+        self.assertEqual(r.on_message(msg(2, "Arden, what do you think", author="Claude", author_id=ME, bot=True), 1), "direct")
+        r.on_message(msg(3, "Arden, and?", author="Claude", author_id=ME, bot=True), 2)   # third bot message: over the cap
+        self.assertEqual(len(r.pending), 1)
+
+
 class SpeakerAndPrompt(unittest.TestCase):
     def test_speaker(self):
         self.assertEqual(rc.speaker_env(["John"]), "the room (woken by John)")

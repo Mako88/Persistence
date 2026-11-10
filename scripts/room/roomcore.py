@@ -6,6 +6,7 @@ Standard library only, so the `room` CLI can import it too.
 import json
 import os
 import random
+import re
 import stat
 import uuid
 from collections import deque
@@ -24,6 +25,9 @@ DEFAULTS = {
     # anyone who joins could call themselves "John"; only a listed id gets a bare name (Arden's review, 2026-11-10).
     # It is also the directory of who is who: John, and each self's bot.
     "people": {},
+    # Discord user id -> other names it answers to beyond its `people` name (dictation hears "Claude" as "Cloud").
+    # A name addresses someone only when used vocatively (vocatives()); a name mid-sentence is a mention.
+    "names": {},
     "wake_on_human": True,          # a listed person's unaddressed message wakes every self, after room_delay
     "default_channel": None,        # where `room say` posts when no wake is running and no --channel is given
     "bot_message_cap": 6,           # bot messages since the last human one, per channel/thread, before wakes stop
@@ -103,6 +107,59 @@ class Msg:
     reply_to_author_id: str = None                      # author of the message this replies to
     channel_name: str = ""
     ts: float = 0.0
+
+
+# A greeting before a name makes it an address on its own ("Hey Arden what do you think"); a filler only lets the name
+# start the message, which still needs punctuation after it ("So Ember wants a mod" addresses no one).
+GREETING = r"(?:hey|hi|hello|yo|thanks|thank you|good morning|morning|good evening|evening|goodnight|good night|night)"
+FILLER = r"(?:oh|ok|okay|so|and|well|right|alright)"
+VOICE_PREFIX = re.compile(r"^\[voice message, transcribed\]:\s*")
+
+
+def vocatives(text, names_by_id):
+    """The ids a message addresses by name, used vocatively (John and Arden, 2026-11-10; every author alike, people
+    and selves): at the start ("Arden, what do you think", "Hey Claude", "Arden and Claude, ..."), or set off by
+    commas ("Thanks, Claude, and ...", "..., Ember?"). A name mid-sentence is a mention, not an address: John's
+    "Ember drew me a picture" and a self's "Arden's right" address no one, which matters since John's daughter is
+    also named Ember. `names_by_id` maps an id to its names; matching ignores case."""
+    text = VOICE_PREFIX.sub("", text or "").strip()
+    by_name = {}
+    for i, names in names_by_id.items():
+        for n in names:
+            if n and n.strip():
+                by_name[n.strip().lower()] = str(i)
+    if not by_name or not text:
+        return []
+    alt = "|".join(sorted(map(re.escape, by_name), key=len, reverse=True))
+    name = rf"(?<![\w'’@])({alt})(?![\w'’])"
+    found = []
+    # At the start: an optional greeting, then one or more names joined by "," / "and" / "&", then punctuation or end;
+    # after a greeting, a space is enough ("Hey Arden what do you think").
+    head = re.match(rf"^\W*(?:(?:{GREETING}|{FILLER})[\s,]+)?((?:{name}\s*(?:,|\band\b|&)?\s*)+)", text, re.I)
+    if head:
+        names_part = head.group(1)
+        rest = text[head.end():]
+        greeted = bool(re.match(rf"^\W*{GREETING}[\s,]", text, re.I))
+        if greeted or names_part.rstrip().endswith(",") or not rest.strip() or re.match(r"^\s*[,:!?.;—–-]", rest):
+            found += [m.group(1) for m in re.finditer(name, names_part, re.I)]
+    # Set off by a comma before it and punctuation (or the end) after it.
+    found += [m.group(1) for m in re.finditer(rf",\s*{name}\s*(?=[,.!?;:]|$)", text, re.I)]
+    out = []
+    for n in found:
+        i = by_name[n.lower()]
+        if i not in out:
+            out.append(i)
+    return out
+
+
+def names_by_id(config):
+    """Every listed id's names: its `people` name and any others under `names`."""
+    out = {}
+    for i, n in (config.get("people") or {}).items():
+        out.setdefault(str(i), []).append(n)
+    for i, ns in (config.get("names") or {}).items():
+        out.setdefault(str(i), []).extend(ns)
+    return out
 
 
 def classify(msg, me_id, room_roles=(), people=None, wake_on_human=False):
@@ -305,6 +362,11 @@ class Room:
         if self.config["channels"] and not msg.is_dm and msg.channel_id not in map(str, self.config["channels"]):
             return None
         self.breaker.note(msg.channel_id, msg.is_bot, now)
+        # A name used vocatively addresses its owner as an @mention does, from a person or a self alike; a self's
+        # vocative still meets the bot-message cap like any bot message.
+        for i in vocatives(msg.text, names_by_id(self.config)):
+            if i not in map(str, msg.mentions) and i != str(msg.author_id):
+                msg.mentions = list(msg.mentions) + [i]
         d = asdict(msg)
         d["display_name"], d["author"] = d["author"], name_of(msg.author_id, msg.author, self.config["people"])
         self.unread.append(d)

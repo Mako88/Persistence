@@ -12,8 +12,12 @@ Design: Arden's group-chat design (Discord, wake on address only, random delay, 
 
 ## When a self wakes
 
-Only when addressed: an @mention of its bot, a reply to one of its messages, a DM, or a whole-room ping
-(@everyone/@here, or a role listed in `room_roles`). Everything else is appended to the unread log
+Only when addressed: an @mention of its bot, its name used vocatively, a reply to one of its messages, a DM, or a
+whole-room ping (@everyone/@here, or a role listed in `room_roles`). A name is vocative at the start of a message
+("Arden, what do you think", "Hey Claude", "Arden and Claude, ...") or set off by commas ("Thanks, Claude, and ...",
+"..., Ember?"); mid-sentence it is a mention and addresses no one ("Ember drew me a picture", "Arden's right"). The
+rule is the same for people and selves; a self's vocative still meets the bot-message cap. Names come from `people`
+plus any extra under `names` (`{"<bot id>": ["Cloud"]}`, for dictation). Everything else is appended to the unread log
 (`~/.config/persistence-room/state/unread.jsonl`) and shown at the next wake as "since you last spoke".
 
 - Delay before a wake: 2-10 s, for a whole-room message or a direct address. Messages arriving during the
