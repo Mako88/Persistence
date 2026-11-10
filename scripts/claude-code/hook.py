@@ -1875,12 +1875,28 @@ def answer(name, part, event):
     return json.dumps({"hookSpecificOutput": {"hookEventName": event.get("hook_event_name", "SessionStart"), "additionalContext": out}})
 
 
+# Who and where one session is: set in the environment of the session (or the wake that started it), never the
+# server's. The server is started by whichever session's hook found it down, and outlives it; with these inherited,
+# every later session's speaker fell back on that wake's ("Arden (a wake I set from the room)", Arden #1109,
+# 2026-11-10) and a call without its own session was filed under the starter's.
+PER_SESSION = ("PERSISTENCE_SPEAKER", "PERSISTENCE_SESSION", "PERSISTENCE_ROOM_CHANNEL", "PERSISTENCE_ROOM_SOCKET",
+               "PERSISTENCE_SLEEP_CWD", "PERSISTENCE_WAKE_SECONDS", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_SESSION_ATTENDED")
+
+
+def server_environ(environ):
+    """The environment a hook server runs with: the starter's, less what belongs to the starting session."""
+    return {k: v for k, v in environ.items() if k not in PER_SESSION}
+
+
 def serve():
     """The hooks a session calls every message, answered by a process that stays up: the harness posts
     the event to http://127.0.0.1:PERSISTENCE_HOOK_PORT/<hook>[/<part>], and nothing starts per call.
     When this script changes it starts itself again, so an edit is live from the next call."""
     import time
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    for key in PER_SESSION:  # also what a re-exec (os.execv, which passes os.environ) hands on
+        os.environ.pop(key, None)
 
     sys.stdout = PerRequest(sys.stdout)
     script = Path(__file__).resolve()
@@ -1936,7 +1952,7 @@ def ensure():
         socket.create_connection(("127.0.0.1", HOOK_PORT), timeout=1).close()
     except OSError:
         flags = BACKGROUND
-        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "serve"], creationflags=flags,
+        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "serve"], creationflags=flags, env=server_environ(os.environ),
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
 
 

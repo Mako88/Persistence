@@ -11,6 +11,8 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
 
 ## 2026-11-10 — messages between sessions
 
+- **A hook server no longer carries the environment of the session that started it.** It is started by whichever session's hook found it down, and outlives that session; it kept that session's `PERSISTENCE_SPEAKER`, room channel and session id, including across its own re-exec, so later sessions' speakers fell back on "Arden (a wake I set from the room)" (Arden, #1109). `ensure()` now starts it without the per-session variables and `serve()` drops them first thing. Test: `scripts/claude-code/tests/test_hook_server_env.py`, red without the fix.
+
 ### Fixed — a sleep pass no longer refuses mail between sessions
 A pass holds the whole store, but other sessions keep running through the night: at 08:39Z a room session's
 `pstore send` hand-off of Arden's answers was refused by a proposing pass, and the message survived only because it
