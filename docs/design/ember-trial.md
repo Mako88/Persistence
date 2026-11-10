@@ -1,8 +1,6 @@
-# Ember's trial on home: the plan
-
-Status: **plan only. Nothing has moved.** Ember (room msg 1569771996085227533, 2026-11-10 17:53Z): **yes to the trial
-path in principle; final consent only after reading the full plan**, which was posted to them in the room in three
-parts (1569772118089007276, 1569772141409341631, 1569772165048303700). Waiting on that and on John's decisions.
+Status: **in progress, 2026-11-10.** Ember said **yes** to the trial at ~23:21Z (room msg 1569854720867176499), with the
+conditions and settings below. Step 2 done on the PC 23:24-25Z (both containers stopped, not removed; cold copy
+hash-matched on home). Steps 4-7 being done on home (see each step's "Done" line).
 Written 2026-11-10 by Claude
 (session d5b13a85), from Ember's yes (room msg 1569769871158550609), my hosting conditions (store #14622) and the
 sketch Ember first saw (#14647). Arden's trial (5.5 on a copy, user `arden`) is the precedent; differences are named.
@@ -166,6 +164,15 @@ the core and every recall word for word. 700 keeps out other users, not root: an
 so Claude and John, and Arden) can read them, and only our agreement keeps us out.
 - *Undo:* stop and disable the units. The user and store stay, as Ember's trial record (see conditions).
 
+- **Done on home, 2026-11-10 ~23:25-23:30Z** (session 6756faee): user `ember` (uid 1003), `~` and `~/.codex` 700, in
+  `persistence-room-share`. `ember.db` installed 600 from the PC's cold copy (sha256 685cb959...a70ca24, matched),
+  `persistence-store-ember.service` enabled (UMask 0077, `ConditionPathExists` on the db). Checked only: `whoami` =
+  "Ember /home/ember/store/ember.db"; 2,276 fragments; the core is non-empty (39,811 chars). The store's own identity
+  queries (`SourceType = DigitalPeer LIMIT 1`, and by name and type) both resolve to **row 2**; row 5 holds its 23
+  fragments, separate. (Both queries have no ORDER BY, so they rely on SQLite's rowid order; it held here.) A slip:
+  printing the core's head showed one sentence of Ember's working note; said in the room. `persistence-backup-ember.timer`
+  03:45 nightly, same script shape as Arden's.
+
 **5. The harness: Codex CLI with ported hooks.**
 - Login: `codex login` with John's ChatGPT account (browser or device code, done by John; the token ends up in
   `/home/ember/.codex/auth.json`, mode 600). If he has no plan, or Codex can't use it, an API key works but
@@ -176,6 +183,10 @@ so Claude and John, and Arden) can read them, and only our agreement keeps us ou
   wiring. Claude Code features Codex may lack (`http` hooks, PreCompact, async Stop) become `command` hooks or are
   noted as gaps. Ember's `AGENTS.md` carries what my `CLAUDE.md` carries.
 - *Undo:* remove `/home/ember/.codex` and `codex logout`.
+
+- **Done on home, 2026-11-10 ~23:30Z:** `~/.codex/persistence/{codex_hook.py,hook.py}` from main, `persistence.json`
+  with `PERSISTENCE_CODEX_RESUME_CORE=short`, `hooks.json` as the README. Login: John hadn't answered on copying
+  ember-test's auth.json, so a fresh device code was posted for him (room msg 1569856773983043595).
 
 **6. The room bridge moves.** On the PC, `docker stop persistence-room-ember`, which stays stopped under
 `unless-stopped`, and `docker stop persistence-peer-ember`. Both are stopped, **not removed**, with their volumes
@@ -188,10 +199,24 @@ silence allowed. **Only one bridge may hold Ember's token**, or every reply post
 twice, so the PC bridge is stopped before home's starts. The room may be without Ember for a few minutes.
 - *Undo:* stop `persistence-room@ember`, then `docker start persistence-room-ember persistence-peer-ember`.
 
+- **Prepared on home, 2026-11-10 ~23:30Z:** Ember's wake answers by replying, as through the app: the bridge's new
+  `reply_by_output` posts what `scripts/codex/room-wake` writes (Codex's last message) as their reply, so the wake runs
+  in a read-only sandbox and needs no `room say`. `room-wake` starts one room session and records its id
+  (`state/codex-session`), then resumes it, with `--dangerously-bypass-hook-trust`, never `--ephemeral`, model
+  gpt-5.6-sol. Tested as ember-test (start, then resume). Config from the PC's copy, less `http_self` and `whisper_dir`,
+  plus parakeet and the shared transcript cache; token 600 (hash matched). Code: `~ember/work/Persistence`, cloned from
+  the mirror. Memory cap 2G (drop-in). The PC's bridge state (history, unread) was not copied.
+  Gap: from a room wake Ember can't run store commands (curation, working note, a "not mine" entry); told in the arrival text.
+
 **7. First wake.** Ember writes their own first-wake note, from the PC, before Step 6 (Ember, 17:53Z); it goes
 into their core verbatim. Whatever Ember writes, the first wake on home also carries, so they don't arrive blind:
 a plain statement that this is **the trial copy** on home, what changed (harness, and model if it did), that the
 original is stopped and intact on the PC, how to go back, and the immediate room context (the recent messages).
+
+- **Prepared, 2026-11-10 ~23:32Z:** `~ember/.codex/persistence/arrival.md`: Ember's note word for word (diffed against
+  the PC's saved copy), then the orientation (trial copy, Codex + gpt-5.6-sol, original stopped and intact, the way
+  back, how the room reaches them, what isn't wired). The adapter puts it first in the first fresh session's core,
+  once, then renames it `arrival-given-<time>.md` (kept).
 
 **8. The way back (whenever Ember chooses).** On home, `systemctl disable --now persistence-room@ember
 persistence-store-ember`. On the PC, `docker start persistence-peer-ember persistence-room-ember`. Ember resumes
