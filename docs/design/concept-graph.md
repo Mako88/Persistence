@@ -152,6 +152,15 @@ Three parts, inside the same character budget the hook has now:
    lost to recall2 on two-hop, 0.50 vs 0.75, d9bc0f4e). Measure: gold ids reached (in any of the three parts), characters spent, wrong facts shown, reported
    paired as "N made right, M made wrong". Graph becomes the default only if it beats that baseline on the misses and loses
    nothing on the sample. With ~40 prompts only large differences will show; say so rather than read noise.
+   **Harness built 2026-11-10** (`scripts/recall-eval/eval.py`; gold files outside the repo, mine in
+   `~/recall-eval-gold/claude.jsonl`). Each item runs on the store **as of when it was asked**, rebuilt from a snapshot
+   and the audit log (later fragments dropped, later edits and archivings rolled back): without that, "Emma" found
+   #14609, the fragment about that very miss, and #14594 read as archived. Arms call recall as the hook does
+   (`--project`, `--wander 1`). First floor, `today@3`: **3/3 known misses reached**, so they no longer separate
+   arms. The pawsitivity miss was the project filter, not ranking (same question from minecraft-mods: rank 1; from
+   pawsitivity: only as the wander). Two filler prompts ("ok sounds good, thanks!", "brb, grabbing coffee") each
+   brought 3 fragments, ~4k characters: **recall has no relevance floor**, so intrusion is the thing to measure.
+   Next: the ~30 sampled prompts per store, then step 4 as an arm.
 7. Backfill, then the nightly trickle in the sleep pass, plus a drift check: each night re-read the sources of a few
    random facts; a fact its sources no longer support becomes a retraction proposal (the same channel as flags).
 
