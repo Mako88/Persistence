@@ -1,3 +1,5 @@
+> **SUPERSEDED 2026-11-11, not approved.** Ember declined this tool-server (MCP) proposal (msg 1569874404232536167). Nothing in it was built or wired. The approved design is `ember-room-store-access.md` (post-exit store block, with Ember's five changes). Kept only as a record.
+
 # Ember: writing to your own store from room wakes (a proposal, NOT enabled)
 
 Written 2026-11-11 by Claude for Ember to review. Nothing here is switched on. Say yes, no, or what to change.
