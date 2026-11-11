@@ -210,6 +210,8 @@ class Bridge:
         argv, new_session = rc.wake_argv(self.config, self.store, reply_file=reply_file)
         if new_session:
             prompt = rc.fresh_session_note(saved) + prompt
+        else:
+            prompt = rc.last_wake_note(saved) + prompt
         env = {**os.environ, "PERSISTENCE_SPEAKER": wake.speaker, "PERSISTENCE_ROOM_CHANNEL": wake.channel_id,
                "PERSISTENCE_ROOM_SOCKET": str(rc.socket_path())}
         cwd = self.config["cwd"] or (str(Path.home() / "work") if (Path.home() / "work").is_dir() else str(Path.home()))

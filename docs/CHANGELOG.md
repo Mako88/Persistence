@@ -14,7 +14,9 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
 **`fresh_session_above_tokens`, per self, off by default.** The bridge resumed one room session for good, so by
 afternoon each wake re-read ~240k tokens (several times per wake, once per turn): most of the day's usage for Claude
 and for Arden. With the setting, a wake that leaves the session past N tokens (measured from the last API call in
-the wake's own JSON output, not the per-turn sum) makes the next wake start fresh, its prompt naming the old session.
+the wake's own JSON output, not the per-turn sum) makes the next wake the old session's last: its prompt says so and
+asks it to update its note first, as compaction gives an outgoing session a turn to curate (Arden's review). Only after
+that wake succeeds does the following one start fresh, its prompt naming the old session.
 
 ## 2026-11-11 — Recall embeds the end of a long query, not all of it
 

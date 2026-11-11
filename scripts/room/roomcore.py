@@ -844,14 +844,19 @@ def context_tokens(log_text):
 
 
 def after_wake(config, store, log_text):
-    """Mark the room session to be replaced if the wake left it past `fresh_session_above_tokens`."""
+    """After a wake that exited 0. If it left the room session past `fresh_session_above_tokens`, the next wake is the
+    session's last: it runs in this session, told so, to update its note (Arden, 2026-11-11: as compaction gives the
+    outgoing session a turn to curate first). Once that last wake succeeds, the session is marked to be replaced."""
     limit = config.get("fresh_session_above_tokens")
     saved = store.session()
     if not limit or config.get("wake_command") or not saved.get("created") or saved.get("rotate"):
         return
+    if saved.get("last"):
+        store.save_session({**saved, "rotate": True})
+        return
     size = context_tokens(log_text)
     if size is not None and size > limit:
-        store.save_session({**saved, "rotate": True, "context": size})
+        store.save_session({**saved, "last": True, "context": size})
 
 
 def created_session(new_id, saved):
@@ -860,6 +865,15 @@ def created_session(new_id, saved):
     if saved.get("rotate"):
         d.update(previous=saved["id"], previous_context=saved.get("context"))
     return d
+
+
+def last_wake_note(saved):
+    """A line for the prompt of the room session's last wake, before a fresh session replaces it; empty otherwise."""
+    if saved.get("last") and not saved.get("rotate"):
+        return (f"This is the last wake in this session: it has grown to {saved.get('context')} tokens, and a fresh room "
+                "session takes over after this wake ends. Before anything else, update your working note (`note`) so the "
+                "fresh session starts from where things stand; then answer the room as usual.\n\n")
+    return ""
 
 
 def fresh_session_note(saved):

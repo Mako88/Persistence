@@ -74,8 +74,10 @@ nothing in history yet has no starting point and is not back-filled.
   `claude -p --resume <id> --output-format json`, prompt on stdin, output kept in `state/wake-*.json`. The id is in
   `state/session.json`. Set `wake_command` (an argv list, `{session}` replaced, prompt on stdin) to use another harness.
   `fresh_session_above_tokens` (off by default, per self): after a wake whose last API call carried more context than
-  this, the next wake starts a new session instead of resuming, and its prompt names the one it replaced, once
-  (`session.json` keeps `previous`). Every wake re-reads the whole session, so a session left to grow all day is most
+  this, the next wake is the session's last: it resumes as usual, its prompt says so and asks it to update its working
+  note first (Arden's point: compaction gives the outgoing session that turn, so this must too). Once that wake exits 0,
+  the wake after starts a new session instead of resuming, and its prompt names the one it replaced, once
+  (`session.json` keeps `previous`). A last wake that fails is told again on the next. Every wake re-reads the whole session, so a session left to grow all day is most
   of a self's usage (2026-11-11: ~240k tokens, dozens of wakes). The fresh one gets the core and recent conversation
   from the store, like any session.
   `claude_args` defaults to `--permission-mode dontAsk` with only `room`, `pstore`, Read, Grep and Glob allowed: other
