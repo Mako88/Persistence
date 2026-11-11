@@ -2,6 +2,8 @@
 with a fake command in place of claude, so a bridge that never prepends the notes, never records the session replaced,
 or drops the reply on a malformed log fails here, not only the roomcore functions it calls."""
 import asyncio
+import contextlib
+import io
 import json
 import sys
 import tempfile
@@ -24,7 +26,7 @@ print(sys.argv[3])
 """
 
 
-def run(session, log_line, reply_by_output=False):
+def run(session, log_line, reply_by_output=False, rig=None, out=None):
     """One wake through Bridge.run_wake with the default claude session's argv swapped for the fake; the store's
     session, wake_argv's own choice of resume or fresh id, and everything around it are the real ones."""
     d = Path(tempfile.mkdtemp())
@@ -39,6 +41,8 @@ def run(session, log_line, reply_by_output=False):
 
     async def say(req):
         posted.append(req)
+        if rig:
+            rig["events"].append("post")
         return {"ok": True}
 
     async def mark(turns, which):
@@ -53,10 +57,22 @@ def run(session, log_line, reply_by_output=False):
         return [sys.executable, str(d / "fake.py"), str(d / "prompt.txt"), str(reply_file), log_line], new
 
     rc.wake_argv = fake_argv
+    real_after = rc.after_wake
+    if rig:
+        rig["events"] = []
+        rig.get("setup", lambda b, store: None)(b, store)
+
+        def after(*a):
+            rig["events"].append("after_wake")
+            return rig.get("after_wake", real_after)(*a)
+
+        rc.after_wake = after
     try:
-        asyncio.run(b.run_wake(rc.Wake(triggers=[m(7)], unread=[m(7)], channel_id="c1", speaker="x", to_mark=[m(7)])))
+        with contextlib.redirect_stdout(out if out is not None else io.StringIO()):
+            asyncio.run(b.run_wake(rc.Wake(triggers=[m(7)], unread=[m(7)], channel_id="c1", speaker="x", to_mark=[m(7)])))
     finally:
         rc.wake_argv = real
+        rc.after_wake = real_after
     timings = [json.loads(l) for l in (d / "timings.jsonl").read_text().splitlines()] if (d / "timings.jsonl").exists() else []
     return (d / "prompt.txt").read_text(), store.session(), posted, timings
 
@@ -89,6 +105,34 @@ class RolloverWiring(unittest.TestCase):
         self.assertEqual(len(steps), 1); self.assertIn("last wake", steps[0]["said"])
         _, _, _, timings = run({"id": "old", "created": True, "last": True, "context": 151_000}, usage_log(152_000))
         self.assertIn("fresh session", [t for t in timings if t.get("what") == "rollover"][0]["said"])
+
+    def test_a_raising_after_wake_runs_after_the_reply_and_costs_nothing(self):
+        """Arden's review of 2e9676f: after_wake is pinned after post_reply, and its failing loses neither the reply nor
+        the wake's end."""
+        def boom(*a):
+            raise RuntimeError("boom")
+
+        rig = {"after_wake": boom}
+        _, _, posted, timings = run({"id": "old", "created": True}, usage_log(1_000), reply_by_output=True, rig=rig)
+        self.assertEqual(rig["events"], ["post", "after_wake"])
+        self.assertEqual([p["text"] for p in posted], ["the reply"])
+        self.assertIn("wake", [t.get("what") for t in timings])
+        self.assertIn("rollover check failed: boom", [t.get("said") for t in timings if t.get("what") == "rollover"])
+
+    def test_an_oserror_saving_the_session_is_not_called_a_failed_start(self):
+        """Arden's review of 2e9676f: an OSError from save_session inside after_wake is the rollover failing, not the
+        wake failing to start."""
+        def broken_disk(b, store):
+            def save(d):
+                raise OSError("disk full")
+            store.save_session = save
+
+        out = io.StringIO()
+        _, _, posted, timings = run({"id": "old", "created": True}, usage_log(151_000), reply_by_output=True,
+                                    rig={"setup": broken_disk}, out=out)
+        self.assertEqual([p["text"] for p in posted], ["the reply"])
+        self.assertNotIn("wake could not start", out.getvalue())
+        self.assertIn("rollover check failed: disk full", [t.get("said") for t in timings if t.get("what") == "rollover"])
 
 
 if __name__ == "__main__":
