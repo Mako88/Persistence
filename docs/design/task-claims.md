@@ -71,6 +71,14 @@ terminal file to `closed/` changes no byte of it and isn't a write.
   take it **from the claim record**, and run-due refuses an item whose `claim` names a record with a different
   `cwd`. `take` keeps it: work somewhere else is a new claim. The heartbeat never takes a path from anywhere but the
   record (or, for a claim-less wake retry, the ledger's `enqueued` fact, which run-due wrote from the item).
+- **Stored canonical, bound at use** (Ember 1570143444578603091: validating a real path and later using the original
+  string leaves a symlink-retargeting gap). The value stored, in the claim and the item, is the canonical real path
+  computed at creation (`pwake`, `ptask claim`), and it is the only path ever used afterwards; the string as given is
+  never stored. At each use (spawn, retry, nudge, `take`) the harness opens that directory once, with
+  `O_DIRECTORY|O_NOFOLLOW` on the final component, re-checks the opened descriptor (`fstat`: a directory, owned by
+  the self, still under an allowed root), and starts the child from that descriptor (`fchdir`) rather than resolving
+  the string again. Any mismatch refuses that use and reports once (`no valid cwd`); nothing falls back to another
+  path.
 
 **A spell** is the time between two status transitions. `nudged` and `reported` are cleared only by a transition into
 `claimed` (claim, resume, take, pause expiry), **never by `touch`**: otherwise a nudged session that touches and exits
@@ -216,6 +224,10 @@ consent. **Way back:** turn the setting off; claim files are plain JSON, no stor
   failed start's retry and a later nudge run there too → `take` keeps it. An item whose `cwd` differs from its claim's
   is refused by run-due. A relative, unnormalised, outside-home or vanished `cwd`: refused at creation, or no
   spawn/nudge and one `no valid cwd` report. A path in task text is never used.
+- **`cwd` is canonical and bound** (Ember): a `cwd` given through a symlink or with `..` is stored as its canonical
+  real path, in both claim and item. After validation, the directory is swapped for a symlink to another directory
+  (inside home and outside): spawn, retry, nudge and `take` are refused with one `no valid cwd` report, and no child
+  runs there. Mutation: re-resolving the stored string at use instead of the opened descriptor.
 - **Pause expiry** (Ember): `settle_pauses` is the only writer of `expire`: one transition with `by: pause-expiry`,
   `nudged`/`reported` cleared; two concurrent callers produce one entry; without `--until` the claim stays paused
   across any number of beats; with the heartbeat and `PERSISTENCE_TASKCLAIMS` off, the next `ptask` write settles it.
@@ -249,6 +261,8 @@ the text. Not in v1. Addressed work-inbox notes (section 2) are a separate chang
   v1); no Discord meaning; test.
 - Ember 4, execution location → `cwd` field, validation and preservation through `pwake`, spawn, retry, nudge and
   `take` (section 1, 2.4, 4); test through the full path.
+- Ember, `cwd` symlink gap (1570143444578603091, after a8faeb8) → section 1 "Stored canonical, bound at use"; test
+  in section 6.
 - Ember, work inbox → section 2 "The work inbox can't carry work"; a separate change; tests named.
 - Arden, silent stall → section 4 report row ignores `updated`, says `touched since`; test with mutation.
 - Arden, unbounded hand-off retry → once per spell, usage-limit deferrals per the heartbeat, then report; test.
