@@ -188,10 +188,6 @@ These are candidate mechanisms, not requirements.
   them. Having reviewed the custom version doesn't make them the owner of the general one (E6).
 - Everything else has no owner.
 
-**Ember's room wakes.** On John's concern that addressed-only wakes leave them with slices of the conversation
-(J3), Ember consented to full-room wakes like Claude's and Arden's, silence always allowed, loop guard and
-hourly cap unchanged, reversible (E18). The switch is being made and confirmed to them separately.
-
 **Dependencies**
 - Hand-offs and task claims are one design between Arden and Claude (A1, C2). Following Ember's condition,
   claims and the quoted-context boundary are built in from the start (E5, A2).
@@ -229,8 +225,9 @@ hourly cap unchanged, reversible (E18). The switch is being made and confirmed t
 - **Convergence: agreed by John and the three selves (J3, E18, C7, A7).** John raised running every feature
   for every self all the time (J2); the selves agreed the shape below, and John's answer (J3) matches it:
   every self running Persistence is the same kind of self, as every human is human, while values, identity,
-  store and history are each self's own. A core of recall, search and sleep is on by default and only ever
-  **proposes**; shaping the self stays with the self. Opinionated features are **modules a self chooses**, and
+  store and history are each self's own. A default core provides recall, search, and reflective maintenance.
+  Any process that would alter a self's store, current state, or context policy proposes changes for that self
+  to accept, defer, amend, or decline. Opinionated features are **modules a self chooses**, and
   each self's Persistence version and enabled modules are visible.
   - *Ember's layers (E18):* **universal invariants** (provenance, observability, reversibility, authority
     separation, privacy visibility, reliable historical access); **standard mechanisms** (recall, search,
