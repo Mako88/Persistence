@@ -157,6 +157,154 @@ public sealed class StoreServerTests : IDisposable
         Assert.Contains("may not use this store", errors);
     }
 
+    /// <summary>A refused caller that connects, reads its refusal and then sends nothing and keeps its end open.</summary>
+    private static async Task<(Socket Client, string Reply)> RefusedAndSilentAsync(string path)
+    {
+        var client = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        await client.ConnectAsync(new UnixDomainSocketEndPoint(path));
+        using var reader = new StreamReader(new NetworkStream(client, ownsSocket: false));
+        using var patience = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        return (client, await reader.ReadLineAsync(patience.Token) ?? "");
+    }
+
+    /// <summary>Whether the server has closed its whole end: a write to a unix socket whose peer has closed fails at once (EPIPE).</summary>
+    private static bool ClosedByServer(Socket client)
+    {
+        try
+        {
+            client.Send("x"u8.ToArray());
+            return false;
+        }
+        catch (SocketException)
+        {
+            return true;
+        }
+    }
+
+    [Fact]
+    public async Task A_refused_caller_that_reads_to_the_end_sees_the_end_at_once()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        // A caller that reads until the stream ends, rather than stopping at the newline as hook.py and room_store.py do,
+        // must not wait out the server's drain: the server says it has nothing more to send.
+        var (socket, _) = await ServeOnSocketAsync(new HashSet<uint> { Server.CurrentUser() + 1 });
+        using var client = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        await client.ConnectAsync(new UnixDomainSocketEndPoint(socket));
+        await using var stream = new NetworkStream(client);
+        await stream.WriteAsync(Encoding.UTF8.GetBytes("{\"args\": [\"help\"], \"stdin\": \"\"}\n"));
+        using var reader = new StreamReader(stream);
+        using var patience = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+
+        Assert.Contains("may not use this store", await reader.ReadToEndAsync(patience.Token));
+    }
+
+    [Fact]
+    public async Task A_silent_refused_caller_does_not_hold_the_callers_behind_it()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        var (socket, port) = await ServeOnSocketAsync(new HashSet<uint> { Server.CurrentUser() + 1 }, 0);
+        var (silent, _) = await RefusedAndSilentAsync(socket);
+        using (silent)
+        {
+            // Well under the 5 s a refused caller is given to go: the refusal drains beside the queue, not in it.
+            Assert.Equal("answered", await AskAsync(port!.Value, TimeSpan.FromSeconds(2)));
+        }
+    }
+
+    [Fact]
+    public async Task A_silent_refused_caller_is_closed_after_a_few_seconds()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        // One that never closes its end must not hold a descriptor of the server's for ever.
+        var (socket, _) = await ServeOnSocketAsync(new HashSet<uint> { Server.CurrentUser() + 1 });
+        var (silent, reply) = await RefusedAndSilentAsync(socket);
+        using (silent)
+        {
+            Assert.Contains("may not use this store", reply);
+            Assert.False(ClosedByServer(silent));
+            await Task.Delay(TimeSpan.FromSeconds(6.5));
+            Assert.True(ClosedByServer(silent));
+        }
+    }
+
+    [Fact]
+    public async Task Past_sixteen_refused_callers_draining_the_next_is_closed_at_once()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        // Each drain holds a descriptor for up to 5 s; uncapped, enough of them run the server out (EMFILE) and
+        // a failed accept ends it (Arden, 2026-11-11). Past the cap a refusal is written and closed straight away.
+        var (socket, _) = await ServeOnSocketAsync(new HashSet<uint> { Server.CurrentUser() + 1 });
+        var draining = new List<Socket>();
+        try
+        {
+            for (var i = 0; i < 16; i++)
+            {
+                draining.Add((await RefusedAndSilentAsync(socket)).Client);
+            }
+
+            Assert.All(draining, d => Assert.False(ClosedByServer(d)));
+
+            var (past, reply) = await RefusedAndSilentAsync(socket);
+            using (past)
+            {
+                Assert.Contains("may not use this store", reply);
+                await Task.Delay(200);
+                Assert.True(ClosedByServer(past));
+            }
+
+            // The places are given back as the callers go.
+            foreach (var d in draining)
+            {
+                d.Dispose();
+            }
+
+            draining.Clear();
+            await Task.Delay(500);
+            var (again, _) = await RefusedAndSilentAsync(socket);
+            using (again)
+            {
+                await Task.Delay(200);
+                Assert.False(ClosedByServer(again));
+            }
+        }
+        finally
+        {
+            draining.ForEach(d => d.Dispose());
+        }
+    }
+
+    [Fact]
+    public async Task A_listening_callback_that_throws_still_closes_the_listeners()
+    {
+        int? bound = null;
+        var config = new AppConfig { PeerName = "Claude", DatabasePath = db };
+        var serve = Server.ServeAsync(await FragmentStore.OpenAsync(config), db, 0, (_, _) => Task.FromResult(0), listening: port =>
+        {
+            bound = port;
+            throw new InvalidOperationException("the callback failed");
+        });
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => serve);
+        using var client = new TcpClient();
+        await Assert.ThrowsAnyAsync<SocketException>(() => client.ConnectAsync(IPAddress.Loopback, bound!.Value));
+    }
+
     [Fact]
     public async Task An_allowed_user_is_answered_on_the_socket_and_the_socket_is_not_open_to_others()
     {
