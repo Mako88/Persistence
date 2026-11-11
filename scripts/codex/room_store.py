@@ -187,7 +187,8 @@ COMMANDS = {
 
 def to_argv(request):
     """A parsed request (a dict) -> the CLI's argv after the binary, or Refused. Every field must be known to its
-    command; a missing required one, an unknown one, or a bad value refuses the whole request."""
+    command; a missing required one, an unknown one, or a bad value refuses this one request (one line);
+    the block's other requests still run."""
     if type(request) is not dict:
         raise Refused("a request is one JSON object per line")
     name = request.get("cmd")

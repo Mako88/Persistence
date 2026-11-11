@@ -39,7 +39,7 @@ stay), then runs the requests in order. Codex itself stays read-only and offline
 1. **Exact allowlist of commands and fields.** Each command has a fixed set of fields, each with a type and range
    (ids positive integers, tags `a/b` of letters/digits/`_.-`, types one of four, numbers 0-1, limits capped, text
    at most 20,000 characters and never `-`). An unknown command, an unknown field, a missing required one or a bad
-   value refuses that whole request. There is no "does this look like a path" check: there is simply no field that
+   value refuses that one request (that line); the block's other lines still run. There is no "does this look like a path" check: there is simply no field that
    takes a path, a socket or a store.
 2. **Parsed as data.** `json.loads` per line, then the request becomes an argument list sent to your store server
    as JSON over its socket, `{"args": [...], "stdin": ""}`, as the hooks do. No process is started, no shell, no
