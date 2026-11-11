@@ -393,6 +393,27 @@ class A_Open(Base):
         self.assertIn(": start failed,", self.lines[0])
 
 
+    def test_the_ledger_written_queue_not_yet_removed_window_reconciles(self):
+        """Ember's B3: run-due died after the retry's enqueued fact (`at` ISO text) and before the queue rewrite (the
+        item's `at` a number). The beat must not compare the two. Inside the start grace it does nothing; run-due's
+        next minute only drops an already-enqueued item, so that attempt never starts, and once the grace has passed
+        it is reported once as `start failed` (and B reports the stuck item overdue). Never a second
+        retry."""
+        record = self.c.create("t", owner=None, cwd=str(self.work), by=sid(), dispatch="handoff", status="open",
+                               origin_session=sid())
+        f0, s = self.fire(how="never-started", work=True, claim=record["id"])
+        self.beat()
+        r1, = self.items()
+        coordination.append(self.state, coordination.enqueued_fact(r1, self.now.isoformat()))  # and then a crash
+        self.assertEqual(self.beat(1), "ok")
+        self.assertEqual([w["id"] for w in self.items()], [r1["id"]])
+        self.assertEqual(self.lines, [])
+        self.assertEqual(self.beat(10), "ok")  # still queued (run-due not back yet), past the grace
+        self.assertEqual(self.beat(10), "ok")
+        self.assertEqual([w["id"] for w in self.items()], [r1["id"]])  # nothing added
+        self.assertEqual(sorted(l.split(" key=")[1] for l in self.lines),
+                         [f"claim:{record['id']}:0:start-failed", f"wake:{r1['id']}:overdue"])  # B sees run-due is late
+
 class SplitNudge(Base):
     def test_wake_written_mark_missing_is_completed_with_that_firing(self):
         owner = sid()

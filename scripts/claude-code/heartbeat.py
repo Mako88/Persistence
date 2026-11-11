@@ -276,9 +276,13 @@ class Beat:
 
     # Shared by C and A: the recovery chain of an origin firing.
     def chain(self, origin):
-        """Every attempt for an origin, queued or fired: dicts with id, attempt, deferral, follows."""
+        """Every attempt for an origin, queued or fired, once each: dicts with firing, attempt, deferral, follows. In
+        the window where run-due wrote an attempt's enqueued fact and died before rewriting the queue, its id is in
+        both; the fact wins (Ember's B3), so nothing is counted twice."""
         out = [f for f in self.enq.values() if f.get("retry_of") == origin]
-        out += [dict(w, firing=w["id"]) for w in read_queue(self.state) if w.get("retry_of") == origin]
+        fired = {a["firing"] for a in out}
+        out += [dict(w, firing=w["id"]) for w in read_queue(self.state)
+                if w.get("retry_of") == origin and w.get("id") not in fired]
         return out
 
     def answered(self, firing):
@@ -398,8 +402,7 @@ class Beat:
         firing = next((f for f, e in self.enq.items() if e.get("claim") == record["id"] and not e.get("retry_of")), None)
         if not firing or self.states.get(firing) != "never-started":
             return
-        attempts = self.chain(firing)
-        latest = max(attempts, key=lambda a: a.get("at") or "", default=None)
+        latest = last_attempt(self.chain(firing))
         if latest is None and not self.answered(firing):
             if self.take_cap():
                 import hook
@@ -564,6 +567,14 @@ def firing_states(facts, now, table, alive, seen, outputs):
                 state = "never-started"
         states[firing] = state
     return states
+
+
+def last_attempt(attempts):
+    """The attempt no other attempt in the chain follows: chosen by structure, never by comparing `at`s, since an
+    enqueued fact's is ISO text and a queued item's a number (Ember's B3). None for an empty chain."""
+    followed = {a.get("follows") for a in attempts}
+    ends = [a for a in attempts if a.get("firing") not in followed]
+    return ends[-1] if ends else None
 
 
 def transcript_exists(home, session):
