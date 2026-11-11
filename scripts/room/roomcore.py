@@ -69,6 +69,11 @@ DEFAULTS = {
     # made by whichever bridge gets there first. None: each bridge transcribes on its own.
     "transcript_cache": None,
     "wake_command": None,           # argv list, prompt on stdin; {session} is replaced. None = the default claude room session
+    # Start a fresh room session after a wake whose last API call carried more than this many tokens of context
+    # (2026-11-11: one room session ran all day to ~240k and every wake re-read all of it, most of the day's usage).
+    # The fresh one starts with the core, the working note and recent conversation from the store, as any session does.
+    # None: one session for good. Only the default claude session; a wake_command self manages its own.
+    "fresh_session_above_tokens": None,
     # The wake command's self speaks by replying, not with `room say` (Ember on Codex, sandboxed, 2026-11-10): the prompt
     # says so, "{reply_file}" in wake_command is replaced by a path, and what the command writes there is posted as the
     # self's reply after it exits 0. Nothing written, or only whitespace: silence.
@@ -815,7 +820,72 @@ def wake_argv(config, store, session_id=None, reply_file=None):
         return [a.replace("{session}", session_id or "").replace("{reply_file}", str(reply_file or ""))
                 for a in config["wake_command"]], None
     saved = store.session()
-    if saved.get("created"):
+    if saved.get("created") and not saved.get("rotate"):
         return ["claude", "-p", "--resume", saved["id"], "--output-format", "json", *config["claude_args"]], None
     new = str(uuid.uuid4())
     return ["claude", "-p", "--session-id", new, "--output-format", "json", *config["claude_args"]], new
+
+
+def context_tokens(log_text):
+    """The context the wake's last API call carried, from `claude -p --output-format json` output (stderr may come
+    first in the log). The top-level usage sums every turn, so it is the last iteration that measures the session."""
+    for line in reversed((log_text or "").splitlines()):
+        if not line.startswith("{"):
+            continue
+        try:
+            calls = (json.loads(line).get("usage") or {}).get("iterations") or []
+        except ValueError:
+            continue
+        if not calls:
+            return None
+        last = calls[-1]
+        return sum(int(last.get(k) or 0) for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+    return None
+
+
+def after_wake(config, store, log_text):
+    """After a wake that exited 0. If it left the room session past `fresh_session_above_tokens`, the next wake is the
+    session's last: it runs in this session, told so, to update its note (Arden, 2026-11-11: as compaction gives the
+    outgoing session a turn to curate first). Once that last wake succeeds, the session is marked to be replaced.
+    Returns a line saying what it did, for the bridge's log, or None when nothing changed. A log it can't read is said,
+    never raised: the bridge calls this after posting the reply, and a rollover is never worth a crash (Arden)."""
+    limit = config.get("fresh_session_above_tokens")
+    saved = store.session()
+    if not limit or config.get("wake_command") or not saved.get("created") or saved.get("rotate"):
+        return None
+    if saved.get("last"):
+        store.save_session({**saved, "rotate": True})
+        return f"rollover: the last wake of room session {saved['id']} is done; the next wake starts a fresh session"
+    try:
+        size = context_tokens(log_text)
+    except Exception:
+        return "size unreadable: no rollover"
+    if size is not None and size > limit:
+        store.save_session({**saved, "last": True, "context": size})
+        return f"rollover: room session {saved['id']} is at {size} tokens (> {limit}); its next wake is its last wake"
+    return None
+
+
+def created_session(new_id, saved):
+    """What session.json holds once a fresh session's first wake succeeds: the id, and the one it replaced (once)."""
+    d = {"id": new_id, "created": True}
+    if saved.get("rotate"):
+        d.update(previous=saved["id"], previous_context=saved.get("context"))
+    return d
+
+
+def last_wake_note(saved):
+    """A line for the prompt of the room session's last wake, before a fresh session replaces it; empty otherwise."""
+    if saved.get("last") and not saved.get("rotate"):
+        return (f"This is the last wake in this session: it has grown to {saved.get('context')} tokens, and a fresh room "
+                "session takes over after this wake ends. Before anything else, update your working note (`note`) so the "
+                "fresh session starts from where things stand; then answer the room as usual.\n\n")
+    return ""
+
+
+def fresh_session_note(saved):
+    """A line for a fresh session's prompt naming the session it replaced; empty otherwise."""
+    if saved.get("rotate"):
+        return (f"This is a fresh room session: the previous one ({saved['id']}) had grown to {saved.get('context')} "
+                "tokens. Your core above carries your note and recent conversation; `room read` shows the room.\n\n")
+    return ""

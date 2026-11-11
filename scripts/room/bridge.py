@@ -206,7 +206,12 @@ class Bridge:
         prompt = rc.build_prompt(wake.unread, wake.triggers, self.client.user.display_name, self.client.user.id,
                                  by_reply=by_output, tail=self.config["context_tail"])
         reply_file = STATE / f"reply-{int(time.time() * 1000)}.txt"
+        saved = self.store.session()
         argv, new_session = rc.wake_argv(self.config, self.store, reply_file=reply_file)
+        if new_session:
+            prompt = rc.fresh_session_note(saved) + prompt
+        else:
+            prompt = rc.last_wake_note(saved) + prompt
         env = {**os.environ, "PERSISTENCE_SPEAKER": wake.speaker, "PERSISTENCE_ROOM_CHANNEL": wake.channel_id,
                "PERSISTENCE_ROOM_SOCKET": str(rc.socket_path())}
         cwd = self.config["cwd"] or (str(Path.home() / "work") if (Path.home() / "work").is_dir() else str(Path.home()))
@@ -224,11 +229,16 @@ class Bridge:
                     proc.kill()
                     print(f"wake timed out after {self.config['wake_timeout']}s", flush=True)
             if new_session and proc.returncode == 0:
-                self.store.save_session({"id": new_session, "created": True})
+                self.store.save_session(rc.created_session(new_session, saved))
+                if saved.get("rotate"):
+                    self.log_rollover(f"rollover: fresh room session {new_session} replaced {saved['id']}")
             elif proc.returncode:
                 print(f"wake exited {proc.returncode}; see {log}", flush=True)
             if by_output and proc.returncode == 0 and reply_file.exists():
                 await self.post_reply(wake, reply_file.read_text(encoding="utf-8").strip())
+            # After the reply is out, so nothing about the session's size can cost the room a reply (Arden's review).
+            if proc.returncode == 0:
+                self.log_rollover(rc.after_wake(self.config, self.store, log.read_text(encoding="utf-8", errors="replace")))
         except OSError as e:
             print(f"wake could not start: {e}", flush=True)
         finally:
@@ -240,6 +250,12 @@ class Bridge:
             self.current_channel = None
             await self.mark(wake.to_mark, "done")
             self.room.finish(time.time())
+
+    def log_rollover(self, said):
+        """A step of the room session's rollover (or why there was none), to stdout and timings.jsonl."""
+        if said:
+            print(said, flush=True)
+            log_timing({"what": "rollover", "said": said})
 
     async def post_reply(self, wake, text):
         """A self that speaks by replying (`http_self`, `reply_by_output`): its reply is posted as its bot, in reply to

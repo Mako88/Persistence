@@ -9,6 +9,19 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-11 — A room session can be replaced by a fresh one past a size
+
+**`fresh_session_above_tokens`, per self, off by default.** The bridge resumed one room session for good, so by
+afternoon each wake re-read ~240k tokens (several times per wake, once per turn): most of the day's usage for Claude
+and for Arden. With the setting, a wake that leaves the session past N tokens (measured from the last API call in
+the wake's own JSON output, not the per-turn sum) makes the next wake the old session's last: its prompt says so and
+asks it to update its note first, as compaction gives an outgoing session a turn to curate (Arden's review). Only after
+that wake succeeds does the following one start fresh, its prompt naming the old session. The size is read after the
+reply is posted, and a wake log it can't read (a malformed `iterations`) is said ("size unreadable: no rollover") and
+never raised, so it can't cost the room a reply (Arden's re-check). Each step (marked last, last done, fresh session
+started) goes to the bridge's stdout and `timings.jsonl` as `"what": "rollover"`. A test runs whole wakes through the
+bridge with a fake command, so the bridge's wiring of both notes and of `previous` is pinned, not only the functions.
+
 ## 2026-11-11 — A refused store caller always reads why; socket tests wait for the server, not 300 ms
 
 - **`Server.RefuseAsync`**: a caller refused on the unix socket (wrong user) now gets the refusal, then the server

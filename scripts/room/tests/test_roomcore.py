@@ -521,6 +521,13 @@ class TokenFile(unittest.TestCase):
             rc.read_token(Path(d, "missing"))
 
 
+def usage_log(context, turns=1):
+    """A wake log as `claude -p --output-format json` writes it: usage summed over turns, iterations per call."""
+    call = {"input_tokens": 2, "cache_read_input_tokens": context - 502, "cache_creation_input_tokens": 500}
+    return json.dumps({"session_id": "old", "usage": {"input_tokens": 2 * turns,
+                       "cache_read_input_tokens": (context - 502) * turns, "iterations": [call]}})
+
+
 class WakeCommand(unittest.TestCase):
     def test_default_creates_then_resumes(self):
         store = rc.RoomStore(tempfile.mkdtemp())
@@ -530,6 +537,90 @@ class WakeCommand(unittest.TestCase):
         argv, new = rc.wake_argv(config(), store)
         self.assertEqual(argv[:4], ["claude", "-p", "--resume", argv[3]])
         self.assertIsNone(new)
+
+    def test_off_by_default_the_session_is_never_rotated(self):
+        store = rc.RoomStore(tempfile.mkdtemp())
+        store.save_session({"id": "old", "created": True})
+        rc.after_wake(config(), store, usage_log(900_000))
+        argv, new = rc.wake_argv(config(), store)
+        self.assertEqual(argv[3], "old"); self.assertIsNone(new)
+
+    def test_a_session_past_the_setting_is_replaced_by_a_fresh_one(self):
+        # 2026-11-11: the room session ran all day to ~240k tokens, and every wake reloaded all of it.
+        cfg = config(fresh_session_above_tokens=150_000)
+        store = rc.RoomStore(tempfile.mkdtemp())
+        store.save_session({"id": "old", "created": True})
+        rc.after_wake(cfg, store, usage_log(149_000))
+        self.assertEqual(rc.wake_argv(cfg, store)[0][3], "old")
+        rc.after_wake(cfg, store, usage_log(151_000))
+        rc.after_wake(cfg, store, usage_log(152_000))   # the last wake in the old session (see the test below)
+        argv, new = rc.wake_argv(cfg, store)
+        self.assertIn("--session-id", argv); self.assertTrue(new); self.assertNotEqual(new, "old")
+        self.assertIn("old", rc.fresh_session_note(store.session()))
+        store.save_session(rc.created_session(new, store.session()))
+        argv, again = rc.wake_argv(cfg, store)
+        self.assertEqual(argv[3], new); self.assertIsNone(again)
+        self.assertEqual(rc.fresh_session_note(store.session()), "")   # said once, on the first wake only
+
+    def test_the_wake_after_the_line_is_crossed_is_told_it_is_the_last_and_the_fresh_session_waits_for_it(self):
+        # Arden, 2026-11-11: compaction gives the outgoing session a turn to curate its note before it is cut; a
+        # size-triggered fresh session needs the same, or it starts from a stale note. The size is known only once a
+        # wake ends, so the next wake runs in the old session, told it is its last, and the fresh one starts after it.
+        cfg = config(fresh_session_above_tokens=150_000)
+        store = rc.RoomStore(tempfile.mkdtemp())
+        store.save_session({"id": "old", "created": True})
+        self.assertEqual(rc.last_wake_note(store.session()), "")
+        rc.after_wake(cfg, store, usage_log(151_000))
+        argv, new = rc.wake_argv(cfg, store)
+        self.assertEqual(argv[3], "old"); self.assertIsNone(new)
+        note = rc.last_wake_note(store.session())
+        self.assertIn("last wake in this session", note); self.assertIn("note", note)
+        self.assertEqual(rc.fresh_session_note(store.session()), "")
+        # The last wake did not succeed (the bridge calls after_wake only on exit 0): the next one is told again.
+        self.assertEqual(rc.wake_argv(cfg, store)[0][3], "old")
+        rc.after_wake(cfg, store, usage_log(153_000))
+        argv, new = rc.wake_argv(cfg, store)
+        self.assertTrue(new)
+        self.assertEqual(rc.last_wake_note(store.session()), "")
+        self.assertIn("old", rc.fresh_session_note(store.session()))
+
+    def test_context_is_the_last_call_not_the_sum_over_turns(self):
+        log = usage_log(240_000, turns=4)
+        self.assertEqual(rc.context_tokens(log), 240_000)
+        self.assertIsNone(rc.context_tokens("not json"))
+        self.assertIsNone(rc.context_tokens(json.dumps({"usage": {"input_tokens": 5}})))
+
+    def test_context_is_read_after_stderr_lines_in_the_log(self):
+        self.assertEqual(rc.context_tokens("a warning\n" + usage_log(1000)), 1000)
+
+    def test_a_malformed_log_is_said_and_never_rolls_over_or_raises(self):
+        # Arden's review (1570120427085500567): context_tokens raised on these, and after_wake ran before post_reply,
+        # so one malformed log dropped the self's reply.
+        cfg = config(fresh_session_above_tokens=150_000)
+        for usage in ({"iterations": {"input_tokens": 999_999}},          # a dict, not a list: KeyError
+                      {"iterations": ["999999"]},                         # an item that isn't a dict: AttributeError
+                      {"iterations": [{"input_tokens": "lots"}]}):        # a count that isn't a number: ValueError
+            with self.subTest(usage=usage):
+                store = rc.RoomStore(tempfile.mkdtemp())
+                store.save_session({"id": "old", "created": True})
+                said = rc.after_wake(cfg, store, json.dumps({"usage": usage}))
+                self.assertEqual(said, "size unreadable: no rollover")
+                self.assertEqual(store.session(), {"id": "old", "created": True})
+
+    def test_each_step_of_a_rollover_is_said_for_the_log(self):
+        cfg = config(fresh_session_above_tokens=150_000)
+        store = rc.RoomStore(tempfile.mkdtemp())
+        store.save_session({"id": "old", "created": True})
+        self.assertIsNone(rc.after_wake(cfg, store, usage_log(149_000)))
+        said = rc.after_wake(cfg, store, usage_log(151_000))
+        self.assertIn("old", said); self.assertIn("151000", said); self.assertIn("last wake", said)
+        said = rc.after_wake(cfg, store, usage_log(152_000))
+        self.assertIn("old", said); self.assertIn("fresh session", said)
+
+    def test_a_fresh_session_records_the_one_it_replaced(self):
+        d = rc.created_session("new", {"id": "old", "created": True, "rotate": True, "context": 151_000})
+        self.assertEqual(d, {"id": "new", "created": True, "previous": "old", "previous_context": 151_000})
+        self.assertEqual(rc.created_session("new", {}), {"id": "new", "created": True})
 
     def test_custom_command(self):
         argv, new = rc.wake_argv(config(wake_command=["codex", "{session}"]), None, "s1")
