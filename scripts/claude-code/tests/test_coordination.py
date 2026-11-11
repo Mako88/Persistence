@@ -13,6 +13,8 @@ import uuid
 from pathlib import Path
 from unittest import mock
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "testguard"))
+import no_real_claude  # noqa: E402,F401  first: no test can start a real claude (Arden 1570199499278909491)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import hook
 import coordination
@@ -121,6 +123,19 @@ class Ledger(Base):
         with coordination.lock(self.state, "wakes"), coordination.lock(self.state, "tasks"), coordination.lock(self.state, "fired"):
             pass
 
+    def test_fired_lock_is_a_leaf_whatever_the_order_puts_after_it(self):
+        """Arden's mutation M (1570199516513046549): the leaf rule is its own rule, not a consequence of fired being
+        last in today's order. With a lock ordered after it, taking that lock while holding fired.lock is still refused."""
+        with mock.patch.object(coordination, "LOCK_ORDER", coordination.LOCK_ORDER + ("later",)), \
+                mock.patch.dict(coordination.LOCK_FILES, {"later": "later.lock"}):
+            with coordination.lock(self.state, "tasks"), coordination.lock(self.state, "later"):
+                pass  # the order alone allows it
+            with coordination.lock(self.state, "fired"):
+                with self.assertRaisesRegex(coordination.LockOrderError, "leaf"):
+                    with coordination.lock(self.state, "later"):
+                        pass
+            self.assertEqual(coordination.held_locks(), [])
+
     def test_a_short_write_is_cut_back_and_fails_loudly(self):
         coordination.append(self.state, self.fact(1))
         before = self.ledger()
@@ -190,6 +205,25 @@ class Ledger(Base):
         self.assertEqual(set(fact), {"firing", "fact", "at"} | set(coordination.ENQUEUED_FIELDS))
         self.assertNotIn("MARKER", json.dumps(fact))
         self.assertEqual(len(fact["reason_sha256"]), 64)
+
+
+
+class CopyOnlyInstall(unittest.TestCase):
+    """Arden 1570199516513046549 point 3: hook.py copied alone (a Codex install made before coordination.py existed,
+    or John's PC's) still imports, so session-start and recall still run; only what takes a lock needs coordination.py."""
+
+    def test_hook_py_alone_imports_and_reads_the_queue(self):
+        import shutil
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as d:
+            shutil.copy(Path(hook.__file__), d)
+            code = ("import sys; sys.path.insert(0, sys.argv[1]); import hook; "
+                    "assert 'coordination' not in sys.modules, 'imported at module level'; "
+                    "assert hook.wakes() == []; print('ok')")
+            done = subprocess.run([sys.executable, "-I", "-c", code, d], capture_output=True, text=True, timeout=60,
+                                  env={**os.environ, "PERSISTENCE_STATE_DIR": str(Path(d) / "state")})
+        self.assertEqual((done.returncode, done.stdout.strip()), (0, "ok"), done.stderr)
 
 
 if __name__ == "__main__":

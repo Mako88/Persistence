@@ -14,6 +14,8 @@ from unittest import mock
 TMP = tempfile.mkdtemp(prefix="codex-hook-test-")
 os.environ["PERSISTENCE_CODEX_CONFIG"] = str(Path(TMP) / "none.json")  # never the running user's own config
 os.environ["PERSISTENCE_STATE_DIR"] = str(Path(TMP) / "state")
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "testguard"))
+import no_real_claude  # noqa: E402,F401  first: no test can start a real claude (Arden 1570199499278909491)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import codex_hook  # noqa: E402
 hook = codex_hook.hook

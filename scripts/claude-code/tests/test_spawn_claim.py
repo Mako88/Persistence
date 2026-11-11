@@ -16,6 +16,8 @@ import uuid
 from pathlib import Path
 from unittest import mock
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "testguard"))
+import no_real_claude  # noqa: E402,F401  first: no test can start a real claude (Arden 1570199499278909491)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import hook
 import claims
@@ -214,6 +216,103 @@ class SpawnClaim(Base):
         self.assertIn(marker, call["prompt"], "the task reaches the worker only as the prompt's text")
 
 
+class SurvivedMutations(Base):
+    """Arden's mutations I, J and G (1570199516513046549), which survived cf63ad0's tests."""
+
+    def test_spawn_locked_refuses_an_open_claim_with_dispatch_none(self):
+        """I: Ember's point 7. An open record with dispatch none is unowned and nothing assigns it in v1, so the spawn
+        claim refuses it as claim_open does, writing nothing and binding no descriptor."""
+        record = self.c.create("not a hand-off", owner=None, cwd=str(self.home / "work"), by=self.room, dispatch="none",
+                               status="open")
+        before = self.claim_file(record).read_bytes()
+        opened = []
+        with mock.patch.object(self.c, "open_cwd", side_effect=lambda cwd: opened.append(cwd)), \
+                coordination.lock(self.state, "wakes"), coordination.lock(self.state, "tasks"):
+            with self.assertRaises(claims.Refused):
+                self.c.spawn_locked(record["id"], sid(), sid(), record["cwd"])
+        self.assertEqual(self.claim_file(record).read_bytes(), before)
+        self.assertEqual(opened, [])
+
+    def test_run_due_with_dispatch_none_on_the_item_s_claim_launches_nothing(self):
+        record = self.c.create("not a hand-off", owner=None, cwd=str(self.home / "work"), by=self.room, dispatch="none",
+                               status="open")
+        _, item = self.pwake()
+        hook.wakes(lambda items: [dict(w, claim=record["id"]) for w in items])
+        self.run_due()
+        self.assertEqual(self.launched.calls, [])
+        self.assertEqual((self.c.get(record["id"])["status"], self.c.get(record["id"])["owner"]), ("open", None))
+
+    def test_unknown_liveness_waits(self):
+        """J: when the process table can't be read, claims.running is None, and the wake waits: no claim, no fact,
+        no launch, the item stays queued."""
+        record, item = self.pwake()
+        before = self.claim_file(record).read_bytes()
+        with mock.patch.object(claims, "process_table", return_value=None):
+            self.run_due()
+        self.assertIsNone(claims.running(item["session"], None))
+        self.assertEqual(self.launched.calls, [])
+        self.assertEqual(self.claim_file(record).read_bytes(), before)
+        self.assertEqual(self.facts(), [])
+        self.assertEqual([w["id"] for w in self.queue()], [item["id"]])
+        self.run_due()  # the table readable again: it fires
+        self.assertEqual(len(self.launched.calls), 1)
+
+    def test_a_mixed_due_queue_takes_tasks_lock_and_fires_both(self):
+        """G: one due item names a claim and one doesn't. tasks/.lock is taken because any item names a claim, the
+        hand-off is spawned by its claim, and the plain item still goes the plain way."""
+        record, item = self.pwake()
+        other = sid()
+        hook.wakes(lambda items: items + [{"id": str(uuid.uuid4()), "reason": "carry on", "session": other, "at": 0,
+                                           "set": "2026-11-11T21:00:00+00:00"}])
+        plain, seen = [], []
+        with mock.patch.object(hook, "_resume_or_start", side_effect=lambda s, mine: plain.append((s, [w["reason"] for w in mine]))), \
+                mock.patch.object(coordination, "LOCK_OBSERVER", seen.append):
+            try:
+                self.run_due()
+            except coordination.LockOrderError as e:
+                self.fail(f"run-due reached the spawn claim without tasks/.lock: {e}")
+        self.assertIn(("acquire", "tasks"), seen)
+        [call] = self.launched.calls
+        self.assertEqual(call["argv"][call["argv"].index("--session-id") + 1], item["session"])
+        self.assertEqual(plain, [(other, ["carry on"])])
+        self.assertEqual(self.c.get(record["id"])["status"], "claimed")
+        self.assertEqual(self.queue(), [])
+
+
+class EachLaunchOnItsOwn(Base):
+    """Arden's nit (1570199516513046549): one failed launch doesn't drop the ones after it, and a launch that fails
+    before cwd-exec takes its descriptor leaves none open."""
+
+    def open_fds(self):
+        return set(os.listdir("/proc/self/fd"))
+
+    def test_a_failed_launch_doesn_t_drop_the_next(self):
+        first, _ = self.pwake()
+        second, _ = self.pwake(task="The second hand-off")
+        real, calls = self.launched, []
+
+        def fail_first(fd, argv, **popen):
+            calls.append(fd)
+            if len(calls) == 1:
+                os.close(fd)
+                raise OSError("the first launch failed")
+            return real(fd, argv, **popen)
+        with mock.patch.object(claims, "launch", fail_first):
+            with self.assertRaisesRegex(OSError, "the first launch failed"):
+                self.run_due()
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(self.launched.calls), 1)
+
+    def test_a_launch_failing_before_cwd_exec_closes_its_descriptor(self):
+        self.pwake()
+        before = self.open_fds()
+        with mock.patch.object(hook, "server_environ", side_effect=RuntimeError("before the launch")):
+            with self.assertRaises(RuntimeError):
+                self.run_due()
+        self.assertEqual(self.launched.calls, [])
+        self.assertEqual(self.open_fds(), before)
+
+
 class SpawnLockOrder(Base):
     """Lock order, the spawn path (Ember 1570158593645355039): wakes.lock -> tasks/.lock -> fired.lock, fired.lock
     released before the queue rewrite, all three released before the launcher is called."""
@@ -369,8 +468,24 @@ class Seam(Base):
                   "mine = claims.Claims(os.environ['TEST_STATE'], home=os.environ['TEST_HOME']).by_owner(session)\n"
                   "json.dump({'cwd': os.getcwd(), 'argv': args, 'claim': mine and mine['id'], 'stdin': sys.stdin.read()}, open(sys.argv[2], 'w'))")
         record, item = self.pwake()
-        for p in reversed(self.fakes):
-            p.stop()
+        # Only the launcher is lifted. Popen stays guarded: the one process it may start is cwd-exec running the fake
+        # worker, and the plain path is refused outright, so a wrong run_due (Arden's mutation R: an item with no claim
+        # took _resume_or_start and started a real `claude -p` with the tester's PATH and HOME) fails here, launching
+        # nothing.
+        self.fakes[1].stop()
+        real_popen = hook.subprocess.Popen
+        started = []
+
+        def only_cwd_exec(argv, *a, **k):
+            if list(argv[:3]) != [sys.executable, "-I", str(claims.CWD_EXEC)] or list(argv[4:7]) != [sys.executable, "-c", worker]:
+                raise AssertionError(f"a process other than cwd-exec running the fake worker: {argv!r}")
+            started.append(argv)
+            return real_popen(argv, *a, **k)
+        self.fakes[0].stop()
+        guards = [mock.patch.object(hook.subprocess, "Popen", only_cwd_exec),
+                  mock.patch.object(hook, "_resume_or_start", side_effect=AssertionError("the plain path, not the claim's"))]
+        for g in guards:
+            g.start()
         try:
             with mock.patch.object(hook, "WORK_ARGV", [sys.executable, "-c", worker, here, str(out)]), \
                     mock.patch.dict(os.environ, {"TEST_STATE": str(self.state), "TEST_HOME": str(self.home)}):
@@ -380,8 +495,11 @@ class Seam(Base):
                     break
                 time.sleep(0.05)
         finally:
+            for g in reversed(guards):
+                g.stop()
             for p in self.fakes:
                 p.start()
+        self.assertEqual(len(started), 1)
         self.assertTrue(out.exists(), "the worker ran (it exits at once without --session-id)")
         seen = json.loads(out.read_text())
         self.assertEqual(seen["cwd"], str(self.home / "work"))

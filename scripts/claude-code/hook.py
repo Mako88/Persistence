@@ -56,7 +56,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import coordination  # noqa: E402  the locks and the fired-wake ledger (heartbeat.md 2524fe7)
+# coordination.py (the locks and the fired-wake ledger, heartbeat.md 2524fe7) is imported where it's used, as claims.py
+# is: a copy-only install with hook.py alone (the Codex adapter's, John's PC's) must still run session-start and recall
+# rather than fail every hook at import (Arden 1570199516513046549, point 3).
 
 CAP = 9500  # Claude Code replaces injected context over 10,000 characters with a file path and a preview
 WHOLE = 200_000  # the core as a file the peer reads after a session starts: bounded only by what one read takes
@@ -1644,6 +1646,8 @@ def wakes(update=None):
         except (OSError, ValueError):
             return []
         return items if isinstance(items, list) else []
+    import coordination
+
     with coordination.lock(STATE, "wakes"):
         items = update(queue_locked())
         write_queue_locked(items)
@@ -1677,6 +1681,8 @@ def write_queue_locked(items):
         f.write(json.dumps(items, indent=1))
         f.flush()
         os.fsync(f.fileno())
+    import coordination
+
     coordination.observe(("write", "wakes.json"))
     os.replace(tmp, WAKES)
 
@@ -1737,18 +1743,29 @@ def run_due(grace=120, home=None):
             if launch[0] == "claim" and launch[3] is not None:
                 os.close(launch[3])  # a run that dies mid-transition launches nothing and leaks no descriptor
         raise
+    # Each launch on its own (Arden 1570199516513046549, nit): one that fails doesn't drop the ones after it, and its
+    # descriptor is closed. The first failure is raised once all have been tried, so the run still shows it.
+    failed = []
     for launch in launches:
-        if launch[0] == "claim":
-            _, w, record, fd = launch
-            handoff = {k: record[k] for k in TASK_FIELDS}
-            print(start_work_session(record["cwd"], w["reason"], "room", w["session"], handoff=handoff, cwd_fd=fd,
-                                     claim=record["id"]))
-        else:
-            _resume_or_start(*launch[1:])
+        try:
+            if launch[0] == "claim":
+                _, w, record, fd = launch
+                handoff = {k: record[k] for k in TASK_FIELDS}
+                print(start_work_session(record["cwd"], w["reason"], "room", w["session"], handoff=handoff, cwd_fd=fd,
+                                         claim=record["id"]))
+            else:
+                _resume_or_start(*launch[1:])
+        except Exception as e:
+            print(f"run-due: a launch failed, the rest still go: {e!r}", file=sys.stderr)
+            failed.append(e)
+    if failed:
+        raise failed[0]
 
 
 def _run_due_locked(c, claims, now, at, grace, launches):
     """run_due's locked transition; what it decides to start goes into `launches`, started only after it returns."""
+    import coordination
+
     with coordination.lock(STATE, "wakes"):
         try:
             items = queue_locked()
@@ -1847,6 +1864,7 @@ def set_handoff(wake, home=None):
     not through add_wake, which keeps dropping `claim` so a peer can't write it."""
     import uuid
     import claims
+    import coordination
 
     if wake.get("pid"):
         # run-due fires only timed items, and a pre-minted worker has no waiter to see a pid end: refused, not lost.
@@ -1890,6 +1908,23 @@ def start_work_session(cwd, reasons, origin, session=None, handoff=None, cwd_fd=
     """A new working session with full permissions, started for work handed to it: a wake set from the room (on home),
     or messages sent from home to this machine (`link`, on John's PC; John approved full auto, 2026-11-10). Never a
     resumed session, so never the room's. Its output is kept in state/wake-<id>-<time>.json."""
+    try:
+        return _start_work_session(cwd, reasons, origin, session, handoff, cwd_fd, claim)
+    except BaseException:
+        if cwd_fd is not None and _fd_open(cwd_fd):
+            os.close(cwd_fd)  # failed before cwd-exec took it (claims.launch closes it once called, whatever happens)
+        raise
+
+
+def _fd_open(fd):
+    try:
+        os.fstat(fd)
+        return True
+    except OSError:
+        return False
+
+
+def _start_work_session(cwd, reasons, origin, session, handoff, cwd_fd, claim):
     import shutil
     import uuid
 
