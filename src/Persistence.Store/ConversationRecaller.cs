@@ -20,7 +20,8 @@ namespace Persistence.Store;
 internal sealed class ConversationRecaller(
     IContextFragmentRepository fragments,
     IFragmentEmbeddingRepository vectors,
-    IEmbeddingClient embeddings)
+    IEmbeddingClient embeddings,
+    QueryEmbedder queryEmbedder)
 {
     /// <summary>Shorter than this and an utterance is an acknowledgement ("sounds good"), not a memory.</summary>
     public const int MinLength = 80;
@@ -136,13 +137,12 @@ internal sealed class ConversationRecaller(
     {
         await BackfillAsync(BackfillPerCall);
         var stored = loaded ??= (await vectors.GetAllAsync(Model)).ToList();
-        var query = await embeddings.EmbedAsync([EmbeddingMemorySurfacer.QueryText(text)]);
-        if (stored.Count == 0 || query.Count == 0 || query[0].Length == 0)
+        if (stored.Count == 0 || await queryEmbedder.EmbedAsync(text) is not { } query)
         {
             return [];
         }
 
-        var top = stored.Select(v => (v.ContextFragmentId, score: VectorMath.Cosine(query[0], v.Vector)))
+        var top = stored.Select(v => (v.ContextFragmentId, score: VectorMath.Cosine(query, v.Vector)))
             .OrderByDescending(x => x.score).Take(Pool * 2).ToList();
         var byId = (await fragments.GetByIdsAsync(top.Select(x => x.ContextFragmentId))).ToDictionary(f => f.Id);
         return top.Where(x => byId.TryGetValue(x.ContextFragmentId, out var f) && wanted(f))

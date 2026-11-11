@@ -9,6 +9,36 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-11 — Review fixes to the query trim and the quality weight (Arden's review, Ember's requirements)
+
+- **The trim is a per-store setting, off by default.** `EmbeddingSettings.QueryTailChars` (env
+  `PERSISTENCE_EMBEDDING_QUERYTAILCHARS`): tail characters used for query embedding. 0, the default, sends the whole
+  query as before 77b9191, so no store's recall changes until its self opts in (Ember: retrieval policy touches a
+  self). 1,200 is the measured choice. `EmbeddingMemorySurfacer.QueryText` is gone; `QueryEmbedder` applies the
+  policy for recall and conversation recall.
+- **Fragments and the near check always use the head.** 77b9191 made `nearest` (the duplicate check on `add`, sleep's
+  pairing) embed a text's tail, but every stored vector is of a fragment's head: a long exact duplicate scored 0.793
+  against itself on Arden's store (#832) and was missed. `Nearest` now embeds `HeadText`, and is unaffected by
+  `QueryTailChars`.
+- **1,200 characters is a heuristic, not a guarantee.** Measured on bge-small: 1,200 characters of prose are 228
+  tokens, but of digits 732, code 720, hex 857, Cyrillic 972, CJK 1,200; all refused. A refused tail is halved and
+  retried, at most twice, never below 300 characters (600 recovers all of those but CJK, 300 recovers CJK).
+- **The lexical fallback is never silent.** When recall gets no query vector (refused, unreachable, or semantic recall
+  threw), it logs to stderr and `recall` prints "(Recall ran on exact words alone, without meaning: why)" at the top
+  of its output (stderr only under `--json`). The prompt hook dropped recall's output when nothing matched, so the
+  notice vanished exactly when recall came back empty (Arden); it now shows one line then ("Recall found nothing new
+  for this message. Recall ran on exact words alone…"), and an empty recall *with* meaning still prints nothing.
+  A store with no vectors at all (an embedder that never worked) returned before the query embed and was silent
+  too; it is noted now ("no memory in this store has a vector yet…"), since there every recall is words alone (Arden).
+  When a prompt cue matched and recall came back empty, the hook showed the cue and dropped the notice; it shows
+  both now. The notice reached stderr twice (QueryEmbedder's display, then `recall` again); once now.
+- **The shrink bounds and the thrown path are pinned.** At a 1,200 tail, "at most twice" and "floor 300" stop at the
+  same place, so deleting either left every test green; tails of 4,000 (4000/2000/1000) and 500 (500/300) pin each
+  on its own, and a test now fails if semantic recall throwing stops being noted (Arden).
+- **A test for the meaning-based half of the quality weight.** Hard-coding the semantic ranking's weight to 1 left
+  every test passing; `SemanticRanking_QualityWeight_DecidesBetweenMeaningAndImportance` fails under it.
+- **recall-eval** sets `QUERYTAILCHARS=1200` for its runs (overridable), so its numbers stay comparable with 77b9191's.
+
 ## 2026-11-11 — The newest working note, and contextual hand-offs (built on a branch, in review)
 
 - **A newer note is shown, not hidden** (docs/design/handoff-and-notes.md, revision 3, section 1): when another

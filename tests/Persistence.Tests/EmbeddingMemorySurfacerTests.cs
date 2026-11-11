@@ -3,6 +3,7 @@ using Persistence.Config;
 using Persistence.Data.Entities;
 using Persistence.Data.Repositories;
 using Persistence.Services;
+using Persistence.Runtime;
 
 namespace Persistence.Tests;
 
@@ -137,18 +138,182 @@ public class EmbeddingMemorySurfacerTests
     }
 
     [Fact]
-    public async Task SurfaceAsync_EmbedsOnlyTheEndOfALongQuery()
+    public async Task SurfaceAsync_QueryTailSet_EmbedsOnlyTheEndOfALongQuery()
     {
         // The embedder refuses past 512 tokens; a whole long message sent to it cost recall its semantic ranking.
+        var embeddings = new FakeEmbeddingClient();
+        var surfacer = Build(lexicalHits: [Frag(1)], embeddings: embeddings, stored: [(1L, [1f, 0f])], queryTailChars: 1200);
+        var query = new string('x', 3000) + " so what should we do about the slowdown?";
+
+        await surfacer.SurfaceAsync([], query, count: 2, CancellationToken.None);
+
+        var sent = Assert.Single(embeddings.Texts);
+        Assert.Equal(1200, sent.Length);
+        Assert.EndsWith("about the slowdown?", sent);
+    }
+
+    [Fact]
+    public async Task SurfaceAsync_QueryTailZero_SendsTheWholeQueryAsBefore()
+    {
+        // 0 is the default: no store's recall changes until its self opts in to the trim (Ember, 2026-11-11).
         var embeddings = new FakeEmbeddingClient();
         var surfacer = Build(lexicalHits: [Frag(1)], embeddings: embeddings, stored: [(1L, [1f, 0f])]);
         var query = new string('x', 3000) + " so what should we do about the slowdown?";
 
         await surfacer.SurfaceAsync([], query, count: 2, CancellationToken.None);
 
-        var sent = Assert.Single(embeddings.Texts);
-        Assert.Equal(EmbeddingMemorySurfacer.MaxEmbedChars, sent.Length);
-        Assert.EndsWith("about the slowdown?", sent);
+        Assert.Equal(query, Assert.Single(embeddings.Texts));
+        Assert.Equal(0, new EmbeddingSettings().QueryTailChars);
+    }
+
+    [Fact]
+    public async Task SurfaceAsync_TokenDenseTailRefused_ShrinksAndRetriesUntilItEmbeds()
+    {
+        // 1,200 characters is a heuristic: measured on bge-small (2026-11-11), 1,200 characters of CJK are 1,200
+        // tokens and refused, of Cyrillic 972, of code 720, of digits 732; CJK embeds at 300. The fake refuses
+        // as that server does, one token a character, past 512.
+        var embeddings = new FakeEmbeddingClient { RefuseOverChars = 512 };
+        var display = new Mock<IDisplayProvider>();
+        var surfacer = Build(lexicalHits: [], embeddings: embeddings, stored: [(2L, [1f, 0f])],
+            knownFragments: [Frag(2)], queryTailChars: 1200, display: display);
+        var query = string.Concat(Enumerable.Repeat("记忆的持续性在于存储而不是会话本身因此每次唤醒都要读取核心", 60));
+
+        var surfaced = await surfacer.SurfaceAsync([], query, count: 2, CancellationToken.None);
+
+        Assert.Equal([1200, 600, 300], embeddings.Texts.Select(t => t.Length));
+        Assert.Equal([2L], surfaced.Select(f => f.Id)); // found by meaning alone, after the retries
+        display.Verify(d => d.ShowError(It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task SurfaceAsync_EmbedderStillRefuses_FallsBackToWordsAndSaysSo()
+    {
+        var embeddings = new FakeEmbeddingClient { RefuseOverChars = 100 };
+        var display = new Mock<IDisplayProvider>();
+        var queryEmbedder = new QueryEmbedder(embeddings, Config(queryTailChars: 1200), display.Object);
+        var surfacer = Build(lexicalHits: [Frag(1)], embeddings: embeddings, stored: [(2L, [1f, 0f])],
+            knownFragments: [Frag(2)], queryEmbedder: queryEmbedder);
+        var query = new string('9', 1991) + " slowdown";
+
+        var surfaced = await surfacer.SurfaceAsync([], query, count: 2, CancellationToken.None);
+
+        Assert.Equal([1L], surfaced.Select(f => f.Id)); // the lexical floor
+        Assert.Equal([1200, 600, 300], embeddings.Texts.Select(t => t.Length)); // bounded: two shrinks, then stop
+        Assert.Contains("exact words alone", queryEmbedder.Fallback);
+        Assert.Contains("2,000 characters", queryEmbedder.Fallback);
+        display.Verify(d => d.ShowError(queryEmbedder.Fallback!), Times.Once);
+
+        // The same message in the same recall is not retried, but stays noted.
+        await surfacer.SurfaceAsync([], query, count: 2, CancellationToken.None);
+        Assert.Equal(3, embeddings.Texts.Count);
+        Assert.NotNull(queryEmbedder.Fallback);
+    }
+
+    [Fact]
+    public async Task SurfaceAsync_QueryTailZero_RefusedWholeQueryIsNotRetriedButIsNoted()
+    {
+        var embeddings = new FakeEmbeddingClient { RefuseOverChars = 512 };
+        var queryEmbedder = new QueryEmbedder(embeddings, Config(), Mock.Of<IDisplayProvider>());
+        var surfacer = Build(lexicalHits: [Frag(1)], embeddings: embeddings, stored: [(2L, [1f, 0f])],
+            knownFragments: [Frag(2)], queryEmbedder: queryEmbedder);
+
+        var surfaced = await surfacer.SurfaceAsync([], new string('9', 1990) + " slowdown", count: 2, CancellationToken.None);
+
+        Assert.Equal([1L], surfaced.Select(f => f.Id));
+        Assert.Single(embeddings.Texts);
+        Assert.Contains("sent whole", queryEmbedder.Fallback);
+    }
+
+    [Fact]
+    public async Task SurfaceAsync_StoreWithNoVectors_FallsBackToWordsAndSaysSo()
+    {
+        // A store whose embedder has never worked: the backfill is refused, no fragment has a vector,
+        // and recall returned before the query embed, so the fallback went unnoted. There every recall
+        // is words alone, which is where a silent fallback misleads most (Arden, 2026-11-11).
+        var embeddings = new FakeEmbeddingClient { RefuseOverChars = 1 };
+        var display = new Mock<IDisplayProvider>();
+        var queryEmbedder = new QueryEmbedder(embeddings, Config(), display.Object);
+        var repo = new FakeEmbeddingRepository { Stale = [2L] };
+        var surfacer = Build(lexicalHits: [Frag(1)], embeddings: embeddings, embeddingRepo: repo,
+            knownFragments: [Frag(2)], queryEmbedder: queryEmbedder);
+
+        var surfaced = await surfacer.SurfaceAsync([], "intent and outcome", count: 2, CancellationToken.None);
+
+        Assert.Equal([1L], surfaced.Select(f => f.Id)); // the lexical floor
+        Assert.Empty(repo.Stored);
+        Assert.Contains("exact words alone", queryEmbedder.Fallback);
+        Assert.Contains("no memory in this store has a vector", queryEmbedder.Fallback);
+        display.Verify(d => d.ShowError(queryEmbedder.Fallback!), Times.Once);
+    }
+
+    [Fact]
+    public async Task SurfaceAsync_LongTailRefused_StopsAfterTwoShrinks()
+    {
+        // Pins MaxShrinks on its own: at a 1,200 tail the floor of 300 stops at the same place, so that test
+        // stays green without the shrink count (Arden, 2026-11-11). From 4,000 the floor is never reached.
+        var embeddings = new FakeEmbeddingClient { RefuseOverChars = 100 };
+        var queryEmbedder = new QueryEmbedder(embeddings, Config(queryTailChars: 4000), Mock.Of<IDisplayProvider>());
+        var surfacer = Build(lexicalHits: [Frag(1)], embeddings: embeddings, stored: [(2L, [1f, 0f])],
+            knownFragments: [Frag(2)], queryEmbedder: queryEmbedder);
+
+        await surfacer.SurfaceAsync([], new string('9', 5000), count: 2, CancellationToken.None);
+
+        Assert.Equal([4000, 2000, 1000], embeddings.Texts.Select(t => t.Length));
+        Assert.Contains("exact words alone", queryEmbedder.Fallback);
+    }
+
+    [Fact]
+    public async Task SurfaceAsync_ShortTailRefused_StopsAtTheFloor()
+    {
+        // Pins MinTailChars on its own: from 500, halving would send 250; the floor sends 300 and stops there.
+        var embeddings = new FakeEmbeddingClient { RefuseOverChars = 100 };
+        var queryEmbedder = new QueryEmbedder(embeddings, Config(queryTailChars: 500), Mock.Of<IDisplayProvider>());
+        var surfacer = Build(lexicalHits: [Frag(1)], embeddings: embeddings, stored: [(2L, [1f, 0f])],
+            knownFragments: [Frag(2)], queryEmbedder: queryEmbedder);
+
+        await surfacer.SurfaceAsync([], new string('9', 5000), count: 2, CancellationToken.None);
+
+        Assert.Equal([500, 300], embeddings.Texts.Select(t => t.Length));
+        Assert.Contains("exact words alone", queryEmbedder.Fallback);
+    }
+
+    [Fact]
+    public async Task SurfaceAsync_EmbedderThrows_FallsBackToWordsAndSaysSo()
+    {
+        // The thrown path is a fallback too: it must be noted like a refusal, never silent.
+        var embeddings = new FakeEmbeddingClient { Throws = true };
+        var display = new Mock<IDisplayProvider>();
+        var queryEmbedder = new QueryEmbedder(embeddings, Config(), display.Object);
+        var surfacer = Build(lexicalHits: [Frag(1)], embeddings: embeddings, stored: [(2L, [1f, 0f])],
+            knownFragments: [Frag(2)], queryEmbedder: queryEmbedder);
+
+        var surfaced = await surfacer.SurfaceAsync([], "intent and outcome", count: 2, CancellationToken.None);
+
+        Assert.Equal([1L], surfaced.Select(f => f.Id)); // the lexical floor
+        Assert.Contains("exact words alone", queryEmbedder.Fallback);
+        Assert.Contains("embedding service unreachable", queryEmbedder.Fallback);
+        display.Verify(d => d.ShowError(queryEmbedder.Fallback!), Times.Once);
+    }
+
+    [Fact]
+    public async Task SemanticRanking_QualityWeight_DecidesBetweenMeaningAndImportance()
+    {
+        // Only the meaning-based half: no lexical hits. A matches the query exactly but is unimportant;
+        // B matches less (cosine 0.8) and is important. Relevance x quality^W: at W=1 B wins (0.8 x 0.9 > 1 x 0.1),
+        // at W=0 relevance alone decides and A wins.
+        var a = Frag(1);
+        a.Importance = a.Confidence = 0.1f;
+        var b = Frag(2);
+        b.Importance = b.Confidence = 0.9f;
+
+        async Task<long[]> RankAt(double weight) => (await Build(lexicalHits: [], embeddings: new FakeEmbeddingClient(),
+                stored: [(1L, [1f, 0f]), (2L, [0.8f, 0.6f])], knownFragments: [a, b], qualityWeight: weight)
+            .SurfaceAsync([], "anything", count: 2, CancellationToken.None)).Select(f => f.Id).ToArray();
+
+        var atOne = await RankAt(1.0);
+        var atZero = await RankAt(0.0);
+        Assert.Equal([2L, 1L], atOne);
+        Assert.Equal([1L, 2L], atZero);
     }
 
     [Fact]
@@ -298,7 +463,11 @@ public class EmbeddingMemorySurfacerTests
         IReadOnlyList<(long id, float[] vector)>? stored = null,
         FakeEmbeddingRepository? embeddingRepo = null,
         IReadOnlyList<ContextFragmentEntity>? knownFragments = null,
-        IReadOnlyDictionary<long, (long HeadId, int Hops)>? heads = null)
+        IReadOnlyDictionary<long, (long HeadId, int Hops)>? heads = null,
+        double qualityWeight = 1.0,
+        int queryTailChars = 0,
+        Mock<IDisplayProvider>? display = null,
+        QueryEmbedder? queryEmbedder = null)
     {
         var fragmentRepo = new Mock<IContextFragmentRepository>();
 
@@ -326,6 +495,16 @@ public class EmbeddingMemorySurfacerTests
             repo.Stored[id] = new StoredEmbedding(id, vector, "hash");
         }
 
+        var config = Config(qualityWeight, queryTailChars);
+
+        // The lexical half is given no config, so it keeps W=1: only the meaning-based half sees qualityWeight.
+        return new EmbeddingMemorySurfacer(
+            new MemorySurfacer(fragmentRepo.Object), embeddings, repo, fragmentRepo.Object, config,
+            queryEmbedder ?? new QueryEmbedder(embeddings, config, (display ?? new Mock<IDisplayProvider>()).Object));
+    }
+
+    private static IAppConfig Config(double qualityWeight = 1.0, int queryTailChars = 0)
+    {
         var config = new Mock<IAppConfig>();
         config.Setup(c => c.Embedding).Returns(new EmbeddingSettings
         {
@@ -333,10 +512,10 @@ public class EmbeddingMemorySurfacerTests
             ApiBaseUrl = "http://localhost:8081/v1",
             BackfillPerTurn = 32,
             FusionK = 60,
+            QualityWeight = qualityWeight,
+            QueryTailChars = queryTailChars,
         });
-
-        return new EmbeddingMemorySurfacer(
-            new MemorySurfacer(fragmentRepo.Object), embeddings, repo, fragmentRepo.Object, config.Object);
+        return config.Object;
     }
 
     private sealed class FakeEmbeddingClient : IEmbeddingClient
@@ -348,6 +527,9 @@ public class EmbeddingMemorySurfacerTests
         public int EmbedCallCount { get; private set; }
         public List<string> Texts { get; } = [];
 
+        /// <summary>Longer than this and the text is refused, as llama.cpp refuses past its context (0: never).</summary>
+        public int RefuseOverChars { get; set; }
+
         public Task<IReadOnlyList<float[]>> EmbedAsync(
             IReadOnlyList<string> texts, CancellationToken ct = default)
         {
@@ -357,6 +539,11 @@ public class EmbeddingMemorySurfacerTests
             if (Throws)
             {
                 throw new InvalidOperationException("embedding service unreachable");
+            }
+
+            if (RefuseOverChars > 0 && texts.Any(t => t.Length > RefuseOverChars))
+            {
+                return Task.FromResult<IReadOnlyList<float[]>>([]);
             }
 
             return Task.FromResult<IReadOnlyList<float[]>>(
