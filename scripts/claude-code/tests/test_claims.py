@@ -141,7 +141,7 @@ class OneOwner(Base):
     def test_racing_takes_one_wins_and_the_loser_is_told_the_owner_and_that_it_is_running_or_not(self):
         record = self.mine()
         takers = [sid() for _ in range(8)]
-        results = self.race(lambda i: self.c.take(record["id"], takers[i], table=[], items=[]))
+        results = self.race(lambda i: self.c.take(record["id"], takers[i], table=[], items=[], expected_owner=self.me))
         self.assertEqual(len([r for r in results if r[0] == "won"]), 1, results)
         after = self.c.get(record["id"])
         self.assertIn(after["owner"], takers)
@@ -153,7 +153,7 @@ class OneOwner(Base):
         with self.assertRaises(claims.Refused) as e:
             self.c.take(record["id"], sid(), table=[["claude", "--resume", self.me]], items=[])
         self.assertIn(self.me, str(e.exception))
-        self.assertIn("running", str(e.exception))
+        self.assertIn("which is running", str(e.exception))
 
     def test_a_take_is_refused_while_a_wake_is_pending_for_the_owner_or_the_claim(self):
         record = self.mine()
@@ -387,7 +387,10 @@ class PauseExpiry(Base):
 
     def test_one_expiry_clears_the_spell_marks(self):
         i = self.paused()
-        claims.Claims(self.state, home=self.home, now=self.clock)._write_marks_for_test(i, nudged="x", reported="y")
+        path = self.state / "tasks" / f"{i}.json"
+        record = json.loads(path.read_text())
+        record.update(nudged="2026-11-11T21:01:00+00:00", reported="2026-11-11T21:02:00+00:00")  # as the heartbeat would mark it
+        path.write_text(json.dumps(record))
         self.clock.advance(minutes=5)
         self.assertEqual(self.c.settle_pauses(), 1)
         after = self.c.get(i)

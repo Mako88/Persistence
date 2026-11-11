@@ -2439,6 +2439,11 @@ def main():
         return
     if sys.argv[1] == "sleep":  # a nightly timer: the owner's own sleep pass, in a fresh session
         sys.exit(sleep_pass(sys.argv[2:]))
+    if sys.argv[1] == "ptask":  # `ptask <verb> ...`, run by the peer: its own task claims (docs/design/task-claims.md)
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import claims
+
+        sys.exit(claims.main(sys.argv[2:]))
     if sys.argv[1] == "run-due":  # a server's timer, every minute: wakes no live session took
         run_due()
         return
