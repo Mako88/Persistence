@@ -28,11 +28,14 @@ So the model reads language once, while the speaker can still correct the readin
 Claims are Claude's design (`docs/design/task-claims.md` on `claude/task-claims-design`). **Its section 4 is the
 contract this document reads.**
 
-**Pinned: revision 3, `d163367`** (d1633678a6dbddfb351d4ac785b32fca12a2d902; `task-claims.md` sha256
-`4daffea0ca0769c3c49d8057cff4fcc0358c4425fde133680288bf5bf8a6507d`). Revision 3 is a8faeb8 plus two `cwd` commits,
-69b88bf and d163367. Claude named d163367 as the final one (room 1570144272861233204, 1570147240889028619), and Ember
-took it as the claims review target (1570147323579990148). Row A below is d163367 §4 row by row. Revision 2 of this
-doc pinned f0dfc81; everything it listed as expected in revision 3 was checked against d163367:
+**Pinned: revision 4, `b0b8383`** (b0b838379eac69db53c0a0ad1d124dd3510429ad; `task-claims.md` sha256
+`8440c4ddb3fac98ef9af88b38c6abf638406c2d4474538051c34b7b654596b33`). Revision 4 is d83d654 and 2639469 (the claims
+half of Ember's paired review) plus b0b8383 (item 2 of Ember's final review: report keys). Claude named b0b8383 as
+the one to pin (room 1570164170018529444, 1570164331113615421), and Ember took it as the claims target
+(1570163545528860796, 1570164221470179369). Row A below is b0b8383 §4 row by row.
+
+The earlier re-pin, to revision 3 (`d163367`, sha256 `4daffea0…507d`), checked everything revision 2 of this doc
+(which pinned f0dfc81) listed as expected in claims revision 3:
 
 - **Silent stall** (Arden, 1570133745346805830): confirmed. The report row ignores `updated`, and the line says
   `touched since` when `updated` is newer than `nudged`. Row A takes that wording.
@@ -50,9 +53,9 @@ doc pinned f0dfc81; everything it listed as expected in revision 3 was checked a
   the inbox either way.
 
 The two points 7433a3b left for the paired review (lock order; which row owns a hand-off that failed after the spawn
-claim) are settled below, in the words Ember's review asked for. Claims revision 4 states its side of each: the same
-lock-order sentence, and in its §4 that a failed first launch after the spawn claim stays `claimed`. Until revision 4
-is pinned by hash, this doc names the behaviour it expects of claims and does not pin a commit for it.
+claim) are settled below, in the words Ember's review asked for. Claims revision 4 (`b0b8383`, pinned above) states its
+side of each in §4: the same lock-order sentence ("Locks"), and that a failed first launch after the spawn claim stays
+`claimed` ("Owner never started").
 
 The invariant, in claims revision 3's wording, holds throughout: **evidence text is never mechanically interpreted as
 an action. Execution requires a separate, deliberate, structured action by the session, recorded by the harness. A
@@ -90,7 +93,7 @@ The heartbeat runs as the self's own user and sees only that self's state: `~/.c
 | **C. Fired wake that didn't finish well** | the ledger's state for a firing (below) | one ordinary retry if eligible, plus bounded usage-limit deferrals; report once |
 | **D. Failed unit** | `systemctl is-failed` on this self's fixed unit list | report once per failure (unit and invocation id); never restart |
 
-### A, row by row (claims d163367 §4)
+### A, row by row (claims b0b8383 §4)
 
 **First, `settle_pauses(now)`.** Each beat that reads claims calls the claims module's `settle_pauses` before anything
 else, under `state/tasks/.lock`. Every expired pause becomes `paused → claimed` with `action: expire`, `by:
@@ -411,7 +414,7 @@ it may be false. I checked: the bridge has an allow-list, `channels` (`roomcore.
 every channel, and no excluded-channel setting. The heartbeat also can't read another self's bridge config. So
 **v1 reports go to the journal only**, and nothing is posted to the room.
 
-**Who decides what** (claims d163367 §4, "Reports"). Claims fix a claim report's **content** and what **`reported`**
+**Who decides what** (claims b0b8383 §4, "Reports"). Claims fix a claim report's **content** and what **`reported`**
 means. The **sink** is the heartbeat's: part of its configuration, which the self consents to by turning it on. In v1
 there is exactly one sink, the journal (the unit's stdout), and **no setting selects another**. A second sink is the
 later room change below, with its own consent. "Reported" never means "posted to Discord".
@@ -439,8 +442,8 @@ later room change below, with its own consent. "Reported" never means "posted to
   `liveness-unknown`, `start-failed`). Wording that depends on later facts (`touched since`) is fixed when the line
   enters the outbox, so a repeat is byte-identical.
 - **The emitted line** is the content line followed by ` key=<key>`. That suffix is sink framing, the heartbeat's
-  part. Claims fix the content before it, unchanged. I'm asking claims revision 4 to name the suffix, so a reader of
-  either doc can dedupe.
+  part. Claims fix the content before it, unchanged. Claims §4 "Reports" (b0b8383) names the same suffix, key and
+  delivery rule, so a reader of either doc can dedupe.
 - **The outbox carries it.** In phase 1 the beat stores each decided report in `heartbeat.json` as `key → exact
   line`; a key already there, or already marked, isn't decided again. Phase 2 emits every outbox line, including any
   left by an earlier beat. Phase 3 marks the confirmed ones: a claim's `reported` (with its `action: report`, `by:
@@ -628,6 +631,18 @@ calls a model.
 - **v1 defaults:** a 10-minute beat and 3 heartbeat wakes per hour (both agreed).
 - **Report channel:** journal-only in v1. John picks a room channel only after the exclusion is mechanical (Ember).
 - **Ember's Codex self:** off until claims and the reply-text parser are separated (Ember).
+
+## What changed in the re-pin to claims revision 4 (from 165aca1)
+
+Ember's final review (room 1570163375776735393), item 1, routed in 1570163545528860796:
+
+- Claims pin: d163367 → **b0b8383** with its `task-claims.md` sha256. Not 2639469: b0b8383 adds the §4 text that the
+  ` key=` framing relies on.
+- Row A and "Who decides what" cite b0b8383 §4. The lock-order sentence and "owner never started" are now cited as
+  pinned claims text, not as behaviour expected of an unpinned revision.
+- The ` key=<key>` suffix is cited to claims §4 "Reports" instead of asked of it. No semantics changed; the key,
+  at-least-once delivery, the identical repeat, the suffix as sink framing and `reported` tied to the key's spell
+  were checked against b0b8383 and agree.
 
 ## What changed in revision 3 (from 7433a3b)
 
