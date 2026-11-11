@@ -892,6 +892,32 @@ public sealed class FragmentStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task The_process_check_finds_exactly_the_session_id_on_a_live_argv()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        var id = Guid.NewGuid().ToString();
+        using var holder = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("/bin/sh")
+        {
+            ArgumentList = { "-c", "sleep 30", "sh", "--session-id", id },
+        })!;
+        try
+        {
+            await Task.Delay(200);
+            Assert.True(FragmentStore.ProcessHoldsSession(id));
+            Assert.False(FragmentStore.ProcessHoldsSession(Guid.NewGuid().ToString()));
+            Assert.False(FragmentStore.ProcessHoldsSession(id[..8]), "a prefix of the id is not the id");
+        }
+        finally
+        {
+            holder.Kill();
+        }
+    }
+
+    [Fact]
     public async Task The_newer_note_line_is_empty_when_mine_is_newest_and_names_the_newer_one_otherwise()
     {
         var store = await OpenAsync();
