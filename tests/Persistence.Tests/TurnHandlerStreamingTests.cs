@@ -115,6 +115,7 @@ public class TurnHandlerStreamingTests
             new TokenUsageTracker(),
             new Mock<ISessionCostEstimator>().Object,
             new Mock<IMemorySurfacer>().Object,
+            new QueryEmbedder(new Mock<IEmbeddingClient>().Object, config, new Mock<IDisplayProvider>().Object),
             eventBus,
             config,
             new Mock<ISourceRepository>().Object);
@@ -235,6 +236,7 @@ public class TurnHandlerStreamingTests
             new TokenUsageTracker(),
             new Mock<ISessionCostEstimator>().Object,
             new Mock<IMemorySurfacer>().Object,
+            new QueryEmbedder(new Mock<IEmbeddingClient>().Object, config, new Mock<IDisplayProvider>().Object),
             new EventBus(),
             config,
             new Mock<ISourceRepository>().Object);

@@ -36,6 +36,7 @@ public class TurnHandler : ITurnHandler
     private readonly ITokenUsageTracker usageTracker;
     private readonly ISessionCostEstimator costEstimator;
     private readonly IMemorySurfacer memorySurfacer;
+    private readonly QueryEmbedder queryEmbedder;
     private readonly IEventBus eventBus;
     private readonly IAppConfig config;
     private readonly ISourceRepository sourceRepository;
@@ -64,6 +65,7 @@ public class TurnHandler : ITurnHandler
         ITokenUsageTracker usageTracker,
         ISessionCostEstimator costEstimator,
         IMemorySurfacer memorySurfacer,
+        QueryEmbedder queryEmbedder,
         IEventBus eventBus,
         IAppConfig config,
         ISourceRepository sourceRepository)
@@ -82,6 +84,7 @@ public class TurnHandler : ITurnHandler
         this.usageTracker = usageTracker;
         this.costEstimator = costEstimator;
         this.memorySurfacer = memorySurfacer;
+        this.queryEmbedder = queryEmbedder;
         this.eventBus = eventBus;
         this.config = config;
         this.sourceRepository = sourceRepository;
@@ -451,6 +454,9 @@ public class TurnHandler : ITurnHandler
             .Select(f => f.Id)
             .ToList();
 
+        // Each turn is one recall: a words-only fallback is logged once per turn, not once per process, or
+        // an embedder outage would go silent after the first turn (Arden, msg 1570122833919610943).
+        queryEmbedder.Clear();
         var count = sessionContext.SurfacedMemoryCount ?? config.SurfacedMemoryCount;
         return await memorySurfacer.SurfaceAsync(activeIds, recentText, count, ct);
     }
