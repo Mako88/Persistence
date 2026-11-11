@@ -14,8 +14,8 @@ trap 'rm -rf "$work"' EXIT
 dotnet publish "$repo/src/Persistence.Store" -c Release -r linux-x64 --self-contained true -o "$work/pub" >/dev/null
 tar -czf "$work/store.tgz" -C "$work/pub" .
 # hook.py imports coordination.py (the locks and the fired-wake ledger) and, for ptask and run-due, claims.py and
-# cwd_exec.py: all four go beside it.
-py=(hook.py coordination.py claims.py cwd_exec.py)
+# cwd_exec.py; run-due launches every firing through run_line.py and refuses to fire without it: all five go beside it.
+py=(hook.py coordination.py claims.py cwd_exec.py run_line.py)
 scp -q "$work/store.tgz" "${py[@]/#/$repo/scripts/claude-code/}" "$host:/tmp/"
 ssh "$host" "set -e
   sudo tar -xzf /tmp/store.tgz -C /opt/persistence/store

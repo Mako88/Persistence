@@ -233,6 +233,33 @@ class RunDueHeartbeatItems(Base):
         self.assertEqual([f["firing"] for f in self.facts("enqueued")], [item["id"]])  # on record: never started
         self.assertEqual(hook.wakes(), [])
 
+    def test_without_the_run_line_nothing_fires_and_it_says_so_once(self):
+        """Claude's Q3: a launch without run_line.py leaves only an enqueued fact, so a resume wake that ran reads as
+        never started and gets retried (it runs twice). So run-due refuses: no launch, no fact, the queue untouched,
+        one line naming the missing file. Nothing falls back to a bare claude."""
+        import contextlib
+        import io
+
+        item = self.item("resume")
+        hook.wakes(lambda items: items + [{"id": sid(), "session": sid(), "at": 0, "reason": "plain"}])
+        before = hook.WAKES.read_bytes()
+        err = io.StringIO()
+        with mock.patch.object(hook, "RUN_LINE", self.home / "nowhere" / "run_line.py"), contextlib.redirect_stderr(err):
+            hook.run_due(home=self.home)
+        self.assertEqual(self.launched, [])
+        self.assertEqual(self.facts(), [])
+        self.assertEqual(hook.WAKES.read_bytes(), before)
+        lines = err.getvalue().splitlines()
+        self.assertEqual(len(lines), 1, lines)
+        self.assertIn("run_line.py", lines[0])
+        self.assertEqual(hook.wakes()[0]["id"], item["id"])
+
+    def test_no_launch_falls_back_to_a_bare_claude(self):
+        self.assertNotIn("exec claude", hook.WORK_ARGV[2])
+        self.assertTrue(hook.run_line_prefix().startswith("python3 -I "))
+        with mock.patch.object(hook, "RUN_LINE", self.home / "nowhere" / "run_line.py"):
+            self.assertTrue(hook.run_line_prefix().startswith("python3 -I "))  # never silently empty
+
     def test_a_cwd_outside_home_is_refused_at_launch(self):
         item = self.item("resume")
         hook.wakes(lambda items: [{**items[0], "cwd": "/tmp"}])

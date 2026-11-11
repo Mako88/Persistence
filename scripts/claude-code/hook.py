@@ -1797,6 +1797,10 @@ def run_due(grace=120, home=None):
     already enqueued (a run that died before its rewrite) is only removed, firing nothing. Liveness is by exact id."""
     import claims
 
+    if not RUN_LINE.is_file():
+        # Fail loudly, fire nothing: the queue, the ledger and every claim are left as they are (Claude's review Q3).
+        print(f"run-due: {RUN_LINE} is missing, so nothing fires; install all six files beside hook.py", file=sys.stderr)
+        return
     now = datetime.now().timestamp()
     at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     c = claims.Claims(STATE, home=home)
@@ -1986,7 +1990,7 @@ def _resume_or_start(session, mine):
     if compact:
         # Kept, not thrown away: Arden's 19:07 compact failed and /dev/null hid why (Arden, 2026-11-09).
         run += f"claude -p --resume {session} /compact --output-format json > {shlex.quote(str(out.with_suffix('.compact.json')))} 2>&1; "
-    run += (f"{run_line_prefix()}claude -p --resume {session} --output-format json "
+    run += (f"{run_line_prefix() if firings else ''}claude -p --resume {session} --output-format json "
             f"< {shlex.quote(str(prompt))} > {shlex.quote(str(out))} 2>&1")
     # The words are the peer's own, from the wake it set, entered under the login's account.
     env = {**os.environ, "PERSISTENCE_SPEAKER": f"{os.environ.get('PERSISTENCE_PEERNAME') or 'me'} (a wake I set)"}
@@ -2045,13 +2049,15 @@ WORK_PROMPTS = {
 # `started` before claude and `finished` after it for the firings named in its environment. Its arguments follow,
 # none from text; "$0" is the run line's own path.
 RUN_LINE = Path(__file__).resolve().with_name("run_line.py")
-# A copy-only install without run_line.py still launches, as before, just without the ledger's started/finished.
-WORK_ARGV = ["bash", "-lc", '[ -f "$0" ] && exec python3 -I "$0" claude -p "$@"; exec claude -p "$@"', str(RUN_LINE)]
+# No fallback to a bare claude (Claude's review Q3): a firing launched without the run line has only its enqueued fact,
+# so a resume wake that ran reads as never started and is retried, running twice. run_due refuses to fire anything
+# when run_line.py is missing (one line saying so); these launch through it unconditionally.
+WORK_ARGV = ["bash", "-lc", 'exec python3 -I "$0" claude -p "$@"', str(RUN_LINE)]
 
 
 def run_line_prefix():
-    """The run line before `claude` in a shell launch string, when its file is installed beside hook.py."""
-    return f"python3 -I {shlex.quote(str(RUN_LINE))} " if RUN_LINE.is_file() else ""
+    """The run line before `claude` in a shell launch string."""
+    return f"python3 -I {shlex.quote(str(RUN_LINE))} "
 # The room's own session (its bridge's session.json): a heartbeat wake never resumes it (heartbeat.md, "Staying out
 # of a running room turn").
 ROOM_SESSION_FILE = Path.home() / ".config" / "persistence-room" / "state" / "session.json"
@@ -2132,7 +2138,8 @@ def _start_work_session(cwd, reasons, origin, session, handoff, cwd_fd, claim, f
             subprocess.Popen([claude, "-p", *args], cwd=str(cwd), env=env, stdin=stdin, stdout=stdout,
                              stderr=subprocess.STDOUT, creationflags=BACKGROUND, close_fds=True)
     else:
-        run = (f"cd {shlex.quote(str(cwd))} && {run_line_prefix()}claude -p {' '.join(args)} "
+        # A launch with no firing ids (link) has nothing for the run line to record, and runs claude as before.
+        run = (f"cd {shlex.quote(str(cwd))} && {run_line_prefix() if firings else ''}claude -p {' '.join(args)} "
                f"< {shlex.quote(str(prompt))} > {shlex.quote(str(out))} 2>&1")
         subprocess.Popen(["bash", "-lc", run], env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL, start_new_session=True)
