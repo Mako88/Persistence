@@ -17,6 +17,13 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
   after the close had its write fail with EPIPE and never read the refusal. Under load (~16 on 4 cores) that failed
   `StoreServerTests` socket tests in 6 of 38 runs; the new test `A_refused_caller_slow_to_send_its_line_still_reads_why`
   hits it every time (it sends its line 300 ms late), and is red again when the drain is removed.
+- **Draining is capped at 16** (Arden's review): each drain holds a descriptor for up to 5 s, and uncapped, enough
+  refused callers could run the server out (EMFILE) and a failed accept would end it. Past 16 a refusal is written
+  and closed at once, as before. Anything unexpected in the un-awaited drain now writes a line to stderr instead of
+  vanishing; the socket is closed even if wrapping it in a stream throws; and the `listening` callback runs inside
+  the try, so a callback that throws still closes the listeners. New tests pin what the first round left untested:
+  a caller reading to the end sees it at once (`Shutdown(Send)`), a silent refused caller holds no TCP call and is
+  closed after its 5 s, the cap and its places given back, and the callback case. Each is red under its mutant.
 - **`Server.ServeAsync(listening:)`**: tells its caller the TCP port actually bound (port 0 picks any free one) once it
   accepts. The tests wait on that (failing with a message after 10 s) instead of sleeping 300 ms, and bind port 0
   instead of finding a free port and releasing it before the server binds it. The serving line on stderr shows

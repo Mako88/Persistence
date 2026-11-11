@@ -24,6 +24,13 @@ internal static class Server
     private static readonly TimeSpan RequestArrives = TimeSpan.FromSeconds(5);
 
     /// <summary>
+    /// Refused callers given time to go at once. Each holds a descriptor for up to <see cref="RequestArrives"/>; with no cap,
+    /// enough of them would run the server out (EMFILE) and a failed accept ends it (Arden, 2026-11-11). Past the cap a
+    /// refusal is written and closed straight away, as before 2026-11-11.
+    /// </summary>
+    private const int MostDraining = 16;
+
+    /// <summary>
     /// Serves on a unix socket (<paramref name="socketPath"/>) when one is given, and then answers only callers whose
     /// user is in <paramref name="allowed"/>: the kernel says who connected (SO_PEERCRED), which a TCP port cannot.
     /// On TCP every local user's process could run any command on any store, accept included (Arden, 2026-11-10).
@@ -64,9 +71,11 @@ internal static class Server
 
         // One accept waiting per listener; the calls themselves still run one at a time.
         var waiting = listeners.ToDictionary(l => l, l => l.AcceptAsync());
-        listening?.Invoke(bound);
+        var draining = new SemaphoreSlim(MostDraining);  // not disposed: a drain can outlive the server and still release
         try
         {
+            // Inside the try: a callback that throws still has the listeners closed.
+            listening?.Invoke(bound);
             while (true)
             {
                 var done = await Task.WhenAny(waiting.Values);
@@ -92,8 +101,17 @@ internal static class Server
             if (accepted.AddressFamily == AddressFamily.Unix && PeerUser(accepted) is var caller && (caller is null || allowed is null || !allowed.Contains(caller.Value)))
             {
                 stderr.WriteLine($"refused a caller: user {caller?.ToString() ?? "unknown"} is not one this store answers");
-                // Not awaited: a refused caller must not hold the callers behind it.
-                _ = RefuseAsync(accepted, Reply(2, "", $"refused: user {caller?.ToString() ?? "unknown"} may not use this store"));
+                var why = Reply(2, "", $"refused: user {caller?.ToString() ?? "unknown"} may not use this store");
+                if (draining.Wait(0))
+                {
+                    // Not awaited: a refused caller must not hold the callers behind it.
+                    _ = RefuseAsync(accepted, why, stderr, draining);
+                }
+                else
+                {
+                    RefuseAtOnce(accepted, why);
+                }
+
                 return;
             }
 
@@ -175,7 +193,7 @@ internal static class Server
     /// Closing at once was a race: a caller whose line came after the close had its write fail (EPIPE) and
     /// never read the refusal, which showed as socket tests failing under load (2026-11-11).
     /// </summary>
-    private static async Task RefuseAsync(Socket accepted, string reply)
+    private static async Task RefuseAsync(Socket accepted, string reply, TextWriter stderr, SemaphoreSlim draining)
     {
         try
         {
@@ -190,6 +208,32 @@ internal static class Server
         }
         catch (Exception e) when (e is IOException or SocketException or OperationCanceledException or ObjectDisposedException)
         {
+        }
+        catch (Exception e)
+        {
+            // Nothing awaits this task, so anything else would vanish without a line.
+            stderr.WriteLine($"refusing a caller failed: {e}");
+        }
+        finally
+        {
+            // Closed even when the stream could not be made around it.
+            accepted.Dispose();
+            draining.Release();
+        }
+    }
+
+    /// <summary>Past <see cref="MostDraining"/>: the refusal is written and the connection closed straight away.</summary>
+    private static void RefuseAtOnce(Socket accepted, string reply)
+    {
+        using (accepted)
+        {
+            try
+            {
+                accepted.Send(new UTF8Encoding(false).GetBytes(reply + "\n"));
+            }
+            catch (SocketException)
+            {
+            }
         }
     }
 
