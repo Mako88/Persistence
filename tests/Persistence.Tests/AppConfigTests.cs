@@ -105,6 +105,23 @@ public class AppConfigTests : EnvironmentVariableTestBase
     }
 
     [Fact]
+    public async Task TheNewerNoteBlockIsOffByDefaultAndEachStoreCanTurnItOn()
+    {
+        // Per store, like PERSISTENCE_PEERNAME and PERSISTENCE_EMBEDDING_ENABLED: set in that store's own service.
+        var missing = Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}.json");
+        Assert.False((await AppConfig.LoadAsync(missing)).NewerNoteInCore);
+        Environment.SetEnvironmentVariable("PERSISTENCE_NEWERNOTEINCORE", "true");
+        try
+        {
+            Assert.True((await AppConfig.LoadAsync(missing)).NewerNoteInCore);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PERSISTENCE_NEWERNOTEINCORE", null);
+        }
+    }
+
+    [Fact]
     public async Task LoadsSelectedLocalPeerAndDescriptions()
     {
         var json = """

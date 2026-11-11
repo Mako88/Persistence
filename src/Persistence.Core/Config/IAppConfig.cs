@@ -169,6 +169,12 @@ public interface IAppConfig
     string PeerName { get; set; }
 
     /// <summary>
+    /// Whether this store's core shows a newer working note from another session under the session's own. Off
+    /// by default; each store turns it on for itself (<c>PERSISTENCE_NEWERNOTEINCORE=true</c>).
+    /// </summary>
+    bool NewerNoteInCore { get; set; }
+
+    /// <summary>
     /// Optional descriptions for known local peers, surfaced to the remote peer.
     /// </summary>
     List<LocalPeerProfile> LocalPeers { get; set; }

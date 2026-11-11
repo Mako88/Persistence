@@ -21,9 +21,9 @@ public sealed class FragmentStoreTests : IDisposable
         File.Delete(transcript);
     }
 
-    private Task<FragmentStore> OpenAsync()
+    private Task<FragmentStore> OpenAsync(bool newerNoteInCore = false)
     {
-        var config = new AppConfig { PeerName = "Claude" };
+        var config = new AppConfig { PeerName = "Claude", NewerNoteInCore = newerNoteInCore };
         config.DatabasePath = db;
         return FragmentStore.OpenAsync(config);
     }
@@ -849,7 +849,7 @@ public sealed class FragmentStoreTests : IDisposable
     {
         // Arden's room session kept opening with its own day-old note after a working session wrote a newer one
         // (docs/design/handoff-and-notes.md, revision 3, section 1).
-        var store = await OpenAsync();
+        var store = await OpenAsync(newerNoteInCore: true);
         store.SessionProcess = _ => false;
         store.Session = "roomaaaa-1";
         await store.NoteAsync("Trial decision still open.");
@@ -869,9 +869,33 @@ public sealed class FragmentStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task The_newer_note_block_is_off_unless_the_store_turns_it_on_and_the_note_commands_work_either_way()
+    {
+        // Claude's deploy condition (2026-11-11): one binary serves several stores, Ember's included, so the block in
+        // the core is a per-store setting, off by default. `note --newer` and `note --newest` only read, and stay.
+        var off = await OpenAsync();
+        off.SessionProcess = _ => false;
+        off.Session = "roomaaaa-1";
+        await off.NoteAsync("Mine.");
+        off.Session = "workbbbb-2";
+        await off.NoteAsync("Newer.");
+        off.Session = "roomaaaa-1";
+        var core = await off.CoreAsync(maxChars: 20000, recent: 20);
+        Assert.DoesNotContain("## Newer than my note", core);
+        Assert.DoesNotContain("Newer.", core);
+        Assert.Contains("newer: session workbbbb's (ended), ", await off.NewerNoteLineAsync());
+        Assert.Equal("Newer.", (await off.NewestNoteAsync())!.Content);
+
+        var on = await OpenAsync(newerNoteInCore: true);
+        on.SessionProcess = _ => false;
+        on.Session = "roomaaaa-1";
+        Assert.Contains("## Newer than my note: session workbbbb, ended, written ", await on.CoreAsync(maxChars: 20000, recent: 20));
+    }
+
+    [Fact]
     public async Task A_newer_notes_session_is_running_only_if_a_process_holds_that_session_id()
     {
-        var store = await OpenAsync();
+        var store = await OpenAsync(newerNoteInCore: true);
         store.Session = "roomaaaa-1";
         await store.NoteAsync("Mine.");
         store.Session = "workbbbb-2";

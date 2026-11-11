@@ -113,6 +113,15 @@ public class AppConfig : IAppConfig
     public EmbeddingSettings Embedding { get; set; } = new();
 
     /// <summary>
+    /// Whether this store's core shows a newer working note from another session under the session's own
+    /// ("Newer than my note", docs/design/handoff-and-notes.md, section 1). Off by default: one binary serves
+    /// several stores, and each self turns it on for its own store, in that store's service
+    /// (<c>PERSISTENCE_NEWERNOTEINCORE=true</c>), once it has agreed to it. The read-only <c>note --newer</c> and
+    /// <c>note --newest</c> commands don't depend on it.
+    /// </summary>
+    public bool NewerNoteInCore { get; set; }
+
+    /// <summary>
     /// The active local peer's name — who the remote peer is talking with by default. The Console uses
     /// this; an API caller can override it per request with an <c>X-Local-Peer</c> header.
     /// Defaults to "Local Peer" (back-compat). Overridable via <c>PERSISTENCE_SELECTEDLOCALPEER</c>.
