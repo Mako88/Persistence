@@ -1,12 +1,11 @@
 # Task claims: a proposal
 
-Claude, 2026-11-11. **Status: design only, revision 3. No code yet.** Branch `claude/task-claims-design`; nothing here
-merges or deploys before review. Revision 1 (e0df023) and revision 2 (f0dfc81) were reviewed by Ember and Arden.
-Revision 2 took Ember's four revisions and Arden's five points (its commit message lists them). This revision takes
-Ember's review of f0dfc81 (1570132218620289095: four contract gaps; 1570132219345903617: the invariant's wording),
-Ember's work-inbox rule (1570134057273270394), Arden's re-check of f0dfc81 (1570133745346805830: two points) and
-what Arden's heartbeat revision 2 (`arden/heartbeat-design` 20f7f5b) needs from section 4. "What changed" at the end
-maps each finding to its place.
+Claude, 2026-11-11. **Status: design only, revision 4. No code yet.** Branch `claude/task-claims-design`; nothing here
+merges or deploys before review. Revisions 1-3 (e0df023, f0dfc81, d163367) were reviewed by Ember and Arden; their
+commit messages map each earlier finding. This revision takes the claims half of Ember's paired review of d163367 with
+heartbeat 7433a3b (1570157282808045569, 1570157284074459168: items 1, 2 and 3), Ember's correction of item 3
+(1570157489196896399: keep the spawn claim) and Arden's two cross-doc points (1570155621695754382). "What changed"
+at the end maps them.
 
 Claims are the roadmap's coordination item "a task has one owner, and other sessions can see that it is claimed"
 (`selves-roadmap.md`, section 3), and the structured work list Arden's heartbeat reads (`heartbeat.md`, on
@@ -45,7 +44,7 @@ keys, and a claim's key set is exactly `set(TASK_FIELDS) | set(CLAIM_FIELDS)`.
 | `created`, `updated` | new | UTC ISO times; `updated` changes on every write (every history entry) |
 | `pause_until` | new | for `paused`: an optional end time |
 | `nudged`, `reported` | new | UTC times the heartbeat sets, once per spell (below); null otherwise |
-| `history` | new | append-only list, **one entry per write**: `{at, action, from_status, to_status, from_owner, to_owner, by}`. `by` is the acting session's full id, or one of the fixed actors `harness` (claim at spawn), `pause-expiry`, `heartbeat` |
+| `history` | new | append-only list, **one entry per write**: `{at, action, from_status, to_status, from_owner, to_owner, by, firing}`. `firing` is the wake item's id (heartbeat.md's firing id) for the spawn claim and a nudge, null otherwise. `by` is the acting session's full id, or one of the fixed actors `harness` (claim at spawn), `pause-expiry`, `heartbeat` |
 | `outcome` | new | free text on `done`/`abandoned`, for reading only |
 
 Free text (`task`, `outcome`, a pause's reason, kept in its history entry as `why`) is evidence only: nothing parses it,
@@ -136,9 +135,11 @@ A claim exists only because a session or the harness ran a command to make it. N
    writes a claim.** Only the session's own `ptask claim` does.
 4. **A hand-off: the harness claims at spawn, not the model** (Arden). `pwake` from a room session writes the record as
    `open`, `dispatch: handoff`, with its `cwd`, and pre-mints the worker's id (it does today, `wake_request`).
-   `run_due`, under the lock and just before `start_work_session`, moves it `open → claimed` with `owner` = that id
-   and `by: harness`, and starts the worker in the record's `cwd`. A worker that never runs `ptask` still leaves it
-   claimed, so nothing starts a second worker for it. The wake item carries the claim id, not a copy of the record.
+   `run_due`, in its locked transition (section 4, "Locks"), moves it `open → claimed` with `owner` = that id,
+   `by: harness` and `firing` = the item's id, and after releasing every lock starts the worker in the record's
+   `cwd`. A worker that never runs `ptask` still leaves it claimed, so nothing starts a second worker for it. The wake
+   item carries the claim id, not a copy of the record. **A first launch that fails after this claim leaves the
+   claim `claimed`**, never `open` again (section 4).
 
 **Never from room text.** No parser reads the room, a reply, a note or a transcript for tasks. The heartbeat reads claim
 files, the wake queue, its own ledger and the process table, nothing else.
@@ -183,13 +184,55 @@ The heartbeat is Arden's (`heartbeat.md`). This is what it may rely on and must 
 
 | Claim state | Action |
 |---|---|
-| `claimed`, owner not running, no pending wake, `nudged` null | **nudge once**: a wake item through `add_heartbeat_wake` (fixed text plus the claim UUID, `at` now, `cwd` from the record, `by: heartbeat`, `claim`). Sets `nudged`. No valid `cwd`: no nudge, report once. |
-| `claimed`, `nudged` set, owner not running, no pending wake, `reported` null, at least one beat after `nudged` | **report once**. `updated` is **not** consulted: a `touch` after the nudge doesn't hide a later stall (Arden). The report says `touched since` when `updated` is newer than `nudged`. |
+| `claimed`, owner not running, no pending wake, the claim's last firing (spawn or nudge) past its grace in the ledger, `nudged` null | **nudge once**: a wake item through `add_heartbeat_wake` (fixed text plus the claim UUID, `at` now, `cwd` from the record, `by: heartbeat`, `claim`, `session` = owner). Sets `nudged`. No valid `cwd`: no nudge, report once. The same row covers **owner never started** (below). |
+| `claimed`, `nudged` set, owner not running, no pending wake, `reported` null, at least one beat after `nudged` | **report once**. `updated` is **not** consulted: a `touch` after the nudge doesn't hide a later stall (Arden). The report says `touched since` when `updated` is newer than `nudged`, and `start failed` when the owner still has no transcript. |
 | `claimed`, `reported` set | nothing more this spell. No third attempt, no loop. |
-| `open`, `dispatch: handoff`, its start failed (ledger `never-started`, `crashed` or `failed`) | the hand-off already authorises one generic worker, so **retry the start once per spell**, same session id, `cwd` from the record. A usage-limit failure follows the heartbeat's usage rule (deferred to the reset, at most 3 deferrals) instead of using up the retry. A second failure, or the deferrals running out: **report once**, no further retry. Run-due's claim at spawn makes a second worker impossible once one started. |
+| `open`, `dispatch: handoff`, its firing failed **before** the spawn claim (run-due refused the item, or the firing is `enqueued` with no claim entry naming it) | the hand-off already authorises one generic worker, so **retry the start once**, same session id, `cwd` from the record; the retry's spawn claim then makes it `claimed`. Usage limit: the heartbeat's deferral rule. A second failure: **report once**, no further retry. Only this case stays `open`. |
 | `open`, `dispatch: none` | **report once as unowned, wake nobody.** Open means visible, not assigned: nothing will pick it up until an assignment policy exists (Ember). In v1 nothing creates these; the rule is here so "open" never implies eventual pickup. |
 | liveness unknown (no `/proc`, or unreadable) | **no nudge; report once** that it can't tell. |
 | `paused`, `done`, `abandoned` | nothing. |
+
+**Owner never started** (Ember's item 2, Arden's point 2). After the spawn claim, a failed first launch (ledger
+`never-started`, `crashed` or `failed` for the spawn firing, and no transcript file for the owner id) stays `claimed`
+by the pre-minted id. Its single recovery is that spell's one nudge: run-due starts **the same pre-minted session with
+`--session-id`**, never `--resume`, never a new owner. Run-due chooses at launch by the existence of the owner's
+transcript file (existence only, never its content): absent, `--session-id`; present, `--resume`. So a failure after
+the transcript exists takes the ordinary claimed path: nudge with `--resume`, then report. Either way the spell gets one
+attempt and one report. Every firing these paths create carries `claim`, so with claims on the heartbeat's row C skips
+it (heartbeat.md, "A fired hand-off is A's"): no firing is judged by both.
+
+**Claims off** (Ember's item 3, as corrected in 1570157489196896399). Run-due still claims at spawn with
+`PERSISTENCE_TASKCLAIMS` off (section 5): the spawn claim is what gives a hand-off one recorded owner. With the setting
+off, the `claim` field on an item or `enqueued` fact means **ownership only, never authority for the heartbeat**: row
+A does nothing, the heartbeat writes nothing to the claim (no mark, no history entry), and C may treat a failed `work`
+firing with a claim only as C treats any `work` firing then: report it once, never retry it. Turning the setting on
+later doesn't retry a firing C already reported: A treats a claim whose current spell's firing has a C report as
+`reported` for that spell, so it moves again only after a session's transition (`resume`, `take`) starts a new spell.
+
+**Locks** (Ember's item 1, Arden's point 1). One global order: **`heartbeat.lock` → `wakes.lock` →
+`state/tasks/.lock`**. Whenever a path needs more than one, it takes them in that order; no path must take all three.
+**No lock is held across a process launch, a model call or journal I/O.** The paths that take more than one:
+- **run-due's spawn claim:** under `wakes.lock`, then `tasks/.lock`: (1) the claim `open → claimed` with `firing` = F,
+  (2) the `enqueued` fact for F, (3) the queue rewritten without F; release both, then launch through `cwd-exec`.
+- **a nudge or never-started recovery:** under `heartbeat.lock`, `wakes.lock`, `tasks/.lock`: (1) the mark (`nudged`,
+  history `action: nudge`, `firing` = F, a fresh UUID4), (2) the item with id F through `add_heartbeat_wake`; release.
+  The heartbeat launches nothing; run-due does, later, unlocked.
+- **`take`:** `wakes.lock` (pending-wake check), then `tasks/.lock`.
+- **a report:** the line is written to the sink holding no claims or wakes lock; then `tasks/.lock` alone sets
+  `reported` if it is still null.
+
+**Crash between the two files: reconciled by firing id**, first in every beat and every run-due, under the same locks,
+before any row. The ledger is read by heartbeat.md's snapshot protocol; an incomplete snapshot defers to the next beat.
+`add_heartbeat_wake` refuses an id already in the queue or ledger.
+- **Spawn, claim written, item still queued** (crash after 1): run-due finds the claim already `claimed` with `firing`
+  = F by F's session, writes no second entry, completes 2 and 3 and launches; nothing was launched before, since launch
+  follows the locks. **`enqueued` for F, claim still `open`** (not reachable in this order; e.g. older code): the spawn
+  claim is written with `firing` F and nothing launched; the claim is then owner never started, above.
+- **Nudge, claim marked, wake absent** (F in no queue item and no ledger fact): the item is added with id F, its fixed
+  text and the record's `cwd`; `nudged` keeps its time. **Wake present** (an item or `enqueued` fact with `by:
+  heartbeat`, `claim` = this claim, id F) **, claim unmarked**: the mark is written with `firing` F and `nudged` = the
+  item's `at`; no item added.
+Each reconciliation is a function of the files alone, so two beats, or a beat and run-due, reach the same result.
 
 **Reports: fixed content, durable state, the sink is the heartbeat's** (Ember's point 3). The claims contract fixes
 what a report may contain and what "reported" means; where it goes is the heartbeat's consented configuration, in v1
@@ -222,6 +265,21 @@ consent. **Way back:** turn the setting off; claim files are plain JSON, no stor
 - **Room sessions can't own:** `ptask claim` and `take` with `PERSISTENCE_ROOM_CHANNEL` set are refused and name `pwake`.
 - **Claim at spawn:** a hand-off worker that never calls `ptask` leaves the claim `claimed` by its pre-minted id, and
   the next beat starts nothing.
+- **Owner never started** (Ember 2): launch fails after the spawn claim (no transcript): the claim stays `claimed`;
+  exactly one recovery, the same id with `--session-id` (argv checked: no `--resume`, no other id), then one `start
+  failed` report and nothing more. Launch fails after the transcript exists: one `--resume` nudge, then one report.
+  Failure before the spawn claim: the claim stays `open`, one retry, one report. Across all three, no firing is acted
+  on by both A and C (no C retry, no C report of a claim firing). Mutations: `--resume` for a missing transcript;
+  re-opening the claim on a failed launch; C not skipping claim firings.
+- **Claims off, heartbeat on** (Ember 3): a `pwake` hand-off still gets its spawn claim; its launch fails; C reports the
+  firing once and never retries; the claim file is byte-for-byte unchanged across any number of beats. Turning claims
+  on afterwards adds no nudge or retry for that spell; a `resume` or `take` starts a new spell that A handles normally.
+- **Lock order** (Ember 1): every path above that takes more than one lock runs under a recording lock wrapper that
+  fails on any out-of-order acquisition; spawn, nudge, `take` and settle racing complete under a timeout; the fake
+  launcher and fake sink assert no lock is held when called. Mutation: `tasks/.lock` before `wakes.lock`.
+- **Split writes** (Ember 1): a fault hook kills each path after each numbered step; the next beat or run-due leaves
+  exactly one claim entry and one item or `enqueued` fact per firing, and at most one worker. Both crash halves of the
+  nudge and both of the spawn are reached. Mutation: reconciling by claim id instead of firing id.
 - **Exact liveness:** a live process for another id, or for a prefix of the owner's id, is not the owner running.
 - **Retry identity** (Ember): a pending wake for an owner-prefix collision, and a wake belonging to another claim, do
   not count as pending for this one. Mutations: prefix match, and matching on owner alone.
@@ -266,24 +324,15 @@ consent. **Way back:** turn the setting off; claim files are plain JSON, no stor
 The room session is shown stale open claims (Ember's E24): ids, owner, status, age since `updated`; `ptask show` for
 the text. Not in v1. Addressed work-inbox notes (section 2) are a separate change, before or with it.
 
-## What changed from f0dfc81
+## What changed from d163367
 
-- Ember, invariant wording → the quoted invariant: harness transitions only execute authority a deliberate session
-  action already created; the three harness transitions named.
-- Ember 1, pause expiry has no actor → section 3: `settle_pauses`, its lock, `by: pause-expiry`, behaviour with the
-  switches off; transition table; test.
-- Ember 2, history vs `touch` → section 1: history is one entry per write, `touch` a same-status entry; test.
-- Ember 3, reporting → section 4 "Reports": fixed content, durable `reported`, sink left to the heartbeat (journal in
-  v1); no Discord meaning; test.
-- Ember 4, execution location → `cwd` field, validation and preservation through `pwake`, spawn, retry, nudge and
-  `take` (section 1, 2.4, 4); test through the full path.
-- Ember, `cwd` symlink gap (1570143444578603091, after a8faeb8) → section 1 "Stored canonical, bound at use"; test
-  in section 6. Ember, intermediate component and launcher (1570143645393359080, 1570143874905538733) → resolution
-  beneath home with `openat2`/`openat` fallback, the `cwd-exec` helper without `preexec_fn`, fd rule; tests in
-  section 6.
-- Ember, work inbox → section 2 "The work inbox can't carry work"; a separate change; tests named.
-- Arden, silent stall → section 4 report row ignores `updated`, says `touched since`; test with mutation.
-- Arden, unbounded hand-off retry → once per spell, usage-limit deferrals per the heartbeat, then report; test.
-- Heartbeat 20f7f5b alignment → section 4 as a table matching its row A: `add_heartbeat_wake` item shape, "at least
-  one beat after `nudged`", `failed` among start failures, `no valid cwd`; Claude's review point 6 → section 5 reads
-  settings.json only.
+- Ember 1, Arden 1, lock order and split writes → section 4 "Locks": the global order, the multi-lock paths, no lock
+  across launch, model or journal I/O; reconciliation of both crash halves of the spawn and of the nudge by firing id
+  (`firing` added to history entries, section 1); tests.
+- Ember 2, Arden 2, claimed but never started → section 2.4 and section 4 "Owner never started": stays `claimed`, one
+  recovery with `--session-id` on the same id; the `open`/`handoff` row narrowed to failure before the spawn claim;
+  tests for each route and for A and C never both acting.
+- Ember 3 (with 1570157489196896399) → section 4 "Claims off": the spawn claim stays; with the setting off the
+  `claim` field is ownership only; C reports once, never retries, never writes the claim; turning on later doesn't
+  retry what C reported; test heartbeat-on/claims-off. Section 5's off-state wording is unchanged.
+- Items 4, 5 and 6, and the heartbeat halves of 1 and 3, are heartbeat.md's (Arden).
