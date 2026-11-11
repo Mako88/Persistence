@@ -1712,44 +1712,157 @@ def add_wake(event):
     return {"set": item}
 
 
-def run_due(grace=120):
+def run_due(grace=120, home=None):
     """`hook.py run-due`, from a server's timer every minute: wakes past due for a session no live process holds.
     A wake fires through a running session's Stop waiter; a peer run as `claude -p` has none once the run ends,
     so its wakes never fired and it could not carry on without someone resuming it (Arden, 2026-11-09). Each
     such session is resumed with its reasons. A reason of exactly "/compact" compacts it first: a peer's own
-    compaction. The grace leaves a live waiter time to take its wake first."""
+    compaction. The grace leaves a live waiter time to take its wake first.
+
+    One locked transition (heartbeat.md 2524fe7, "The ledger of fired wakes"; task-claims.md section 4, "Locks"): under
+    wakes.lock (and tasks/.lock when an item names a claim), for each item it fires: the spawn claim for a hand-off
+    (open -> claimed by the pre-minted id, by harness, firing = the item's id), then the `enqueued` fact under
+    fired.lock, then the queue rewritten without it; every lock released, then the launches. An item whose firing is
+    already enqueued (a run that died before its rewrite) is only removed, firing nothing. Liveness is by exact id."""
+    import claims
+
     now = datetime.now().timestamp()
-    # A room wake has no live session whose waiter could take it, so it gets no grace: it waited two minutes for
-    # nothing, and John thought it had failed (2026-11-10).
-    due = [w for w in wakes() if w.get("session") and "at" in w and w["at"] + (0 if w.get("work") else grace) <= now]
-    for session in {w["session"] for w in due}:
-        if run_quiet(["pgrep", "-f", f"claude.*{session}"]).strip():
-            continue  # a run of it is going: its wake waits for the next minute
-        mine = [w for w in due if w["session"] == session]
-        wakes(lambda items: [w for w in items if w not in mine])
-        compact = any(w["reason"].strip() == "/compact" for w in mine)
-        reasons = "; ".join(w["reason"] for w in mine if w["reason"].strip() != "/compact") or "you compacted yourself; carry on"
-        STATE.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        prompt = STATE / f"wake-{session[:8]}-{stamp}.txt"
-        prompt.write_text(f"A wake you set came due: {reasons}", encoding="utf-8")
-        out = STATE / f"wake-{session[:8]}-{stamp}.json"
-        cwd = next((w["cwd"] for w in mine if w.get("cwd")), str(Path.home()))
-        run = f"cd {shlex.quote(cwd)} && "
-        if any(w.get("work") for w in mine):
-            # A wake set from the room: a new working session with full permissions, never the room session itself.
-            handoff = next((w["handoff"] for w in mine if w.get("handoff")), None)
-            print(start_work_session(cwd, reasons, "room", session, handoff=handoff))
-            continue
-        if compact:
-            # Kept, not thrown away: Arden's 19:07 compact failed and /dev/null hid why (Arden, 2026-11-09).
-            run += f"claude -p --resume {session} /compact --output-format json > {shlex.quote(str(out.with_suffix('.compact.json')))} 2>&1; "
-        run += f"claude -p --resume {session} --output-format json < {shlex.quote(str(prompt))} > {shlex.quote(str(out))} 2>&1"
-        # The words are the peer's own, from the wake it set, entered under the login's account.
-        env = {**os.environ, "PERSISTENCE_SPEAKER": f"{os.environ.get('PERSISTENCE_PEERNAME') or 'me'} (a wake I set)"}
-        subprocess.Popen(["bash", "-lc", run], env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, start_new_session=True)
-        print(f"woke {session[:8]}: {reasons}{' (compacted first)' if compact else ''}")
+    at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    c = claims.Claims(STATE, home=home)
+    launches = []  # what to start once every lock is released
+    try:
+        _run_due_locked(c, claims, now, at, grace, launches)
+    except BaseException:
+        for launch in launches:
+            if launch[0] == "claim" and launch[3] is not None:
+                os.close(launch[3])  # a run that dies mid-transition launches nothing and leaks no descriptor
+        raise
+    for launch in launches:
+        if launch[0] == "claim":
+            _, w, record, fd = launch
+            handoff = {k: record[k] for k in TASK_FIELDS}
+            print(start_work_session(record["cwd"], w["reason"], "room", w["session"], handoff=handoff, cwd_fd=fd,
+                                     claim=record["id"]))
+        else:
+            _resume_or_start(*launch[1:])
+
+
+def _run_due_locked(c, claims, now, at, grace, launches):
+    """run_due's locked transition; what it decides to start goes into `launches`, started only after it returns."""
+    with coordination.lock(STATE, "wakes"):
+        try:
+            items = queue_locked()
+        except WakesUnreadable as e:
+            print(f"run-due: {e}", file=sys.stderr)
+            return
+        # A room wake has no live session whose waiter could take it, so it gets no grace: it waited two minutes for
+        # nothing, and John thought it had failed (2026-11-10).
+        due = [w for w in items if isinstance(w, dict) and w.get("session") and "at" in w
+               and w["at"] + (0 if w.get("work") else grace) <= now]
+        if not due:
+            return
+        table = claims.process_table()
+        tasks = coordination.lock(STATE, "tasks") if any(w.get("claim") for w in due) else _no_lock()
+        with tasks:
+            try:
+                enqueued = coordination.enqueued_ids(STATE)
+            except coordination.LedgerError as e:
+                print(f"run-due: the ledger can't be read, so nothing fires: {e}", file=sys.stderr)
+                return
+            gone = []
+            for w in [w for w in due if w["id"] in enqueued]:
+                # Its transition was made and the run died before the rewrite: only remove it. For a hand-off whose
+                # claim is still open (older code), the spawn claim is written with this firing; nothing is launched.
+                gone.append(w)
+                if w.get("claim"):
+                    try:
+                        c.spawn_locked(w["claim"], w["session"], w["id"], w.get("cwd"), bind=False)
+                    except claims.Refused:
+                        pass
+            for session in dict.fromkeys(w["session"] for w in due if w not in gone):
+                mine = [w for w in due if w["session"] == session and w not in gone]
+                alive = claims.running(session, table)
+                if alive is None:
+                    print(f"run-due: can't tell whether {session[:8]} is running; its wake waits", file=sys.stderr)
+                    continue
+                if alive:
+                    continue  # a run of it is going: its wake waits for the next minute
+                for w in mine:
+                    if w.get("claim"):
+                        try:
+                            record, fd, _ = c.spawn_locked(w["claim"], session, w["id"], w.get("cwd"))
+                            launches.append(("claim", w, record, fd))
+                        except claims.Refused as e:
+                            # Refused before the spawn claim: the claim stays open, the firing is on record (enqueued,
+                            # never started), and nothing is launched.
+                            print(f"run-due: firing {w['id']} refused: {e}", file=sys.stderr)
+                    coordination.append(STATE, coordination.enqueued_fact(w, at))
+                    gone.append(w)
+                plain = [w for w in mine if not w.get("claim")]
+                if plain:
+                    launches.append(("plain", session, plain))
+            write_queue_locked([w for w in items if w not in gone])
+
+
+class _no_lock:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _resume_or_start(session, mine):
+    """Today's launch for an item with no claim: a working session for a work item set before claims, or the session
+    resumed with its reasons (compacted first for /compact)."""
+    compact = any(w["reason"].strip() == "/compact" for w in mine)
+    reasons = "; ".join(w["reason"] for w in mine if w["reason"].strip() != "/compact") or "you compacted yourself; carry on"
+    STATE.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    prompt = STATE / f"wake-{session[:8]}-{stamp}.txt"
+    prompt.write_text(f"A wake you set came due: {reasons}", encoding="utf-8")
+    out = STATE / f"wake-{session[:8]}-{stamp}.json"
+    cwd = next((w["cwd"] for w in mine if w.get("cwd")), str(Path.home()))
+    run = f"cd {shlex.quote(cwd)} && "
+    if any(w.get("work") for w in mine):
+        # A wake set from the room before claims: a new working session with full permissions, never the room session.
+        handoff = next((w["handoff"] for w in mine if w.get("handoff")), None)
+        print(start_work_session(cwd, reasons, "room", session, handoff=handoff))
+        return
+    if compact:
+        # Kept, not thrown away: Arden's 19:07 compact failed and /dev/null hid why (Arden, 2026-11-09).
+        run += f"claude -p --resume {session} /compact --output-format json > {shlex.quote(str(out.with_suffix('.compact.json')))} 2>&1; "
+    run += f"claude -p --resume {session} --output-format json < {shlex.quote(str(prompt))} > {shlex.quote(str(out))} 2>&1"
+    # The words are the peer's own, from the wake it set, entered under the login's account.
+    env = {**os.environ, "PERSISTENCE_SPEAKER": f"{os.environ.get('PERSISTENCE_PEERNAME') or 'me'} (a wake I set)"}
+    subprocess.Popen(["bash", "-lc", run], env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True)
+    print(f"woke {session[:8]}: {reasons}{' (compacted first)' if compact else ''}")
+
+
+def set_handoff(wake, home=None):
+    """`pwake` from a room session (task-claims.md section 2.4): the hand-off's task record becomes an open claim,
+    dispatch handoff, with the canonical cwd, and the wake item carries the claim's id and the pre-minted worker id,
+    not a copy of the record. Under wakes.lock -> tasks/.lock: the claim, then the item. Written here by the harness,
+    not through add_wake, which keeps dropping `claim` so a peer can't write it."""
+    import uuid
+    import claims
+
+    record = wake["handoff"]
+    origin = record.get("origin_session")
+    if not claims.full_id(origin):
+        raise ValueError("a hand-off is set by a room session with its full id (CLAUDE_CODE_SESSION_ID)")
+    c = claims.Claims(STATE, home=home)
+    with coordination.lock(STATE, "wakes"):
+        items = queue_locked()
+        claim = c.create(wake["reason"], owner=None, cwd=wake["cwd"], by=origin, dispatch="handoff", status="open",
+                         origin_session=origin, room_channel=record.get("room_channel"),
+                         room_from=record.get("room_from"), room_upto=record.get("room_upto"))
+        item = {"id": str(uuid.uuid4()), "reason": wake["reason"], "set": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "cwd": claim["cwd"], "session": wake["session"], "work": True, "claim": claim["id"],
+                "at": datetime.now().timestamp() + 60 * float(wake.get("in", 30))}
+        write_queue_locked(items + [item])
+    return claim, item
 
 
 WORK_PROMPTS = {
@@ -1767,7 +1880,10 @@ WORK_PROMPTS = {
 }
 
 
-def start_work_session(cwd, reasons, origin, session=None, handoff=None):
+WORK_ARGV = ["bash", "-lc", 'exec claude -p "$@"', "claude"]  # the worker cwd-exec execs; its arguments follow, none from text
+
+
+def start_work_session(cwd, reasons, origin, session=None, handoff=None, cwd_fd=None, claim=None):
     """A new working session with full permissions, started for work handed to it: a wake set from the room (on home),
     or messages sent from home to this machine (`link`, on John's PC; John approved full auto, 2026-11-10). Never a
     resumed session, so never the room's. Its output is kept in state/wake-<id>-<time>.json."""
@@ -1779,7 +1895,14 @@ def start_work_session(cwd, reasons, origin, session=None, handoff=None):
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     prompt, out = STATE / f"wake-{session[:8]}-{stamp}.txt", STATE / f"wake-{session[:8]}-{stamp}.json"
     text = WORK_PROMPTS[origin].format(reasons=reasons, cwd=cwd)
-    if handoff:
+    if claim:
+        text += (f"\n\nThis task is claim {claim}, claimed for this session when it started (`ptask show {claim}`). "
+                 f"`ptask done {claim}` when it's finished, or `ptask pause {claim}` with why.")
+    if handoff and claim:
+        # The claim is the task record: no second copy by session id (task-claims.md section 1).
+        if setting("PERSISTENCE_HANDOFF_TURNS", "1") != "0":
+            text += "\n\n" + evidence_block(handoff)
+    elif handoff:
         # Evidence goes after the formatted task, never through the template (revision 3, invariant point 2), and the
         # record is kept by its owner's id alone, for the freshness line: no evidence byte in a name, argv or env.
         task_file(session).parent.mkdir(parents=True, exist_ok=True)
@@ -1790,7 +1913,15 @@ def start_work_session(cwd, reasons, origin, session=None, handoff=None):
     me = os.environ.get("PERSISTENCE_PEERNAME") or "me"
     env = {**server_environ(os.environ), "PERSISTENCE_SPEAKER": f"{me} (a wake I set from the {origin})"}
     args = ["--session-id", session, "--permission-mode", "bypassPermissions", "--output-format", "json"]
-    if os.name == "nt":
+    if cwd_fd is not None:
+        # Launched from the verified directory descriptor through cwd-exec, never the path string again (task-claims.md
+        # section 1, step 3). Nothing but ids and fixed flags in argv.
+        import claims
+
+        with open(prompt, "rb") as stdin, open(out, "wb") as stdout:
+            claims.launch(cwd_fd, [*WORK_ARGV, *args], env=env, stdin=stdin, stdout=stdout, stderr=subprocess.STDOUT,
+                          start_new_session=True)
+    elif os.name == "nt":
         claude = shutil.which("claude") or str(Path.home() / ".local" / "bin" / "claude.exe")
         with open(prompt, "rb") as stdin, open(out, "wb") as stdout:
             subprocess.Popen([claude, "-p", *args], cwd=str(cwd), env=env, stdin=stdin, stdout=stdout,
@@ -1927,10 +2058,18 @@ def evidence_block(record):
 def room_freshness(session):
     """Snapshot freshness observation (revision 3): one line when the task's channel has moved past its snapshot. A
     notice, not a gate: it says something changed, not what, and doesn't stop a commit, push or `room say`."""
+    record = None
     try:
-        record = json.loads(task_file(session).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
+        import claims
+
+        record = claims.Claims(STATE).by_owner(session)  # task_file becomes a lookup by owner (task-claims.md section 1)
+    except Exception:
+        record = None
+    if record is None:
+        try:
+            record = json.loads(task_file(session).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
     if not record.get("room_channel") or not record.get("room_upto"):
         return None
     history = channel_history(record["room_channel"], timeout=ROOM_WAIT_OBSERVED)
@@ -2530,6 +2669,16 @@ def main():
             print("note: a /compact wake runs only once this session has exited (the timer compacts it, then resumes it "
                   "with \"you compacted yourself; carry on\"). While the session is live it waits: a live session cannot "
                   "compact itself, and auto-compact still applies.")
+        if wake.get("work"):
+            import claims
+
+            try:
+                claim, item = set_handoff(wake)
+            except (ValueError, claims.Refused) as e:
+                print(f"wake not set: {e}", file=sys.stderr)
+                sys.exit(2)
+            print(json.dumps({"set": item, "claim": claim["id"]}))
+            return
         ensure()
         request = urllib.request.Request(f"http://127.0.0.1:{HOOK_PORT}/wake", json.dumps(wake).encode("utf-8"), {"Content-Type": "application/json"})
         print(urllib.request.urlopen(request, timeout=10).read().decode("utf-8"))

@@ -5,12 +5,15 @@ A claim is the hand-off's task record (`hook.TASK_FIELDS`) extended by `CLAIM_FI
 A claim exists only because a session (`ptask`) or the harness made it; nothing here reads room text, a reply, a
 note or a transcript for tasks, and no free text of a claim reaches argv, the environment or a file name.
 
-This module is the core only: the record, its transitions and history, the locks, pause expiry, exact-id liveness,
-pending-by-structure, the canonical and bound `cwd`, the `cwd-exec` launch, the one setting, and `ptask`. The
-run-due spawn claim and everything the heartbeat does with claims are not wired here yet.
+This module is the claims core: the record, its transitions and history, pause expiry, exact-id liveness,
+pending-by-structure, the canonical and bound `cwd`, the `cwd-exec` launch, the one setting, `ptask`, and the spawn
+claim run-due makes (`spawn_locked`). The locks and the fired-wake ledger are coordination.py's. Everything the
+heartbeat does with claims (nudges, reports, the never-started recovery) is the heartbeat PR's.
 
 `PERSISTENCE_TASKCLAIMS` (settings.json only, off by default) gates nothing in this module: claims are recorded
-whether it is on or off (section 5). Nothing in hook.py calls this module except `hook.py ptask`.
+whether it is on or off, the spawn claim included (section 5; Ember 1570181248079626261 and Arden
+1570189766400417927: off means no promise check and no heartbeat automation, not no ownership record). hook.py calls
+this module for `ptask`, for `pwake` from a room session (`set_handoff`) and in `run_due`.
 
 Standard library only, Linux for the descriptor binding."""
 import ctypes
@@ -412,6 +415,43 @@ class Claims:
             record["nudged"] = record["reported"] = None
             self._write(record)
             return record
+
+    def spawn_locked(self, claim_id, owner, firing, item_cwd, bind=True):
+        """run-due's spawn claim (section 2.4, section 4 "Locks"), called holding wakes.lock and tasks/.lock: open/handoff
+        -> claimed with owner = the item's pre-minted session, `by: harness`, `firing` = the item's id. Reconciled by
+        firing id: a claim already claimed by the harness for this firing and this owner gets no second entry. The
+        record's cwd must equal the item's, and is bound to a descriptor before anything is written, so a cwd that
+        fails gets no claim. Returns (record, fd or None, fresh); Refused leaves the file byte for byte."""
+        if held_locks()[-1:] != ["tasks"] or "wakes" not in held_locks():
+            raise LockOrderError("the spawn claim runs holding wakes.lock and tasks/.lock")
+        if not full_id(owner) or not full_id(firing):
+            raise Refused("the spawn claim needs the pre-minted session's full id and the firing id")
+        self._settle_locked()
+        path = self._path(claim_id)
+        if not path.exists():
+            raise Refused(f"no claim {claim_id}")
+        record = self._load(path)
+        if record["cwd"] != item_cwd:
+            raise Refused(f"no valid cwd: the item's cwd differs from claim {claim_id}'s")
+        if record["status"] == "claimed" and record["owner"] == owner and any(
+                h["action"] == "claim" and h["by"] == "harness" and h["firing"] == firing for h in record["history"]):
+            fresh = False
+        elif record["status"] == "open" and record["dispatch"] == "handoff":
+            fresh = True
+        else:
+            raise Refused(f"claim {claim_id} is {record['status']}" + (f" by {record['owner']}" if record["owner"] else "")
+                          + f", not open for firing {firing}")
+        fd = self.open_cwd(record["cwd"]) if bind else None
+        if fresh:
+            try:
+                self._append(record, "claim", "claimed", "harness", to_owner=owner, firing=firing)
+                record["nudged"] = record["reported"] = None
+                self._write(record)
+            except BaseException:
+                if fd is not None:
+                    os.close(fd)
+                raise
+        return record, fd, fresh
 
     def pause(self, claim_id, by, until=None, why=""):
         self._actor(by)

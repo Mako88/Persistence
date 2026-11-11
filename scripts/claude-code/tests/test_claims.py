@@ -1,10 +1,10 @@
 """Task claims, the claims core (docs/design/task-claims.md, revision 4, sha256 8440c4dd…6b33).
 
-Each class names the design's section 6 test it covers. What this file does not cover yet, because it needs the
-run-due/ledger/heartbeat pieces whose build order is an open question, is listed at the end of this docstring and in
-the branch's hand-over: claim at spawn, owner never started, claims off with the heartbeat on, the spawn and nudge lock
-paths, split writes, the hand-off half of `cwd`, spell/silent stall, the hand-off retry bound and the heartbeat
-contract.
+Each class names the design's section 6 test it covers. Run-due's spawn claim (claim at spawn, the spawn lock path,
+the spawn's split writes, `cwd` through the hand-off, the seam test) is tests/test_spawn_claim.py; the shared locks and
+ledger are tests/test_coordination.py. Per Ember 1570181249534795788 point 3, the heartbeat PR owns stall decisions
+(spell/silent stall through the beat), retries and deferrals (owner never started, the hand-off retry bound),
+reporting, claims off with the heartbeat on, the nudge's lock path and split writes, and the heartbeat contract.
 
 Every claim here lives in a temporary state directory under a temporary home; nothing touches the real ones."""
 import json
