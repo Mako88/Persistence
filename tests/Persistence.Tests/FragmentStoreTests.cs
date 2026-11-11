@@ -845,6 +845,75 @@ public sealed class FragmentStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task A_newer_note_from_an_ended_session_is_shown_under_mine_marked_ended()
+    {
+        // Arden's room session kept opening with its own day-old note after a working session wrote a newer one
+        // (docs/design/handoff-and-notes.md, revision 3, section 1).
+        var store = await OpenAsync();
+        store.SessionProcess = _ => false;
+        store.Session = "roomaaaa-1";
+        await store.NoteAsync("Trial decision still open.");
+        store.Session = "workbbbb-2";
+        await store.NoteAsync("Trial decided: I move.");
+
+        store.Session = "roomaaaa-1";
+        var core = await store.CoreAsync(maxChars: 20000, recent: 20);
+        Assert.Contains("Trial decision still open.", core);
+        var heading = core.IndexOf("## Newer than my note: session workbbbb, ended, written ", StringComparison.Ordinal);
+        Assert.True(heading > core.IndexOf("Trial decision still open.", StringComparison.Ordinal), core);
+        Assert.True(core.IndexOf("Trial decided: I move.", StringComparison.Ordinal) > heading, core);
+
+        // The newer session sees no newer note than its own.
+        store.Session = "workbbbb-2";
+        Assert.DoesNotContain("## Newer than my note", await store.CoreAsync(maxChars: 20000, recent: 20));
+    }
+
+    [Fact]
+    public async Task A_newer_notes_session_is_running_only_if_a_process_holds_that_session_id()
+    {
+        var store = await OpenAsync();
+        store.Session = "roomaaaa-1";
+        await store.NoteAsync("Mine.");
+        store.Session = "workbbbb-2";
+        await store.NoteAsync("Newer.");
+        store.Session = "roomaaaa-1";
+
+        // A live process for this session id: still running.
+        store.SessionProcess = id => id == "workbbbb-2";
+        Assert.Contains("## Newer than my note: session workbbbb, still running, written ", await store.CoreAsync(maxChars: 20000, recent: 20));
+
+        // A live process for some other session (Ember: not merely "some worker exists"): ended.
+        store.SessionProcess = id => id == "otherccc-3";
+        Assert.Contains("## Newer than my note: session workbbbb, ended, written ", await store.CoreAsync(maxChars: 20000, recent: 20));
+
+        // A check that cannot run says so rather than guessing.
+        store.SessionProcess = _ => null;
+        Assert.Contains("## Newer than my note: session workbbbb, state unknown, written ", await store.CoreAsync(maxChars: 20000, recent: 20));
+    }
+
+    [Fact]
+    public async Task The_newer_note_line_is_empty_when_mine_is_newest_and_names_the_newer_one_otherwise()
+    {
+        var store = await OpenAsync();
+        store.SessionProcess = _ => false;
+        store.Session = "roomaaaa-1";
+        await store.NoteAsync("Mine.");
+        Assert.Null(await store.NewerNoteLineAsync());
+
+        store.Session = "workbbbb-2";
+        await store.NoteAsync("Newer.");
+        store.Session = "roomaaaa-1";
+        var line = await store.NewerNoteLineAsync();
+        Assert.NotNull(line);
+        Assert.StartsWith("working note: mine written ", line);
+        Assert.Contains("newer: session workbbbb's (ended), ", line);
+        Assert.Contains("`pstore note --newest` shows it", line);
+
+        // `note --newest` reads the newest in the store, whoever wrote it.
+        Assert.Equal("Newer.", (await store.NewestNoteAsync())!.Content);
+    }
+
+    [Fact]
     public async Task A_view_changed_in_another_session_is_refused_with_where()
     {
         var store = await OpenAsync();
