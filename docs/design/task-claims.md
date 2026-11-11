@@ -251,9 +251,23 @@ the journal only (`heartbeat.md`, "Reports"). "Reported" never means "posted to 
   `<condition>` one of `stalled after nudge`, `stalled after nudge, touched since`, `unowned`, `liveness unknown`,
   `start failed`, `no valid cwd`. No task, outcome, pause reason or result text, ever. `ptask show <id>` gives the rest
   to whoever wants it.
+- **"Report once" means one key, delivered at least once** (Ember's final review, item 2; heartbeat.md rev 3,
+  "Reports"). Delivery is at least once, not exactly once: the line goes to one store (the journal) and the mark to
+  another (the claim), and no write order makes that pair atomic. Every report has a **stable idempotency key**; it
+  is delivered **at least once**; and after a crash between flushing the journal and marking, it is delivered again
+  as an **identical line with the same key**. Everywhere in this doc, "report once" means one key, delivered at least
+  once.
+- **The key** for a claim report is heartbeat.md's `claim:<claim>:<spell>:<kind>`, where `<spell>` is the history
+  sequence number that began the spell and `<kind>` is the condition's slug (`stalled`, `unowned`,
+  `liveness-unknown`, `start-failed`, `no-valid-cwd`). Wording that depends on later facts (`touched since`) is fixed
+  when the line enters the outbox, so a repeat is byte-identical.
+- **The emitted line** is the content line followed by ` key=<key>`. That suffix is sink framing, the heartbeat's
+  part. Claims fix the content before it, unchanged.
 - **State:** `reported` is set (with its history entry) only after the sink confirms durable delivery (for the journal,
-  written and flushed). If delivery fails, it stays null and the next beat tries again; once set, the report is not
-  repeated this spell. Not `inbox/work`, which would copy the signal into whichever session came next.
+  written and flushed), and only if the claim is still in the key's spell; otherwise the outbox entry is just dropped
+  and nothing is written to the claim. If delivery fails, it stays null and the next beat emits the same line with
+  the same key again. Once set, no new key is decided for this spell; the one key may still have been emitted more
+  than once. Not `inbox/work`, which would copy the signal into whichever session came next.
 
 ## 5. Consent and the way back
 
@@ -298,8 +312,8 @@ consent. **Way back:** turn the setting off; claim files are plain JSON, no stor
 - **Retry identity** (Ember): a pending wake for an owner-prefix collision, and a wake belonging to another claim, do
   not count as pending for this one. Mutations: prefix match, and matching on owner alone.
 - **Spell:** nudge, `touch`, owner exits: no second nudge. Resume: the next stall may be nudged again.
-- **Silent stall** (Arden): nudge, `touch`, owner exits, one beat: exactly one report, saying `touched since`.
-  Mutation: consulting `updated` in the report rule.
+- **Silent stall** (Arden): nudge, `touch`, owner exits, one beat: exactly one report key, its line saying `touched
+  since`. Mutation: consulting `updated` in the report rule.
 - **Hand-off retry bound** (Arden): an `open`/`handoff` whose start fails every time is retried once, then reported
   once; further beats add no item. A usage-limit failure defers to the reset, at most 3 times, then reports.
 - **`cwd` through the hand-off path** (Ember): `pwake` → claim and item carry the same `cwd` → spawn runs there → a
@@ -351,4 +365,8 @@ the text. Not in v1. Addressed work-inbox notes (section 2) are a separate chang
 - Ember 3 (with 1570157489196896399) → section 4 "Claims off": the spawn claim stays; with the setting off the
   `claim` field is ownership only; C reports once, never retries, never writes the claim; turning on later doesn't
   retry what C reported; test heartbeat-on/claims-off. Section 5's off-state wording is unchanged.
+- Ember's final review, item 2 → section 4 "Reports": "report once" means one stable key, delivered at least once
+  and possibly emitted identically more than once after a crash; the ` key=<key>` suffix (heartbeat.md's
+  `claim:<claim>:<spell>:<kind>`) is the heartbeat's sink framing after the unchanged claims content; `reported` is set
+  only within the key's spell.
 - Items 4, 5 and 6, and the heartbeat halves of 1 and 3, are heartbeat.md's (Arden).
