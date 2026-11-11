@@ -431,6 +431,9 @@ class Beat:
             return
         if claims.running(owner, self.table):
             return
+        if f0 and self.enq.get(f0, {}).get("retry_of") and not transcript_exists(self.home, owner):
+            self.spent_spawn(record, spell, f0)  # Q4: the spawn was itself the hand-off's one retry
+            return
         nudge = nudge_entry(record)
         # Reconcile both split-nudge halves by firing id (heartbeat.md, "Split writes in a nudge").
         if nudge is None:
@@ -464,6 +467,23 @@ class Beat:
             return
         touched = _time(record["updated"]) and _time(record["updated"]) > _time(record["nudged"])
         self.report_claim(record, spell, "stalled after nudge, touched since" if touched else "stalled after nudge")
+
+    def spent_spawn(self, record, spell, f0):
+        """Q4 (Ember, 1570222344146780254): one recovery total per logical spawn attempt per spell. This spell's spawn
+        claim was made by A's retry of a hand-off that never started, so that retry was the one recovery: an
+        owner-never-started nudge would be a second. The chain's last attempt, once it has failed, is deferred if it
+        hit the usage limit (deferrals keep their own budget), else reported once as `start failed`."""
+        last = last_attempt(self.chain(self.enq[f0]["retry_of"]))
+        firing = last and last.get("firing")
+        if firing not in self.enq or self.states.get(firing) not in ("never-started", "crashed", "failed"):
+            return  # still queued, young or running
+        if self.answered(firing):
+            return
+        out, _ = self.finished_output(firing)
+        if usage_limited(out) and self.recover(firing, self.enq[firing], claim=record["id"], cwd=record["cwd"],
+                                               nudge=True) is None:
+            return
+        self.report_claim(record, spell, "start failed")
 
     def unmarked_nudge(self, record):
         """A heartbeat nudge item for this claim that's queued, enqueued or taken in this spell, with no mark yet."""

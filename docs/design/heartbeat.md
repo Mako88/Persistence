@@ -145,6 +145,10 @@ owner = the pre-minted id) just before it launches the worker. The two failure r
 - **Failure after the owner ran** (a transcript exists): the ordinary claimed path, a nudge with `launch: "resume"`.
 
 Neither route touches C while claims are on. Each is bounded: one retry then one report, or one nudge then one report.
+The bound is **one recovery total per logical spawn attempt per spell** (Q4, Ember 1570222344146780254): when route 1's
+retry is what took the spawn claim and its owner then never ran, that retry was the one recovery, so there is no
+owner-never-started nudge after it; its failure is reported once as `start failed`. Usage-limit deferrals keep their
+own budget of three in either route.
 
 **Writes go through the claims module.** Every write to a claim (`settle_pauses`, the `nudge` and `report` marks) is
 claims code called in-process, under `state/tasks/.lock`, write-then-rename. Each write appends **exactly one history

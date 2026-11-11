@@ -442,6 +442,96 @@ class SplitNudge(Base):
         self.assertEqual(len(self.items()), 1)
 
 
+class OneRecoveryPerSpawn(Base):
+    """Q4 (Ember's call, 1570222344146780254): one recovery total per logical spawn attempt per spell. Usage-limit
+    deferrals keep their own budget. Both orders: the hand-off's retry went through the spawn claim (it was the one
+    recovery, so no nudge after it), and the spawn claim on the first firing (the session-id nudge is the one)."""
+
+    def handoff(self):
+        return self.c.create("t", owner=None, cwd=str(self.work), by=sid(), dispatch="handoff", status="open",
+                             origin_session=sid())
+
+    def spawn(self, record, owner, firing):
+        with coordination.lock(self.state, "wakes"), coordination.lock(self.state, "tasks"):
+            self.c.spawn_locked(record["id"], owner, firing, record["cwd"], bind=False)
+
+    def retried_then_spawned(self):
+        """f0 failed before the spawn claim; A's retry r1 then took the spawn claim (run-due's _heartbeat_spawn)."""
+        record = self.handoff()
+        f0, s = self.fire(how="never-started", work=True, claim=record["id"])
+        self.beat()
+        r1, = self.items()
+        self.assertEqual((r1["attempt"], r1["launch"]), ("retry", "session-id"))
+        self.spawn(record, s, r1["id"])
+        return record, f0, s, r1
+
+    def keys(self):
+        return [l.split(" key=")[1] for l in self.lines]
+
+    def test_retry_then_spawn_claim_then_failure_is_reported_not_nudged(self):
+        record, f0, s, r1 = self.retried_then_spawned()
+        self.drain(how="failed")  # the owner never ran: no transcript
+        for _ in range(3):
+            self.beat(10)
+        self.assertEqual(self.items(), [])
+        spell = claims.spell_start(self.c.get(record["id"]))
+        self.assertEqual(self.keys(), [f"claim:{record['id']}:{spell}:start-failed"])
+        self.assertIsNone(self.c.get(record["id"])["nudged"])
+
+    def test_retry_then_spawn_claim_then_usage_limit_is_deferred_then_reported(self):
+        record, f0, s, r1 = self.retried_then_spawned()
+        self.drain(how="usage")
+        self.beat(10)
+        d1, = self.items()
+        self.assertEqual((d1["attempt"], d1["deferral"], d1["retry_of"], d1["follows"], d1["claim"], d1["launch"]),
+                         ("deferral", 1, f0, r1["id"], record["id"], "session-id"))
+        self.drain(how="failed")
+        self.now += timedelta(hours=1)
+        for _ in range(2):
+            self.beat(10)
+        self.assertEqual(self.items(), [])
+        self.assertEqual([k.rsplit(":", 1)[1] for k in self.keys()], ["start-failed"])
+        self.assertIsNone(self.c.get(record["id"])["nudged"])
+
+    def test_retry_still_queued_or_young_waits(self):
+        record, f0, s, r1 = self.retried_then_spawned()
+        coordination.append(self.state, coordination.enqueued_fact(r1, self.now.isoformat()))
+        hook.wakes(lambda items: [])
+        self.beat(1)
+        self.assertEqual((self.items(), self.lines), ([], []))
+
+    def test_spawn_claim_first_then_the_nudge_is_the_one_recovery(self):
+        record = self.handoff()
+        owner, f0 = sid(), sid()
+        self.spawn(record, owner, f0)
+        self.fire(f0, owner, how="failed", work=True, claim=record["id"])
+        self.beat()
+        n, = self.items()
+        self.assertEqual((n["launch"], n["session"]), ("session-id", owner))
+        self.drain(how="crashed")
+        for _ in range(3):
+            self.beat(10)
+        self.assertEqual(self.items(), [])  # no C retry of the nudge, no second nudge
+        self.assertEqual([k.rsplit(":", 1)[1] for k in self.keys()], ["start-failed"])
+
+    def test_spawn_claim_first_then_the_nudge_hits_the_usage_limit(self):
+        record = self.handoff()
+        owner, f0 = sid(), sid()
+        self.spawn(record, owner, f0)
+        self.fire(f0, owner, how="failed", work=True, claim=record["id"])
+        self.beat()
+        n, = self.items()
+        self.drain(how="usage")
+        self.beat(10)
+        d1, = self.items()
+        self.assertEqual((d1["attempt"], d1["deferral"], d1["follows"], d1["launch"]), ("deferral", 1, n["id"], "session-id"))
+        self.drain(how="failed")
+        self.now += timedelta(hours=1)
+        for _ in range(2):
+            self.beat(10)
+        self.assertEqual(self.items(), [])
+        self.assertEqual([k.rsplit(":", 1)[1] for k in self.keys()], ["start-failed"])
+
 class NotRetroactive(Base):
     claims_on = False
 

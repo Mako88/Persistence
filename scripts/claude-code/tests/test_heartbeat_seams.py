@@ -309,6 +309,13 @@ class CrossDocument(Base):
         self.assertNotIn("--resume", made[0])
         self.assertEqual(self.c.get(record["id"])["owner"], item["session"])
         self.assertFalse(any(l.startswith("heartbeat wake") for l in self.lines), "C duplicated A")
+        # Q4: that retry took the spawn claim and failed with no transcript; it was the one recovery, so no nudge.
+        for minutes in (22, 33, 44):
+            self.beat(datetime.now(timezone.utc) + timedelta(minutes=minutes))
+        self.assertEqual(hook.wakes(), [])
+        self.assertIsNone(self.c.get(record["id"])["nudged"])
+        self.assertEqual(len(self.lines), 1)
+        self.assertIn(f"heartbeat claim {record['id']}: start failed", self.lines[0])
 
 
 class NoTextLeaks(Base):
