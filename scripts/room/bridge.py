@@ -237,8 +237,13 @@ class Bridge:
             if by_output and proc.returncode == 0 and reply_file.exists():
                 await self.post_reply(wake, reply_file.read_text(encoding="utf-8").strip())
             # After the reply is out, so nothing about the session's size can cost the room a reply (Arden's review).
+            # All of it is guarded: an OSError saving the session is the rollover failing, not the wake failing to start.
             if proc.returncode == 0:
-                self.log_rollover(rc.after_wake(self.config, self.store, log.read_text(encoding="utf-8", errors="replace")))
+                try:
+                    said = rc.after_wake(self.config, self.store, log.read_text(encoding="utf-8", errors="replace"))
+                except Exception as e:
+                    said = f"rollover check failed: {e}"
+                self.log_rollover(said)
         except OSError as e:
             print(f"wake could not start: {e}", flush=True)
         finally:
