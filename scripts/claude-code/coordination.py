@@ -185,7 +185,9 @@ def snapshot(state):
             if not isinstance(fact, dict):
                 raise ValueError("not an object")
         except ValueError:
-            raise LedgerError(f"ledger line at byte {offset} can't be read")
+            err = LedgerError(f"ledger line at byte {offset} can't be read")
+            err.offset = offset  # the heartbeat's report key names it
+            raise err
         facts.append(fact)
         offset += len(raw) + 1
     return facts, not repaired

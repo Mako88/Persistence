@@ -234,6 +234,38 @@ class Beat:
                 except ValueError:
                     continue  # an item whose id or session isn't a full id: nothing structural to name it by
 
+    def check_ledger(self):
+        """The ledger, read whole under fired.lock. A partial tail (repaired by the read) means no ledger-based decision
+        this beat; a bad line that isn't the tail is reported once and nothing is decided."""
+        try:
+            facts, complete = coordination.snapshot(self.state)
+        except coordination.LedgerError as e:
+            offset = getattr(e, "offset", 0)
+            self.report(ledger_key(offset), f"heartbeat ledger: unreadable, at {hhmm(self.now)}")
+            return
+        if complete:
+            self.ledger_decisions(facts)
+
+    def outputs(self, facts):
+        """Each finished firing's output, parsed, by its plain file name in state/; None when missing or unreadable."""
+        out = {}
+        for f in facts:
+            name = f.get("output") if f.get("fact") == "finished" else None
+            if isinstance(name, str) and name and "/" not in name and name not in out:
+                try:
+                    out[name] = json.loads((self.state / name).read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    out[name] = None
+        return out
+
+    def ledger_decisions(self, facts):
+        """Rows A and C's decisions from a complete snapshot (slice 3). Here: the derived states."""
+        import claims
+
+        self.facts = facts
+        self.states = firing_states(facts, self.now, claims.process_table(), wrapper_alive, self.data["crashed_seen"],
+                                    self.outputs(facts))
+
     def check_units(self):
         """D: `systemctl is-failed` and `show -p InvocationID` on the fixed list only; never start, restart, stop, reset."""
         for unit in units_for(self.user):
@@ -245,6 +277,57 @@ class Beat:
             if not INVOCATION.match(invocation):
                 invocation = ""
             self.report(unit_key(unit, invocation), f"heartbeat unit {unit}: failed, invocation {invocation}, at {hhmm(self.now)}")
+
+
+START_GRACE = timedelta(minutes=5)
+BEAT = timedelta(minutes=10)
+
+
+def wrapper_alive(pid, start):
+    """The run line's pid is alive with the same /proc start time (a recycled pid has another)."""
+    import run_line
+
+    return pid is not None and start is not None and run_line.start_time(pid) == start
+
+
+def firing_states(facts, now, table, alive, seen, outputs):
+    """Per firing id, its derived state (heartbeat.md, "States"), or None while no decision can be made yet: running,
+    never-started (enqueued, no start, past the start grace), crashed (started, nothing alive, for a full beat after
+    first seen so), failed (finished with is_error, a missing or unparseable output, or a non-zero exit), ok, taken.
+    `seen` is heartbeat.json's crashed_seen, updated here; `outputs` maps an output file name to its parsed JSON or None."""
+    import claims
+
+    by = {}
+    for f in facts:
+        if isinstance(f.get("firing"), str):
+            by.setdefault(f["firing"], {}).setdefault(f.get("fact"), f)
+    states = {}
+    for firing, got in by.items():
+        state = None
+        if "taken" in got:
+            state = "taken"
+        elif "finished" in got:
+            out = outputs.get(got["finished"].get("output"))
+            bad = got["finished"].get("exit") != 0 or not isinstance(out, dict) or out.get("is_error") is not False
+            state = "failed" if bad else "ok"
+        elif "started" in got:
+            s = got["started"]
+            live = claims.running(s.get("session"), table) if claims.full_id(s.get("session")) else False
+            if live or live is None or alive(s.get("pid"), s.get("start_time")):
+                seen.pop(firing, None)
+                state = "running" if live or alive(s.get("pid"), s.get("start_time")) else None
+            else:
+                first = _time(seen.get(firing))
+                if first is None:
+                    seen[firing] = now.isoformat(timespec="seconds")
+                elif now - first >= BEAT:
+                    state = "crashed"
+        elif "enqueued" in got:
+            at = _time(got["enqueued"].get("at"))
+            if at is not None and now - at >= START_GRACE:
+                state = "never-started"
+        states[firing] = state
+    return states
 
 
 def _time(value):
@@ -324,6 +407,7 @@ def beat(state=None, home=None, now=None, sink=journal, systemctl=systemctl_run,
     try:
         with Beat(state, home, now, sink, systemctl, user) as b:
             b.check_overdue()
+            b.check_ledger()
             b.check_units()
     except coordination.LockBusy:
         return "busy"
