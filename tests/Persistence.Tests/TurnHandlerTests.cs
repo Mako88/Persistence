@@ -37,11 +37,15 @@ public class TurnHandlerTests
         public readonly AppConfig Config = new() { Streaming = false, MaxActionIterations = 5 };
         public readonly WorkingContextEntity Context;
         public readonly List<string> Replies = [];
+        public readonly Mock<IMemorySurfacer> Surfacer = new();
+        public readonly Mock<IDisplayProvider> Display = new();
+        public readonly QueryEmbedder QueryEmbedder;
 
         public Harness()
         {
             var now = DateTimeOffset.UtcNow;
             Context = new WorkingContextEntity { Id = 1, Name = "c", Summary = "s", CreatedUtc = now, LastModifiedUtc = now };
+            QueryEmbedder = new QueryEmbedder(new Mock<IEmbeddingClient>().Object, Config, Display.Object);
 
             ContextRepo.Setup(r => r.GetByIdAsync(1, It.IsAny<CancellationToken>())).ReturnsAsync(Context);
             ContextRepo.Setup(r => r.SaveAsync(It.IsAny<WorkingContextEntity>(), It.IsAny<IDbTransaction?>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
@@ -85,7 +89,28 @@ public class TurnHandlerTests
             ContextRepo.Object, TagRepo.Object, ActionLog.Object, AuditLog.Object, new Mock<IContextFragmentRepository>().Object, Session, TestResolvers.For(Model.Object), Parser.Object,
             Formatter.Object, Builder.Object, Handlers.Object, new TokenUsageTracker(),
             new Mock<ISessionCostEstimator>().Object,
-            new Mock<IMemorySurfacer>().Object, Bus, Config, Sources.Object);
+            Surfacer.Object, QueryEmbedder, Bus, Config, Sources.Object);
+    }
+
+    [Fact]
+    public async Task Each_turn_notes_the_same_words_only_fallback_again()
+    {
+        // The app never reads Fallback, so its log is the only signal: an outage that fails the same way every
+        // turn must say so every turn, not once per process (Arden, msg 1570122833919610943).
+        var h = new Harness();
+        h.RegisterHandler(ModelAction.RespondToUser);
+        h.ParseReturns(Harness.Turn(ModelAction.RespondToUser), Harness.Turn(ModelAction.RespondToUser));
+        h.Surfacer
+            .Setup(s => s.SurfaceAsync(It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Callback(() => h.QueryEmbedder.Note("semantic recall failed (connection refused)"))
+            .ReturnsAsync([]);
+        var handler = h.Build();
+
+        await handler.ExecuteTurnAsync("first");
+        await handler.ExecuteTurnAsync("second");
+
+        h.Surfacer.Verify(s => s.SurfaceAsync(It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<string?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
+        h.Display.Verify(d => d.ShowError(It.Is<string>(m => m.StartsWith("Recall ran on exact words alone"))), Times.Exactly(2));
     }
 
     [Fact]

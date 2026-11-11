@@ -51,7 +51,9 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
   A store with no vectors at all (an embedder that never worked) returned before the query embed and was silent
   too; it is noted now ("no memory in this store has a vector yet…"), since there every recall is words alone (Arden).
   When a prompt cue matched and recall came back empty, the hook showed the cue and dropped the notice; it shows
-  both now. The notice reached stderr twice (QueryEmbedder's display, then `recall` again); once now.
+  both now. The notice reached stderr twice (QueryEmbedder's display, then `recall` again); once now, per recall:
+  the same reason is logged once within a recall, and again on the next (the app's TurnHandler clears it each turn,
+  as the store does each `recall`), so an outage that keeps failing the same way keeps saying so (Arden).
 - **The shrink bounds and the thrown path are pinned.** At a 1,200 tail, "at most twice" and "floor 300" stop at the
   same place, so deleting either left every test green; tails of 4,000 (4000/2000/1000) and 500 (500/300) pin each
   on its own, and a test now fails if semantic recall throwing stops being noted (Arden).

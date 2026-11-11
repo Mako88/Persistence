@@ -43,7 +43,14 @@ public class QueryEmbedder(IEmbeddingClient embeddings, IAppConfig config, IDisp
     /// <summary>Notes that recall ran on words alone, and why, and logs it.</summary>
     public void Note(string why)
     {
-        Fallback = $"Recall ran on exact words alone, without meaning: {why}.";
+        // One recall asks the surfacer more than once (here, then elsewhere); the same reason is logged once.
+        var fallback = $"Recall ran on exact words alone, without meaning: {why}.";
+        if (fallback == Fallback)
+        {
+            return;
+        }
+
+        Fallback = fallback;
         display.ShowError(Fallback);
     }
 
