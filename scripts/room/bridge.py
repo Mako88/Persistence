@@ -206,7 +206,10 @@ class Bridge:
         prompt = rc.build_prompt(wake.unread, wake.triggers, self.client.user.display_name, self.client.user.id,
                                  by_reply=by_output, tail=self.config["context_tail"])
         reply_file = STATE / f"reply-{int(time.time() * 1000)}.txt"
+        saved = self.store.session()
         argv, new_session = rc.wake_argv(self.config, self.store, reply_file=reply_file)
+        if new_session:
+            prompt = rc.fresh_session_note(saved) + prompt
         env = {**os.environ, "PERSISTENCE_SPEAKER": wake.speaker, "PERSISTENCE_ROOM_CHANNEL": wake.channel_id,
                "PERSISTENCE_ROOM_SOCKET": str(rc.socket_path())}
         cwd = self.config["cwd"] or (str(Path.home() / "work") if (Path.home() / "work").is_dir() else str(Path.home()))
@@ -224,7 +227,9 @@ class Bridge:
                     proc.kill()
                     print(f"wake timed out after {self.config['wake_timeout']}s", flush=True)
             if new_session and proc.returncode == 0:
-                self.store.save_session({"id": new_session, "created": True})
+                self.store.save_session(rc.created_session(new_session, saved))
+            if proc.returncode == 0:
+                rc.after_wake(self.config, self.store, log.read_text(encoding="utf-8", errors="replace"))
             elif proc.returncode:
                 print(f"wake exited {proc.returncode}; see {log}", flush=True)
             if by_output and proc.returncode == 0 and reply_file.exists():

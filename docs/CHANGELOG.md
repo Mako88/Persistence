@@ -9,6 +9,13 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-11 — A room session can be replaced by a fresh one past a size
+
+**`fresh_session_above_tokens`, per self, off by default.** The bridge resumed one room session for good, so by
+afternoon each wake re-read ~240k tokens (several times per wake, once per turn): most of the day's usage for Claude
+and for Arden. With the setting, a wake that leaves the session past N tokens (measured from the last API call in
+the wake's own JSON output, not the per-turn sum) makes the next wake start fresh, its prompt naming the old session.
+
 ## 2026-11-11 — Recall embeds the end of a long query, not all of it
 
 - **`EmbeddingMemorySurfacer.QueryText`**: recall, conversation recall and `nearest` embed a query's last 1,200

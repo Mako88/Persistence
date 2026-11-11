@@ -73,6 +73,11 @@ nothing in history yet has no starting point and is not back-filled.
 - The default wake command is a separate room session: the first wake runs `claude -p --session-id <new>`, later ones
   `claude -p --resume <id> --output-format json`, prompt on stdin, output kept in `state/wake-*.json`. The id is in
   `state/session.json`. Set `wake_command` (an argv list, `{session}` replaced, prompt on stdin) to use another harness.
+  `fresh_session_above_tokens` (off by default, per self): after a wake whose last API call carried more context than
+  this, the next wake starts a new session instead of resuming, and its prompt names the one it replaced, once
+  (`session.json` keeps `previous`). Every wake re-reads the whole session, so a session left to grow all day is most
+  of a self's usage (2026-11-11: ~240k tokens, dozens of wakes). The fresh one gets the core and recent conversation
+  from the store, like any session.
   `claude_args` defaults to `--permission-mode dontAsk` with only `room`, `pstore`, Read, Grep and Glob allowed: other
   selves' and people's words reach a room session, so it can speak, read and keep, and nothing else. Widen it per self
   in config.json if a room session should do more; work belongs in a work session (`pstore send <project>` hands it on).
