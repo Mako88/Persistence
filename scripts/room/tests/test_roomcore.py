@@ -593,6 +593,35 @@ class WakeCommand(unittest.TestCase):
     def test_context_is_read_after_stderr_lines_in_the_log(self):
         self.assertEqual(rc.context_tokens("a warning\n" + usage_log(1000)), 1000)
 
+    def test_a_malformed_log_is_said_and_never_rolls_over_or_raises(self):
+        # Arden's review (1570120427085500567): context_tokens raised on these, and after_wake ran before post_reply,
+        # so one malformed log dropped the self's reply.
+        cfg = config(fresh_session_above_tokens=150_000)
+        for usage in ({"iterations": {"input_tokens": 999_999}},          # a dict, not a list: KeyError
+                      {"iterations": ["999999"]},                         # an item that isn't a dict: AttributeError
+                      {"iterations": [{"input_tokens": "lots"}]}):        # a count that isn't a number: ValueError
+            with self.subTest(usage=usage):
+                store = rc.RoomStore(tempfile.mkdtemp())
+                store.save_session({"id": "old", "created": True})
+                said = rc.after_wake(cfg, store, json.dumps({"usage": usage}))
+                self.assertEqual(said, "size unreadable: no rollover")
+                self.assertEqual(store.session(), {"id": "old", "created": True})
+
+    def test_each_step_of_a_rollover_is_said_for_the_log(self):
+        cfg = config(fresh_session_above_tokens=150_000)
+        store = rc.RoomStore(tempfile.mkdtemp())
+        store.save_session({"id": "old", "created": True})
+        self.assertIsNone(rc.after_wake(cfg, store, usage_log(149_000)))
+        said = rc.after_wake(cfg, store, usage_log(151_000))
+        self.assertIn("old", said); self.assertIn("151000", said); self.assertIn("last wake", said)
+        said = rc.after_wake(cfg, store, usage_log(152_000))
+        self.assertIn("old", said); self.assertIn("fresh session", said)
+
+    def test_a_fresh_session_records_the_one_it_replaced(self):
+        d = rc.created_session("new", {"id": "old", "created": True, "rotate": True, "context": 151_000})
+        self.assertEqual(d, {"id": "new", "created": True, "previous": "old", "previous_context": 151_000})
+        self.assertEqual(rc.created_session("new", {}), {"id": "new", "created": True})
+
     def test_custom_command(self):
         argv, new = rc.wake_argv(config(wake_command=["codex", "{session}"]), None, "s1")
         self.assertEqual(argv, ["codex", "s1"])
