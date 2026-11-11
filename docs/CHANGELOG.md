@@ -9,6 +9,19 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-11 — A refused store caller always reads why; socket tests wait for the server, not 300 ms
+
+- **`Server.RefuseAsync`**: a caller refused on the unix socket (wrong user) now gets the refusal, then the server
+  closes only its sending side and lets the caller's line drain (up to 5 s, in the background, so the callers
+  behind it are not held). Before, the server wrote the refusal and closed at once; a caller whose line arrived
+  after the close had its write fail with EPIPE and never read the refusal. Under load (~16 on 4 cores) that failed
+  `StoreServerTests` socket tests in 6 of 38 runs; the new test `A_refused_caller_slow_to_send_its_line_still_reads_why`
+  hits it every time (it sends its line 300 ms late), and is red again when the drain is removed.
+- **`Server.ServeAsync(listening:)`**: tells its caller the TCP port actually bound (port 0 picks any free one) once it
+  accepts. The tests wait on that (failing with a message after 10 s) instead of sleeping 300 ms, and bind port 0
+  instead of finding a free port and releasing it before the server binds it. The serving line on stderr shows
+  the bound port.
+
 ## 2026-11-11 — Recall embeds the end of a long query, not all of it
 
 - **`EmbeddingMemorySurfacer.QueryText`**: recall, conversation recall and `nearest` embed a query's last 1,200
