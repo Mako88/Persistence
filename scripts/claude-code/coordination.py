@@ -93,7 +93,8 @@ def lock(state, name, wait=None):
 # `firing`, `fact`, `at`. Appended and read under state/fired.lock only.
 LEDGER = "fired.jsonl"
 # What an `enqueued` fact carries from its item: structure only, never the reason (its sha256 instead). The item's own
-# `at` is carried as `item_at`, since every fact's `at` is the time it was written (heartbeat.md lists both as `at`).
+# `at` is carried as `item_at`, since every fact's `at` is the time it was written (heartbeat.md names it `item_at`
+# too, since 1e4f42e).
 ENQUEUED_FIELDS = ("session", "cwd", "item_at", "work", "by", "claim", "launch", "retry_of", "follows", "attempt",
                    "deferral", "reason_sha256")
 
