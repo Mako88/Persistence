@@ -1636,8 +1636,10 @@ def add_wake(event):
         item["session"] = event["session"]  # only this session's waiter takes it: one session's wake fired in another (2026-11-09)
     if event.get("work"):
         item["work"] = True  # set from a room session: run-due starts a working session for it, never resumes the room's
-    if isinstance(event.get("handoff"), dict) and tuple(event["handoff"]) == TASK_FIELDS:
-        item["handoff"] = {k: (None if v is None else str(v)) for k, v in event["handoff"].items()}
+    # The key set is what counts, not its order (Ember's review, 2026-11-11): a reordered record was silently dropped.
+    # Missing or extra keys are still refused; the stored record is rebuilt in TASK_FIELDS order.
+    if isinstance(event.get("handoff"), dict) and set(event["handoff"]) == set(TASK_FIELDS):
+        item["handoff"] = {k: (None if event["handoff"][k] is None else str(event["handoff"][k])) for k in TASK_FIELDS}
     if event.get("pid"):
         item["pid"] = int(event["pid"])
     else:

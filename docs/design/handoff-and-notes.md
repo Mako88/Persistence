@@ -62,9 +62,11 @@ service, the same way `PERSISTENCE_PEERNAME` and `PERSISTENCE_EMBEDDING_ENABLED`
 block. A self turns it on for its own store once it has agreed to it. `note --newer` and `note --newest` only
 read, and work whether it is on or off.
 
-**Way back.** Store side: the setting, or one block in `CoreAsync`; reverting the commit removes it with no data
-change (no migration). Hook side: the line has its own function and a setting `PERSISTENCE_OBSERVE_NOTE=0` that turns it
-off.
+**Way back.** The normal way back is the setting: the block is off unless a store's service file sets
+`PERSISTENCE_NEWERNOTEINCORE=true`, so turning it off for one store is removing that line and restarting the
+service. Reverting the commit is the rollback, not the way back: it removes the block (one block in `CoreAsync`)
+for every store, with no data change (no migration). Hook side: the line has its own function and a setting
+`PERSISTENCE_OBSERVE_NOTE=0` that turns it off.
 
 
 ## 2. Contextual hand-offs

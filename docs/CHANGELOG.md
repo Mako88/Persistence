@@ -35,6 +35,9 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
   U+2028/U+2029 too) and clipped to 40 before it reaches a heading; the per-prompt freshness check waits 3 s for
   the bridge instead of 30, so a hung bridge can't stall every prompt; tilde fences are broken up like backtick
   ones; the process check's comment now says it reads all of /proc.
+- **A hand-off record's keys may come in any order** (Ember's review): `add_wake` accepts exactly the task
+  record's key set, refuses a missing or extra key, and stores the record in canonical field order. Before, a
+  reordered record was silently dropped.
 
 ## 2026-11-11 — Recall embeds the end of a long query, not all of it
 
