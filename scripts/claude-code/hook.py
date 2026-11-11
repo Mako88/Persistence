@@ -1360,7 +1360,9 @@ def recall(event):
     record_shown(event, "recall", ids)
     text = ("Cued by this message (a reminder you set for words like these):\n\n" + reminded + "\n\n" if reminded else "") + (
         "Recalled from your store, by association with this message (`persistence-store show <id>` "
-        "reads the whole of one):\n\n" + found.strip() if ids else "")
+        "reads the whole of one):\n\n" + found.strip() if ids else
+        # A cue matched but recall found nothing: the words-only notice still goes out, never silent.
+        f"Recall found nothing new for this message. {words_only.group(1)}" if words_only else "")
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": text[:CAP]}}))
 
 

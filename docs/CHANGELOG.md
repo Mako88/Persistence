@@ -30,6 +30,11 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
   for this message. Recall ran on exact words alone…"), and an empty recall *with* meaning still prints nothing.
   A store with no vectors at all (an embedder that never worked) returned before the query embed and was silent
   too; it is noted now ("no memory in this store has a vector yet…"), since there every recall is words alone (Arden).
+  When a prompt cue matched and recall came back empty, the hook showed the cue and dropped the notice; it shows
+  both now. The notice reached stderr twice (QueryEmbedder's display, then `recall` again); once now.
+- **The shrink bounds and the thrown path are pinned.** At a 1,200 tail, "at most twice" and "floor 300" stop at the
+  same place, so deleting either left every test green; tails of 4,000 (4000/2000/1000) and 500 (500/300) pin each
+  on its own, and a test now fails if semantic recall throwing stops being noted (Arden).
 - **A test for the meaning-based half of the quality weight.** Hard-coding the semantic ranking's weight to 1 left
   every test passing; `SemanticRanking_QualityWeight_DecidesBetweenMeaningAndImportance` fails under it.
 - **recall-eval** sets `QUERYTAILCHARS=1200` for its runs (overridable), so its numbers stay comparable with 77b9191's.

@@ -71,6 +71,14 @@ class RecallFallback(unittest.TestCase):
         self.assertIn("already in this window", shown)
         self.assertIn("exact words alone", shown)
 
+    def test_cue_matched_and_recall_empty_on_words_alone_shows_the_notice(self):
+        # The cue branch skipped the empty-result path, so a matched cue hid the notice (Arden, hook.py:1342 on 9a1e8e7).
+        hook.cued.return_value = "[#9 | Personal | i:0.5 c:1 | tags: cue]\na reminder\n"
+        self.reply = NOTICE + "\n\n"
+        shown = self.run_recall()
+        self.assertIn("a reminder", shown)
+        self.assertIn("exact words alone", shown)
+
 
 if __name__ == "__main__":
     unittest.main()

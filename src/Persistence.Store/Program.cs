@@ -451,12 +451,8 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
                 : (DateTimeOffset?)null;
             var recalled = await store.RecallAsync(line.Text("text") ?? string.Join(' ', line.Positional), line.GetInt("limit", 3),
                 exclude, line.Get("project"), line.GetInt("wander", 0), line.GetInt("said", 0), before);
-            if (recalled.Fallback is { } fallback)
-            {
-                // Never silent: on stderr for a script, and at the head of what a reader sees.
-                Console.Error.WriteLine(fallback);
-            }
-
+            // Never silent: QueryEmbedder.Note has already put the fallback on stderr (through QuietDisplay.ShowError)
+            // for a script; here it goes at the head of what a reader sees. Writing it to stderr again doubled it.
             if (line.Has("json"))
             {
                 Print(line, [.. recalled.Here, .. recalled.Frames, .. recalled.Elsewhere, .. recalled.Said]);
