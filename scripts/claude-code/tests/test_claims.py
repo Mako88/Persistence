@@ -129,7 +129,7 @@ class OneOwner(Base):
     def test_racing_claims_of_one_open_record_one_wins(self):
         record = self.open_one()
         racers = [sid() for _ in range(8)]
-        results = self.race(lambda i: self.c.claim_open(record["id"], racers[i], by=racers[i]))
+        results = self.race(lambda i: self.c.claim_open(record["id"], racers[i], by="harness", firing=sid()))
         won = [r for r in results if r[0] == "won"]
         self.assertEqual(len(won), 1, results)
         owner = self.c.get(record["id"])["owner"]
@@ -471,11 +471,38 @@ class CwdCanonicalAndBound(Base):
     def test_bad_cwds_are_refused_at_creation(self):
         (self.home / "out").symlink_to(self.outside)
         (self.home / "afile").write_text("x")
-        for bad in ("work", str(self.home / "work") + "/", str(self.home) + "//work", str(self.outside),
-                    str(self.home / "out"), str(self.home / "gone"), str(self.home / "afile"), str(self.home / "wo\nrk")):
+        (self.home / "wo\nrk").mkdir()
+        for bad in ("", str(self.outside), str(self.home / "out"), str(self.home / "gone"), str(self.home / "afile"),
+                    str(self.home / "wo\nrk"), str(self.home / "work" / ".." / ".."), "..", str(self.home) + "/../outside"):
             with self.subTest(cwd=bad), self.assertRaises(claims.Refused):
-                self.c.claim("t", self.me, cwd=bad)
+                self.c.claim("t", self.me, cwd=bad, base=str(self.home))
         self.assertEqual(self.files(), [])
+
+    def test_harmless_noncanonical_input_is_accepted_and_only_its_canonical_path_stored(self):
+        """Ember 1570181249534795788, point 4: canonicalise at creation, validate and store only that; don't refuse
+        input that reaches an allowed directory through `.`, `..` or a symlink; never store the string as given."""
+        work = str(self.home / "work")
+        (self.home / "work" / "proj").mkdir()
+        (self.home / "link").symlink_to(self.home / "work")
+        cases = [(work + "/", None), (str(self.home) + "//work", None), (work + "/proj/..", None), (work + "/./proj/../", None),
+                 (str(self.home / "link"), None), (".", work), ("..", work + "/proj"), ("proj/..", work), ("link", str(self.home))]
+        for given, base in cases:
+            with self.subTest(cwd=given, base=base):
+                r = self.c.claim("t", self.me, cwd=given, base=base)
+                self.assertEqual(r["cwd"], work)
+                if os.path.isabs(given):
+                    self.assertNotIn(given, json.dumps(r), "the string as given is never stored")
+
+    def test_ptask_claim_takes_the_callers_directory_or_a_relative_cwd_against_it(self):
+        work = str(self.home / "work")
+        (self.home / "work" / "proj").mkdir()
+        lines = []
+        env = {"CLAUDE_CODE_SESSION_ID": self.me}
+        self.assertEqual(claims.cli(["claim", "--cwd", "..", "t"], env=env, state=self.state, home=self.home,
+                                    cwd=work + "/proj", out=lines.append, now=self.clock), 0)
+        self.assertEqual(claims.cli(["claim", "t2"], env=env, state=self.state, home=self.home,
+                                    cwd=work + "/proj/..", out=lines.append, now=self.clock), 0)
+        self.assertEqual(sorted(r["cwd"] for r in self.c.all()), [work, work])
 
     def setup_tree(self):
         (self.home / "work" / "proj" / "deep").mkdir(parents=True)
@@ -656,15 +683,139 @@ class LockOrder(Base):
         self.assertEqual(held, [[]])
 
 
-class Archive(Base):
-    """Retention: nothing is deleted; `ptask show` finds a claim in tasks/ or closed/."""
+class Retention(Base):
+    """Ember 1570189950421565481, point 5: no archiving in v1. Terminal records stay in place, no command moves them as a
+    side effect, nothing is deleted, and `ptask show` reads them where they are."""
 
-    def test_show_finds_a_closed_claim(self):
+    def test_terminal_records_stay_in_place_through_every_command(self):
+        d, a, live = self.mine(), self.mine(), self.mine()
+        self.c.done(d["id"], self.me, outcome="built")
+        self.c.abandon(a["id"], self.me)
+        before = {n: (self.state / "tasks" / n).read_bytes() for n in (f"{d['id']}.json", f"{a['id']}.json")}
+        self.clock.advance(days=400)
+        env = {"CLAUDE_CODE_SESSION_ID": self.me}
+        for args in (["list"], ["show", d["id"]], ["show", a["id"]], ["claim", "another"], ["touch", live["id"]],
+                     ["pause", live["id"], "--until", "2027-01-01T00:00:00Z", "why"], ["resume", live["id"]]):
+            claims.cli(args, env=env, state=self.state, home=self.home, cwd=str(self.home / "work"), out=lambda t: None, now=self.clock)
+        self.c.settle_pauses()
+        for name, data in before.items():
+            self.assertEqual((self.state / "tasks" / name).read_bytes(), data)
+        self.assertFalse((self.state / "tasks" / "closed").exists())
+        self.assertEqual(self.c.get(d["id"])["status"], "done")
+
+    def test_list_leaves_terminal_ones_out_and_show_finds_them(self):
+        d = self.mine(task="finished thing")
+        self.c.done(d["id"], self.me)
+        lines = []
+        claims.cli(["list"], env={}, state=self.state, home=self.home, out=lines.append, now=self.clock)
+        self.assertNotIn(d["id"], "\n".join(lines))
+        lines = []
+        claims.cli(["show", d["id"]], env={}, state=self.state, home=self.home, out=lines.append, now=self.clock)
+        self.assertIn(d["id"], "\n".join(lines))
+
+
+class OwnerOnly(Base):
+    """Ember 1570189950421565481, point 6: only the exact owner session may touch, pause, resume, done or abandon a
+    claimed task; take is the one guarded transfer; the harness may do only the spawn claim and pause expiry; a room
+    session may abandon an open hand-off before spawn but never close or alter a claimed task."""
+
+    def others(self):
+        prefix_twin = self.me[:9] + str(uuid.uuid4())[9:]  # the same first 8 (and the dash): an owner-prefix collision
+        return {"another session of this self": sid(), "an owner-prefix collision": prefix_twin,
+                "a prefix of the owner": self.me[:8], "the harness": "harness", "pause-expiry": "pause-expiry",
+                "the heartbeat": "heartbeat"}
+
+    def test_nobody_but_the_exact_owner_may_write_a_claimed_or_paused_claim(self):
+        r, p = self.mine(), self.mine()
+        self.c.pause(p["id"], self.me)
+        calls = [("touch", r, {}), ("pause", r, {}), ("done", r, {}), ("abandon", r, {}),
+                 ("touch", p, {}), ("resume", p, {}), ("done", p, {}), ("abandon", p, {})]
+        for who, by in self.others().items():
+            for verb, rec, kw in calls:
+                with self.subTest(by=who, verb=verb, status=self.c.get(rec["id"])["status"]):
+                    path = self.state / "tasks" / f"{rec['id']}.json"
+                    before = path.read_bytes()
+                    with self.assertRaises(claims.Refused):
+                        getattr(self.c, verb)(rec["id"], by, **kw)
+                    self.assertEqual(path.read_bytes(), before)
+
+    def test_the_exact_owner_may(self):
         r = self.mine()
-        self.c.done(r["id"], self.me)
-        (self.state / "tasks" / "closed").mkdir()
-        os.replace(self.state / "tasks" / f"{r['id']}.json", self.state / "tasks" / "closed" / f"{r['id']}.json")
-        self.assertEqual(self.c.get(r["id"])["status"], "done")
+        self.c.touch(r["id"], self.me)
+        self.c.pause(r["id"], self.me)
+        self.c.resume(r["id"], self.me)
+        self.assertEqual(self.c.done(r["id"], self.me)["status"], "done")
+
+    def test_a_room_session_may_abandon_an_open_hand_off_but_not_a_claimed_task(self):
+        room = sid()
+        env = {"CLAUDE_CODE_SESSION_ID": room, "PERSISTENCE_ROOM_CHANNEL": "1569586907955073130"}
+        o = self.c.create("h", owner=None, cwd=str(self.home / "work"), by=room, dispatch="handoff", status="open")
+        r = self.mine()
+        errs = []
+        for verb in ("done", "abandon", "touch", "pause"):
+            path = self.state / "tasks" / f"{r['id']}.json"
+            before = path.read_bytes()
+            self.assertEqual(claims.cli([verb, r["id"]], env=env, state=self.state, home=self.home, out=lambda t: None,
+                                        err=errs.append, now=self.clock), 1, verb)
+            self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(claims.cli(["abandon", o["id"], "not needed"], env=env, state=self.state, home=self.home,
+                                    out=lambda t: None, err=errs.append, now=self.clock), 0, errs)
+        after = self.c.get(o["id"])
+        self.assertEqual((after["status"], after["history"][-1]["by"]), ("abandoned", room))
+
+    def test_the_harness_may_not_close_or_abandon_an_open_one_either(self):
+        o = self.c.create("h", owner=None, cwd=str(self.home / "work"), by="harness", dispatch="handoff", status="open")
+        for actor in ("harness", "pause-expiry", "heartbeat", "abc12345"):
+            with self.subTest(by=actor), self.assertRaises(claims.Refused):
+                self.c.abandon(o["id"], actor)
+        self.assertEqual(self.c.get(o["id"])["status"], "open")
+
+
+class OpenRecords(Base):
+    """Ember 1570189950421565481, point 7: no general syntax for claiming an existing open record in v1. `ptask claim`
+    creates a new claimed/none record owned by its caller; open/handoff is claimed only by run-due at spawn (the
+    harness); open/none has no assignment; take does not apply to open records."""
+
+    def open(self, dispatch="handoff"):
+        return self.c.create("h", owner=None, cwd=str(self.home / "work"), by="harness", dispatch=dispatch, status="open")
+
+    def test_only_the_harness_claims_an_open_hand_off(self):
+        o = self.open()
+        path = self.state / "tasks" / f"{o['id']}.json"
+        before = path.read_bytes()
+        for actor in (self.me, sid(), "pause-expiry", "heartbeat"):
+            with self.subTest(by=actor), self.assertRaises(claims.Refused):
+                self.c.claim_open(o["id"], self.me, by=actor)
+        self.assertEqual(path.read_bytes(), before)
+        after = self.c.claim_open(o["id"], self.me, by="harness", firing=sid())
+        self.assertEqual((after["status"], after["owner"], after["history"][-1]["by"]), ("claimed", self.me, "harness"))
+
+    def test_an_open_none_record_is_never_claimed_or_taken(self):
+        o = self.open(dispatch="none")
+        path = self.state / "tasks" / f"{o['id']}.json"
+        before = path.read_bytes()
+        with self.assertRaises(claims.Refused):
+            self.c.claim_open(o["id"], self.me, by="harness", firing=sid())
+        with self.assertRaises(claims.Refused):
+            self.c.take(o["id"], self.me, table=[], items=[])
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_take_does_not_apply_to_an_open_hand_off(self):
+        o = self.open()
+        with self.assertRaises(claims.Refused):
+            self.c.take(o["id"], self.me, table=[], items=[])
+
+    def test_ptask_claim_naming_an_open_record_creates_a_new_claim_and_leaves_the_open_one(self):
+        o = self.open()
+        path = self.state / "tasks" / f"{o['id']}.json"
+        before = path.read_bytes()
+        lines = []
+        self.assertEqual(claims.cli(["claim", o["id"]], env={"CLAUDE_CODE_SESSION_ID": self.me}, state=self.state,
+                                    home=self.home, cwd=str(self.home / "work"), out=lines.append, now=self.clock), 0)
+        self.assertEqual(path.read_bytes(), before)
+        new = [r for r in self.c.all() if r["id"] != o["id"]]
+        self.assertEqual(len(new), 1)
+        self.assertEqual((new[0]["status"], new[0]["dispatch"], new[0]["owner"]), ("claimed", "none", self.me))
 
 
 if __name__ == "__main__":
