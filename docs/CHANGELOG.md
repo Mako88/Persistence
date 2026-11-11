@@ -9,6 +9,16 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-11 — Recall embeds the end of a long query, not all of it
+
+- **`EmbeddingMemorySurfacer.QueryText`**: recall, conversation recall and `nearest` embed a query's last 1,200
+  characters. Before, the whole query went to the embedder, which refuses past 512 tokens; the error was caught and
+  recall fell back to BM25 alone, saying nothing. That happened on 5 of 35 real prompts in my recall gold set (John's
+  long messages, 2,400 to 3,700 characters) and on both of Arden's fixed cases. The end is kept because a long
+  message ends with what it asks. Measured on my store: 20/31 vs 19/31 at W=1 (2 right, 1 wrong), 23/31 either way
+  at W=0; on Arden's, no change in hits. Neutral on gold within noise; the gain is that recall no longer loses its
+  semantic half without a sign.
+
 ## 2026-11-11 — Recall: an importance-weight knob and the ablation it ran
 
 - **`EmbeddingSettings.QualityWeight`** (env `PERSISTENCE_EMBEDDING_QUALITYWEIGHT`, default 1, unchanged

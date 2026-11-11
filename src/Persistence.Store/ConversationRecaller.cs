@@ -136,7 +136,7 @@ internal sealed class ConversationRecaller(
     {
         await BackfillAsync(BackfillPerCall);
         var stored = loaded ??= (await vectors.GetAllAsync(Model)).ToList();
-        var query = await embeddings.EmbedAsync([text]);
+        var query = await embeddings.EmbedAsync([EmbeddingMemorySurfacer.QueryText(text)]);
         if (stored.Count == 0 || query.Count == 0 || query[0].Length == 0)
         {
             return [];

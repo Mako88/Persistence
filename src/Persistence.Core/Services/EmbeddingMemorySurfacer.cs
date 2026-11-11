@@ -108,7 +108,7 @@ public class EmbeddingMemorySurfacer : IMemorySurfacer
             return [];
         }
 
-        var queryVectors = await embeddings.EmbedAsync([queryText], ct);
+        var queryVectors = await embeddings.EmbedAsync([QueryText(queryText)], ct);
 
         if (queryVectors.Count == 0 || queryVectors[0].Length == 0)
         {
@@ -220,8 +220,17 @@ public class EmbeddingMemorySurfacer : IMemorySurfacer
         return text.Length > MaxEmbedChars ? text[..MaxEmbedChars] : text;
     }
 
+    /// <summary>
+    /// The text a query is embedded from: its last <see cref="MaxEmbedChars"/> characters. The embedder refuses
+    /// past 512 tokens, and recall then fell back to BM25 alone, silently: 5 of 35 real prompts in the recall
+    /// gold set (John's long messages, 2,400 to 3,700 characters) never had a semantic ranking (2026-11-11).
+    /// The end is kept because a long message ends with what it asks, and a query with the turn before it
+    /// (recall-eval --context prev) puts the message last.
+    /// </summary>
+    public static string QueryText(string text) => text.Length > MaxEmbedChars ? text[^MaxEmbedChars..] : text;
+
     /// <summary>Characters of a fragment embedded: well inside 512 tokens even for dense text.</summary>
-    internal const int MaxEmbedChars = 1200;
+    public const int MaxEmbedChars = 1200;
 
     /// <summary>
     /// Reciprocal rank fusion: each ranking contributes <c>1 / (k + position)</c>, and the sums decide

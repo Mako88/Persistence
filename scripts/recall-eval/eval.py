@@ -133,6 +133,7 @@ def arm_today(item, db, limit, exclude, opts):
                  for f in pool]
 
 
+QUERY_EMBED_CHARS = 1200      # EmbeddingMemorySurfacer.MaxEmbedChars
 EMBED_URL = EMBED_ENV["PERSISTENCE_EMBEDDING_APIBASEURL"] + "/embeddings"
 
 
@@ -150,9 +151,9 @@ def fragment_parts(db, query, ids):
     import array
     import math
     try:
-        q = embed(query)
+        q = embed(query[-QUERY_EMBED_CHARS:])     # as the store embeds a query (EmbeddingMemorySurfacer.QueryText)
     except OSError:
-        q = []      # too long for the embedder (a 500): the store's own recall falls back to BM25 alone here too
+        q = []      # the embedder refused it: no cosine, as the store would have none
     qn = math.sqrt(sum(x * x for x in q))
     c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     out = {}
