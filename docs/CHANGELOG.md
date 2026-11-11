@@ -9,6 +9,17 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-11 — Recall: an importance-weight knob and the ablation it ran
+
+- **`EmbeddingSettings.QualityWeight`** (env `PERSISTENCE_EMBEDDING_QUALITYWEIGHT`, default 1, unchanged
+  behaviour): both recall rankings now score relevance x quality^W, so W=0 ranks by relevance alone. One helper,
+  `MemorySurfacer.Quality`, replaces the two copies of the quality term. Why: Arden saw the same few high-importance
+  fragments win across unrelated prompts; one scalar was doing two jobs (keep a fragment prominent, and make it look
+  relevant). The ablation (docs/design/concept-graph.md step 6): W=0 reaches 23/31 vs 19/31 on my store and 7/17 vs
+  5/17 on Arden's, nothing made wrong on either; a lean on small sets. The default stays 1 until we choose.
+- **recall-eval**: `run --quality-weight W` and `--parts` (each pooled fragment's cosine, importance, confidence),
+  `winners` (fragments shown on many prompts, with those parts), and `floor` sweeps a minimum cosine over that pool.
+
 ## 2026-11-11 — Store commands from a Codex room wake (built, off)
 
 - **`scripts/codex/room_store.py`**, switched on by `CODEX_ROOM_STORE=1` in `room-wake`: a self on Codex, read-only

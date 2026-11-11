@@ -148,7 +148,7 @@ public class EmbeddingMemorySurfacer : IMemorySurfacer
                         && x.head.Status == ContextFragmentStatus.Active
                         && authorable.Contains(x.head.FragmentType)
                         && !exclude.Contains(x.head.Id))
-            .Select(x => (x.head, score: x.similarity * Quality(x.head)))
+            .Select(x => (x.head, score: x.similarity * MemorySurfacer.Quality(x.head, config.Embedding.QualityWeight)))
             .GroupBy(x => x.head.Id)
             .Select(g => g.OrderByDescending(x => x.score).First()) // old and head both matching: the better score
             .OrderByDescending(x => x.score)
@@ -222,9 +222,6 @@ public class EmbeddingMemorySurfacer : IMemorySurfacer
 
     /// <summary>Characters of a fragment embedded: well inside 512 tokens even for dense text.</summary>
     internal const int MaxEmbedChars = 1200;
-
-    /// <summary>The mean of importance and confidence — the same quality signal the lexical path applies.</summary>
-    private static double Quality(ContextFragmentEntity f) => (f.Importance + f.Confidence) / 2.0;
 
     /// <summary>
     /// Reciprocal rank fusion: each ranking contributes <c>1 / (k + position)</c>, and the sums decide

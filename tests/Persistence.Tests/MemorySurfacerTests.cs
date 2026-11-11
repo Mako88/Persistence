@@ -89,6 +89,27 @@ public class MemorySurfacerTests
     }
 
     [Fact]
+    public async Task SurfaceAsync_QualityWeightZero_RanksByRelevanceAlone()
+    {
+        // The same candidates as above; with the quality term weighted 0 (the importance ablation), BM25 order stands.
+        var repo = new Mock<IContextFragmentRepository>();
+        repo.Setup(r => r.SearchRelevantAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[]
+            {
+                Frag(1, ContextFragmentType.Personal, 0.5f, 0.5f),
+                Frag(2, ContextFragmentType.Personal, 0.9f, 0.9f),
+                Frag(3, ContextFragmentType.Personal, 0.4f, 0.4f),
+            });
+        var config = new Mock<Persistence.Config.IAppConfig>();
+        config.SetupGet(c => c.Embedding).Returns(new Persistence.Config.EmbeddingSettings { QualityWeight = 0 });
+
+        var surfaced = await new MemorySurfacer(repo.Object, config.Object)
+            .SurfaceAsync(Array.Empty<long>(), "honesty", count: 2, CancellationToken.None);
+
+        Assert.Equal(new long[] { 1, 2 }, surfaced.Select(f => f.Id));
+    }
+
+    [Fact]
     public async Task SurfaceAsync_DropsDeletedAndArchivedFragments()
     {
         var deleted = Frag(1, ContextFragmentType.Personal, 0.9f, 0.9f);

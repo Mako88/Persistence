@@ -430,6 +430,7 @@ public class AppConfig : IAppConfig
         if (Env("BATCHSIZE") is { } b && int.TryParse(b, out var bs)) config.Embedding.BatchSize = bs;
         if (Env("BACKFILLPERTURN") is { } f && int.TryParse(f, out var fp)) config.Embedding.BackfillPerTurn = fp;
         if (Env("FUSIONK") is { } k && int.TryParse(k, out var fk)) config.Embedding.FusionK = fk;
+        if (Env("QUALITYWEIGHT") is { } q && double.TryParse(q, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var qw)) config.Embedding.QualityWeight = qw;
     }
 
     private static async Task<AppConfig> LoadFromFileAsync(string path) =>

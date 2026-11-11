@@ -6,6 +6,7 @@
                 [--out results.jsonl]
     eval.py compare <results.jsonl> today@3 rerank@3     paired: N made right, M made wrong
     eval.py floor <results.jsonl> [--arm rerank]          a relevance floor swept over the saved pool scores
+    eval.py winners <results.jsonl> --arm today [--limit 5]  fragments shown on many prompts, with their parts
 
 A gold line: {"id": "emma", "query": "...", "as_of": "2026-11-10T00:30:00Z", "gold": [7153], "kind": "miss|sample|none",
 "project": "pawsitivity", "why": "..."}. `project` is the folder the asking session sat in (recall drops fragments
@@ -20,6 +21,11 @@ with bge-reranker-v2-m3; scores of the whole pool are kept, so a relevance floor
 `--context prev` searches on the message PLUS the turn before it (everything the other speaker said in that session
 since the asker last spoke, found from the line's `source_fragment`); `prevtail` keeps only that turn's last
 PREV_TAIL characters. Lines with no source fragment run on the message alone and are marked `ctx: none`.
+`--quality-weight W` runs any arm with the store ranking relevance x quality^W (quality = mean of importance and
+confidence; 1 is today, 0 relevance alone; needs a store built with EmbeddingSettings.QualityWeight) and labels the arm
+`today~qW`. With it or `--parts`, the `today` arm also keeps a pool of POOL_PARTS fragments with each one's raw
+relevance (cosine of the query to its stored bge-small vector), importance and confidence, so `floor` can sweep a
+minimum cosine over it and `winners` can show what each part contributes.
 Scored: gold reached in the top `limit`, characters shown, and paired against a baseline arm with `compare`.
 """
 import argparse
@@ -88,7 +94,7 @@ def as_of_db(snap, as_of):
     return out
 
 
-def store_recall(item, db, limit, exclude, wander=None):
+def store_recall(item, db, limit, exclude, wander=None, env=None):
     """The store's own recall, called as the prompt hook calls it (hook.py recall): fused BM25 + bge-small embeddings,
     weighted by importance, the asking session's project only, plus `wander` of another project's best matches after
     the `limit` here's. Utterances (--said) are left out: no gold is a ChatMessage. Fragments as dicts, in order."""
@@ -98,15 +104,72 @@ def store_recall(item, db, limit, exclude, wander=None):
         args += ["--exclude", ",".join(map(str, exclude))]
     if item.get("project"):
         args += ["--project", item["project"]]      # the asking session's folder: recall leaves other projects out
-    r = subprocess.run(args, input=item["query"], capture_output=True, text=True, env={**os.environ, **EMBED_ENV},
+    r = subprocess.run(args, input=item["query"], capture_output=True, text=True, env={**os.environ, **EMBED_ENV, **(env or {})},
                        timeout=300)
     if r.returncode != 0:
         raise RuntimeError(f"recall failed on {item['id']}: {r.stderr[-500:]}")
     return json.loads(r.stdout or "[]")
 
 
+POOL_PARTS = 15
+
+
+def quality_env(opts):
+    w = opts.get("quality_weight")
+    return {} if w is None else {"PERSISTENCE_EMBEDDING_QUALITYWEIGHT": str(w)}
+
+
 def arm_today(item, db, limit, exclude, opts):
-    return [(f["id"], len(f.get("content") or ""), None) for f in store_recall(item, db, limit, exclude)], None
+    env = quality_env(opts)
+    got = [(f["id"], len(f.get("content") or ""), None) for f in store_recall(item, db, limit, exclude, env=env)]
+    if not opts.get("parts"):
+        return got, None
+    # A separate, wider call: its top `limit` can differ a little from the call above (the fused lists are longer).
+    pool = store_recall(item, db, POOL_PARTS, exclude, env=env)
+    parts = fragment_parts(db, item["query"], [f["id"] for f in pool])
+    cos = {i: p[0] for i, p in parts.items()}
+    got = [(i, n, cos.get(i)) for i, n, _ in got]
+    return got, [[f["id"], parts[f["id"]][0], len(f.get("content") or ""), parts[f["id"]][1], parts[f["id"]][2]]
+                 for f in pool]
+
+
+EMBED_URL = EMBED_ENV["PERSISTENCE_EMBEDDING_APIBASEURL"] + "/embeddings"
+
+
+def embed(text):
+    import urllib.request
+    body = json.dumps({"model": EMBED_ENV["PERSISTENCE_EMBEDDING_MODEL"], "input": [text]}).encode()
+    with urllib.request.urlopen(urllib.request.Request(EMBED_URL, body, {"Content-Type": "application/json"}),
+                                timeout=120) as resp:
+        return json.load(resp)["data"][0]["embedding"]
+
+
+def fragment_parts(db, query, ids):
+    """Each fragment's raw relevance (cosine of the query to its stored vector, as the store's semantic ranking
+    computes it before multiplying by quality), its importance and its confidence: {id: (cos, imp, conf)}."""
+    import array
+    import math
+    try:
+        q = embed(query)
+    except OSError:
+        q = []      # too long for the embedder (a 500): the store's own recall falls back to BM25 alone here too
+    qn = math.sqrt(sum(x * x for x in q))
+    c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    out = {}
+    try:
+        for i in ids:
+            imp, conf = c.execute("SELECT Importance, Confidence FROM ContextFragments WHERE Id=?", (i,)).fetchone()
+            v = c.execute("SELECT Vector FROM FragmentEmbeddings WHERE ContextFragmentId=? AND Model=?",
+                          (i, EMBED_ENV["PERSISTENCE_EMBEDDING_MODEL"])).fetchone()
+            cos = None
+            if v:
+                vec = array.array("f", v[0])
+                vn = math.sqrt(sum(x * x for x in vec))
+                cos = round(sum(a * b for a, b in zip(q, vec)) / (qn * vn), 4) if qn and vn else None
+            out[i] = (cos, round(imp, 3), round(conf, 3))
+    finally:
+        c.close()
+    return out
 
 
 RERANK_URL = os.environ.get("RECALL_RERANK_URL", "http://127.0.0.1:8082/v1/rerank")
@@ -192,7 +255,9 @@ def run(gold_path, db, arm, limit, out, opts=None, context=None):
         got, pool = ARMS[arm](it, as_of_db(db, it["as_of"]) if it.get("as_of") else db, limit, exclude, opts or {})
         ids = [i for i, _, _ in got]
         gold = set(it.get("gold", []))
-        row = {"id": it["id"], "kind": it.get("kind", "sample"), "arm": arm + (f"+{context}" if context else ""),
+        qw = (opts or {}).get("quality_weight")
+        row = {"id": it["id"], "kind": it.get("kind", "sample"),
+               "arm": arm + (f"+{context}" if context else "") + (f"~q{qw:g}" if qw is not None else ""),
                "limit": limit, "ctx": ctx, "shown": ids,
                "gold": sorted(gold), "reached": sorted(gold & set(ids)), "chars": sum(n for _, n, _ in got),
                "scores": [sc for _, _, sc in got], "pool": pool, "opts": opts or {}}
@@ -201,7 +266,7 @@ def run(gold_path, db, arm, limit, out, opts=None, context=None):
         mark = "-" if row["hit"] is None else ("HIT" if row["hit"] else "miss")
         print(f"{it['id']:<24} {mark:<5} shown {ids} gold {sorted(gold)}" + (f" ctx {ctx}" if context else ""), flush=True)
     scored = [r for r in rows if r["hit"] is not None]
-    print(f"\n{arm}{'+' + context if context else ''}@{limit}: {sum(r['hit'] for r in scored)}/{len(scored)} reached gold; "
+    print(f"\n{rows[0]['arm'] if rows else arm}@{limit}: {sum(r['hit'] for r in scored)}/{len(scored)} reached gold; "
           f"{sum(r['chars'] for r in rows)} chars shown; "
           f"{sum(r['chars'] for r in rows if r['kind'] == 'none')} on no-gold prompts")
     if out:
@@ -233,7 +298,7 @@ def compare(path, a, b):
 def floor_sweep(path, arm, limit):
     """For each candidate floor: gold reached in the top `limit` of the pool scored over it, and what is shown."""
     R = load_rows(path, arm, limit)
-    scores = sorted({s for r in R.values() for _, s, _ in (r.get("pool") or [])})
+    scores = sorted({p[1] for r in R.values() for p in (r.get("pool") or []) if p[1] is not None})
     if not scores:
         print("no pool scores (the rerank arm saves them)")
         return
@@ -241,7 +306,7 @@ def floor_sweep(path, arm, limit):
     for t in [None] + [round(lo + (hi - lo) * k / 12, 2) for k in range(1, 12)]:
         hit = n = chars = nonechars = empty = 0
         for r in R.values():
-            kept = [(i, s, c) for i, s, c in (r.get("pool") or []) if t is None or s >= t][:limit]
+            kept = [(p[0], p[1], p[2]) for p in (r.get("pool") or []) if t is None or (p[1] or 0) >= t][:limit]
             empty += not kept
             ch = sum(c for _, _, c in kept)
             chars += ch
@@ -251,6 +316,35 @@ def floor_sweep(path, arm, limit):
             else:
                 nonechars += ch
         print(f"floor {str(t):>7}: {hit}/{n} reached, {chars} chars, {nonechars} on no-gold, {empty} prompts shown nothing")
+
+
+def winners(path, arm, limit, top=12):
+    """Fragments in the top `limit` on many prompts, with their parts: how often each was shown, on how many
+    prompts with gold it was shown and wasn't gold, its importance and confidence, and its raw relevance (cosine)
+    on the prompts it won against the median cosine of everything shown. A fragment that wins everywhere on
+    importance shows a low cosine beside a high quality term."""
+    import statistics
+    R = load_rows(path, arm, limit)
+    seen, cosines, parts = {}, {}, {}
+    for r in R.values():
+        pool = {p[0]: p for p in (r.get("pool") or [])}
+        for i in r["shown"]:
+            seen.setdefault(i, []).append(r["id"])
+            if i in pool:
+                cosines.setdefault(i, []).append(pool[i][1])
+                parts[i] = pool[i][3:5]
+    allcos = [p[1] for r in R.values() for p in (r.get("pool") or [])[:limit] if p[1] is not None]
+    print(f"{arm}@{limit}: {len(R)} prompts, {len(seen)} distinct fragments shown; median cosine of what's shown "
+          f"{statistics.median(allcos) if allcos else '?'}")
+    print(f"{'id':>7} {'shown':>5} {'wrong':>5} {'imp':>5} {'conf':>5} {'quality':>7} {'cos med':>7} {'cos max':>7}")
+    for i, on in sorted(seen.items(), key=lambda kv: -len(kv[1]))[:top]:
+        wrong = sum(1 for p in on if R[p]["gold"] and i not in R[p]["gold"])
+        cs = [c for c in cosines.get(i, []) if c is not None]
+        imp, conf = parts.get(i, (None, None))
+        q = (imp + conf) / 2 if imp is not None else None
+        print(f"{i:>7} {len(on):>5} {wrong:>5} {imp if imp is not None else '?':>5} {conf if conf is not None else '?':>5} "
+              f"{round(q, 3) if q is not None else '?':>7} {round(statistics.median(cs), 3) if cs else '?':>7} "
+              f"{max(cs) if cs else '?':>7}")
 
 
 def main(argv):
@@ -268,6 +362,8 @@ def main(argv):
     r.add_argument("--pool", type=int, default=30, help="rerank: candidates taken from the store's recall")
     r.add_argument("--floor", type=float, help="rerank: show nothing scored under this")
     r.add_argument("--context", choices=["prev", "prevtail"], help="search on the message plus the turn before it")
+    r.add_argument("--quality-weight", type=float, help="rank by relevance x quality^W (1 today, 0 relevance alone)")
+    r.add_argument("--parts", action="store_true", help="today: keep a pool with each fragment's cosine, importance, confidence")
     c = sub.add_parser("compare")
     c.add_argument("results")
     c.add_argument("a", help="arm@limit, e.g. today@3")
@@ -276,15 +372,22 @@ def main(argv):
     f.add_argument("results")
     f.add_argument("--arm", default="rerank")
     f.add_argument("--limit", type=int, default=3)
+    w = sub.add_parser("winners")
+    w.add_argument("results")
+    w.add_argument("--arm", default="today")
+    w.add_argument("--limit", type=int, default=5)
     a = p.parse_args(argv)
     if a.cmd == "snapshot":
         snapshot(a.live, a.out)
     elif a.cmd == "compare":
         compare(a.results, a.a, a.b)
+    elif a.cmd == "winners":
+        winners(a.results, a.arm, a.limit)
     elif a.cmd == "floor":
         floor_sweep(a.results, a.arm, a.limit)
     else:
-        run(a.gold, a.db, a.arm, a.limit, a.out, {"pool": a.pool, "floor": a.floor}, a.context)
+        run(a.gold, a.db, a.arm, a.limit, a.out, {"pool": a.pool, "floor": a.floor, "quality_weight": a.quality_weight,
+                                                   "parts": a.parts or a.quality_weight is not None}, a.context)
 
 
 if __name__ == "__main__":
