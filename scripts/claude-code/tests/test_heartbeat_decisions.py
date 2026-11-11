@@ -503,6 +503,19 @@ class MarkMethods(Base):
         with self.assertRaises(claims.Refused):
             self.c.mark_nudged(record["id"], "not-an-id")
 
+    def test_marking_the_same_firing_twice_writes_one_entry(self):
+        """Claude's M1: the split-nudge reconcile may mark the same firing twice; the second writes nothing."""
+        record = self.c.claim("t", sid(), str(self.work))
+        n = len(record["history"])
+        f = sid()
+        first = self.c.mark_nudged(record["id"], f)
+        raw = (self.state / "tasks" / f"{record['id']}.json").read_bytes()
+        self.now += timedelta(minutes=3)
+        second = self.c.mark_nudged(record["id"], f)
+        self.assertEqual(len(second["history"]), n + 1)
+        self.assertEqual(second["nudged"], first["nudged"])
+        self.assertEqual((self.state / "tasks" / f"{record['id']}.json").read_bytes(), raw)
+
 
 if __name__ == "__main__":
     unittest.main()
