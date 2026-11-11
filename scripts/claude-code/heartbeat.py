@@ -259,12 +259,247 @@ class Beat:
         return out
 
     def ledger_decisions(self, facts):
-        """Rows A and C's decisions from a complete snapshot (slice 3). Here: the derived states."""
+        """Rows A and C from a complete snapshot. Recovery decisions (C, A's hand-off retry and nudge deferrals) run
+        before A's report decisions, so a usage-refused nudge is deferred, not reported as a stall."""
         import claims
 
         self.facts = facts
-        self.states = firing_states(facts, self.now, claims.process_table(), wrapper_alive, self.data["crashed_seen"],
-                                    self.outputs(facts))
+        self.table = claims.process_table()
+        self.outs = self.outputs(facts)
+        self.states = firing_states(facts, self.now, self.table, wrapper_alive, self.data["crashed_seen"], self.outs)
+        self.enq = {f["firing"]: f for f in facts if f.get("fact") == "enqueued" and isinstance(f.get("firing"), str)}
+        self.claims_on = claims.enabled(self.home)
+        self.check_fired()
+        if self.claims_on:
+            self.check_claims()
+
+    # Shared by C and A: the recovery chain of an origin firing.
+    def chain(self, origin):
+        """Every attempt for an origin, queued or fired: dicts with id, attempt, deferral, follows."""
+        out = [f for f in self.enq.values() if f.get("retry_of") == origin]
+        out += [dict(w, firing=w["id"]) for w in read_queue(self.state) if w.get("retry_of") == origin]
+        return out
+
+    def answered(self, firing):
+        """An attempt is handled exactly when some item follows it or its report key exists."""
+        if any(a.get("follows") == firing for chain in [self.enq.values(), read_queue(self.state)] for a in chain):
+            return True
+        return any(k.startswith(f"wake:{firing}:") for k in list(self.data["reported"]) + list(self.data["outbox"]))
+
+    def busy(self, origin):
+        """An attempt for this origin is queued, or a fired one is running."""
+        if any(w.get("id") == origin or w.get("retry_of") == origin for w in read_queue(self.state)):
+            return True
+        return any(self.states.get(a.get("firing")) in ("running", None) and a.get("firing") in self.enq
+                   for a in self.chain(origin))
+
+    def finished_output(self, firing):
+        f = next((x for x in self.facts if x.get("firing") == firing and x.get("fact") == "finished"), None)
+        return (self.outs.get(f.get("output")) if f else None), (_time(f.get("at")) if f else None)
+
+    def recover(self, firing, e, claim=None, cwd=None, nudge=False):
+        """C's rule for one unanswered failed attempt: a usage limit is deferred (up to 3 per origin); anything else
+        gets the origin's one ordinary retry, else is reported. A nudge has no ordinary retry. Returns the report
+        condition when it reports, else None."""
+        import claims
+
+        origin = e.get("retry_of") or firing
+        out, finished = self.finished_output(firing)
+        chain = self.chain(origin)
+        if usage_limited(out):
+            used = sum(1 for a in chain if a.get("attempt") == "deferral")
+            if used >= 3:
+                return "usage limit, deferrals used up"
+            at = reset_time(out.get("result"), finished or self.now) + timedelta(minutes=5)
+            self.add(origin, firing, e, "usage-limit", "deferral", used + 1, at, claim, cwd)
+            return None
+        if nudge or any(a.get("attempt") == "retry" for a in chain):
+            return {"never-started": "never started"}.get(self.states[firing], self.states[firing])
+        self.add(origin, firing, e, self.states[firing], "retry", None, self.now, claim, cwd)
+        return None
+
+    def add(self, origin, follows, e, kind, attempt, deferral, at, claim, cwd):
+        """One recovery item through add_heartbeat_wake, against the hourly cap; the same session, kept structurally."""
+        import claims
+        import hook
+
+        session = e.get("session")
+        cwd = cwd if cwd is not None else e.get("cwd")
+        if claims.static_cwd_problem(cwd, os.path.realpath(str(self.home or Path.home()))):
+            self.report_wake(follows, "no valid cwd", session)
+            return
+        if not self.take_cap():
+            return
+        launch = "resume" if transcript_exists(self.home, session) else "session-id"
+        try:
+            hook.add_heartbeat_wake(id=str(uuid.uuid4()), kind=kind, session=session, launch=launch, claim=claim,
+                                    retry_of=origin, follows=follows, attempt=attempt, deferral=deferral,
+                                    at=at.timestamp(), cwd=cwd)
+        except ValueError as e:
+            print(f"heartbeat: no recovery for firing {follows}: {e}", file=sys.stderr)
+
+    def report_wake(self, firing, condition, owner):
+        try:
+            self.report(wake_key(firing, WAKE_CONDITIONS[condition]), wake_line(firing, condition, owner, self.now))
+        except ValueError:
+            pass
+
+    def check_fired(self):
+        """C: a fired wake that didn't finish well. With claims on, a firing whose enqueued fact has a claim is A's.
+        A `work` firing A doesn't own is reported, never retried; with claims off that is every work firing, and the
+        claim is never read or written."""
+        import claims
+
+        for firing, e in self.enq.items():
+            state = self.states.get(firing)
+            if state not in ("never-started", "crashed", "failed") or self.answered(firing):
+                continue
+            if self.claims_on and e.get("claim"):
+                continue
+            if e.get("work"):
+                self.report_wake(firing, {"never-started": "never started"}.get(state, state), e.get("session"))
+                continue
+            origin = e.get("retry_of") or firing
+            if claims.running(e.get("session"), self.table) is not False or self.busy(origin):
+                continue
+            condition = self.recover(firing, e)
+            if condition:
+                self.report_wake(firing, condition, e.get("session"))
+
+    # A: claims section 4, row by row.
+    def report_claim(self, record, spell, condition):
+        key = claim_key(record["id"], spell, CLAIM_CONDITIONS[condition])
+        self.report(key, claim_line(record["id"], condition, record["owner"], self.now))
+
+    def check_claims(self):
+        import claims
+
+        c = claims.Claims(self.state, home=self.home, now=lambda: self.now)
+        c.settle_pauses()
+        items = read_queue(self.state)
+        for record in c.all():
+            spell = claims.spell_start(record)
+            if record["status"] == "open":
+                self.open_row(c, record, spell or 0)
+            elif record["status"] == "claimed":
+                self.claimed_row(c, record, spell or 0, items)
+
+    def spawn_firing(self, record):
+        """The firing that spawn-claimed this spell (by harness), if that's how the spell began."""
+        start = claims_spell_entry(record)
+        return start["firing"] if start and start["by"] == "harness" and start["action"] == "claim" else None
+
+    def open_row(self, c, record, spell):
+        if record["dispatch"] == "none":
+            self.report_claim(record, spell, "unowned")
+            return
+        # open/handoff: its firing failed before the spawn claim.
+        firing = next((f for f, e in self.enq.items() if e.get("claim") == record["id"] and not e.get("retry_of")), None)
+        if not firing or self.states.get(firing) != "never-started":
+            return
+        attempts = self.chain(firing)
+        latest = max(attempts, key=lambda a: a.get("at") or "", default=None)
+        if latest is None and not self.answered(firing):
+            if self.take_cap():
+                import hook
+
+                e = self.enq[firing]
+                try:
+                    hook.add_heartbeat_wake(id=str(uuid.uuid4()), kind="never-started", session=e["session"],
+                                            launch="session-id", claim=record["id"], retry_of=firing, follows=firing,
+                                            attempt="retry", at=self.now.timestamp(), cwd=record["cwd"])
+                except ValueError as err:
+                    print(f"heartbeat: no retry for claim {record['id']}: {err}", file=sys.stderr)
+            return
+        if latest is not None and self.states.get(latest.get("firing")) in ("never-started", "crashed", "failed"):
+            self.report_claim(record, spell, "start failed")
+
+    def claimed_row(self, c, record, spell, items):
+        import claims
+        import hook
+
+        owner = record["owner"]
+        f0 = self.spawn_firing(record)
+        if f0 and any(k.startswith(f"wake:{f0}:") for k in self.data["reported"]):
+            return  # C reported it while claims were off: no A action until a session's own transition (not retroactive)
+        if self.table is None:
+            self.report_claim(record, spell, "liveness unknown")
+            return
+        if claims.running(owner, self.table):
+            return
+        nudge = nudge_entry(record)
+        # Reconcile both split-nudge halves by firing id (heartbeat.md, "Split writes in a nudge").
+        if nudge is None:
+            half = self.unmarked_nudge(record)
+            if half:
+                with coordination.lock(self.state, "wakes"):
+                    c.mark_nudged(record["id"], half)
+                return
+        elif nudge["firing"] not in self.enq and not any(w.get("id") == nudge["firing"] for w in items) \
+                and not any(f.get("firing") == nudge["firing"] and f.get("fact") == "taken" for f in self.facts):
+            self.nudge(c, record, nudge["firing"], readd=True)
+            return
+        if claims.pending_for(record, items):
+            return
+        if nudge is None:
+            self.nudge(c, record, str(uuid.uuid4()))
+            return
+        # The nudge fired. A usage refusal of it is deferred (recovery before the report decision).
+        f = nudge["firing"]
+        if self.states.get(f) in ("never-started", "crashed", "failed") and not self.answered(f):
+            out, _ = self.finished_output(f)
+            if usage_limited(out):
+                if self.recover(f, self.enq.get(f, {"session": owner}), claim=record["id"], cwd=record["cwd"], nudge=True) is None:
+                    return
+        if record["reported"] or _time(record["nudged"]) is None or self.now - _time(record["nudged"]) < BEAT:
+            return
+        if self.states.get(f) in (None, "running") and f in self.enq:
+            return
+        if f0 and not transcript_exists(self.home, owner):
+            self.report_claim(record, spell, "start failed")
+            return
+        touched = _time(record["updated"]) and _time(record["updated"]) > _time(record["nudged"])
+        self.report_claim(record, spell, "stalled after nudge, touched since" if touched else "stalled after nudge")
+
+    def unmarked_nudge(self, record):
+        """A heartbeat nudge item for this claim that's queued, enqueued or taken in this spell, with no mark yet."""
+        import hook
+
+        start = _time(claims_spell_entry(record)["at"]) if claims_spell_entry(record) else None
+        for w in read_queue(self.state):
+            if w.get("by") == "heartbeat" and w.get("claim") == record["id"] and not w.get("retry_of"):
+                return w["id"]
+        for f in self.facts:
+            ours = f.get("fact") == "taken" or (f.get("fact") == "enqueued" and f.get("by") == "heartbeat"
+                                                 and not f.get("retry_of"))
+            if f.get("claim") == record["id"] and ours:
+                if start is None or (_time(f.get("at")) or start) >= start:
+                    return f["firing"]
+        return None
+
+    def nudge(self, c, record, firing, readd=False):
+        """Nudge once: the item first (minted firing id), then the mark, under wakes.lock -> tasks/.lock. A claim with
+        no valid cwd is reported instead. A re-add (the mark without its item) writes only the item, same id."""
+        import claims
+        import hook
+
+        spell = claims.spell_start(record) or 0
+        if claims.static_cwd_problem(record["cwd"], c.home_real):
+            self.report_claim(record, spell, "no valid cwd")
+            return
+        if not readd and not self.take_cap():
+            return
+        f0 = self.spawn_firing(record)
+        launch = "resume" if transcript_exists(self.home, record["owner"]) else "session-id"
+        with coordination.lock(self.state, "wakes"):
+            try:
+                hook.add_heartbeat_wake(id=firing, kind="nudge", session=record["owner"], launch=launch,
+                                        claim=record["id"], at=self.now.timestamp(), cwd=record["cwd"])
+            except ValueError as e:
+                print(f"heartbeat: no nudge for claim {record['id']}: {e}", file=sys.stderr)
+                return
+            if not readd:
+                c.mark_nudged(record["id"], firing)
 
     def check_units(self):
         """D: `systemctl is-failed` and `show -p InvocationID` on the fixed list only; never start, restart, stop, reset."""
@@ -330,6 +565,26 @@ def firing_states(facts, now, table, alive, seen, outputs):
     return states
 
 
+def transcript_exists(home, session):
+    """A stat of the session's transcript path, never opened."""
+    return bool(session) and any((Path(home or Path.home()) / ".claude" / "projects").glob(f"*/{session}.jsonl"))
+
+
+def claims_spell_entry(record):
+    import claims
+
+    i = claims.spell_start(record)
+    return record["history"][i] if i is not None else None
+
+
+def nudge_entry(record):
+    """This spell's nudge mark, if any."""
+    import claims
+
+    start = claims.spell_start(record)
+    return next((h for h in reversed(record["history"][start or 0:]) if h["action"] == "nudge"), None)
+
+
 def _time(value):
     try:
         moment = datetime.fromisoformat(value)
@@ -377,18 +632,34 @@ def emit(state, sink):
     return confirmed
 
 
-def mark(state, keys, now):
-    """Phase 3: retake heartbeat.lock (30 s), mark each confirmed key and drop it from the outbox. Claim marks come
-    with row A in a later slice."""
+def mark(state, keys, now, home=None):
+    """Phase 3: retake heartbeat.lock (30 s), mark each confirmed key and drop it from the outbox. A claimed claim's key
+    sets its `reported` through the claims module (under tasks/.lock) only while the claim is still in the key's
+    spell; otherwise the entry is just dropped."""
     if not keys:
         return
     try:
         with coordination.lock(state, "heartbeat", wait=MARK_WAIT):
             data = load(state)
             for key in keys:
-                if key in data["outbox"]:
-                    data["reported"][key] = now.isoformat(timespec="seconds")
-                    del data["outbox"][key]
+                if key not in data["outbox"]:
+                    continue
+                del data["outbox"][key]
+                if key.startswith("claim:"):
+                    import claims
+
+                    _, claim, spell, _kind = key.split(":")
+                    c = claims.Claims(state, home=home, now=lambda: now)
+                    try:
+                        record = c.get(claim)
+                    except claims.Refused:
+                        continue
+                    if record["status"] == "claimed":
+                        if not c.mark_reported(claim, int(spell)):
+                            continue  # the spell ended between emission and marking: dropped
+                    elif record["status"] != "open":
+                        continue
+                data["reported"][key] = now.isoformat(timespec="seconds")
             save(state, data)
     except coordination.LockBusy:
         return  # nothing marked; the next beat emits again
@@ -411,7 +682,7 @@ def beat(state=None, home=None, now=None, sink=journal, systemctl=systemctl_run,
             b.check_units()
     except coordination.LockBusy:
         return "busy"
-    mark(state, emit(state, sink), now())
+    mark(state, emit(state, sink), now(), home=home)
     return "ok"
 
 

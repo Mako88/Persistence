@@ -1771,7 +1771,8 @@ def add_heartbeat_wake(id, kind, session, launch, claim=None, retry_of=None, fol
                        ("attempt", attempt), ("deferral", deferral)):
         if value is not None:
             item[key] = value
-    with coordination.lock(STATE, "wakes"):
+    # The nudge holds wakes.lock across its two writes (the item, then the mark); a retry takes it here.
+    with (_no_lock() if "wakes" in coordination.held_locks() else coordination.lock(STATE, "wakes")):
         items = queue_locked()
         if any(isinstance(w, dict) and w.get("id") == id for w in items):
             return None

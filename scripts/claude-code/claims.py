@@ -453,6 +453,37 @@ class Claims:
                 raise
         return record, fd, fresh
 
+    # The heartbeat's marks (heartbeat.md, "Writes go through the claims module"): claims code, called in-process under
+    # tasks/.lock, one history entry each, `by: heartbeat`, the same-status form touch uses. Added for the heartbeat PR;
+    # no existing transition changes.
+    def mark_nudged(self, claim_id, firing):
+        """`nudged` set, with an `action: nudge` entry carrying the nudge's firing id. A claimed claim only; a second
+        mark for the same firing in this spell writes nothing (the split-nudge reconcile may call it twice)."""
+        if not full_id(firing):
+            raise Refused("a nudge mark needs the nudge's firing id")
+        with self._locked(claim_id) as record:
+            self._expect(record, "nudge", "claimed")
+            start = spell_start(record) or 0
+            if any(h["action"] == "nudge" and h["firing"] == firing for h in record["history"][start:]):
+                return record
+            entry = self._append(record, "nudge", "claimed", "heartbeat", firing=firing)
+            record["nudged"] = entry["at"]
+            self._write(record)
+            return record
+
+    def mark_reported(self, claim_id, spell):
+        """`reported` set, with an `action: report` entry, only while the claim is still claimed in the spell the
+        report's key names. False (nothing written) when that spell has ended."""
+        with self._locked(claim_id) as record:
+            if record["status"] != "claimed" or spell_start(record) != spell:
+                return False
+            if record["reported"]:
+                return True
+            entry = self._append(record, "report", "claimed", "heartbeat")
+            record["reported"] = entry["at"]
+            self._write(record)
+            return True
+
     def pause(self, claim_id, by, until=None, why=""):
         self._actor(by)
         until_text = None
