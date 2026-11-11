@@ -230,12 +230,15 @@ class Bridge:
                     print(f"wake timed out after {self.config['wake_timeout']}s", flush=True)
             if new_session and proc.returncode == 0:
                 self.store.save_session(rc.created_session(new_session, saved))
-            if proc.returncode == 0:
-                rc.after_wake(self.config, self.store, log.read_text(encoding="utf-8", errors="replace"))
+                if saved.get("rotate"):
+                    self.log_rollover(f"rollover: fresh room session {new_session} replaced {saved['id']}")
             elif proc.returncode:
                 print(f"wake exited {proc.returncode}; see {log}", flush=True)
             if by_output and proc.returncode == 0 and reply_file.exists():
                 await self.post_reply(wake, reply_file.read_text(encoding="utf-8").strip())
+            # After the reply is out, so nothing about the session's size can cost the room a reply (Arden's review).
+            if proc.returncode == 0:
+                self.log_rollover(rc.after_wake(self.config, self.store, log.read_text(encoding="utf-8", errors="replace")))
         except OSError as e:
             print(f"wake could not start: {e}", flush=True)
         finally:
@@ -247,6 +250,12 @@ class Bridge:
             self.current_channel = None
             await self.mark(wake.to_mark, "done")
             self.room.finish(time.time())
+
+    def log_rollover(self, said):
+        """A step of the room session's rollover (or why there was none), to stdout and timings.jsonl."""
+        if said:
+            print(said, flush=True)
+            log_timing({"what": "rollover", "said": said})
 
     async def post_reply(self, wake, text):
         """A self that speaks by replying (`http_self`, `reply_by_output`): its reply is posted as its bot, in reply to

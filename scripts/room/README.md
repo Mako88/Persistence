@@ -79,7 +79,8 @@ nothing in history yet has no starting point and is not back-filled.
   the wake after starts a new session instead of resuming, and its prompt names the one it replaced, once
   (`session.json` keeps `previous`). A last wake that fails is told again on the next. Every wake re-reads the whole session, so a session left to grow all day is most
   of a self's usage (2026-11-11: ~240k tokens, dozens of wakes). The fresh one gets the core and recent conversation
-  from the store, like any session.
+  from the store, like any session. Each step is logged (stdout, and `timings.jsonl` as `"what": "rollover"`); a wake
+  log whose size can't be read means no rollover, said in the log, and the size is read only after the reply is posted.
   `claude_args` defaults to `--permission-mode dontAsk` with only `room`, `pstore`, Read, Grep and Glob allowed: other
   selves' and people's words reach a room session, so it can speak, read and keep, and nothing else. Widen it per self
   in config.json if a room session should do more; work belongs in a work session (`pstore send <project>` hands it on).

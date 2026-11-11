@@ -846,17 +846,24 @@ def context_tokens(log_text):
 def after_wake(config, store, log_text):
     """After a wake that exited 0. If it left the room session past `fresh_session_above_tokens`, the next wake is the
     session's last: it runs in this session, told so, to update its note (Arden, 2026-11-11: as compaction gives the
-    outgoing session a turn to curate first). Once that last wake succeeds, the session is marked to be replaced."""
+    outgoing session a turn to curate first). Once that last wake succeeds, the session is marked to be replaced.
+    Returns a line saying what it did, for the bridge's log, or None when nothing changed. A log it can't read is said,
+    never raised: the bridge calls this after posting the reply, and a rollover is never worth a crash (Arden)."""
     limit = config.get("fresh_session_above_tokens")
     saved = store.session()
     if not limit or config.get("wake_command") or not saved.get("created") or saved.get("rotate"):
-        return
+        return None
     if saved.get("last"):
         store.save_session({**saved, "rotate": True})
-        return
-    size = context_tokens(log_text)
+        return f"rollover: the last wake of room session {saved['id']} is done; the next wake starts a fresh session"
+    try:
+        size = context_tokens(log_text)
+    except Exception:
+        return "size unreadable: no rollover"
     if size is not None and size > limit:
         store.save_session({**saved, "last": True, "context": size})
+        return f"rollover: room session {saved['id']} is at {size} tokens (> {limit}); its next wake is its last wake"
+    return None
 
 
 def created_session(new_id, saved):

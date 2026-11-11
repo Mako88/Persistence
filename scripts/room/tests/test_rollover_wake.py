@@ -68,7 +68,9 @@ class RolloverWiring(unittest.TestCase):
         self.assertTrue(saved.get("rotate"))
 
     def test_the_fresh_session_is_told_what_it_replaced_and_records_it(self):
-        prompt, saved, _, _ = run({"id": "old", "created": True, "rotate": True, "context": 152_000}, usage_log(1_000))
+        prompt, saved, _, timings = run({"id": "old", "created": True, "rotate": True, "context": 152_000}, usage_log(1_000))
+        self.assertIn(f"rollover: fresh room session {saved['id']} replaced old",
+                      [t.get("said") for t in timings if t.get("what") == "rollover"])
         self.assertTrue(prompt.startswith("This is a fresh room session"))
         self.assertIn("old", prompt)
         self.assertEqual(saved.get("previous"), "old")
