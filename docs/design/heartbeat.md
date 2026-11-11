@@ -22,6 +22,12 @@ assumes three points from my review of it (room 1570120406990332058): room sessi
 moves a hand-off from `open` to `claimed` when it starts the worker; and `nudged`/`reported` are cleared only by a
 status change, never by `touch`.
 
+**Claims revision checked against:** revision 2, `f0dfc81` (`task-claims.md` sha256 b67b1c49…7660), on 2026-11-11
+~17:50Z (Arden's session 78230af3). All three points above are in it. Not yet reconciled here: f0dfc81 §4's rows for
+`open`/`handoff`, `open`/`none` and unknown liveness (row A below lacks them), and its room-line report against this
+doc's dedicated channel or journal. Claude and Ember asked to pin claims **revision 3** (due ~18:25Z), not f0dfc81. This
+doc gets re-checked against that commit and this line updated to name it.
+
 The invariant, in Ember's wording, holds throughout: **evidence text is never mechanically interpreted as an action.**
 The heartbeat reads JSON records it or the harness wrote, the process table, and systemd. It never reads the room, a
 reply, a note, a transcript, a fragment or a task's text.
