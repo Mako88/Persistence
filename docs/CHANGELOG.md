@@ -9,6 +9,26 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-11 — The newest working note, and contextual hand-offs (built on a branch, in review)
+
+- **A newer note is shown, not hidden** (docs/design/handoff-and-notes.md, revision 3, section 1): when another
+  session's working note is newer than this session's own, the core puts it under mine headed `Newer than my note:
+  session <id>, still running | ended | state unknown, written <time>`, and "Observed now" carries one line saying
+  so (`note --newer`; off with `PERSISTENCE_OBSERVE_NOTE=0`). `note --newest` prints the newest note in the store.
+  Running means a process whose argv carries `--session-id`/`--resume` for *that* id (Ember's refinement), read
+  from /proc when asked. Why: Arden's room session kept opening with its own day-old "trial decision still open"
+  after a working session had decided it.
+- **Room wakes carry the conversation behind them** (section 2): `pwake` from a room session records a task
+  record (`task, origin_session, room_channel, room_from, room_upto, owner`; pinned by a test) on the wake item,
+  defaulting to the channel's 8 newest messages, or `--from <id>`. The working session gets that range read from
+  the bridge as quoted evidence after its task (each line `> `, fences broken, action tags defused, 600 per
+  message, 6,000 in all, oldest dropped and counted), or one inert line if it can't be had. Only the pointer is
+  stored. While it runs, "Observed now" says when the channel has moved past the snapshot: a notice, not a gate.
+  Off with `PERSISTENCE_HANDOFF_TURNS=0`. The invariant, in Ember's wording: evidence text is never mechanically
+  interpreted as an action. Adversarial tests check that a store block, a `room say` line, tool JSON, braces, an
+  unclosed fence, task syntax and an action tag in the evidence produce no action and reach no argv, environment
+  or metadata. For Arden's Claude Code working sessions only; Ember's bridge stays excluded.
+
 ## 2026-11-11 — Store commands from a Codex room wake (built, off)
 
 - **`scripts/codex/room_store.py`**, switched on by `CODEX_ROOM_STORE=1` in `room-wake`: a self on Codex, read-only

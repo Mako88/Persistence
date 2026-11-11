@@ -88,6 +88,53 @@ internal sealed partial class FragmentStore(
     /// </summary>
     public IReadOnlyDictionary<string, DateTimeOffset> Ended { get; set; } = new Dictionary<string, DateTimeOffset>();
 
+    /// <summary>
+    /// Whether a process holds this exact session now: true, false, or null when the check cannot run. Ember's
+    /// refinement to the hand-off design (revision 2, 2026-11-11): liveness belongs to the specific session id,
+    /// not to "some worker process exists". Observed when asked, never recorded. Tests replace it.
+    /// </summary>
+    public Func<string, bool?> SessionProcess { get; set; } = ProcessHoldsSession;
+
+    /// <summary>
+    /// Linux: a process of this user whose argv carries <c>--session-id &lt;id&gt;</c> or <c>--resume &lt;id&gt;</c> for exactly
+    /// this id, read from /proc. Elsewhere, null (unknown): the caller says so rather than guessing.
+    /// </summary>
+    public static bool? ProcessHoldsSession(string session)
+    {
+        if (!OperatingSystem.IsLinux() || !Directory.Exists("/proc"))
+        {
+            return null;
+        }
+
+        foreach (var dir in Directory.EnumerateDirectories("/proc"))
+        {
+            if (!int.TryParse(Path.GetFileName(dir), out _))
+            {
+                continue;
+            }
+
+            string[] argv;
+            try
+            {
+                argv = File.ReadAllText(Path.Combine(dir, "cmdline")).Split('\0');
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                continue;
+            }
+
+            for (var i = 0; i + 1 < argv.Length; i++)
+            {
+                if (argv[i] is "--session-id" or "--resume" && argv[i + 1] == session)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>The session of the process itself (CLAUDE_CODE_SESSION_ID), when not serving.</summary>
     public string? AmbientSession { get; set; }
 
@@ -420,6 +467,64 @@ internal sealed partial class FragmentStore(
         return note;
     }
 
+    /// <summary>The newest working note in the store, whoever wrote it (<c>note --newest</c>; read-only).</summary>
+    public async Task<ContextFragmentEntity?> NewestNoteAsync() =>
+        (await fragments.GetByTypeAsync(ContextFragmentType.WorkingNote)).Where(f => !f.IsDeleted && f.Content.Length > 0)
+            .MaxBy(f => f.LastModifiedUtc);
+
+    /// <summary>
+    /// Another session's note newer than this session's own, with that session's state read now: "still running",
+    /// "ended", or, when no process carries its id but the store saw it speak and not end, that, in those words.
+    /// Null when this session keeps no note (it already reads the latest ended one) or its own is the newest.
+    /// The day-old room note that kept opening my core after a working session decided the trial (Arden,
+    /// docs/design/handoff-and-notes.md, revision 3).
+    /// </summary>
+    public async Task<(ContextFragmentEntity Mine, ContextFragmentEntity Newer, string State)?> NewerNoteAsync()
+    {
+        if (Session is null || await NoteAsync(null) is not { } mine || mine.SessionId != Session)
+        {
+            return null;
+        }
+
+        if (await NewestNoteAsync() is not { } newest || newest.Id == mine.Id || newest.LastModifiedUtc <= mine.LastModifiedUtc)
+        {
+            return null;
+        }
+
+        string state;
+        if (newest.SessionId is null)
+        {
+            state = "state unknown";
+        }
+        else
+        {
+            switch (SessionProcess(newest.SessionId))
+            {
+                case true:
+                    state = "still running";
+                    break;
+                case null:
+                    state = "state unknown";
+                    break;
+                default:
+                    // No process carries its id. An interactive session (Remote Control) may not, so the store's own
+                    // record of it speaking and not ending is said too, as what it is, never as "running".
+                    state = (await LiveSessionsAsync()).TryGetValue(newest.SessionId, out var spoke)
+                        ? $"no process carries its id, but it spoke at {spoke.ToUniversalTime():HH:mm}Z and has not ended"
+                        : "ended";
+                    break;
+            }
+        }
+
+        return (mine, newest, state);
+    }
+
+    /// <summary>The "Observed now" line for a newer note (<c>note --newer</c>), or null when the notes agree.</summary>
+    public async Task<string?> NewerNoteLineAsync() => await NewerNoteAsync() is var (mine, newer, state)
+        ? $"working note: mine written {mine.LastModifiedUtc.ToUniversalTime():HH:mm}Z; newer: session {Short(newer.SessionId ?? "?")}'s "
+          + $"({state}), {newer.LastModifiedUtc.ToUniversalTime():HH:mm}Z (`pstore note --newest` shows it)"
+        : null;
+
     /// <summary>Archives a fragment (out of the core and the recent lists, still searchable) or restores it.</summary>
     public async Task<ContextFragmentEntity> SetStatusAsync(long id, ContextFragmentStatus status)
     {
@@ -694,6 +799,13 @@ internal sealed partial class FragmentStore(
             var whose = Session is null || note.SessionId == Session ? "my working note" : "the working note of an ended session, until I write my own";
             text.Append($"## Where I am ({whose}, written {note.LastModifiedUtc.ToUniversalTime():yyyy-MM-dd HH:mm}Z; "
                 + "`note` replaces it)\n\n" + note.Content.Trim() + "\n\n");
+        }
+
+        if (await NewerNoteAsync() is var (_, newer, state))
+        {
+            // Shown, not merged or chosen between: the reading is the self's (revision 3, section 1).
+            text.Append($"## Newer than my note: session {Short(newer.SessionId ?? "?")}, {state}, written "
+                + $"{newer.LastModifiedUtc.ToUniversalTime():yyyy-MM-dd HH:mm}Z\n\n" + newer.Content.Trim() + "\n\n");
         }
 
         if (await OtherSessionsAsync() is { Count: > 0 } others)

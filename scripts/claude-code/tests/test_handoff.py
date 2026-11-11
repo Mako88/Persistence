@@ -270,5 +270,19 @@ class NewerNote(unittest.TestCase):
             self.assertIsNone(hook.note_line({"session_id": "roomaaaa-1"}))
 
 
+class Observed(unittest.TestCase):
+    def test_observe_carries_both_lines(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(hook, "note_line", return_value="- working note: NOTELINE"), \
+                mock.patch.object(hook, "room_freshness", return_value="- room: FRESHLINE"), \
+                mock.patch.object(hook, "linux_processes", return_value="[]"), \
+                mock.patch.object(hook, "own_services", return_value=[]), \
+                mock.patch.object(hook, "run_quiet", return_value=""), \
+                mock.patch.object(hook, "project", return_value="work"):
+            text = hook.observe({"session_id": "workbbbb-2", "cwd": tmp})
+        self.assertIn("- working note: NOTELINE", text)
+        self.assertIn("- room: FRESHLINE", text)
+
+
 if __name__ == "__main__":
     unittest.main()

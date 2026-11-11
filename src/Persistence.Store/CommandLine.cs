@@ -10,7 +10,7 @@ internal sealed class CommandLine
     /// <summary>The options that are switches rather than carrying a value.</summary>
     /// <summary>Every option some command reads (a text option's <c>-file</c> form too); anything else is refused.</summary>
     public static readonly IReadOnlySet<string> Known = new HashSet<string>(
-        ["archived", "batch", "before", "compacted", "confidence", "db", "debug", "ended", "everywhere", "exclude", "help", "importance", "json",
+        ["archived", "batch", "before", "compacted", "confidence", "db", "debug", "ended", "everywhere", "exclude", "help", "importance", "json", "newer", "newest",
          "hours", "limit", "local-peer", "max", "max-chars", "over", "peer", "port", "project", "propose", "protected", "reason", "recent", "said", "sample", "session",
          "snippet", "speaker", "tag", "transcript", "type", "untag", "wander", "when", "written-by", "content", "content-file", "summary", "summary-file", "text", "text-file",
          "fact", "fact-file", "source", "object", "state", "as-of", "supersedes", "kind", "by", "note", "history", "socket", "allow-uid", "tcp-no-auth"],
@@ -18,7 +18,7 @@ internal sealed class CommandLine
 
     public static readonly IReadOnlySet<string> Flags = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
-        "json", "protected", "archived", "help", "debug", "everywhere", "propose", "state", "history", "tcp-no-auth",
+        "json", "newer", "newest", "protected", "archived", "help", "debug", "everywhere", "propose", "state", "history", "tcp-no-auth",
     };
 
     public string Command { get; }

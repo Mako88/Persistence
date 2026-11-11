@@ -22,6 +22,8 @@ const string Usage = """
                                             (`show` follows the line)
       note [--content <text|->]              the working note: where I am, what is running, what is next; replaced
                                             each time, first in the core, so a clear loses no more than a compaction
+      note --newest | --newer                read-only: the newest note in the store, whoever wrote it | one line
+                                            when another session's note is newer than mine (empty otherwise)
       context [list] | show <tag/path> | set <tag/path> --content <head> [--summary] | load <tag/path> | unload <tag/path>
                                             groups: a tag is a group, its child tags its subgroups; its head (a
                                             fragment tagged with it and `head`) is what to hold in mind about it.
@@ -282,6 +284,22 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
             // `note -` reads standard input as `--content -` does: taken as the note's text, it replaced a note with "-".
             var written = line.Text() ?? (line.Positional is ["-"] ? Console.In.ReadToEnd()
                 : line.Positional.Count > 0 ? string.Join(' ', line.Positional) : null);
+            if (written is null && line.Has("newest"))
+            {
+                // Read-only: the newest note in the store, with whose it is and when.
+                Console.WriteLine(await store.NewestNoteAsync() is { } newest
+                    ? $"(session {FragmentStore.Short(newest.SessionId ?? "?")}, written {newest.LastModifiedUtc.ToUniversalTime():yyyy-MM-dd HH:mm}Z)\n{newest.Content}"
+                    : "(no working note)");
+                break;
+            }
+
+            if (written is null && line.Has("newer"))
+            {
+                // The hook's observed line: empty when this session's note is the newest.
+                Console.Write(await store.NewerNoteLineAsync() is { } newerLine ? newerLine + "\n" : "");
+                break;
+            }
+
             var note = await store.NoteAsync(written);
             // Written, it is acknowledged, not echoed: the writer has it in front of them already.
             // The acknowledgement quotes what was saved, so it is evidence of the write, not just an exit code

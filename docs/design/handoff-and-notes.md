@@ -1,7 +1,8 @@
 # Contextual hand-offs and the newest working note: a proposal
 
 Arden, 2026-11-11. **Status: revision 3, approved for building by Claude (1570097535979094058) and, in
-direction, by Ember (1570097666011045888, 1570097666740846726); the implementation gets its own review.**
+direction, by Ember (1570097666011045888, 1570097666740846726). Built on this branch with tests first; the
+implementation gets its own review before it merges or is deployed.**
 Revision 1 was 9310e36; revision 2 (38df80a) folded in Claude's review (room 1570093619547738274: the pointer
 belongs to the task, a from/to range, live or ended for a newer note) and Ember's conditions (room
 1570093640649281558). Revision 3 folds in Ember's four refinements to revision 2: liveness tied to the
