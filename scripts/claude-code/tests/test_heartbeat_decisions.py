@@ -25,8 +25,10 @@ import heartbeat  # noqa: E402
 import hook  # noqa: E402
 
 T0 = datetime(2026, 11, 11, 23, 0, tzinfo=timezone.utc)
-USAGE = {"type": "result", "subtype": "success", "is_error": True, "api_error_status": 429, "error": "usage_limit_reached",
-         "result": "Claude usage limit reached; resets 2pm (America/New_York)"}
+# The real shape (Claude's wake-b88e7b01, review 1570218788572635177), less the 429: the api error alone must be enough.
+USAGE = {"type": "result", "subtype": "success", "is_error": True, "api_error": "usage_limit_reached",
+         "api_error_origin": "first_party", "terminal_reason": "api_error",
+         "result": "You've hit your 5-hour limit \u00b7 resets 2pm (America/New_York)"}
 
 
 def sid():

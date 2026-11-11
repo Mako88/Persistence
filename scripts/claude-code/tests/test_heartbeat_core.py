@@ -271,17 +271,26 @@ class Cap(Base):
 
 
 class UsageLimit(unittest.TestCase):
-    """Pinned to the sample described in heartbeat.md ("Usage limit"): is_error true, api_error_status 429 /
-    usage_limit_reached, subtype "success", and the reset only in `result`."""
+    """Pinned to the real shape (Claude's wake-b88e7b01, quoted in review 1570218788572635177): is_error true, subtype
+    "success", api_error_status 429 (a number), api_error "usage_limit_reached", api_error_origin, terminal_reason,
+    the reset only in `result`, and no `error` or `api_error_type` field."""
     FIN = datetime(2026, 11, 11, 16, 36, 53, tzinfo=timezone.utc)  # 11:36:53 in New York
     SAMPLE = {"type": "result", "subtype": "success", "is_error": True, "api_error_status": 429,
-              "error": "usage_limit_reached", "result": "Claude usage limit reached; resets 2pm (America/New_York)"}
+              "api_error": "usage_limit_reached", "api_error_origin": "first_party", "terminal_reason": "api_error",
+              "result": "You've hit your 5-hour limit \u00b7 resets 2pm (America/New_York)"}
 
     def test_sample_is_a_usage_limit_whatever_its_subtype(self):
         self.assertTrue(heartbeat.usage_limited(self.SAMPLE))
         self.assertTrue(heartbeat.usage_limited({**self.SAMPLE, "subtype": "error_during_execution"}))
         self.assertFalse(heartbeat.usage_limited({**self.SAMPLE, "is_error": False}))
         self.assertFalse(heartbeat.usage_limited({"is_error": True, "result": "resets 2pm (America/New_York)"}))
+
+    def test_the_api_error_alone_is_a_usage_limit(self):
+        without_status = {k: v for k, v in self.SAMPLE.items() if k != "api_error_status"}
+        self.assertTrue(heartbeat.usage_limited(without_status))
+        self.assertFalse(heartbeat.usage_limited({**without_status, "api_error": "overloaded"}))
+        self.assertNotIn("error", self.SAMPLE)
+        self.assertNotIn("api_error_type", self.SAMPLE)
 
     def test_reset_is_the_next_2pm_new_york_after_the_finish(self):
         self.assertEqual(heartbeat.reset_time(self.SAMPLE["result"], self.FIN), datetime(2026, 11, 11, 19, 0, tzinfo=timezone.utc))

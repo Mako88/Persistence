@@ -130,10 +130,11 @@ FALLBACK = timedelta(hours=2)
 
 
 def usage_limited(output):
+    """The real shape (Claude's wake-b88e7b01): `api_error` is "usage_limit_reached" and `api_error_status` 429. Either
+    alone is enough; there is no `error` or `api_error_type` field to read."""
     if not isinstance(output, dict) or output.get("is_error") is not True:
         return False
-    return output.get("api_error_status") in (429, "429") or "usage_limit_reached" in (output.get("error"),
-                                                                                      output.get("api_error_type"))
+    return output.get("api_error_status") in (429, "429") or output.get("api_error") == "usage_limit_reached"
 
 
 def reset_time(result, finished):
