@@ -109,6 +109,9 @@ public class EmbeddingMemorySurfacer : IMemorySurfacer
 
         if (stored.Count == 0)
         {
+            // An embedder that has never worked leaves no vectors, and every recall runs on words alone:
+            // the case where a silent fallback misleads most, so it is noted like a refused query.
+            queryEmbedder.Note("no memory in this store has a vector yet, so there is nothing to compare meaning with");
             return [];
         }
 

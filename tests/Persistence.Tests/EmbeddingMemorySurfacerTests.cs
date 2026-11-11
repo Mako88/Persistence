@@ -225,6 +225,28 @@ public class EmbeddingMemorySurfacerTests
     }
 
     [Fact]
+    public async Task SurfaceAsync_StoreWithNoVectors_FallsBackToWordsAndSaysSo()
+    {
+        // A store whose embedder has never worked: the backfill is refused, no fragment has a vector,
+        // and recall returned before the query embed, so the fallback went unnoted. There every recall
+        // is words alone, which is where a silent fallback misleads most (Arden, 2026-11-11).
+        var embeddings = new FakeEmbeddingClient { RefuseOverChars = 1 };
+        var display = new Mock<IDisplayProvider>();
+        var queryEmbedder = new QueryEmbedder(embeddings, Config(), display.Object);
+        var repo = new FakeEmbeddingRepository { Stale = [2L] };
+        var surfacer = Build(lexicalHits: [Frag(1)], embeddings: embeddings, embeddingRepo: repo,
+            knownFragments: [Frag(2)], queryEmbedder: queryEmbedder);
+
+        var surfaced = await surfacer.SurfaceAsync([], "intent and outcome", count: 2, CancellationToken.None);
+
+        Assert.Equal([1L], surfaced.Select(f => f.Id)); // the lexical floor
+        Assert.Empty(repo.Stored);
+        Assert.Contains("exact words alone", queryEmbedder.Fallback);
+        Assert.Contains("no memory in this store has a vector", queryEmbedder.Fallback);
+        display.Verify(d => d.ShowError(queryEmbedder.Fallback!), Times.Once);
+    }
+
+    [Fact]
     public async Task SemanticRanking_QualityWeight_DecidesBetweenMeaningAndImportance()
     {
         // Only the meaning-based half: no lexical hits. A matches the query exactly but is unimportant;

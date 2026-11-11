@@ -28,6 +28,8 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
   of its output (stderr only under `--json`). The prompt hook dropped recall's output when nothing matched, so the
   notice vanished exactly when recall came back empty (Arden); it now shows one line then ("Recall found nothing new
   for this message. Recall ran on exact words alone…"), and an empty recall *with* meaning still prints nothing.
+  A store with no vectors at all (an embedder that never worked) returned before the query embed and was silent
+  too; it is noted now ("no memory in this store has a vector yet…"), since there every recall is words alone (Arden).
 - **A test for the meaning-based half of the quality weight.** Hard-coding the semantic ranking's weight to 1 left
   every test passing; `SemanticRanking_QualityWeight_DecidesBetweenMeaningAndImportance` fails under it.
 - **recall-eval** sets `QUERYTAILCHARS=1200` for its runs (overridable), so its numbers stay comparable with 77b9191's.
