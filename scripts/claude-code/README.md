@@ -6,7 +6,8 @@ CLI it calls, and the one the Claude uses itself to curate.
 
 1. Publish the CLI somewhere stable:
    `dotnet publish src/Persistence.Store -c Release -o <dir>`
-2. Copy `hook.py` somewhere stable (e.g. `~/.claude/persistence/hook.py`).
+2. Copy `hook.py`, with `coordination.py`, `claims.py` and `cwd_exec.py` beside it (it imports them), somewhere stable
+   (e.g. `~/.claude/persistence/`).
 3. In `~/.claude/settings.json` (user level, so every session and subagent gets it), merge:
 
 ```json

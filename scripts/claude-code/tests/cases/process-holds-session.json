@@ -1,0 +1,15 @@
+{
+  "about": "Exact-id liveness (docs/design/task-claims.md section 4): a process holds a session when its argv has --session-id or --resume as one entry and the full id as the next. Shared by claims.holds_session (Python) and FragmentStore.ProcessHoldsSession (C#).",
+  "cases": [
+    {"why": "--session-id then the full id", "argv": ["claude", "-p", "--session-id", "0b9f2c1e-3d4a-4b5c-8d6e-7f8091a2b3c4"], "session": "0b9f2c1e-3d4a-4b5c-8d6e-7f8091a2b3c4", "holds": true},
+    {"why": "--resume then the full id", "argv": ["claude", "--resume", "0b9f2c1e-3d4a-4b5c-8d6e-7f8091a2b3c4", "-p"], "session": "0b9f2c1e-3d4a-4b5c-8d6e-7f8091a2b3c4", "holds": true},
+    {"why": "a prefix of the id after --resume", "argv": ["claude", "--resume", "0b9f2c1e"], "session": "0b9f2c1e-3d4a-4b5c-8d6e-7f8091a2b3c4", "holds": false},
+    {"why": "the id is a prefix of the argv entry", "argv": ["claude", "--resume", "0b9f2c1e-3d4a-4b5c-8d6e-7f8091a2b3c4x"], "session": "0b9f2c1e-3d4a-4b5c-8d6e-7f8091a2b3c4", "holds": false},
+    {"why": "another id", "argv": ["claude", "--session-id", "11111111-2222-4333-8444-555555555555"], "session": "0b9f2c1e-3d4a-4b5c-8d6e-7f8091a2b3c4", "holds": false},
+    {"why": "the id inside one shell string", "argv": ["bash", "-lc", "claude -p --resume 0b9f2c1e-3d4a-4b5c-8d6e-7f8091a2b3c4"], "session": "0b9f2c1e-3d4a-4b5c-8d6e-7f8091a2b3c4", "holds": false},
+    {"why": "the id with no flag before it", "argv": ["claude", "0b9f2c1e-3d4a-4b5c-8d6e-7f8091a2b3c4"], "session": "0b9f2c1e-3d4a-4b5c-8d6e-7f8091a2b3c4", "holds": false},
+    {"why": "the flag joined to the id with =", "argv": ["claude", "--resume=0b9f2c1e-3d4a-4b5c-8d6e-7f8091a2b3c4"], "session": "0b9f2c1e-3d4a-4b5c-8d6e-7f8091a2b3c4", "holds": false},
+    {"why": "the flag last, nothing after it", "argv": ["claude", "--resume"], "session": "0b9f2c1e-3d4a-4b5c-8d6e-7f8091a2b3c4", "holds": false},
+    {"why": "another flag before the id", "argv": ["claude", "--model", "0b9f2c1e-3d4a-4b5c-8d6e-7f8091a2b3c4"], "session": "0b9f2c1e-3d4a-4b5c-8d6e-7f8091a2b3c4", "holds": false}
+  ]
+}
