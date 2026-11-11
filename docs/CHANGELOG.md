@@ -25,7 +25,9 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
   retried, at most twice, never below 300 characters (600 recovers all of those but CJK, 300 recovers CJK).
 - **The lexical fallback is never silent.** When recall gets no query vector (refused, unreachable, or semantic recall
   threw), it logs to stderr and `recall` prints "(Recall ran on exact words alone, without meaning: why)" at the top
-  of its output (stderr only under `--json`).
+  of its output (stderr only under `--json`). The prompt hook dropped recall's output when nothing matched, so the
+  notice vanished exactly when recall came back empty (Arden); it now shows one line then ("Recall found nothing new
+  for this message. Recall ran on exact words alone…"), and an empty recall *with* meaning still prints nothing.
 - **A test for the meaning-based half of the quality weight.** Hard-coding the semantic ranking's weight to 1 left
   every test passing; `SemanticRanking_QualityWeight_DecidesBetweenMeaningAndImportance` fails under it.
 - **recall-eval** sets `QUERYTAILCHARS=1200` for its runs (overridable), so its numbers stay comparable with 77b9191's.
