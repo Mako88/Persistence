@@ -1848,6 +1848,9 @@ def set_handoff(wake, home=None):
     import uuid
     import claims
 
+    if wake.get("pid"):
+        # run-due fires only timed items, and a pre-minted worker has no waiter to see a pid end: refused, not lost.
+        raise ValueError("a hand-off from the room is set in minutes, not pid:N")
     record = wake["handoff"]
     origin = record.get("origin_session")
     if not claims.full_id(origin):

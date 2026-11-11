@@ -121,6 +121,12 @@ class Pwake(Base):
         self.assertNotIn("handoff", queued, "the item carries the claim id, not a copy of the record")
         self.assertEqual(uuid.UUID(queued["id"]).version, 4)
 
+    def test_a_room_hand_off_on_a_pid_is_refused_and_writes_nothing(self):
+        with self.assertRaises(ValueError):
+            self.pwake(minutes="pid:1")
+        self.assertEqual(self.queue(), [])
+        self.assertEqual(self.c.all(), [])
+
     def test_pwake_takes_wakes_then_tasks(self):
         seen = []
         with mock.patch.object(coordination, "LOCK_OBSERVER", seen.append):
