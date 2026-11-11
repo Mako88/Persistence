@@ -50,9 +50,13 @@ import os
 import shlex
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import coordination  # noqa: E402  the locks and the fired-wake ledger (heartbeat.md 2524fe7)
 
 CAP = 9500  # Claude Code replaces injected context over 10,000 characters with a file path and a preview
 WHOLE = 200_000  # the core as a file the peer reads after a session starts: bounded only by what one read takes
@@ -1626,21 +1630,66 @@ WAKES = STATE.parent / "wakes.json"
 WAITING = {}  # session -> its newest waiter's generation; an older one is let go, since its turn has passed
 
 
+class WakesUnreadable(ValueError):
+    """wakes.json can't be parsed under an update: refused, the file left as it is (heartbeat.md, "wakes.json")."""
+
+
 def wakes(update=None):
+    """The wake queue. A plain read treats a missing or unreadable file as empty. An update takes state/wakes.lock from
+    its read to its write (heartbeat.md 2524fe7, "wakes.json: one lock, three rewriters"), refuses unreadable JSON
+    instead of reading it as [] (WakesUnreadable), gives every item without a firing id one, and writes by rename."""
+    if update is None:
+        try:
+            items = json.loads(WAKES.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        return items if isinstance(items, list) else []
+    with coordination.lock(STATE, "wakes"):
+        items = update(queue_locked())
+        write_queue_locked(items)
+        return items
+
+
+def queue_locked():
+    """The queue read under wakes.lock: missing is empty, unreadable is refused; every item gets its firing id here,
+    the first time a locked rewrite touches it (heartbeat.md, "Firing id")."""
+    import uuid
+
     try:
         items = json.loads(WAKES.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        items = []
-    if update is not None:
-        items = update(items)
-        WAKES.write_text(json.dumps(items, indent=1), encoding="utf-8")
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError) as e:
+        raise WakesUnreadable(f"{WAKES} can't be read, so it is left as it is: {e}")
+    if not isinstance(items, list):
+        raise WakesUnreadable(f"{WAKES} isn't a list, so it is left as it is")
+    for w in items:
+        if isinstance(w, dict) and not w.get("id"):
+            w["id"] = str(uuid.uuid4())
     return items
+
+
+def write_queue_locked(items):
+    """Write-then-rename: a temp file in the same directory, fsync, os.replace. A reader never sees a half file."""
+    WAKES.parent.mkdir(parents=True, exist_ok=True)
+    tmp = WAKES.with_name(f".{WAKES.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(json.dumps(items, indent=1))
+        f.flush()
+        os.fsync(f.fileno())
+    coordination.observe(("write", "wakes.json"))
+    os.replace(tmp, WAKES)
 
 
 def add_wake(event):
     """A wake set by the peer: at a time ({"in": minutes}) or when a process ends ({"pid": n}), with
     the reason it will be woken with."""
-    item = {"reason": event.get("reason") or "a wake you set", "set": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    import uuid
+
+    # A firing id, minted here and never taken from the caller (heartbeat.md, "Firing id"). Only the keys below are
+    # kept, so a peer can't write `by`, `claim`, `launch`, `retry_of`, `follows`, `attempt` or `deferral`.
+    item = {"id": str(uuid.uuid4()), "reason": event.get("reason") or "a wake you set",
+            "set": datetime.now(timezone.utc).isoformat(timespec="seconds")}
     if event.get("cwd"):
         item["cwd"] = event["cwd"]
     if event.get("session"):
@@ -1655,7 +1704,11 @@ def add_wake(event):
         item["pid"] = int(event["pid"])
     else:
         item["at"] = datetime.now().timestamp() + 60 * float(event.get("in", 30))
-    wakes(lambda items: items + [item])
+    try:
+        wakes(lambda items: items + [item])
+    except WakesUnreadable as e:
+        print(f"wake not set: {e}", file=sys.stderr)
+        return {"refused": str(e)}
     return {"set": item}
 
 
@@ -2107,7 +2160,11 @@ def wait_for_wake(event, poll=10):
             return keep
 
         if any(mine_now(w) and ("at" in w and w["at"] <= now or "pid" in w) for w in wakes()):
-            wakes(take)
+            try:
+                wakes(take)
+            except WakesUnreadable as e:
+                print(f"waiter: {e}", file=sys.stderr)
+                due.clear()
         if due:
             return {"wake": "; ".join(w["reason"] + (f" (pid {w['pid']} ended)" if "pid" in w else "") for w in due)}
         time.sleep(poll)

@@ -14,7 +14,6 @@ whether it is on or off (section 5). Nothing in hook.py calls this module except
 
 Standard library only, Linux for the descriptor binding."""
 import ctypes
-import fcntl
 import json
 import os
 import stat
@@ -44,10 +43,6 @@ class Refused(Exception):
     """A claims write that the table, the lock or the record refuses. The file is left byte for byte."""
 
 
-class LockOrderError(RuntimeError):
-    """A lock taken against the one global order (section 4, "Locks")."""
-
-
 def full_id(value):
     """A full UUID in its canonical text form, or None: never a prefix, never free text."""
     try:
@@ -56,45 +51,9 @@ def full_id(value):
         return None
 
 
-# Locks. Arden's sentence (task-claims.md section 4, heartbeat.md rev 3 "Lock order"): a path takes only the locks
-# it needs, and whenever it holds more than one of state/heartbeat.lock, state/wakes.lock, state/tasks/.lock and
-# state/fired.lock it takes them in that order, never waits for an earlier one while holding a later one, and takes
-# no other lock while holding state/fired.lock; no path holds any of them while it launches a process or model or
-# writes a report to the journal. The order is checked when each lock is taken, so a wrong path fails instead of
-# deadlocking.
-LOCK_ORDER = ("heartbeat", "wakes", "tasks", "fired")
-LOCK_FILES = {"heartbeat": "heartbeat.lock", "wakes": "wakes.lock", "tasks": "tasks/.lock", "fired": "fired.lock"}
-LOCK_OBSERVER = None  # tests: called with ("acquire" | "release", name)
-_held = threading.local()
-
-
-def held_locks():
-    return list(getattr(_held, "names", ()))
-
-
-@contextmanager
-def lock(state, name):
-    names = held_locks()
-    if "fired" in names:
-        raise LockOrderError(f"{name}.lock taken while holding fired.lock, which is a leaf")
-    if names and LOCK_ORDER.index(name) <= LOCK_ORDER.index(names[-1]):
-        raise LockOrderError(f"{name}.lock taken while holding {names[-1]}.lock: the order is {' -> '.join(LOCK_ORDER)}")
-    path = Path(state) / LOCK_FILES[name]
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(str(path), os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        _held.names = names + [name]
-        if LOCK_OBSERVER:
-            LOCK_OBSERVER(("acquire", name))
-        try:
-            yield
-        finally:
-            _held.names = names
-            if LOCK_OBSERVER:
-                LOCK_OBSERVER(("release", name))
-    finally:
-        os.close(fd)  # closing the descriptor releases the flock
+# Locks: the one global order, checked when each lock is taken, lives in coordination.py (shared with run-due and the
+# heartbeat). Re-exported here so claims code and tests name them in one place.
+from coordination import LOCK_ORDER, LOCK_FILES, LockOrderError, held_locks, lock  # noqa: E402,F401
 
 
 # Liveness by exact id (section 4): the owner is running when some process's argv has --session-id or --resume as

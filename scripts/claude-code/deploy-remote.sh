@@ -13,14 +13,17 @@ trap 'rm -rf "$work"' EXIT
 
 dotnet publish "$repo/src/Persistence.Store" -c Release -r linux-x64 --self-contained true -o "$work/pub" >/dev/null
 tar -czf "$work/store.tgz" -C "$work/pub" .
-scp -q "$work/store.tgz" "$repo/scripts/claude-code/hook.py" "$host:/tmp/"
+# hook.py imports coordination.py (the locks and the fired-wake ledger) and, for ptask and run-due, claims.py and
+# cwd_exec.py: all four go beside it.
+py=(hook.py coordination.py claims.py cwd_exec.py)
+scp -q "$work/store.tgz" "${py[@]/#/$repo/scripts/claude-code/}" "$host:/tmp/"
 ssh "$host" "set -e
   sudo tar -xzf /tmp/store.tgz -C /opt/persistence/store
   sudo chown -R root:root /opt/persistence/store
   sudo chmod -R a+rX /opt/persistence/store
   sudo chmod 755 /opt/persistence/store/persistence-store
-  for u in ${users[*]:-}; do sudo install -o \$u -g \$u -m 644 /tmp/hook.py /home/\$u/.claude/persistence/hook.py; done
-  rm /tmp/store.tgz /tmp/hook.py
+  for u in ${users[*]:-}; do for f in ${py[*]}; do sudo install -o \$u -g \$u -m 644 /tmp/\$f /home/\$u/.claude/persistence/\$f; done; done
+  rm /tmp/store.tgz ${py[*]/#//tmp/}
   for s in \$(systemctl list-units --type=service --no-legend 'persistence-store*' | awk '{print \$1}'); do sudo systemctl restart \$s; done
   sleep 5
   systemctl is-active \$(systemctl list-units --type=service --all --no-legend 'persistence-store*' | awk '{print \$1}')"

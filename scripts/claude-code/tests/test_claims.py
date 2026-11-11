@@ -23,6 +23,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import hook
 import claims
+import coordination
 
 CASES = Path(__file__).resolve().parent / "cases" / "process-holds-session.json"
 
@@ -624,14 +625,14 @@ class LockOrder(Base):
     def test_take_takes_wakes_then_tasks(self):
         r = self.mine()
         seen = []
-        with mock.patch.object(claims, "LOCK_OBSERVER", seen.append):
+        with mock.patch.object(coordination, "LOCK_OBSERVER", seen.append):
             self.c.take(r["id"], sid(), table=[])
         self.assertEqual([n for n in seen if n[0] == "acquire"], [("acquire", "wakes"), ("acquire", "tasks")])
 
     def test_a_plain_write_takes_tasks_alone(self):
         r = self.mine()
         seen = []
-        with mock.patch.object(claims, "LOCK_OBSERVER", seen.append):
+        with mock.patch.object(coordination, "LOCK_OBSERVER", seen.append):
             self.c.touch(r["id"], self.me)
         self.assertEqual([n for n in seen if n[0] == "acquire"], [("acquire", "tasks")])
 
