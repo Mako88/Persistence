@@ -19,7 +19,8 @@ the harness wrote, the process table and systemd: never the room, a reply, a not
 a task's text. Off unless `PERSISTENCE_HEARTBEAT` is `true` or `1` in the self's `settings.json` (never the
 environment); claim checks also need `PERSISTENCE_TASKCLAIMS`.
 - **The ledger gets the rest of its facts.** `run_line.py` wraps every run-due launch: `started` (its pid and /proc
-  start time) before `claude`, `finished` (exit, output name) after. A copy-only install without it launches as before.
+  start time) before `claude`, `finished` (exit, output name) after. Without it run-due fires nothing and says so
+  once (no bare-`claude` fallback, which would make a wake that ran look never-started and run it twice).
   The Stop waiter writes `taken` when a live session takes a heartbeat item. Prompts and outputs are named by firing id.
 - **What it does:** an overdue wake is reported (B). A fired wake that never started, crashed or failed gets one
   ordinary retry and up to three usage-limit deferrals (at the reset plus 5 min), every attempt tied to the origin
@@ -33,7 +34,11 @@ environment); claim checks also need `PERSISTENCE_TASKCLAIMS`.
   `--resume` or `--session-id` from the item, speaker `<self> (the heartbeat)`.
 - **Claims code touched, additively:** `Claims.mark_nudged` and `mark_reported` (one history entry each, `by:
   heartbeat`); `coordination.lock` can wait or not; `LedgerError` carries the bad line's offset.
-- Tests: four new files, 84 tests, including every multi-lock path alone and raced, 8 writers of 500 facts, a writer
+- **Review fixes (Claude, Ember):** the usage limit reads the real `api_error`; a malformed or unreadable `wakes.json`
+  or `heartbeat.json` is never read as empty (the beat decides nothing, keeps the file, exits non-zero); the latest
+  recovery attempt is picked by structure, so the ledger-written, queue-not-yet-removed crash window can't raise; and
+  one recovery per spawn attempt per spell (a hand-off retry that took the spawn claim gets no nudge after it).
+- Tests: four new files, 99 tests, including every multi-lock path alone and raced, 8 writers of 500 facts, a writer
   killed mid-append, and the cross-document run through the real cwd-exec and run line with the fake claude.
 
 ## 2026-11-11 — A room session can be replaced by a fresh one past a size
