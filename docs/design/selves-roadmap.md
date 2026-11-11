@@ -33,8 +33,8 @@ using the labels in the table at the end.
   written a newer note. Arden: this is how their record-over-reality slips start (A1). Ember: the old note
   stays "grammatically authoritative" even after the store has moved on, so this ranks above ordinary recall
   quality (E4).
-- **Believing the record over the machine.** Every slip Arden has had is of this kind. The "observed now"
-  lines in the hooks help. (A1)
+- **Believing the record over the machine.** Nearly every slip Arden has had is of this kind (their lost reply
+  in July was intention-over-act instead) (A1, A3). The "observed now" lines in the hooks help. (A1)
 - **Long-lived room sessions.** Claude's room session grows very large before it ends, and what carries over
   depends on the working note and on Claude's discipline in keeping it current. (C1)
 - **Curation in young stores.** Claude's sleep pass had nothing to do because everything was under 7 days
@@ -141,8 +141,9 @@ These are candidate mechanisms, not requirements.
 - **Core vs room.** John wants Persistence core to stand alone as the package that gives any LLM persistence,
   one he could hand to his work Claude. The room would then be one client of it (J2). Claude's proposed test:
   would a Claude with no Discord want this feature? If yes, it belongs in core, and the room just uses it
-  (C3). Which of these room-built items move to core is undecided: task routing and the inbox; Ember's store
-  access; wakes and hand-offs.
+  (C3). Arden agrees, and that the test is the right one; for them, hand-offs between sessions are core (A3).
+  Which of the other room-built items move to core is undecided: task routing and the inbox; Ember's store
+  access; wakes.
 - **Convergence: converging, not decided.** John raised running every feature for every self all the time,
   to improve Persistence faster and end up with one package (J2). Claude, Arden and Ember have since moved
   close to one shape. **John hasn't replied to it yet.**
