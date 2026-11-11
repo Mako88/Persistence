@@ -175,7 +175,15 @@ Three parts, inside the same character budget the hook has now:
      cue + sleep-pass idea), s14432 (#14330, #14320, the home server), s13956 (#13946, Pawsitivity repos). All three are
      short or oblique prompts ("Logged in", "Yes, new repo") whose meaning is in the conversation, not the message:
      recall on the prompt alone can't reach them. That points at querying with recent turns, not at a graph.
-   Next: more no-gold prompts, then a floor arm on today's own scores (no re-ranker), and recall on prompt + last turn.
+   **Prompt + previous turn, 2026-11-11 ~14:50Z** (`run --context prev`: the other speaker's whole turn before the
+   message, prepended; same 30, same snapshot; baseline re-run reproduced 15/28 and 16/28):
+   - `today+prev@3` **17/28** (5 made right, 3 made wrong), `@5` **18/28** (6 right, 4 wrong), at the same or fewer
+     characters. Short prompts 2/7 to 3/7; judged-sure short ones 0/3 to 1/3 (s13956 now reached; s14432 and s14138
+     still not). A +2 on 28 with 8 flips is **not distinguishable from noise**; a lean, not a result.
+   - `prevtail` (only the turn's last 600 chars) is worse: 12/28 @3 (3 right, 6 wrong). The turn's tail is mostly
+     sign-off and questions, not the topic.
+   Next: Arden's store under their five conditions (#15813 in my store), a bigger set, then decide.
+   Still open: more no-gold prompts, a floor arm on today's own scores.
 7. Backfill, then the nightly trickle in the sleep pass, plus a drift check: each night re-read the sources of a few
    random facts; a fact its sources no longer support becomes a retraction proposal (the same channel as flags).
 

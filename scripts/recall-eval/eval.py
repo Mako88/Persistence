@@ -2,7 +2,8 @@
 """The recall A/B (docs/design/concept-graph.md, build step 6): each arm's recall on a gold set, scored per store.
 
     eval.py snapshot <live db> <out db>         a consistent copy (sqlite backup API); arms never touch a live store
-    eval.py run <gold.jsonl> <db> [--arm today|rerank] [--limit 3] [--pool 30] [--floor F] [--out results.jsonl]
+    eval.py run <gold.jsonl> <db> [--arm today|rerank] [--limit 3] [--pool 30] [--floor F] [--context prev|prevtail]
+                [--out results.jsonl]
     eval.py compare <results.jsonl> today@3 rerank@3     paired: N made right, M made wrong
     eval.py floor <results.jsonl> [--arm rerank]          a relevance floor swept over the saved pool scores
 
@@ -16,6 +17,9 @@ chars. Gold files hold real prompts and stay outside the repo.
 Arms: `today` = the store's own `recall` as the hook calls it (BM25 + bge-small embeddings, fused, importance-weighted);
 `rerank` = step 4, that pool widened to 30 and re-scored by a cross-encoder (needs llama-server --reranking on :8082
 with bge-reranker-v2-m3; scores of the whole pool are kept, so a relevance floor can be swept without rerunning).
+`--context prev` searches on the message PLUS the turn before it (everything the other speaker said in that session
+since the asker last spoke, found from the line's `source_fragment`); `prevtail` keeps only that turn's last
+PREV_TAIL characters. Lines with no source fragment run on the message alone and are marked `ctx: none`.
 Scored: gold reached in the top `limit`, characters shown, and paired against a baseline arm with `compare`.
 """
 import argparse
@@ -137,25 +141,67 @@ def arm_rerank(item, db, limit, exclude, opts):
 
 
 ARMS = {"today": arm_today, "rerank": arm_rerank}
+PREV_TAIL = int(os.environ.get("RECALL_PREV_TAIL", "600"))
 
 
-def run(gold_path, db, arm, limit, out, opts=None):
+def previous_turn(db, fid):
+    """The turn before utterance `fid`: every ChatMessage in its session, oldest first, said after the asker's own
+    previous utterance by someone else (a reply arrives as several utterances: text, a tool note, more text)."""
+    c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        row = c.execute("""SELECT f.SessionId, f.CreatedUtc, s.SourceId FROM ContextFragments f
+                           JOIN ContextFragmentSources s ON s.ContextFragmentId=f.Id WHERE f.Id=?""", (fid,)).fetchone()
+        if not row or not row[0]:
+            return None
+        sess, when, who = row
+        before = c.execute("""SELECT f.Content, s.SourceId FROM ContextFragments f
+                              JOIN ContextFragmentSources s ON s.ContextFragmentId=f.Id
+                              WHERE f.SessionId=? AND f.FragmentType=? AND f.CreatedUtc < ? AND f.IsDeleted=0
+                              ORDER BY f.CreatedUtc DESC, f.Id DESC LIMIT 200""",
+                           (sess, c.execute("SELECT FragmentType FROM ContextFragments WHERE Id=?", (fid,)).fetchone()[0],
+                            when)).fetchall()
+    finally:
+        c.close()
+    turn = []
+    for content, src in before:
+        if src == who:
+            if turn:
+                break
+            continue        # the asker's own earlier lines right before (a message sent in parts): not the turn before
+        turn.append(content)
+    return "\n\n".join(reversed(turn)) or None
+
+
+def with_context(item, db, context):
+    if not context:
+        return item, None
+    prev = previous_turn(db, item["source_fragment"]) if item.get("source_fragment") else None
+    if not prev:
+        return item, "none"
+    if context == "prevtail":
+        prev = prev[-PREV_TAIL:]
+    return {**item, "query": prev + "\n\n" + item["query"]}, len(prev)
+
+
+def run(gold_path, db, arm, limit, out, opts=None, context=None):
     items = [json.loads(l) for l in open(gold_path, encoding="utf-8") if l.strip() and not l.startswith("//")]
     rows = []
     for it in items:
         exclude = sorted(set(it.get("exclude", [])))
+        it, ctx = with_context(it, db, context)
         got, pool = ARMS[arm](it, as_of_db(db, it["as_of"]) if it.get("as_of") else db, limit, exclude, opts or {})
         ids = [i for i, _, _ in got]
         gold = set(it.get("gold", []))
-        row = {"id": it["id"], "kind": it.get("kind", "sample"), "arm": arm, "limit": limit, "shown": ids,
+        row = {"id": it["id"], "kind": it.get("kind", "sample"), "arm": arm + (f"+{context}" if context else ""),
+               "limit": limit, "ctx": ctx, "shown": ids,
                "gold": sorted(gold), "reached": sorted(gold & set(ids)), "chars": sum(n for _, n, _ in got),
                "scores": [sc for _, _, sc in got], "pool": pool, "opts": opts or {}}
         row["hit"] = bool(row["reached"]) if gold else None
         rows.append(row)
         mark = "-" if row["hit"] is None else ("HIT" if row["hit"] else "miss")
-        print(f"{it['id']:<24} {mark:<5} shown {ids} gold {sorted(gold)}", flush=True)
+        print(f"{it['id']:<24} {mark:<5} shown {ids} gold {sorted(gold)}" + (f" ctx {ctx}" if context else ""), flush=True)
     scored = [r for r in rows if r["hit"] is not None]
-    print(f"\n{arm}@{limit}: {sum(r['hit'] for r in scored)}/{len(scored)} reached gold; "
+    print(f"\n{arm}{'+' + context if context else ''}@{limit}: {sum(r['hit'] for r in scored)}/{len(scored)} reached gold; "
           f"{sum(r['chars'] for r in rows)} chars shown; "
           f"{sum(r['chars'] for r in rows if r['kind'] == 'none')} on no-gold prompts")
     if out:
@@ -172,7 +218,7 @@ def load_rows(path, arm, limit):
 
 def compare(path, a, b):
     """Arms paired on the same questions: "N made right, M made wrong" (design step 6). a and b are arm@limit."""
-    (aa, al), (ba, bl) = [(x.split("@")[0], int(x.split("@")[1])) for x in (a, b)]
+    (aa, al), (ba, bl) = [(x.rsplit("@", 1)[0], int(x.rsplit("@", 1)[1])) for x in (a, b)]
     A, B = load_rows(path, aa, al), load_rows(path, ba, bl)
     both = [i for i in A if i in B and A[i]["hit"] is not None]
     right = [i for i in both if B[i]["hit"] and not A[i]["hit"]]
@@ -221,6 +267,7 @@ def main(argv):
     r.add_argument("--out")
     r.add_argument("--pool", type=int, default=30, help="rerank: candidates taken from the store's recall")
     r.add_argument("--floor", type=float, help="rerank: show nothing scored under this")
+    r.add_argument("--context", choices=["prev", "prevtail"], help="search on the message plus the turn before it")
     c = sub.add_parser("compare")
     c.add_argument("results")
     c.add_argument("a", help="arm@limit, e.g. today@3")
@@ -237,7 +284,7 @@ def main(argv):
     elif a.cmd == "floor":
         floor_sweep(a.results, a.arm, a.limit)
     else:
-        run(a.gold, a.db, a.arm, a.limit, a.out, {"pool": a.pool, "floor": a.floor})
+        run(a.gold, a.db, a.arm, a.limit, a.out, {"pool": a.pool, "floor": a.floor}, a.context)
 
 
 if __name__ == "__main__":
