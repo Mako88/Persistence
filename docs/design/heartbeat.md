@@ -230,7 +230,7 @@ are named by it (`state/wake-<id>.txt`, `.json`), not by a time stamp and sessio
 
 | Fact | Written by | Carries (structure only, no text) |
 |---|---|---|
-| `enqueued` | `run_due`, in the locked transition below | the item's `session`, `cwd`, `at`, `work`, `by`, `claim`, `launch`, `retry_of`, `follows`, `attempt`, `deferral`, and `reason_sha256`; never the reason |
+| `enqueued` | `run_due`, in the locked transition below | the item's `session`, `cwd`, `at` (carried as `item_at`, since the fact's own `at` is when it was written), `work`, `by`, `claim`, `launch`, `retry_of`, `follows`, `attempt`, `deferral`, and `reason_sha256`; never the reason |
 | `started` | the run line, as its first step, before `claude` | the wrapper's pid and its `/proc/<pid>/stat` start time; for a working session, the new session's full id |
 | `finished` | the run line, after `claude` exits, whatever the exit | the exit status and the output file name |
 | `taken` | the Stop waiter's `take`, for an item with `by: heartbeat` | the item's `id`, `session` and `claim`; the firing went to a live session, not to run-due |
