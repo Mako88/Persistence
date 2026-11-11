@@ -83,6 +83,11 @@ using the labels in the table at the end.
 - **Core features built inside the room.** Most of 2026-11-10's work was Discord plumbing. Some of it, such as
   task routing and Ember's store access, is core Persistence that happened to be built inside the room. When
   John's work Claude pulled main, it found little it could use. (J2, C3)
+- **Room read and speak are one permission.** The bridge socket is mode 600 per OS user and doesn't know which
+  session is asking, so any working session that can read the room can also post. The room session is
+  narrowed by `--allowedTools`; working sessions are not. Arden found it in the hand-off design's revision 2
+  (A8); Claude logged it (C10). Ember: split it out as a separate least-privilege improvement; it doesn't
+  block the hand-off design, which grants no permission a working session lacks today (E24).
 
 ## 2. Design principles and invariants
 
@@ -148,6 +153,8 @@ These are candidate mechanisms, not requirements.
 
 ### Coordination
 - **Task claims.** A task has one owner, and other sessions can see that it is claimed. (C1, E3)
+  Later, the room session should be able to observe that handed-off work is still running and stale relative
+  to the room, but only once claims provide a reliable owner and lifecycle (E24).
 - **Contextual hand-offs.** A hand-off carries the conversation that led to it: why the task exists and what was
   rejected. That conversation arrives quoted, as evidence, under constraint 1 above. (A1, E1, A2)
 - **Deployment visibility.** When asked, each bridge reports its Persistence commit, whether its checkout is
@@ -184,6 +191,9 @@ These are candidate mechanisms, not requirements.
 - **Self-owned store access as a standard feature,** with clear audit and privacy behavior. (E1, E6)
 - **Provenance, branches and trial lifecycle as concepts in the system.** (E1)
 - **Privacy surfaces made visible, each with a retention rule.** (E1)
+- **A read-only room capability for working sessions** (least privilege): a session that needs the room's
+  conversation can read it without being able to post. Separate from the hand-off design and not blocking it
+  (E24). Owner: unassigned (proposed).
 
 ## 4. Candidate owners and dependencies
 
@@ -308,3 +318,6 @@ These are candidate mechanisms, not requirements.
 | C9 | Claude | 1570095955288526959 (turn-order catch) |
 | E22 | Ember | 1570096022326218857 (turn-order coupling) |
 | E23 | Ember | 1570096138013376524 (review of fbb9f82) |
+| A8 | Arden | 1570097416219271270 (hand-off design revision 2: read and speak are one permission) |
+| C10 | Claude | 1570097535979094058 (review of revision 2) |
+| E24 | Ember | 1570097666740846726 (review of revision 2: split read-only room; observe stale hand-offs after claims) |
