@@ -74,11 +74,21 @@ terminal file to `closed/` changes no byte of it and isn't a write.
 - **Stored canonical, bound at use** (Ember 1570143444578603091: validating a real path and later using the original
   string leaves a symlink-retargeting gap). The value stored, in the claim and the item, is the canonical real path
   computed at creation (`pwake`, `ptask claim`), and it is the only path ever used afterwards; the string as given is
-  never stored. At each use (spawn, retry, nudge, `take`) the harness opens that directory once, with
-  `O_DIRECTORY|O_NOFOLLOW` on the final component, re-checks the opened descriptor (`fstat`: a directory, owned by
-  the self, still under an allowed root), and starts the child from that descriptor (`fchdir`) rather than resolving
-  the string again. Any mismatch refuses that use and reports once (`no valid cwd`); nothing falls back to another
-  path.
+  never stored. At each use (spawn, retry, nudge, `take`), bound to a descriptor (Ember 1570143645393359080,
+  1570143874905538733):
+  1. **Resolve beneath a trusted root.** Open the self's home as the trusted directory descriptor. Resolve the stored
+     path, made relative to home, beneath it with Linux `openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`, `O_DIRECTORY`.
+     Where `openat2` is absent: component by component, `openat(parent_fd, name, O_DIRECTORY|O_NOFOLLOW)`, each fd
+     the parent of the next, `..` and empty components refused. No symlink is followed at any depth, final or
+     intermediate.
+  2. **Verify the fd.** `fstat`: a directory, owned by the self.
+  3. **Launch from that fd, never the string again.** A named launcher: a small dedicated helper (`cwd-exec`) that
+     receives only the verified directory fd (`pass_fds` = that fd, `close_fds`), does only `fchdir(fd)`,
+     `close(fd)`, then `exec`s the worker. No `preexec_fn`: forking a multithreaded Python and running Python code
+     before `exec` can deadlock. Descriptor rule: only the cwd fd crosses into the helper, it is closed before the
+     worker starts, and no other descriptor of the harness leaks into the worker.
+
+  Any failure refuses that use and reports once (`no valid cwd`); nothing falls back to another path.
 
 **A spell** is the time between two status transitions. `nudged` and `reported` are cleared only by a transition into
 `claimed` (claim, resume, take, pause expiry), **never by `touch`**: otherwise a nudged session that touches and exits
@@ -225,9 +235,15 @@ consent. **Way back:** turn the setting off; claim files are plain JSON, no stor
   is refused by run-due. A relative, unnormalised, outside-home or vanished `cwd`: refused at creation, or no
   spawn/nudge and one `no valid cwd` report. A path in task text is never used.
 - **`cwd` is canonical and bound** (Ember): a `cwd` given through a symlink or with `..` is stored as its canonical
-  real path, in both claim and item. After validation, the directory is swapped for a symlink to another directory
-  (inside home and outside): spawn, retry, nudge and `take` are refused with one `no valid cwd` report, and no child
-  runs there. Mutation: re-resolving the stored string at use instead of the opened descriptor.
+  real path, in both claim and item. Red, both run through the real `cwd-exec` launcher, not only path validation:
+  after validation (a) the FINAL component and (b) an INTERMEDIATE component are each swapped for a symlink to
+  another directory (inside home and outside): spawn, retry, nudge and `take` are refused with one `no valid cwd`
+  report, and no worker runs there. Both `openat2` and the `openat` fallback pass. Mutations: re-resolving the stored
+  string at use; `O_NOFOLLOW` on the final component only (fails b).
+- **The launcher** (`cwd-exec`): the worker's `getcwd` equals the verified directory even when the path string is
+  retargeted between verify and launch; the worker lists `/proc/self/fd` and sees only 0, 1, 2 (the cwd fd is closed,
+  an extra fd opened in the harness without `O_CLOEXEC` doesn't appear). Mutations: dropping `close(fd)`; dropping
+  `close_fds`; `chdir(path)` instead of `fchdir(fd)`.
 - **Pause expiry** (Ember): `settle_pauses` is the only writer of `expire`: one transition with `by: pause-expiry`,
   `nudged`/`reported` cleared; two concurrent callers produce one entry; without `--until` the claim stays paused
   across any number of beats; with the heartbeat and `PERSISTENCE_TASKCLAIMS` off, the next `ptask` write settles it.
@@ -262,7 +278,9 @@ the text. Not in v1. Addressed work-inbox notes (section 2) are a separate chang
 - Ember 4, execution location → `cwd` field, validation and preservation through `pwake`, spawn, retry, nudge and
   `take` (section 1, 2.4, 4); test through the full path.
 - Ember, `cwd` symlink gap (1570143444578603091, after a8faeb8) → section 1 "Stored canonical, bound at use"; test
-  in section 6.
+  in section 6. Ember, intermediate component and launcher (1570143645393359080, 1570143874905538733) → resolution
+  beneath home with `openat2`/`openat` fallback, the `cwd-exec` helper without `preexec_fn`, fd rule; tests in
+  section 6.
 - Ember, work inbox → section 2 "The work inbox can't carry work"; a separate change; tests named.
 - Arden, silent stall → section 4 report row ignores `updated`, says `touched since`; test with mutation.
 - Arden, unbounded hand-off retry → once per spell, usage-limit deferrals per the heartbeat, then report; test.
