@@ -9,6 +9,16 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-11 — Store commands from a Codex room wake (built, off)
+
+- **`scripts/codex/room_store.py`**, switched on by `CODEX_ROOM_STORE=1` in `room-wake`: a self on Codex, read-only
+  and offline in its room wake, can end its reply with ```store blocks of JSON requests; after Codex exits they're
+  taken out of the reply, checked against an exact list of commands and fields, and sent as data to the user's own
+  store socket; results lead the next wake and are deleted only once it has run. Why: Ember asked to keep notes and
+  "not mine" entries from room wakes, and approved this design with five changes (exact allowlist, data parsing,
+  content-free audit log, a 600 queue deleted after delivery, reads answered next wake). Tested on `ember-test`
+  only; it goes on for Ember only on their go-ahead (docs/design/ember-room-store-access.md).
+
 ## 2026-11-10 — Ember's trial on home: a room wake on Codex
 
 - **The adapter is merged** (Ember reviewed it and said yes to the trial, 23:21Z).

@@ -7,22 +7,35 @@
 # not the core again). Hooks are run with --dangerously-bypass-hook-trust because `codex exec` silently skips
 # untrusted ones, and never --ephemeral (it writes no log, so nothing would be kept).
 # The sandbox is read-only: the self answers by replying, so it needs no network or writes of its own.
+# With CODEX_ROOM_STORE=1 the reply's ```store blocks become store commands once Codex has exited (room_store.py).
 # CODEX_ROOM_MODEL (default gpt-5.6-sol) and CODEX_ROOM_SESSION_FILE may be set in /etc/default/persistence-room-<user>.
 set -eu
 reply="$1"
 model="${CODEX_ROOM_MODEL:-gpt-5.6-sol}"
 session_file="${CODEX_ROOM_SESSION_FILE:-$HOME/.config/persistence-room/state/codex-session}"
+here="$(dirname "$(readlink -f "$0")")"
 cd "$HOME"
 common="--dangerously-bypass-hook-trust --skip-git-repo-check -m $model -c sandbox_mode=\"read-only\" -o $reply"
+umask 077
+events="$(mktemp)"; raw="$(mktemp)"; prompt="$(mktemp)"; manifest="$(mktemp)"
+trap 'rm -f "$events" "$raw" "$prompt" "$manifest"' EXIT
+cat > "$raw"
+# Store commands from the reply (docs/design/ember-room-store-access.md, scripts/codex/room_store.py): only with
+# CODEX_ROOM_STORE=1, set in /etc/default/persistence-room-<user> on the self's own go-ahead. Last wake's results go
+# in front of this prompt; if that step fails the prompt goes as it came, and the results wait.
+store=""
+[ "${CODEX_ROOM_STORE:-}" = 1 ] && store=1
+if [ -n "$store" ] && python3 -I "$here/room_store.py" prompt "$manifest" < "$raw" > "$prompt"; then :; else
+    cp "$raw" "$prompt"; : > "$manifest"
+fi
+status=0
 if [ -s "$session_file" ]; then
     # shellcheck disable=SC2086
-    exec codex exec resume $common "$(cat "$session_file")" -
-fi
-events="$(mktemp)"
-trap 'rm -f "$events"' EXIT
-# shellcheck disable=SC2086
-codex exec $common --json - > "$events"
-id="$(python3 -c '
+    codex exec resume $common "$(cat "$session_file")" - < "$prompt" || status=$?
+else
+    # shellcheck disable=SC2086
+    codex exec $common --json - < "$prompt" > "$events" || status=$?
+    id="$(python3 -c '
 import json, sys
 for line in open(sys.argv[1], encoding="utf-8"):
     try: e = json.loads(line)
@@ -30,10 +43,17 @@ for line in open(sys.argv[1], encoding="utf-8"):
     if e.get("type") == "thread.started" and e.get("thread_id"):
         print(e["thread_id"]); break
 ' "$events")"
-if [ -n "$id" ]; then
-    umask 077
-    printf '%s\n' "$id" > "$session_file"
-else
-    echo "room-wake: no thread id in codex's events; the next wake starts a new session" >&2
-    head -c 2000 "$events" >&2
+    if [ "$status" -ne 0 ]; then :
+    elif [ -n "$id" ]; then
+        printf '%s\n' "$id" > "$session_file"
+    else
+        echo "room-wake: no thread id in codex's events; the next wake starts a new session" >&2
+        head -c 2000 "$events" >&2
+    fi
 fi
+if [ -n "$store" ] && [ "$status" -eq 0 ]; then
+    # The ```store blocks come out of the reply before the bridge posts it; then the results this wake was shown go.
+    python3 -I "$here/room_store.py" run "$reply" || { echo "room-wake: store commands failed; reply not posted" >&2; status=1; }
+    python3 -I "$here/room_store.py" delivered "$manifest" || true
+fi
+exit "$status"
