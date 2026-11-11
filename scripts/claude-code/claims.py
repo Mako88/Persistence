@@ -232,7 +232,6 @@ class Claims:
         self.home_real = os.path.realpath(str(self.home))
         self.now = now or (lambda: datetime.now(timezone.utc))
         self.dir = self.state / "tasks"
-        self.closed = self.dir / "closed"
         self.wakes_path = Path(wakes_path) if wakes_path else self.state.parent / "wakes.json"
 
     def lock(self, name):
@@ -248,11 +247,11 @@ class Claims:
         return self.dir / f"{claim_id}.json"
 
     def get(self, claim_id):
-        """A claim from tasks/ or closed/, read without the lock and without writing (`ptask show`)."""
+        """A claim, read without the lock and without writing (`ptask show`). Terminal claims stay where they are: no
+        archiving in v1, retention unbounded (Ember 1570189950421565481, point 5)."""
         path = self._path(claim_id)
-        for where in (path, self.closed / path.name):
-            if where.exists():
-                return self._load(where)
+        if path.exists():
+            return self._load(path)
         raise Refused(f"no claim {claim_id}")
 
     def _load(self, path):
@@ -265,7 +264,7 @@ class Claims:
         return record
 
     def all(self):
-        """Every claim in tasks/ (not closed/), oldest first."""
+        """Every claim, terminal ones included, oldest first."""
         out = []
         for path in sorted(self.dir.glob("*.json")) if self.dir.is_dir() else []:
             if full_id(path.stem):
@@ -333,13 +332,19 @@ class Claims:
             yield self._load(self._path(claim_id)) if self._path(claim_id).exists() else self._missing(claim_id)
 
     def _missing(self, claim_id):
-        if (self.closed / f"{claim_id}.json").exists():
-            raise Refused(f"claim {claim_id} is closed")
         raise Refused(f"no claim {claim_id}")
 
     def _expect(self, record, action, *statuses):
         if record["status"] not in statuses:
             raise Refused(f"claim {record['id']} is {record['status']}; {action} needs {' or '.join(statuses)}")
+
+    @staticmethod
+    def _owner_only(record, by, verb):
+        """Only the exact owner session may write a claimed or paused claim (Ember 1570189950421565481, point 6): not
+        another session of this self, not an id sharing a prefix, not the harness. take is the one guarded transfer."""
+        if by != record["owner"]:
+            raise Refused(f"claim {record['id']} is held by {record['owner']}; only that session may {verb} it (take "
+                          f"transfers a claim whose owner has stopped)")
 
     def _held_by(self, record):
         alive = running(record["owner"], process_table())
@@ -347,11 +352,15 @@ class Claims:
         return f"claim {record['id']} is {record['status']}, held by {record['owner']}, {state}"
 
     # Creation.
-    def canonical_cwd(self, given):
-        problem = static_cwd_problem(given, self.home_real) if isinstance(given, str) and given else "empty"
-        if problem and problem != "outside home":
-            raise Refused(f"no valid cwd: {problem}")
-        real = os.path.realpath(given)
+    def canonical_cwd(self, given, base=None):
+        """The canonical real path of a supplied or default directory, validated, and the only value ever stored (Ember
+        1570181249534795788, point 4). Harmless non-canonical input (`.`, `..`, a trailing or double slash, a symlink
+        reaching an allowed directory) is resolved, not refused; a relative path resolves against `base`, the caller's
+        directory. The string as given is never stored or used again; the descriptor-bound open at each use stays the
+        security check."""
+        if not isinstance(given, str) or not given:
+            raise Refused("no valid cwd: empty")
+        real = os.path.realpath(os.path.join(base or os.getcwd(), given))
         problem = static_cwd_problem(real, self.home_real)
         if problem:
             raise Refused(f"no valid cwd: {problem}")
@@ -359,7 +368,7 @@ class Claims:
         return real
 
     def create(self, task, owner, cwd, by, dispatch="none", status="claimed", origin_session=None,
-               room_channel=None, room_from=None, room_upto=None):
+               room_channel=None, room_from=None, room_upto=None, base=None):
         if dispatch not in DISPATCHES or status not in ("open", "claimed"):
             raise Refused(f"a claim is created open or claimed, dispatch handoff or none")
         if status == "claimed" and not full_id(owner):
@@ -370,7 +379,7 @@ class Claims:
         record = dict.fromkeys(TASK_FIELDS)
         record.update(task=str(task), origin_session=origin_session, room_channel=room_channel, room_from=room_from,
                       room_upto=room_upto, owner=None)
-        record.update(id=str(uuid.uuid4()), dispatch=dispatch, status=None, cwd=self.canonical_cwd(cwd),
+        record.update(id=str(uuid.uuid4()), dispatch=dispatch, status=None, cwd=self.canonical_cwd(cwd, base),
                       created=self.stamp(), updated=None, pause_until=None, nudged=None, reported=None, history=[], outcome=None)
         with self.lock("tasks"):
             self._settle_locked()
@@ -378,21 +387,27 @@ class Claims:
             self._write(record)
         return record
 
-    def claim(self, task, session, cwd):
-        """`ptask claim "<task>"`: a claimed record, dispatch none, owned by the calling session."""
+    def claim(self, task, session, cwd, base=None):
+        """`ptask claim "<task>"`: always a new record, claimed, dispatch none, owned by the calling session."""
         if not full_id(session):
             raise Refused("ptask claim needs this session's full id (CLAUDE_CODE_SESSION_ID)")
-        return self.create(task, session, cwd, by=session, origin_session=session)
+        return self.create(task, session, cwd, by=session, origin_session=session, base=base)
 
     # Transitions (section 1). Anything else is refused, under the lock.
-    def claim_open(self, claim_id, owner, by=None, firing=None):
-        by = by or owner
+    def claim_open(self, claim_id, owner, by="harness", firing=None):
+        """open/handoff -> claimed, by run-due at spawn only (section 2.4; Ember 1570189950421565481, point 7): there is
+        no session syntax for claiming an existing open record, and open/none has no assignment policy in v1."""
+        if by != "harness":
+            raise Refused("an open hand-off is claimed only by run-due at spawn; ptask claim makes a new claim")
         if not full_id(owner):
             raise Refused(f"{owner!r} is not a session's full id")
-        self._actor(by, ("harness",))
+        if not full_id(firing):
+            raise Refused("the spawn claim names its firing id")
         with self._locked(claim_id) as record:
             if record["status"] != "open":
                 raise Refused(self._held_by(record) if record["owner"] else f"claim {claim_id} is {record['status']}; claim needs open")
+            if record["dispatch"] != "handoff":
+                raise Refused(f"claim {claim_id} is open with dispatch none: unowned, and nothing assigns it in v1")
             self._append(record, "claim", "claimed", by, to_owner=owner, firing=firing)
             record["nudged"] = record["reported"] = None
             self._write(record)
@@ -408,6 +423,7 @@ class Claims:
                 raise Refused(f"--until: {e}")
         with self._locked(claim_id) as record:
             self._expect(record, "pause", "claimed")
+            self._owner_only(record, by, "pause")
             self._append(record, "pause", "paused", by, why=str(why or ""))
             record["pause_until"] = until_text
             self._write(record)
@@ -417,6 +433,7 @@ class Claims:
         self._actor(by)
         with self._locked(claim_id) as record:
             self._expect(record, "resume", "paused")
+            self._owner_only(record, by, "resume")
             self._append(record, "resume", "claimed", by)
             record["pause_until"] = record["nudged"] = record["reported"] = None
             self._write(record)
@@ -427,6 +444,7 @@ class Claims:
         self._actor(by)
         with self._locked(claim_id) as record:
             self._expect(record, "touch", "claimed", "paused")
+            self._owner_only(record, by, "touch")
             self._append(record, "touch", record["status"], by)
             self._write(record)
             return record
@@ -441,6 +459,8 @@ class Claims:
         self._actor(by)
         with self._locked(claim_id) as record:
             self._expect(record, "done" if to == "done" else "abandon", *allowed)
+            if record["status"] != "open":
+                self._owner_only(record, by, "done" if to == "done" else "abandon")
             self._append(record, "done" if to == "done" else "abandon", to, by)
             record["outcome"], record["pause_until"] = str(outcome or ""), None
             self._write(record)
@@ -509,7 +529,7 @@ class Claims:
 
 
 # ptask: the session's own command. `claim` and `take` are refused in a room session (section 2.2).
-USAGE = """ptask claim [--cwd <dir>] "<task>"     claim a task for this session (not from a room session: use pwake)
+USAGE = """ptask claim [--cwd <dir>] "<task>"     a new claim, owned by this session (not from a room session: use pwake)
 ptask list                               this self's claims not yet closed
 ptask show <id>                          one claim, whole
 ptask pause <id> [--until <UTC time>] "<why>"
@@ -542,13 +562,14 @@ def cli(args, env=None, state=None, home=None, cwd=None, out=print, err=None, no
             raise Refused(f"a room session can't own a claim (its id is resumed by the bridge); use pwake, which "
                           f"starts a working session that the harness claims for")
         if verb == "claim":
-            where = cwd or os.getcwd()
+            here = cwd or os.getcwd()
+            where = here
             if rest[:1] == ["--cwd"] and len(rest) > 1:
                 where, rest = rest[1], rest[2:]
             task = " ".join(rest).strip()
             if not task:
                 raise Refused('ptask claim needs the task: ptask claim "<task>"')
-            record = c.claim(task, session, where)
+            record = c.claim(task, session, where, base=here)
             out(f"claimed {record['id']} in {record['cwd']}")
         elif verb == "list":
             moment = c.now()
