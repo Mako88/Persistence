@@ -209,17 +209,26 @@ firing with a claim only as C treats any `work` firing then: report it once, nev
 later doesn't retry a firing C already reported: A treats a claim whose current spell's firing has a C report as
 `reported` for that spell, so it moves again only after a session's transition (`resume`, `take`) starts a new spell.
 
-**Locks** (Ember's item 1, Arden's point 1). One global order: **`heartbeat.lock` → `wakes.lock` →
-`state/tasks/.lock`**. Whenever a path needs more than one, it takes them in that order; no path must take all three.
-**No lock is held across a process launch, a model call or journal I/O.** The paths that take more than one:
-- **run-due's spawn claim:** under `wakes.lock`, then `tasks/.lock`: (1) the claim `open → claimed` with `firing` = F,
-  (2) the `enqueued` fact for F, (3) the queue rewritten without F; release both, then launch through `cwd-exec`.
-- **a nudge or never-started recovery:** under `heartbeat.lock`, `wakes.lock`, `tasks/.lock`: (1) the mark (`nudged`,
-  history `action: nudge`, `firing` = F, a fresh UUID4), (2) the item with id F through `add_heartbeat_wake`; release.
-  The heartbeat launches nothing; run-due does, later, unlocked.
-- **`take`:** `wakes.lock` (pending-wake check), then `tasks/.lock`.
-- **a report:** the line is written to the sink holding no claims or wakes lock; then `tasks/.lock` alone sets
-  `reported` if it is still null.
+**Locks** (Ember's item 1, Arden's point 1). One global order, in Arden's words, the same sentence as heartbeat.md
+rev 3 ("Lock order"):
+
+> **Lock order: a path takes only the locks it needs, and whenever it holds more than one of `state/heartbeat.lock`,
+> `state/wakes.lock`, `state/tasks/.lock` and `state/fired.lock` it takes them in that order, never waits for an
+> earlier one while holding a later one, and takes no other lock while holding `state/fired.lock`; no path holds any of
+> them while it launches a process or model or writes a report to the journal.**
+
+`state/fired.lock` is the ledger's lock (heartbeat.md, Ember's point 4). It is last because it is a leaf: held only
+for one append or one snapshot read. The paths in this doc that take more than one:
+- **run-due's spawn claim:** `wakes.lock` → `tasks/.lock` → `fired.lock`: (1) the claim `open → claimed` with
+  `firing` = F, (2) the `enqueued` fact for F, appended under `fired.lock` while the other two are held, and
+  `fired.lock` released at once, (3) the queue rewritten without F; release both, then launch through `cwd-exec`.
+- **a nudge or never-started recovery** (the heartbeat's, as heartbeat.md writes it): the firing id F, a fresh UUID4,
+  is minted first; under `heartbeat.lock` → `wakes.lock` → `tasks/.lock` (→ `fired.lock` for `add_heartbeat_wake`'s
+  re-check by id): (1) the item with id F through `add_heartbeat_wake`, (2) the mark (`nudged`, history `action:
+  nudge`, `firing` = F); release. The heartbeat launches nothing; run-due does, later, unlocked.
+- **`ptask take`:** `wakes.lock` (pending-wake check), then `tasks/.lock`.
+- **a report:** the line goes to the journal holding no lock (heartbeat.md's emit phase); then `heartbeat.lock` →
+  `tasks/.lock` sets `reported` if it is still null.
 
 **Crash between the two files: reconciled by firing id**, first in every beat and every run-due, under the same locks,
 before any row. The ledger is read by heartbeat.md's snapshot protocol; an incomplete snapshot defers to the next beat.
@@ -228,10 +237,11 @@ before any row. The ledger is read by heartbeat.md's snapshot protocol; an incom
   = F by F's session, writes no second entry, completes 2 and 3 and launches; nothing was launched before, since launch
   follows the locks. **`enqueued` for F, claim still `open`** (not reachable in this order; e.g. older code): the spawn
   claim is written with `firing` F and nothing launched; the claim is then owner never started, above.
-- **Nudge, claim marked, wake absent** (F in no queue item and no ledger fact): the item is added with id F, its fixed
-  text and the record's `cwd`; `nudged` keeps its time. **Wake present** (an item or `enqueued` fact with `by:
-  heartbeat`, `claim` = this claim, id F) **, claim unmarked**: the mark is written with `firing` F and `nudged` = the
-  item's `at`; no item added.
+- **Nudge, wake present, claim unmarked** (crash after 1: an item, or an `enqueued` or `taken` fact, with `by:
+  heartbeat`, `claim` = this claim, id F, and no `nudge` entry in the current spell): the mark is written with `firing`
+  F and `nudged` = the item's `at`; no item added. **Claim marked, wake absent** (F in no queue item and no ledger
+  fact; with the item-first order only a restore or hand edit reaches it): the item is re-added with id F, its fixed
+  text and the record's `cwd`; `nudged` keeps its time.
 Each reconciliation is a function of the files alone, so two beats, or a beat and run-due, reach the same result.
 
 **Reports: fixed content, durable state, the sink is the heartbeat's** (Ember's point 3). The claims contract fixes
@@ -275,8 +285,12 @@ consent. **Way back:** turn the setting off; claim files are plain JSON, no stor
   firing once and never retries; the claim file is byte-for-byte unchanged across any number of beats. Turning claims
   on afterwards adds no nudge or retry for that spell; a `resume` or `take` starts a new spell that A handles normally.
 - **Lock order** (Ember 1): every path above that takes more than one lock runs under a recording lock wrapper that
-  fails on any out-of-order acquisition; spawn, nudge, `take` and settle racing complete under a timeout; the fake
-  launcher and fake sink assert no lock is held when called. Mutation: `tasks/.lock` before `wakes.lock`.
+  fails on any out-of-order acquisition and on any lock taken while `fired.lock` is held; spawn, nudge, `take` and
+  settle racing complete under a timeout; the fake launcher and fake sink assert no lock is held when called. **The
+  spawn path** (Ember, 1570158593645355039): run-due holds `wakes.lock` and `tasks/.lock`, then appends `enqueued`
+  under `fired.lock`; the recorder sees exactly `wakes.lock` → `tasks/.lock` → `fired.lock`, `fired.lock` released
+  before the queue rewrite, and all three released before the launcher is called. Mutations: `tasks/.lock` before
+  `wakes.lock`; `fired.lock` taken before `tasks/.lock`; the `enqueued` append done after releasing `tasks/.lock`.
 - **Split writes** (Ember 1): a fault hook kills each path after each numbered step; the next beat or run-due leaves
   exactly one claim entry and one item or `enqueued` fact per firing, and at most one worker. Both crash halves of the
   nudge and both of the spawn are reached. Mutation: reconciling by claim id instead of firing id.
@@ -326,9 +340,11 @@ the text. Not in v1. Addressed work-inbox notes (section 2) are a separate chang
 
 ## What changed from d163367
 
-- Ember 1, Arden 1, lock order and split writes → section 4 "Locks": the global order, the multi-lock paths, no lock
-  across launch, model or journal I/O; reconciliation of both crash halves of the spawn and of the nudge by firing id
-  (`firing` added to history entries, section 1); tests.
+- Ember 1, Arden 1, lock order and split writes → section 4 "Locks": Arden's lock-order sentence word for word
+  (heartbeat.md rev 3), `fired.lock` last as a leaf, the multi-lock paths (the nudge writes its item first, then the
+  mark, as heartbeat.md does), no lock across launch, model or journal I/O; reconciliation of both crash halves of
+  the spawn and of the nudge by firing id (`firing` added to history entries, section 1); tests, including the spawn
+  path's `enqueued` append under `fired.lock`.
 - Ember 2, Arden 2, claimed but never started → section 2.4 and section 4 "Owner never started": stays `claimed`, one
   recovery with `--session-id` on the same id; the `open`/`handoff` row narrowed to failure before the spawn claim;
   tests for each route and for A and C never both acting.
