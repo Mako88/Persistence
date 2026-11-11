@@ -1746,17 +1746,20 @@ HANDOFF_BACK = 8           # messages in the range when no --from is named
 HANDOFF_CAP = 6000         # characters of quoted evidence, oldest dropped first
 HANDOFF_CLIP = 600         # characters of one quoted message
 HANDOFF_HISTORY = 5000     # messages of a channel asked of the bridge
+ROOM_WAIT = 30             # seconds for the bridge when a session starts with its hand-off
+ROOM_WAIT_OBSERVED = 3     # seconds on the observe path, which runs every prompt (Claude's review, 2026-11-11)
 ACTION_TAGS = re.compile(r"<\s*/?\s*(?:think|respond|context|actions|continue)\b[^>]*>", re.IGNORECASE)  # as PromptFormatter
 
 
-def room_ask(request):
-    """One request to this user's room bridge over its socket (mode 600), as `room` sends it. Only `read` is used here."""
+def room_ask(request, timeout=ROOM_WAIT):
+    """One request to this user's room bridge over its socket (mode 600), as `room` sends it. Only `read` is used here.
+    The timeout bounds each socket operation, so a bridge that accepts and never answers costs about that much."""
     import socket
 
     path = os.environ.get("PERSISTENCE_ROOM_SOCKET") or str(Path.home() / ".config" / "persistence-room" / "bridge.sock")
     s = socket.socket(socket.AF_UNIX)
     try:
-        s.settimeout(30)
+        s.settimeout(timeout)
         s.connect(path)
         s.sendall((json.dumps(request) + "\n").encode())
         data = b""
@@ -1772,10 +1775,10 @@ def room_ask(request):
         s.close()
 
 
-def channel_history(channel):
+def channel_history(channel, timeout=ROOM_WAIT):
     """The channel's messages the bridge holds, oldest first, or None when it can't be read. Filtered by channel here
     too: the range resolves within its channel whatever the bridge returns."""
-    reply = room_ask({"op": "read", "channel": str(channel), "limit": HANDOFF_HISTORY})
+    reply = room_ask({"op": "read", "channel": str(channel), "limit": HANDOFF_HISTORY}, timeout=timeout)
     if not isinstance(reply, dict) or not reply.get("ok"):
         return None
     return [m for m in reply.get("messages") or [] if str(m.get("channel_id")) == str(channel)]
@@ -1801,8 +1804,11 @@ def task_record(task, origin_session, owner, channel, start=None):
 
 
 def channel_label(history, channel):
-    """#name from any message that has it (the bridge's records of its own posts don't), else the channel's id."""
+    """#name from any message that has it (the bridge's records of its own posts don't), else the channel's id. The
+    name is room text, so it is collapsed to one run of words (every kind of line break included) and clipped to 40:
+    it goes into a heading, the one place no room text should reach (Claude's review, 2026-11-11)."""
     name = next((m.get("channel_name") for m in history if m.get("channel_name")), None)
+    name = "-".join(str(name or "").split())[:40]
     return f"#{name}" if name else f"channel {channel}"
 
 
@@ -1824,7 +1830,7 @@ def quoted(m):
     when = datetime.fromtimestamp(float(m["ts"]), timezone.utc).strftime("%H:%MZ") if m.get("ts") else "?"
     line = f"> [{when}] {author} ({m['id']}): {text}"
     line = ACTION_TAGS.sub(lambda t: "⟦" + t.group()[1:-1].strip() + "⟧", line)
-    return line.replace("```", "`·`·`")  # visibly broken, never a look-alike (#1396)
+    return line.replace("```", "`·`·`").replace("~~~", "~·~·~")  # visibly broken, never a look-alike (#1396)
 
 
 def evidence_block(record):
@@ -1861,7 +1867,7 @@ def room_freshness(session):
         return None
     if not record.get("room_channel") or not record.get("room_upto"):
         return None
-    history = channel_history(record["room_channel"])
+    history = channel_history(record["room_channel"], timeout=ROOM_WAIT_OBSERVED)
     if not history:
         return None
     newer = [m for m in history if int(m["id"]) > int(record["room_upto"])]

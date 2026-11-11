@@ -46,7 +46,7 @@ class FakeBridge:
     def __init__(self, history, up=True):
         self.history, self.up, self.requests = history, up, []
 
-    def __call__(self, request):
+    def __call__(self, request, timeout=None):
         self.requests.append(copy.deepcopy(request))
         if not self.up:
             return {"ok": False, "error": "cannot reach the room bridge"}
