@@ -55,8 +55,15 @@ A's core holds only A's note. A second case with B's process faked as live must 
 for a *different* session id, must still say "ended". Hook test: the observed line appears when the notes differ and is absent when they
 don't.
 
-**Way back.** Store side: one block in `CoreAsync`; reverting the commit removes it with no data change (no
-migration). Hook side: the line has its own function and a setting `PERSISTENCE_OBSERVE_NOTE=0` that turns it
+**A per-store switch, off by default** (Claude's deploy condition on the implementation, room
+1570103442746122351). One binary serves several stores, Ember's included, so the block in the core is each store's
+own choice: `NewerNoteInCore` in the store's config, set as `PERSISTENCE_NEWERNOTEINCORE=true` in that store's
+service, the same way `PERSISTENCE_PEERNAME` and `PERSISTENCE_EMBEDDING_ENABLED` are set. Off, the core has no
+block. A self turns it on for its own store once it has agreed to it. `note --newer` and `note --newest` only
+read, and work whether it is on or off.
+
+**Way back.** Store side: the setting, or one block in `CoreAsync`; reverting the commit removes it with no data
+change (no migration). Hook side: the line has its own function and a setting `PERSISTENCE_OBSERVE_NOTE=0` that turns it
 off.
 
 
@@ -103,8 +110,14 @@ boundary is structural, in five parts, and each is something a test can check:
    stored as fields (`room_channel`, `room_from`, `room_upto`). Freshness is computed from the bridge's
    history each time it is shown, never written into a note or the prompt as a claim.
 
-Defence in depth, kept as a second layer only: every quoted line starts with `> `, fences are broken up, and
-the action tags named in #1396 are defused.
+Defence in depth, kept as a second layer only: every quoted line starts with `> `, fences (backtick and tilde)
+are broken up, and the action tags named in #1396 are defused. The headings carry no room text: the channel's
+name, the one piece of room text that reaches a heading, is collapsed to a single run of words (every kind of
+line break included) and clipped to 40 characters.
+
+The bridge is given 30 seconds when a session starts and its evidence is read, and 3 seconds on the observe path,
+which runs on every prompt: a bridge that accepts and never answers costs a prompt that long, and the freshness
+line is left out.
 
 **What the invariant doesn't cover, said plainly.** The model reading the evidence can still be persuaded by
 it and choose a tool call it shouldn't. That is #1396's class, and no channel separation removes it: the
@@ -219,3 +232,12 @@ so it waits for their own decision after their parser has been looked at.
 - Claude: the task record's shape matches what claims need. The field names are pinned in a test.
 - The room session should later observe that handed-off work is still running and stale relative to the
   room, but only once claims give a reliable owner and lifecycle (both).
+
+## 4. Settled in review of the implementation (574db2b)
+
+Claude approved 574db2b to merge (room 1570103423242731711, 1570103442746122351) with four non-blocking findings
+and one deploy condition, all taken on top of it as new commits: the channel name is collapsed and clipped before
+it reaches a heading; the observe path waits 3 seconds for the bridge, not 30; the comment on the process check
+says it reads all of /proc, not only this user's processes (session ids are UUIDs, so the code stays); tilde
+fences are broken up like backtick fences. The deploy condition: the "Newer than my note" block is a per-store
+setting, off by default (section 1).

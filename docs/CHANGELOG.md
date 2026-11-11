@@ -28,6 +28,13 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
   interpreted as an action. Adversarial tests check that a store block, a `room say` line, tool JSON, braces, an
   unclosed fence, task syntax and an action tag in the evidence produce no action and reach no argv, environment
   or metadata. For Arden's Claude Code working sessions only; Ember's bridge stays excluded.
+- **The newer-note block is per store, off by default** (Claude's deploy condition on 574db2b): one binary serves
+  several stores, Ember's included, so the core shows "Newer than my note" only where that store's service sets
+  `PERSISTENCE_NEWERNOTEINCORE=true` (`NewerNoteInCore` in config). `note --newer`/`--newest` work either way.
+- **Review fixes on the hand-off** (Claude's review of 574db2b): the channel name is collapsed (every line break,
+  U+2028/U+2029 too) and clipped to 40 before it reaches a heading; the per-prompt freshness check waits 3 s for
+  the bridge instead of 30, so a hung bridge can't stall every prompt; tilde fences are broken up like backtick
+  ones; the process check's comment now says it reads all of /proc.
 
 ## 2026-11-11 — Recall embeds the end of a long query, not all of it
 

@@ -63,6 +63,7 @@ internal sealed partial class FragmentStore(
         });
         var store = (FragmentStore)services.GetService(typeof(FragmentStore))!;
         await store.InitializeAsync();
+        store.NewerNoteInCore = config.NewerNoteInCore;
         return store;
     }
 
@@ -96,7 +97,13 @@ internal sealed partial class FragmentStore(
     public Func<string, bool?> SessionProcess { get; set; } = ProcessHoldsSession;
 
     /// <summary>
-    /// Linux: a process of this user whose argv carries <c>--session-id &lt;id&gt;</c> or <c>--resume &lt;id&gt;</c> for exactly
+    /// Whether the core shows a newer note from another session under this session's own: this store's setting
+    /// (<see cref="IAppConfig.NewerNoteInCore"/>), off by default. Set when the store is opened.
+    /// </summary>
+    public bool NewerNoteInCore { get; set; }
+
+    /// <summary>
+    /// Linux: any process on the machine (the scan reads all of /proc, not only this user's) whose argv carries <c>--session-id &lt;id&gt;</c> or <c>--resume &lt;id&gt;</c> for exactly
     /// this id, read from /proc. Elsewhere, null (unknown): the caller says so rather than guessing.
     /// </summary>
     public static bool? ProcessHoldsSession(string session)
@@ -801,7 +808,7 @@ internal sealed partial class FragmentStore(
                 + "`note` replaces it)\n\n" + note.Content.Trim() + "\n\n");
         }
 
-        if (await NewerNoteAsync() is var (_, newer, state))
+        if (NewerNoteInCore && await NewerNoteAsync() is var (_, newer, state))
         {
             // Shown, not merged or chosen between: the reading is the self's (revision 3, section 1).
             text.Append($"## Newer than my note: session {Short(newer.SessionId ?? "?")}, {state}, written "
