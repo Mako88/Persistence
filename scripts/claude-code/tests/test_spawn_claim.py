@@ -151,6 +151,7 @@ class SpawnClaim(Base):
         [call] = self.launched.calls
         self.assertEqual(call["cwd"], after["cwd"])
         argv = call["argv"]
+        self.assertIn("--session-id", argv)
         self.assertEqual(argv[argv.index("--session-id") + 1], item["session"])
         self.assertNotIn("--resume", argv)
         self.assertIn(record["id"], call["prompt"])
@@ -325,6 +326,21 @@ class CwdThroughTheHandOff(Base):
         (self.home / "work").symlink_to(self.outside)
         self.refused(record)
 
+    def test_the_launch_uses_the_descriptor_bound_in_the_transition_not_the_path_again(self):
+        """Retargeted after run-due bound the cwd and before it launched: the worker still starts in the directory that
+        was verified, not where the string now points."""
+        record, item = self.pwake()
+        real = hook._run_due_locked
+
+        def then_swap(*a, **k):
+            real(*a, **k)
+            (self.home / "work").rename(self.home / "work.aside")
+            (self.home / "work").symlink_to(self.outside)
+        with mock.patch.object(hook, "_run_due_locked", then_swap):
+            self.run_due()
+        [call] = self.launched.calls
+        self.assertEqual(call["cwd"], str(self.home / "work.aside"))
+
     def test_a_missing_claim_is_refused(self):
         record, item = self.pwake()
         self.claim_file(record).unlink()
@@ -360,6 +376,7 @@ class Seam(Base):
         finally:
             for p in self.fakes:
                 p.start()
+        self.assertTrue(out.exists(), "the worker ran (it exits at once without --session-id)")
         seen = json.loads(out.read_text())
         self.assertEqual(seen["cwd"], str(self.home / "work"))
         self.assertEqual(seen["argv"][seen["argv"].index("--session-id") + 1], item["session"])

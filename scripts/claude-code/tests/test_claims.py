@@ -785,7 +785,7 @@ class OpenRecords(Base):
         before = path.read_bytes()
         for actor in (self.me, sid(), "pause-expiry", "heartbeat"):
             with self.subTest(by=actor), self.assertRaises(claims.Refused):
-                self.c.claim_open(o["id"], self.me, by=actor)
+                self.c.claim_open(o["id"], self.me, by=actor, firing=sid())
         self.assertEqual(path.read_bytes(), before)
         after = self.c.claim_open(o["id"], self.me, by="harness", firing=sid())
         self.assertEqual((after["status"], after["owner"], after["history"][-1]["by"]), ("claimed", self.me, "harness"))
