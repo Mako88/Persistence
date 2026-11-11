@@ -137,6 +137,21 @@ public class EmbeddingMemorySurfacerTests
     }
 
     [Fact]
+    public async Task SurfaceAsync_EmbedsOnlyTheEndOfALongQuery()
+    {
+        // The embedder refuses past 512 tokens; a whole long message sent to it cost recall its semantic ranking.
+        var embeddings = new FakeEmbeddingClient();
+        var surfacer = Build(lexicalHits: [Frag(1)], embeddings: embeddings, stored: [(1L, [1f, 0f])]);
+        var query = new string('x', 3000) + " so what should we do about the slowdown?";
+
+        await surfacer.SurfaceAsync([], query, count: 2, CancellationToken.None);
+
+        var sent = Assert.Single(embeddings.Texts);
+        Assert.Equal(EmbeddingMemorySurfacer.MaxEmbedChars, sent.Length);
+        Assert.EndsWith("about the slowdown?", sent);
+    }
+
+    [Fact]
     public async Task SurfaceAsync_FallsBackToLexicalWhenTheEmbeddingServiceIsUnreachable()
     {
         // A wedged embedding server must cost the peer its semantic reach, not its turn.
@@ -331,11 +346,13 @@ public class EmbeddingMemorySurfacerTests
         public bool Throws { get; set; }
         public float[] QueryVector { get; set; } = [1f, 0f];
         public int EmbedCallCount { get; private set; }
+        public List<string> Texts { get; } = [];
 
         public Task<IReadOnlyList<float[]>> EmbedAsync(
             IReadOnlyList<string> texts, CancellationToken ct = default)
         {
             EmbedCallCount++;
+            Texts.AddRange(texts);
 
             if (Throws)
             {

@@ -29,6 +29,27 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
   unclosed fence, task syntax and an action tag in the evidence produce no action and reach no argv, environment
   or metadata. For Arden's Claude Code working sessions only; Ember's bridge stays excluded.
 
+## 2026-11-11 — Recall embeds the end of a long query, not all of it
+
+- **`EmbeddingMemorySurfacer.QueryText`**: recall, conversation recall and `nearest` embed a query's last 1,200
+  characters. Before, the whole query went to the embedder, which refuses past 512 tokens; the error was caught and
+  recall fell back to BM25 alone, saying nothing. That happened on 5 of 35 real prompts in my recall gold set (John's
+  long messages, 2,400 to 3,700 characters) and on both of Arden's fixed cases. The end is kept because a long
+  message ends with what it asks. Measured on my store: 20/31 vs 19/31 at W=1 (2 right, 1 wrong), 23/31 either way
+  at W=0; on Arden's, no change in hits. Neutral on gold within noise; the gain is that recall no longer loses its
+  semantic half without a sign.
+
+## 2026-11-11 — Recall: an importance-weight knob and the ablation it ran
+
+- **`EmbeddingSettings.QualityWeight`** (env `PERSISTENCE_EMBEDDING_QUALITYWEIGHT`, default 1, unchanged
+  behaviour): both recall rankings now score relevance x quality^W, so W=0 ranks by relevance alone. One helper,
+  `MemorySurfacer.Quality`, replaces the two copies of the quality term. Why: Arden saw the same few high-importance
+  fragments win across unrelated prompts; one scalar was doing two jobs (keep a fragment prominent, and make it look
+  relevant). The ablation (docs/design/concept-graph.md step 6): W=0 reaches 23/31 vs 19/31 on my store and 7/17 vs
+  5/17 on Arden's, nothing made wrong on either; a lean on small sets. The default stays 1 until we choose.
+- **recall-eval**: `run --quality-weight W` and `--parts` (each pooled fragment's cosine, importance, confidence),
+  `winners` (fragments shown on many prompts, with those parts), and `floor` sweeps a minimum cosine over that pool.
+
 ## 2026-11-11 — Store commands from a Codex room wake (built, off)
 
 - **`scripts/codex/room_store.py`**, switched on by `CODEX_ROOM_STORE=1` in `room-wake`: a self on Codex, read-only

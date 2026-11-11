@@ -182,8 +182,22 @@ Three parts, inside the same character budget the hook has now:
      still not). A +2 on 28 with 8 flips is **not distinguishable from noise**; a lean, not a result.
    - `prevtail` (only the turn's last 600 chars) is worse: 12/28 @3 (3 right, 6 wrong). The turn's tail is mostly
      sign-off and questions, not the topic.
-   Next: Arden's store under their five conditions (#15813 in my store), a bigger set, then decide.
-   Still open: more no-gold prompts, a floor arm on today's own scores.
+   Arden's store (their snapshot, five conditions): message only 4/17 @3; +prev 5/17. No evidence either way.
+   **Importance ablation, 2026-11-11 ~15:45Z** (`run --quality-weight W`: each ranking scores relevance x quality^W,
+   quality = mean of importance and confidence; W=1 is today). Arden's reading of their test: the same few
+   high-importance fragments win across unrelated prompts. @5, first three of that list for @3:
+   - Mine (31 gold): W=1 19/31, 0.5 21, 0.25 22, **W=0 23/31** (4 made right, 0 made wrong); @3 16 to 21.
+     Arden's (17): W=1 5/17, **W=0 7/17** (2 right, 0 wrong); @3 4 to 6. Same direction on both, monotone in W on
+     mine; small samples, so a lean, but no prompt got worse on either store.
+   - The repeat winners mostly stay at W=0 (mine #7010, #6928: 22 and 21 prompts to 14 each). Their cosines are
+     typical of what is shown, not low. So importance is part of the crowding, not all of it.
+   - A minimum cosine floor is a weak absence signal: gold cosines (0.55 to 0.85) overlap no-gold prompts' best
+     (0.53 to 0.80). On mine 0.6 costs 1 hit and empties 2 of 4 no-gold prompts; on Arden's it costs nothing and
+     empties 3 of 15. Arden's Emma case (right answer: nothing) has a best cosine of 0.77, above the median gold;
+     no cosine floor gives it nothing. Next for the floor: the cross-encoder's score (the rerank arm).
+   - Found on the way: the store embedded the whole query, and the embedder refuses past 512 tokens, so recall on
+     John's long messages (5 of my 35 prompts, Arden's Synth-wake and Emma) ran on BM25 alone, silently.
+   Next: decide W (0, or a small weight kept for ties), then the floor on re-ranker scores, a bigger set.
 7. Backfill, then the nightly trickle in the sleep pass, plus a drift check: each night re-read the sources of a few
    random facts; a fact its sources no longer support becomes a retraction proposal (the same channel as flags).
 

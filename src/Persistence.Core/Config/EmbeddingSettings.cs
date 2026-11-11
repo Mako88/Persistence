@@ -52,4 +52,12 @@ public class EmbeddingSettings
     /// 60 is the value the RRF literature settles on and needs no tuning for a store this size.
     /// </summary>
     public int FusionK { get; set; } = 60;
+
+    /// <summary>
+    /// How much a fragment's quality (the mean of importance and confidence) weighs in recall: each ranking
+    /// scores relevance × quality^QualityWeight. 1 is the ranking recall has always had; 0 ranks by relevance
+    /// alone. The knob exists for the importance ablation (scripts/recall-eval): importance may be doing two
+    /// jobs, keeping a fragment prominent and making it look relevant to every prompt.
+    /// </summary>
+    public double QualityWeight { get; set; } = 1.0;
 }
