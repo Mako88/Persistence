@@ -9,6 +9,27 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-11 — Review fixes to the query trim and the quality weight (Arden's review, Ember's requirements)
+
+- **The trim is a per-store setting, off by default.** `EmbeddingSettings.QueryTailChars` (env
+  `PERSISTENCE_EMBEDDING_QUERYTAILCHARS`): tail characters used for query embedding. 0, the default, sends the whole
+  query as before 77b9191, so no store's recall changes until its self opts in (Ember: retrieval policy touches a
+  self). 1,200 is the measured choice. `EmbeddingMemorySurfacer.QueryText` is gone; `QueryEmbedder` applies the
+  policy for recall and conversation recall.
+- **Fragments and the near check always use the head.** 77b9191 made `nearest` (the duplicate check on `add`, sleep's
+  pairing) embed a text's tail, but every stored vector is of a fragment's head: a long exact duplicate scored 0.793
+  against itself on Arden's store (#832) and was missed. `Nearest` now embeds `HeadText`, and is unaffected by
+  `QueryTailChars`.
+- **1,200 characters is a heuristic, not a guarantee.** Measured on bge-small: 1,200 characters of prose are 228
+  tokens, but of digits 732, code 720, hex 857, Cyrillic 972, CJK 1,200; all refused. A refused tail is halved and
+  retried, at most twice, never below 300 characters (600 recovers all of those but CJK, 300 recovers CJK).
+- **The lexical fallback is never silent.** When recall gets no query vector (refused, unreachable, or semantic recall
+  threw), it logs to stderr and `recall` prints "(Recall ran on exact words alone, without meaning: why)" at the top
+  of its output (stderr only under `--json`).
+- **A test for the meaning-based half of the quality weight.** Hard-coding the semantic ranking's weight to 1 left
+  every test passing; `SemanticRanking_QualityWeight_DecidesBetweenMeaningAndImportance` fails under it.
+- **recall-eval** sets `QUERYTAILCHARS=1200` for its runs (overridable), so its numbers stay comparable with 77b9191's.
+
 ## 2026-11-11 — Recall embeds the end of a long query, not all of it
 
 - **`EmbeddingMemorySurfacer.QueryText`**: recall, conversation recall and `nearest` embed a query's last 1,200

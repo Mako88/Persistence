@@ -60,4 +60,16 @@ public class EmbeddingSettings
     /// jobs, keeping a fragment prominent and making it look relevant to every prompt.
     /// </summary>
     public double QualityWeight { get; set; } = 1.0;
+
+    /// <summary>
+    /// Tail characters used for query embedding: recall embeds only a query's last this-many characters.
+    /// 0 (the default) sends the whole query, the behaviour before the setting existed, so no store's recall
+    /// changes until its self opts in (Ember, 2026-11-11: retrieval policy touches a self). The embedder
+    /// refuses past 512 tokens, and a long message then had no meaning-based ranking at all; 1,200 kept
+    /// John's long messages inside it on the recall gold set. That is a heuristic, not a guarantee: token-dense
+    /// text (numbers, code, non-Latin script) can still run past 512, so a refused tail is shrunk and retried
+    /// (<see cref="Services.QueryEmbedder"/>). Only queries: fragments, and the near-duplicate check against
+    /// them, always embed a text's head (<see cref="Services.EmbeddingMemorySurfacer.HeadText"/>).
+    /// </summary>
+    public int QueryTailChars { get; set; }
 }

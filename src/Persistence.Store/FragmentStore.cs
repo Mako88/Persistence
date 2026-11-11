@@ -26,7 +26,8 @@ internal sealed partial class FragmentStore(
     ConversationRecaller conversation,
     IFragmentEmbeddingRepository vectors,
     IEmbeddingClient embeddings,
-    IConceptRepository concepts)
+    IConceptRepository concepts,
+    QueryEmbedder queryEmbedder)
 {
     /// <summary>The parent tag of the projects: a fragment tagged <c>project/&lt;name&gt;</c> belongs to that project.</summary>
     public const string ProjectTag = "project";
@@ -51,7 +52,7 @@ internal sealed partial class FragmentStore(
     /// Opens the store <paramref name="config"/> names: wires the repositories as the app does, migrates
     /// the file (creating it if new), and loads the source ids every write is attributed to.
     /// </summary>
-    public static async Task<FragmentStore> OpenAsync(IAppConfig config, bool debug = false)
+    public static async Task<FragmentStore> OpenAsync(IAppConfig config, bool debug = false, IEmbeddingClient? embedder = null)
     {
         var services = IoC.RegisterServices(builder =>
         {
@@ -59,7 +60,8 @@ internal sealed partial class FragmentStore(
             builder.RegisterInstance(new QuietDisplay(debug)).As<IDisplayProvider>().SingleInstance();
             builder.RegisterType<FragmentStore>().SingleInstance();
             builder.RegisterType<ConversationRecaller>().SingleInstance();
-            builder.RegisterDecorator<RememberingEmbeddingClient, IEmbeddingClient>();
+            // A test's embedder stands in for the configured one (a decorator, as registration order would lose to the scan).
+            builder.RegisterDecorator<IEmbeddingClient>((_, _, inner) => new RememberingEmbeddingClient(embedder ?? inner));
         });
         var store = (FragmentStore)services.GetService(typeof(FragmentStore))!;
         await store.InitializeAsync();
@@ -501,6 +503,7 @@ internal sealed partial class FragmentStore(
         string text, int count, IReadOnlyCollection<long> exclude, string? project = null,
         int wander = 0, int said = 0, DateTimeOffset? before = null)
     {
+        queryEmbedder.Clear();
         var projects = (await FindTagAsync(ProjectTag))?.Id;
         // A project the message names out loud ("the Minecraft mods folder") is in hand for this message,
         // whichever project the session sits in: its fragments count as here, not as a wander.
@@ -539,18 +542,22 @@ internal sealed partial class FragmentStore(
         }
 
         var utterances = await conversation.RecallAsync(text, said, skip, before, Session);
-        return new Recalled(kept, elsewhere, utterances, await FramesAsync(kept, skip, project));
+        return new Recalled(kept, elsewhere, utterances, await FramesAsync(kept, skip, project), queryEmbedder.Fallback);
     }
 
     /// <summary>Embeds up to <paramref name="limit"/> past utterances that have none yet, for conversation recall.</summary>
     public Task<int> EmbedConversationAsync(int limit) => conversation.BackfillAsync(limit);
 
-    /// <summary>What a recall brought back: this project's fragments, a wander from elsewhere, and things said before.</summary>
+    /// <summary>
+    /// What a recall brought back: this project's fragments, a wander from elsewhere, and things said before; and,
+    /// when it ran on exact words alone because the message could not be embedded, why (<see cref="QueryEmbedder"/>).
+    /// </summary>
     public sealed record Recalled(
         IReadOnlyList<ContextFragmentEntity> Here,
         IReadOnlyList<ContextFragmentEntity> Elsewhere,
         IReadOnlyList<ContextFragmentEntity> Said,
-        IReadOnlyList<ContextFragmentEntity> Frames);
+        IReadOnlyList<ContextFragmentEntity> Frames,
+        string? Fallback = null);
 
     /// <summary>
     /// The projects whose names a text says as words: <c>minecraft-mods</c> is named by "the Minecraft mods

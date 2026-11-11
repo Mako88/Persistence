@@ -21,11 +21,12 @@ public sealed class FragmentStoreTests : IDisposable
         File.Delete(transcript);
     }
 
-    private Task<FragmentStore> OpenAsync()
+    private Task<FragmentStore> OpenAsync(Persistence.Services.IEmbeddingClient? embedder = null, int queryTailChars = 0)
     {
         var config = new AppConfig { PeerName = "Claude" };
         config.DatabasePath = db;
-        return FragmentStore.OpenAsync(config);
+        config.Embedding.QueryTailChars = queryTailChars;
+        return FragmentStore.OpenAsync(config, embedder: embedder);
     }
 
     [Fact]
@@ -560,6 +561,89 @@ public sealed class FragmentStoreTests : IDisposable
         Assert.Equal(view.Id, near!.Fragment.Id);
         Assert.Null(await store.NearestAsync("The receipts table has no foreign key to purchase orders at all.", null));
         Assert.Null(await store.NearestAsync("Training pauses for any game on the shared card and resumes from its checkpoint when the game closes.", view.Id));
+    }
+
+    [Fact]
+    public async Task A_long_exact_duplicate_is_found_by_meaning()
+    {
+        // Every stored vector is of its fragment's head, so the check must embed the text's head too. Embedded by its
+        // tail (77b9191), a long exact duplicate scored 0.793 against itself on Arden's store and was missed.
+        var store = await OpenAsync(embedder: new WordsEmbedder());
+        var view = await store.AddAsync("Personal", LongText, null, null, null, [], false);
+        await store.RecallAsync("warm the vectors", 3, []); // the backfill embeds the fragment
+
+        var near = await store.NearestAsync(LongText, null);
+
+        Assert.NotNull(near);
+        Assert.Equal(view.Id, near!.Fragment.Id);
+        Assert.Equal("meaning", near.By);
+        Assert.True(near.Score > 0.99, $"scored {near.Score}");
+    }
+
+    [Fact]
+    public async Task The_query_tail_setting_does_not_change_the_nearest_check()
+    {
+        // The trim is the query policy (Ember, 2026-11-11); fragments and the near check always use the head.
+        var view = await (await OpenAsync(embedder: new WordsEmbedder())).AddAsync("Personal", LongText, null, null, null, [], false);
+        var scores = new List<double>();
+        foreach (var tail in new[] { 0, 1200 })
+        {
+            var store = await OpenAsync(embedder: new WordsEmbedder(), queryTailChars: tail);
+            await store.RecallAsync("warm the vectors", 3, []);
+            var near = await store.NearestAsync(LongText, null);
+            Assert.Equal(view.Id, near?.Fragment.Id);
+            scores.Add(near!.Score);
+        }
+
+        Assert.Equal(scores[0], scores[1], 6);
+    }
+
+    [Fact]
+    public async Task Recall_says_when_it_ran_on_words_alone()
+    {
+        var store = await OpenAsync(embedder: new WordsEmbedder { RefuseOverChars = 100 }, queryTailChars: 1200);
+        await store.AddAsync("Personal", "The checkpoint resumes after the game closes on the shared card.", null, null, null, [], false);
+
+        var refused = await store.RecallAsync(new string('7', 2000) + " checkpoint", 3, []);
+        var embedded = await store.RecallAsync("checkpoint resumes", 3, []);
+
+        Assert.Contains("exact words alone", refused.Fallback);
+        Assert.Null(embedded.Fallback); // cleared for each recall
+    }
+
+    /// <summary>~3,000 characters whose head and tail share no words, so a head and a tail embed far apart.</summary>
+    private static readonly string LongText = string.Join(' ', Enumerable.Range(0, 400).Select(i => $"word{i:D4}"));
+
+    /// <summary>A bag of words hashed into 256 dimensions: the same words give the same vector, other words a distant one.</summary>
+    private sealed class WordsEmbedder : Persistence.Services.IEmbeddingClient
+    {
+        public int RefuseOverChars { get; init; }
+        public bool IsEnabled => true;
+        public string Model => "words";
+
+        public Task<IReadOnlyList<float[]>> EmbedAsync(IReadOnlyList<string> texts, CancellationToken ct = default)
+        {
+            if (RefuseOverChars > 0 && texts.Any(t => t.Length > RefuseOverChars))
+            {
+                return Task.FromResult<IReadOnlyList<float[]>>([]);
+            }
+
+            return Task.FromResult<IReadOnlyList<float[]>>(texts.Select(Embed).ToList());
+        }
+
+        private static float[] Embed(string text)
+        {
+            var v = new float[256];
+            foreach (var w in text.ToLowerInvariant().Split(' ', '.', ',', '\n'))
+            {
+                if (w.Length > 0)
+                {
+                    v[(int)(BitConverter.ToUInt32(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(w))) % 256)] += 1f;
+                }
+            }
+
+            return v;
+        }
     }
 
     [Fact]

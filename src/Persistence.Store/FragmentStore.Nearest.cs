@@ -38,7 +38,8 @@ internal sealed partial class FragmentStore
         }
 
         var stored = (await vectors.GetAllAsync(embeddings.Model)).Where(v => v.ContextFragmentId != except).ToList();
-        var query = stored.Count > 0 ? await embeddings.EmbedAsync([EmbeddingMemorySurfacer.QueryText(text)]) : [];
+        // The head, as every stored vector is of its fragment's head; never the query policy (QueryTailChars).
+        var query = stored.Count > 0 ? await embeddings.EmbedAsync([EmbeddingMemorySurfacer.HeadText(text)]) : [];
         var found = new List<Near>();
         if (query.Count > 0 && query[0].Length > 0)
         {

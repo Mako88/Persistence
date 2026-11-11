@@ -32,6 +32,7 @@ public class EmbeddingMemorySurfacer : IMemorySurfacer
     private readonly IFragmentEmbeddingRepository embeddingRepo;
     private readonly IContextFragmentRepository fragmentRepo;
     private readonly IAppConfig config;
+    private readonly QueryEmbedder queryEmbedder;
 
     /// <summary>
     /// How many candidates each ranking contributes to the fusion. Wider than the requested count so
@@ -49,13 +50,15 @@ public class EmbeddingMemorySurfacer : IMemorySurfacer
         IEmbeddingClient embeddings,
         IFragmentEmbeddingRepository embeddingRepo,
         IContextFragmentRepository fragmentRepo,
-        IAppConfig config)
+        IAppConfig config,
+        QueryEmbedder queryEmbedder)
     {
         this.lexical = lexical;
         this.embeddings = embeddings;
         this.embeddingRepo = embeddingRepo;
         this.fragmentRepo = fragmentRepo;
         this.config = config;
+        this.queryEmbedder = queryEmbedder;
     }
 
     /// <inheritdoc />
@@ -83,10 +86,11 @@ public class EmbeddingMemorySurfacer : IMemorySurfacer
                 ? lexicalRanked.Take(count).ToList()
                 : Fuse(lexicalRanked, semanticRanked, config.Embedding.FusionK, count);
         }
-        catch
+        catch (Exception ex)
         {
             // Semantic recall is the enrichment, the lexical result is the floor. A store that cannot
-            // be embedded today still recalls the way it did yesterday.
+            // be embedded today still recalls the way it did yesterday, and says so.
+            queryEmbedder.Note($"semantic recall failed ({ex.Message})");
             return lexicalRanked.Take(count).ToList();
         }
     }
@@ -108,14 +112,10 @@ public class EmbeddingMemorySurfacer : IMemorySurfacer
             return [];
         }
 
-        var queryVectors = await embeddings.EmbedAsync([QueryText(queryText)], ct);
-
-        if (queryVectors.Count == 0 || queryVectors[0].Length == 0)
+        if (await queryEmbedder.EmbedAsync(queryText, ct) is not { } queryVector)
         {
             return [];
         }
-
-        var queryVector = queryVectors[0];
 
         // Rank ids by similarity first, then hydrate only the top of the list: the vectors are the
         // cheap part, the fragment rows are not.
@@ -214,22 +214,19 @@ public class EmbeddingMemorySurfacer : IMemorySurfacer
     /// no content. Small embedders read 512 tokens; one fragment past that failed the whole backfill batch
     /// on every call, so nothing written after it was ever embedded. The opening is what it is about.
     /// </summary>
-    internal static string EmbedText(ContextFragmentEntity fragment)
-    {
-        var text = string.IsNullOrWhiteSpace(fragment.Content) ? fragment.Summary ?? "" : fragment.Content;
-        return text.Length > MaxEmbedChars ? text[..MaxEmbedChars] : text;
-    }
+    internal static string EmbedText(ContextFragmentEntity fragment) =>
+        HeadText(string.IsNullOrWhiteSpace(fragment.Content) ? fragment.Summary ?? "" : fragment.Content);
 
     /// <summary>
-    /// The text a query is embedded from: its last <see cref="MaxEmbedChars"/> characters. The embedder refuses
-    /// past 512 tokens, and recall then fell back to BM25 alone, silently: 5 of 35 real prompts in the recall
-    /// gold set (John's long messages, 2,400 to 3,700 characters) never had a semantic ranking (2026-11-11).
-    /// The end is kept because a long message ends with what it asks, and a query with the turn before it
-    /// (recall-eval --context prev) puts the message last.
+    /// The head policy: a text's first <see cref="MaxEmbedChars"/> characters. Every fragment vector is of its
+    /// head, so a check that compares a text with the stored fragments (the near-duplicate check on <c>add</c>,
+    /// sleep's pairing) must embed the text's head too, whatever the query policy: embedded by its tail, a long
+    /// exact duplicate scored 0.793 against itself and was missed (Arden, 2026-11-11). A query's own policy is
+    /// <see cref="QueryEmbedder"/>'s.
     /// </summary>
-    public static string QueryText(string text) => text.Length > MaxEmbedChars ? text[^MaxEmbedChars..] : text;
+    public static string HeadText(string text) => text.Length > MaxEmbedChars ? text[..MaxEmbedChars] : text;
 
-    /// <summary>Characters of a fragment embedded: well inside 512 tokens even for dense text.</summary>
+    /// <summary>Characters of a fragment embedded: inside 512 tokens for prose, a heuristic rather than a guarantee for dense text.</summary>
     public const int MaxEmbedChars = 1200;
 
     /// <summary>

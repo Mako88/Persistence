@@ -431,6 +431,7 @@ public class AppConfig : IAppConfig
         if (Env("BACKFILLPERTURN") is { } f && int.TryParse(f, out var fp)) config.Embedding.BackfillPerTurn = fp;
         if (Env("FUSIONK") is { } k && int.TryParse(k, out var fk)) config.Embedding.FusionK = fk;
         if (Env("QUALITYWEIGHT") is { } q && double.TryParse(q, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var qw)) config.Embedding.QualityWeight = qw;
+        if (Env("QUERYTAILCHARS") is { } qt && int.TryParse(qt, out var qtc)) config.Embedding.QueryTailChars = qtc;
     }
 
     private static async Task<AppConfig> LoadFromFileAsync(string path) =>

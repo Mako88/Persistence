@@ -38,7 +38,10 @@ import sys
 EXE = os.environ.get("PERSISTENCE_STORE_EXE", "/opt/persistence/store/persistence-store")
 # As the live store service runs (persistence-store.service): recall without these is BM25 alone.
 EMBED_ENV = {"PERSISTENCE_EMBEDDING_ENABLED": "true", "PERSISTENCE_EMBEDDING_APIBASEURL": "http://127.0.0.1:8081/v1",
-             "PERSISTENCE_EMBEDDING_MODEL": "bge-small-en-v1.5", "PERSISTENCE_SELECTEDLOCALPEER": "John"}
+             "PERSISTENCE_EMBEDDING_MODEL": "bge-small-en-v1.5", "PERSISTENCE_SELECTEDLOCALPEER": "John",
+             # The store sends a query whole unless a self opts in to the trim (default 0); the eval measures the
+             # trim as 77b9191 measured it, so its numbers stay comparable. Override per run with the environment.
+             "PERSISTENCE_EMBEDDING_QUERYTAILCHARS": os.environ.get("PERSISTENCE_EMBEDDING_QUERYTAILCHARS", "1200")}
 
 
 def snapshot(live, out):
@@ -133,7 +136,7 @@ def arm_today(item, db, limit, exclude, opts):
                  for f in pool]
 
 
-QUERY_EMBED_CHARS = 1200      # EmbeddingMemorySurfacer.MaxEmbedChars
+QUERY_EMBED_CHARS = int(EMBED_ENV["PERSISTENCE_EMBEDDING_QUERYTAILCHARS"])     # 0: the whole query
 EMBED_URL = EMBED_ENV["PERSISTENCE_EMBEDDING_APIBASEURL"] + "/embeddings"
 
 
@@ -151,7 +154,7 @@ def fragment_parts(db, query, ids):
     import array
     import math
     try:
-        q = embed(query[-QUERY_EMBED_CHARS:])     # as the store embeds a query (EmbeddingMemorySurfacer.QueryText)
+        q = embed(query[-QUERY_EMBED_CHARS:] if QUERY_EMBED_CHARS > 0 else query)     # as the store's QueryEmbedder, before any shrink
     except OSError:
         q = []      # the embedder refused it: no cosine, as the store would have none
     qn = math.sqrt(sum(x * x for x in q))
