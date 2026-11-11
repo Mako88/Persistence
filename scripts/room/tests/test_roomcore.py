@@ -553,6 +553,7 @@ class WakeCommand(unittest.TestCase):
         rc.after_wake(cfg, store, usage_log(149_000))
         self.assertEqual(rc.wake_argv(cfg, store)[0][3], "old")
         rc.after_wake(cfg, store, usage_log(151_000))
+        rc.after_wake(cfg, store, usage_log(152_000))   # the last wake in the old session (see the test below)
         argv, new = rc.wake_argv(cfg, store)
         self.assertIn("--session-id", argv); self.assertTrue(new); self.assertNotEqual(new, "old")
         self.assertIn("old", rc.fresh_session_note(store.session()))
@@ -560,6 +561,28 @@ class WakeCommand(unittest.TestCase):
         argv, again = rc.wake_argv(cfg, store)
         self.assertEqual(argv[3], new); self.assertIsNone(again)
         self.assertEqual(rc.fresh_session_note(store.session()), "")   # said once, on the first wake only
+
+    def test_the_wake_after_the_line_is_crossed_is_told_it_is_the_last_and_the_fresh_session_waits_for_it(self):
+        # Arden, 2026-11-11: compaction gives the outgoing session a turn to curate its note before it is cut; a
+        # size-triggered fresh session needs the same, or it starts from a stale note. The size is known only once a
+        # wake ends, so the next wake runs in the old session, told it is its last, and the fresh one starts after it.
+        cfg = config(fresh_session_above_tokens=150_000)
+        store = rc.RoomStore(tempfile.mkdtemp())
+        store.save_session({"id": "old", "created": True})
+        self.assertEqual(rc.last_wake_note(store.session()), "")
+        rc.after_wake(cfg, store, usage_log(151_000))
+        argv, new = rc.wake_argv(cfg, store)
+        self.assertEqual(argv[3], "old"); self.assertIsNone(new)
+        note = rc.last_wake_note(store.session())
+        self.assertIn("last wake in this session", note); self.assertIn("note", note)
+        self.assertEqual(rc.fresh_session_note(store.session()), "")
+        # The last wake did not succeed (the bridge calls after_wake only on exit 0): the next one is told again.
+        self.assertEqual(rc.wake_argv(cfg, store)[0][3], "old")
+        rc.after_wake(cfg, store, usage_log(153_000))
+        argv, new = rc.wake_argv(cfg, store)
+        self.assertTrue(new)
+        self.assertEqual(rc.last_wake_note(store.session()), "")
+        self.assertIn("old", rc.fresh_session_note(store.session()))
 
     def test_context_is_the_last_call_not_the_sum_over_turns(self):
         log = usage_log(240_000, turns=4)
