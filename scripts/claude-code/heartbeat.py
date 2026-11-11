@@ -158,14 +158,30 @@ def reset_time(result, finished):
     return finished + FALLBACK
 
 
-# Reading what the heartbeat compares.
+# Reading what the heartbeat compares. Only a missing file is empty (Ember's B1, B2): a malformed or unreadable one
+# would read as "nothing pending" or "nothing reported" and the beat would act on that. Instead the beat decides
+# nothing, leaves the file exactly as it is, and says so on stderr (the journal) with a non-zero exit.
+class QueueUnreadable(RuntimeError):
+    """wakes.json exists but can't be read as a list."""
+
+
+class StateUnreadable(RuntimeError):
+    """heartbeat.json exists but can't be read as the heartbeat's own state."""
+
+
 def read_queue(state):
-    """wakes.json, read plainly (no lock): B only reads it. Missing or unreadable is empty."""
+    """wakes.json, read plainly (no lock): B only reads it. Missing is empty; malformed or unreadable raises
+    QueueUnreadable. The message names the file and the error's kind, never its content."""
+    path = Path(state).parent / "wakes.json"
     try:
-        items = json.loads((Path(state).parent / "wakes.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        items = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
         return []
-    return [w for w in items if isinstance(w, dict)] if isinstance(items, list) else []
+    except (OSError, ValueError) as e:
+        raise QueueUnreadable(f"{path} can't be read ({type(e).__name__})") from None
+    if not isinstance(items, list):
+        raise QueueUnreadable(f"{path} isn't a list")
+    return [w for w in items if isinstance(w, dict)]
 
 
 def systemctl_run(argv):
@@ -629,13 +645,18 @@ EMPTY = {"reported": {}, "outbox": {}, "crashed_seen": {}, "cap": {}}
 
 
 def load(state):
+    """heartbeat.json. Missing initializes; malformed, unreadable or the wrong shape raises StateUnreadable (Ember's
+    B2): starting clean would drop the hourly cap, the outbox and the reported keys and then go on deciding."""
+    path = Path(state) / "heartbeat.json"
     try:
-        data = json.loads((Path(state) / "heartbeat.json").read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         data = {}
-    except (OSError, ValueError):
-        data = {}  # unreadable: start clean; the worst case is a repeated report, never a lost wake
-    return {k: dict(data.get(k) or {}) if isinstance(data.get(k) or {}, dict) else {} for k in EMPTY}
+    except (OSError, ValueError) as e:
+        raise StateUnreadable(f"{path} can't be read ({type(e).__name__})") from None
+    if not isinstance(data, dict) or any(data.get(k) is not None and not isinstance(data[k], dict) for k in EMPTY):
+        raise StateUnreadable(f"{path} isn't the heartbeat's state")
+    return {k: dict(data.get(k) or {}) for k in EMPTY}
 
 
 def save(state, data):
@@ -697,8 +718,13 @@ def mark(state, keys, now, home=None):
         return  # nothing marked; the next beat emits again
 
 
+def diagnose(error):
+    print(f"heartbeat: {error}; no decisions this beat, and the file is left as it is", file=sys.stderr, flush=True)
+
+
 def beat(state=None, home=None, now=None, sink=journal, systemctl=systemctl_run, user=None):
-    """One beat. Returns "off", "busy" (another beat holds heartbeat.lock) or "ok"."""
+    """One beat. Returns "off", "busy" (another beat holds heartbeat.lock), "ok", "queue-unreadable" (no wake decision
+    this beat; D and earlier reports still go) or "state-unreadable" (nothing decided, emitted or marked)."""
     if not enabled(home):
         return "off"
     state = Path(state or STATE)
@@ -707,15 +733,23 @@ def beat(state=None, home=None, now=None, sink=journal, systemctl=systemctl_run,
         import pwd
 
         user = pwd.getpwuid(os.geteuid()).pw_name
+    status = "ok"
     try:
         with Beat(state, home, now, sink, systemctl, user) as b:
-            b.check_overdue()
-            b.check_ledger()
+            try:
+                b.check_overdue()  # reads the queue first, so a bad one stops the beat before any decision
+                b.check_ledger()
+            except QueueUnreadable as e:
+                diagnose(e)
+                status = "queue-unreadable"
             b.check_units()
+        mark(state, emit(state, sink), now(), home=home)
     except coordination.LockBusy:
         return "busy"
-    mark(state, emit(state, sink), now(), home=home)
-    return "ok"
+    except StateUnreadable as e:
+        diagnose(e)
+        return "state-unreadable"
+    return status
 
 
 def main(argv=None):

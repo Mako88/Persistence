@@ -532,6 +532,86 @@ class OneRecoveryPerSpawn(Base):
         self.assertEqual(self.items(), [])
         self.assertEqual([k.rsplit(":", 1)[1] for k in self.keys()], ["start-failed"])
 
+class CorruptState(Base):
+    """Ember's B1 and B2: only a missing wakes.json or heartbeat.json may read as empty. Malformed or unreadable, the
+    beat makes no decision, leaves the file exactly as it is and says so on stderr (the journal)."""
+
+    def setUp(self):
+        super().setUp()
+        self.f0, _ = self.fire()  # C would retry this
+        owner = sid()
+        self.record = self.c.claim("t", owner, str(self.work))  # A would nudge this
+        self.transcript(owner)
+        self.hb = self.state / "heartbeat.json"
+
+    def tearDown(self):
+        for path in (hook.WAKES, self.hb):
+            if path.exists():
+                path.chmod(0o600)
+        super().tearDown()
+
+    def quiet_beat(self, minutes=None):
+        import contextlib
+        import io
+
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            result = self.beat(minutes)
+        return result, err.getvalue()
+
+    def assert_no_decision(self):
+        self.assertIsNone(self.c.get(self.record["id"])["nudged"])
+        self.assertEqual(self.lines, [])
+        self.assertFalse((self.state / f"wake-{self.f0}.txt").exists())
+
+    def test_malformed_or_unreadable_wakes_json_aborts_the_beats_decisions_and_is_left_alone(self):
+        for bad, mode in ((b"[{", 0o600), (b'{"not": "a list"}', 0o600), (b"[]", 0o000)):
+            with self.subTest(bad=bad, mode=mode):
+                hook.WAKES.write_bytes(bad)
+                hook.WAKES.chmod(mode)
+                hb_before = self.hb.read_bytes()
+                result, err = self.quiet_beat(10)
+                self.assertEqual(result, "queue-unreadable")
+                hook.WAKES.chmod(0o600)
+                self.assertEqual(hook.WAKES.read_bytes(), bad)
+                self.assertEqual(json.loads(self.hb.read_bytes())["cap"], json.loads(hb_before)["cap"])
+                self.assertEqual(json.loads(self.hb.read_bytes())["outbox"], {})
+                self.assert_no_decision()
+                self.assertIn("wakes.json", err)
+
+    def test_missing_wakes_json_is_empty_and_decisions_go_on(self):
+        self.assertFalse(hook.WAKES.exists())
+        result, _ = self.quiet_beat()
+        self.assertEqual(result, "ok")
+        self.assertEqual(len(self.items()), 2)  # C's retry and A's nudge
+
+    def test_malformed_or_unreadable_heartbeat_json_fails_closed_and_is_kept(self):
+        for bad, mode in ((b"{", 0o600), (b"[]", 0o600), (b'{"reported": ["x"]}', 0o600), (b'{"outbox": "x"}', 0o600),
+                          (b'{"reported": {}}', 0o000)):
+            with self.subTest(bad=bad, mode=mode):
+                self.hb.write_bytes(bad)
+                self.hb.chmod(mode)
+                result, err = self.quiet_beat(10)
+                self.assertEqual(result, "state-unreadable")
+                self.hb.chmod(0o600)
+                self.assertEqual(self.hb.read_bytes(), bad)
+                self.assertEqual(self.items(), [])
+                self.assert_no_decision()
+                self.assertIn("heartbeat.json", err)
+
+    def test_a_beat_that_fails_closed_exits_non_zero(self):
+        self.hb.write_bytes(b"{")
+        with mock.patch.object(heartbeat, "beat", return_value="state-unreadable"):
+            self.assertEqual(heartbeat.main(), 1)
+        with mock.patch.object(heartbeat, "beat", return_value="queue-unreadable"):
+            self.assertEqual(heartbeat.main(), 1)
+
+    def test_missing_heartbeat_json_initializes(self):
+        self.hb.unlink()
+        result, _ = self.quiet_beat()
+        self.assertEqual(result, "ok")
+        self.assertTrue(self.hb.exists())
+
 class NotRetroactive(Base):
     claims_on = False
 

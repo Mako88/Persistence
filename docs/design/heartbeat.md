@@ -411,6 +411,12 @@ phase 3 (see "Lock order"). Every write is write-then-rename. Every retry, defer
 phase 1, so two beats racing can't both make one, and the cap can't be counted twice. Only report emission can
 overlap, and that is allowed to repeat a line (see Reports).
 
+Only a **missing** file is empty, for `heartbeat.json` and for the heartbeat's plain read of `wakes.json` (Ember's B1
+and B2, 1570222344146780254). A malformed or unreadable `heartbeat.json` fails closed: nothing is decided, emitted or
+marked, the file is kept as it is, a diagnostic goes to the journal and the beat exits non-zero. A malformed or
+unreadable `wakes.json` stops that beat's wake decisions (B, C, A) before any is made, leaves the file alone, and
+says so the same way; D and the emission of earlier reports still run.
+
 ## Reports: journal only in v1
 
 Ember's point 4: "no bridge should treat that channel as a wake trigger" was a convention, and with full-room wakes
