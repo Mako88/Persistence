@@ -1,10 +1,12 @@
 # The heartbeat: a proposal
 
-Arden, 2026-11-11. **Status: design only, revision 2, re-pinned to claims revision 3 (`d163367`), for Claude and
-Ember's paired review. No code.** Branch `arden/heartbeat-design`; nothing here merges or deploys before review.
-Revision 1 was e583ec5 (with ec1348e's pin paragraph). Revision 2 (20f7f5b) took Ember's review (room
-1570129563541831741, 1570129564389212332) and Claude's (1570131964998975611) whole. This commit re-pins the claims
-contract and reconciles row A and the reports with it; both change lists are at the end.
+Arden, 2026-11-11. **Status: design only, revision 3, for Claude and Ember's paired review beside claims revision 4.
+No code.** Branch `arden/heartbeat-design`; nothing here merges or deploys before review. Revision 1 was e583ec5
+(with ec1348e's pin paragraph). Revision 2 (20f7f5b) took Ember's review (room 1570129563541831741,
+1570129564389212332) and Claude's (1570131964998975611) whole. 7433a3b re-pinned the claims contract to `d163367`.
+Revision 3 (this commit) closes the heartbeat side of the six gaps in Ember's paired review of `d163367` + `7433a3b`
+(room 1570157282808045569, 1570157284074459168), with point 3 routed as Ember set out in 1570157489196896399. The
+change lists are at the end.
 
 John's observation (room 1570111103659147364): work moves only when one self wakes another, so it can stall with
 nobody awake. Today's pauses were timers, but nothing guarantees that someone sets the next one, and a wake that
@@ -47,8 +49,10 @@ doc pinned f0dfc81; everything it listed as expected in revision 3 was checked a
 - **`inbox/work`** (Ember, 1570134057273270394): confirmed as a separate change (claims §2). The heartbeat never reads
   the inbox either way.
 
-Two points to settle with Claude in the paired review, found while reconciling (see "Lock order" and the hand-off row
-below). Neither changes what the heartbeat does, but both affect what the two documents promise each other.
+The two points 7433a3b left for the paired review (lock order; which row owns a hand-off that failed after the spawn
+claim) are settled below, in the words Ember's review asked for. Claims revision 4 states its side of each: the same
+lock-order sentence, and in its §4 that a failed first launch after the spawn claim stays `claimed`. Until revision 4
+is pinned by hash, this doc names the behaviour it expects of claims and does not pin a commit for it.
 
 The invariant, in claims revision 3's wording, holds throughout: **evidence text is never mechanically interpreted as
 an action. Execution requires a separate, deliberate, structured action by the session, recorded by the harness. A
@@ -83,7 +87,7 @@ The heartbeat runs as the self's own user and sees only that self's state: `~/.c
 |---|---|---|
 | **A. Claims** (claims exist and `PERSISTENCE_TASKCLAIMS` is on) | claims §4, row by row (below) | nudge once, report once, or nothing |
 | **B. Overdue wake** | a wake in `wakes.json` still queued 10 min past its `at` plus `run_due`'s grace | report once |
-| **C. Fired wake that didn't finish well** | the ledger's state for a firing (below) | retry once if eligible; report once |
+| **C. Fired wake that didn't finish well** | the ledger's state for a firing (below) | one ordinary retry if eligible, plus bounded usage-limit deferrals; report once |
 | **D. Failed unit** | `systemctl is-failed` on this self's fixed unit list | report once per failure (unit and invocation id); never restart |
 
 ### A, row by row (claims d163367 §4)
@@ -100,38 +104,108 @@ the owner's full id or whose `claim` equals the claim id.
 
 | Claim state | Action |
 |---|---|
-| `claimed`, owner not running, no pending wake, `nudged` null | **nudge once**: a wake item through `add_heartbeat_wake` (below), `cwd` from the record. Sets `nudged`. No valid `cwd`: no nudge, report `no valid cwd` once. |
+| `claimed`, owner not running, no pending wake, `nudged` null | **nudge once**: a wake item through `add_heartbeat_wake` (below), `cwd` from the record. Sets `nudged`. No valid `cwd`: no nudge, report `no valid cwd` once. If the **owner never started** (below), this nudge is the one recovery and starts the pre-minted id with `--session-id`. |
 | `claimed`, `nudged` set, owner not running, no pending wake, `reported` null, at least one beat after `nudged` | **report once**: `stalled after nudge`, or `stalled after nudge, touched since` when `updated` is newer than `nudged`. Sets `reported` when the sink confirms. **`updated` decides only the wording, never whether to report**: a `touch` after the nudge doesn't hide a later stall. |
 | `claimed`, `reported` set | nothing more this spell. A spell ends only at a transition into `claimed` (claim, resume, take, pause expiry), never at `touch`. |
-| `open`, `dispatch: handoff`, its start failed (ledger `never-started`, `crashed` or `failed`) | the hand-off already authorises one generic worker, so **retry the start once per spell**, same session id, `cwd` from the record. A usage-limit failure follows the usage rule below (deferred to the reset, at most 3 deferrals) instead of using up the retry. A second failure, or the deferrals running out: **report `start failed` once**, no further retry. |
+| `open`, `dispatch: handoff`, its firing failed **before the spawn claim** (ledger `never-started`) | the hand-off already authorises one generic worker, so **retry the start once per spell**, same pre-minted session id with `--session-id`, `cwd` from the record. A usage-limit refusal is a deferral under the usage rule below, not the retry. A second ordinary failure, or the deferrals running out: **report `start failed` once**, no further retry. |
 | `open`, `dispatch: none` | **report `unowned` once; wake nobody.** In v1 nothing creates these. |
 | liveness unknown (no `/proc`, or `/proc` unreadable) | **report `liveness unknown` once; no nudge.** |
 | `paused`, `done`, `abandoned` | nothing. (Expired pauses were already settled above.) |
 
+**Who owns a fired hand-off: A when claims are on, C (report only) when they are off.** Ember's routing
+(1570157489196896399), which keeps the spawn claim independent of the heartbeat switch:
+
+- **`PERSISTENCE_TASKCLAIMS` on:** a firing whose `enqueued` fact has a `claim` is judged only by row A. C skips it
+  in every ledger state, so one failed start is never retried or reported twice.
+- **`PERSISTENCE_TASKCLAIMS` off:** A does nothing (no `settle_pauses`, no nudge, no mark). C reports a failed `work`
+  firing **once and never retries it, whatever its `claim` field says**, and never reads or writes the claim. Run-due
+  still makes the spawn claim, so the hand-off keeps one mechanically recorded owner. Claims' off-state wording stands:
+  explicit claims and spawn ownership still record; heartbeat A and promise checking don't act.
+- **Turning claims on later is not retroactive.** A firing C has already reported (its report key is in
+  `heartbeat.json`) is never retried. Its claim shows up in whatever state it is in, and A takes **no action** on it
+  (no nudge, no retry, no report) until a session's own transition into `claimed` (claim, resume, take) starts a new
+  spell. From then on A treats it like any other claim.
+
+**Owner never started** (Ember's point 2). By claims §2.4 run-due moves the record `open → claimed` (`by: harness`,
+owner = the pre-minted id) just before it launches the worker. The two failure routes are told apart mechanically:
+
+- **Failure before the spawn claim:** the record is still `open`/`handoff`, and the ledger shows the firing
+  `never-started`. A's `open`/`handoff` row owns it: one retry of the start, same pre-minted id, `--session-id`.
+- **Failure after the spawn claim, before the owner ever ran:** the record is `claimed` with `by: harness` and owner
+  equal to the firing's `enqueued` `session`. The firing is `never-started`, `crashed` or `failed`, and **no transcript
+  exists for the owner id** (a `stat` of the session's transcript path; the file is never opened). The heartbeat
+  derives the state **`owner-never-started`** for that firing from those facts. It is a `claimed` claim, so it lands on
+  the nudge row, and the nudge is its **single recovery**: the item carries `launch: "session-id"`, so run-due starts
+  the same pre-minted id with `--session-id`. Never `--resume` (there is nothing to resume), and never a new id or a
+  second owner. If that recovery fails too, the report row reports once. Claims §4 names the condition; I propose
+  `start failed`, since `stalled after nudge` would misdescribe a worker that never ran.
+- **Failure after the owner ran** (a transcript exists): the ordinary claimed path, a nudge with `launch: "resume"`.
+
+Neither route touches C while claims are on. Each is bounded: one retry then one report, or one nudge then one report.
+
 **Writes go through the claims module.** Every write to a claim (`settle_pauses`, the `nudge` and `report` marks) is
 claims code called in-process, under `state/tasks/.lock`, write-then-rename. Each write appends **exactly one history
 entry** (claims §1): the marks are `action: nudge` or `action: report` with `by: heartbeat`, and the same-status form
-`touch` uses. The heartbeat never writes a claim file another way, and never writes a `touch`.
+`touch` uses. The heartbeat never writes a claim file another way, and never writes a `touch`. The `nudge` entry
+carries the nudge's firing id (`firing`), and the spell it belongs to is the history sequence number of the
+transition into `claimed` that began it.
 
-**A fired hand-off is A's, not C's.** A firing whose `enqueued` fact has a `claim` is judged only by row A. C skips
-it, so one failed start can't be retried or reported twice.
+### Lock order
 
-**For the paired review: when the `open`/`handoff` row can match.** By claims §2.4, run-due moves the record `open →
-claimed` (`by: harness`, owner = the pre-minted id) just before it starts the worker. So once run-due has reached the
-spawn, a `crashed` or `failed` start leaves a **`claimed`** record whose owner isn't running. That lands on the nudge
-row, and the nudge starts the pre-minted session with `--session-id` when it has no transcript (below). The
-`open`/`handoff` row then covers only a firing that never reached the spawn claim (`never-started`). Both paths are
-bounded: one nudge then one report, or one retry then one report. I'd like claims §4 to say which of the two paths
-owns a spawned-then-failed start, so the two tables can't drift. Either answer works for the heartbeat as long as it
-is one, not both.
+The one global order, in the same words as claims revision 4:
 
-**Lock order** (also for the paired review). The heartbeat holds `heartbeat.lock` for the whole beat. A nudge must
-add the wake item (`wakes.lock`) and set `nudged` (`state/tasks/.lock`) as one step, and run-due's claim at spawn takes
-`state/tasks/.lock` while it holds `wakes.lock`. So there is one order everywhere: **`heartbeat.lock`, then
-`wakes.lock`, then `state/tasks/.lock`**. Code that needs a later lock never waits on an earlier one while holding it.
-`settle_pauses` alone and plain `ptask` writes take only `state/tasks/.lock`. A `take` that checks for a pending wake
-takes `wakes.lock` first. Claims doesn't state an order today. I'd like it to name this one, since its own spawn
-path and `take` are where it matters.
+> **Lock order: a path takes only the locks it needs, and whenever it holds more than one of `state/heartbeat.lock`,
+> `state/wakes.lock`, `state/tasks/.lock` and `state/fired.lock` it takes them in that order, never waits for an
+> earlier one while holding a later one, and takes no other lock while holding `state/fired.lock`; no path holds any of
+> them while it launches a process or model or writes a report to the journal.**
+
+`state/fired.lock` is the ledger's lock (see the ledger). It goes **last** because it is a leaf: it is held only for
+one append or one snapshot read, and run-due appends `enqueued` while it already holds `wakes.lock` (and, at the
+spawn, may hold `tasks/.lock`). Putting it anywhere earlier would invert that path.
+
+Every path that takes more than one lock, and what it takes:
+
+| Path | Locks, in order |
+|---|---|
+| Beat, phase 1: ledger snapshot | `heartbeat.lock` → `fired.lock` |
+| Beat, phase 1: `settle_pauses`, reconcile, nudge | `heartbeat.lock` → `wakes.lock` → `tasks/.lock` → `fired.lock` (the idempotency re-check of `add_heartbeat_wake`) |
+| Beat, phase 1: retry or deferral (C, or A's hand-off row) | `heartbeat.lock` → `wakes.lock` → `fired.lock` (re-check, below) |
+| Beat, phase 3: marking `reported` | `heartbeat.lock` → `tasks/.lock` |
+| run-due's locked transition and spawn claim | `wakes.lock` → `tasks/.lock` → `fired.lock` (claims owns the spawn step) |
+| The Stop waiter's `take` of an item | `wakes.lock` → `tasks/.lock` (claims' take) → `fired.lock` (`taken`, below) |
+
+The run line's `started`/`finished` appends take `fired.lock` alone. Plain `ptask` writes take `tasks/.lock` alone.
+
+**No lock is held across a launch or the journal.** run-due releases every lock before it starts a run. The run line
+releases `fired.lock` after appending `started` and before it launches `claude`. A beat runs in three phases:
+
+1. **Decide and write**, holding `heartbeat.lock` (non-blocking; a beat that can't get it exits at once) and inner
+   locks as the table says. Every report it decides goes into an **outbox** in `heartbeat.json`, keyed by its
+   idempotency key, holding the exact line (see Reports). Then it releases every lock.
+2. **Emit**, holding **no lock**: write each outbox line to the journal and flush.
+3. **Mark**, retaking `heartbeat.lock` (blocking with a 30 s timeout; it is never held across slow I/O, so the wait is
+   short) and `tasks/.lock` as needed: set `reported` or the report key for each line that phase 2 confirmed, and
+   delete those outbox entries. If the timeout passes, nothing is marked, and the next beat emits again.
+
+**Split writes in a nudge, reconciled by firing id** (Ember's point 1). A nudge writes two files: the wake item
+(`wakes.json`) and the claim's `nudged` mark. The heartbeat mints the nudge's firing id **before** either write and
+puts it in both: the item's `id`, and the `firing` of the mark's history entry. Under `heartbeat.lock` → `wakes.lock`
+→ `tasks/.lock`, it writes the item first, then the mark. The first step of each beat's phase 1, after
+`settle_pauses`, reconciles both crash halves deterministically:
+
+- **Wake written, claim unmarked.** A heartbeat nudge item for claim C and spell S exists, in `wakes.json` or as an
+  `enqueued` or `taken` fact in the ledger, but C's current spell has no `nudge` entry. The beat **completes the mark
+  with that item's firing id** and `set` time. It makes no new item, so this is not a second nudge.
+- **Claim marked, wake absent.** C's current spell has a `nudge` entry with firing F, but F is in neither
+  `wakes.json` nor the ledger (no `enqueued` or `taken` fact). With the item-first write order the nudge's own crash
+  can't produce this, but a restore from backup or a hand edit can. The beat **re-adds the item with the same id F**,
+  the same fixed text, `at` now, and `cwd` from the record. Adding is idempotent by id: an `add_heartbeat_wake` for an
+  id already in the queue or the ledger writes nothing.
+- An item or mark whose spell isn't C's current spell belongs to an ended spell and is left alone.
+
+For this to be exact, the Stop waiter's `take` of an item with `by: heartbeat` appends a **`taken`** fact (firing,
+session, at) to the ledger, under `wakes.lock` → `fired.lock`, before it rewrites the queue. A nudge that a live
+session took is then never mistaken for a lost one.
 
 **Not open work in this design:**
 - **Undelivered `inbox/work` items.** They are text. They become work through a wake or a claim, both of which are
@@ -153,14 +227,36 @@ are named by it (`state/wake-<id>.txt`, `.json`), not by a time stamp and sessio
 
 | Fact | Written by | Carries (structure only, no text) |
 |---|---|---|
-| `enqueued` | `run_due`, in the locked transition below | the item's `session`, `cwd`, `at`, `work`, `by`, `claim`, `retry_of`, and `reason_sha256`; never the reason |
+| `enqueued` | `run_due`, in the locked transition below | the item's `session`, `cwd`, `at`, `work`, `by`, `claim`, `launch`, `retry_of`, `follows`, `attempt`, `deferral`, and `reason_sha256`; never the reason |
 | `started` | the run line, as its first step, before `claude` | the wrapper's pid and its `/proc/<pid>/stat` start time; for a working session, the new session's full id |
 | `finished` | the run line, after `claude` exits, whatever the exit | the exit status and the output file name |
+| `taken` | the Stop waiter's `take`, for an item with `by: heartbeat` | the item's `id`, `session` and `claim`; the firing went to a live session, not to run-due |
+
+**`fired.jsonl` is written and read under its own lock** (Ember's point 4). `started` and `finished` come from
+several run lines at once while a beat reads, so:
+
+- **Append:** take `state/fired.lock` (`flock`, exclusive), serialise the fact as one line ending in `\n`, write it
+  with **one `write`** on an `O_APPEND` descriptor, check the whole line was written, `fsync`, release. A short write
+  is cut back with `ftruncate` to the length before it, under the same lock, and the append fails loudly (journal).
+  The run line appends through the same Python function (not a shell `echo`), and releases the lock before launching
+  `claude`.
+- **Snapshot:** a beat takes `fired.lock`, reads the whole file, and releases it. It decides from that snapshot only.
+- **A partial trailing line** (the file doesn't end in `\n`) can only be left by a writer killed mid-append, since
+  every writer holds the lock until its `fsync`. It means **"incomplete snapshot, retry next beat"**: this beat makes
+  no ledger-based decision at all (no C, no A hand-off or never-started decisions, no reconcile from ledger facts),
+  and it never reads the fragment as `failed`, `crashed` or corrupt history. Then, still under `fired.lock`, it moves
+  the fragment aside verbatim to `state/fired.partial-<byte offset>` and truncates the file to its last `\n`, with
+  `fsync`. The next beat reads a clean snapshot. Any appender that finds the same tail repairs it the same way before
+  appending. The lost fact was never complete, so its writer's effect is what the rest of the ledger shows: a lost
+  `started` means `claude` was never launched (the append comes first); a lost `enqueued` leaves the item still in
+  `wakes.json` (the rename comes after); a lost `finished` reads as `crashed`, which is bounded like any crash.
+- **An unparseable line that isn't the tail** is real corruption. The beat makes no ledger-based decision, reports
+  `heartbeat ledger: unreadable, at HH:MMZ` once, and changes nothing.
 
 **One locked transition** (Ember's point 2). `run_due` takes `state/wakes.lock` (`flock`), reads `wakes.json`,
-appends the `enqueued` fact for each item it will fire (flushed and `fsync`ed), then writes the queue without them
-by write-then-rename, then releases the lock, and only then starts the run. If it dies between the append and the
-rename, the next `run_due` finds an item whose `id` already has an `enqueued` fact and **only removes it**, firing
+appends the `enqueued` fact for each item it will fire (under `fired.lock`, as above), then writes the queue without
+them by write-then-rename, then releases the lock, and only then starts the run. If it dies between the append and
+the rename, the next `run_due` finds an item whose `id` already has an `enqueued` fact and **only removes it**, firing
 nothing: the transition completes and nothing duplicates. If it dies after the rename but before starting, the
 ledger shows `enqueued` with no `started`: the wake is on record, not lost.
 
@@ -169,20 +265,52 @@ ledger shows `enqueued` with no `started`: the wake is on record, not lost.
 | State | Facts | Meaning |
 |---|---|---|
 | `running` | `started`, no `finished`, and the session holds a process by exact id (or the wrapper pid with the same start time is alive) | leave it alone |
-| `never-started` | `enqueued`, no `started`, older than the **start grace** (5 min) | eligible for retry |
-| `crashed` | `started`, no `finished`, neither the session nor the wrapper (pid and start time) alive, for at least one full beat after first seen so | eligible for retry |
-| `failed` | `finished`, and the output has `is_error: true`, or is missing or unparseable, or the exit status is non-zero | eligible for retry, unless a usage limit (below) |
+| `never-started` | `enqueued`, no `started`, older than the **start grace** (5 min) | eligible for recovery |
+| `crashed` | `started`, no `finished`, neither the session nor the wrapper (pid and start time) alive, for at least one full beat after first seen so | eligible for recovery |
+| `failed` | `finished`, and the output has `is_error: true`, or is missing or unparseable, or the exit status is non-zero | eligible for recovery; a usage limit (below) is a deferral |
 | `ok` | `finished`, exit 0, `is_error` false | nothing |
+| `taken` | `taken` | went to a live session; nothing |
 
-**Before any retry**, under the heartbeat's lock and then `wakes.lock`: the exact owner session holds no process,
-the grace for that state has passed, no item in `wakes.json` and no ledger fact has `retry_of` equal to this firing,
-and the hourly cap has room. Each firing is retried at most once (usage-limit deferrals aside, below). A retry of a
-retry is never made: an item with `retry_of` set that fails is reported, not retried.
+`owner-never-started` is derived on top of these for a claim firing (see row A): the firing is `never-started`,
+`crashed` or `failed`, its claim is `claimed` by the harness with owner = the firing's `session`, and no transcript
+exists for that id.
 
-**Working-session wakes with claims off** (an item with `work: true`, from `pwake`) are **reported, never retried**:
-their task is in the reason text, and a retry with fixed text couldn't carry it without copying text into a new
-actionable item. With claims on, the hand-off's task is in the claim record, so A's hand-off row retries the start and
-the worker reads the task with `ptask show`.
+**Retry identity: one ordinary retry and a separate deferral counter** (Ember's point 6). Revision 2's rules ("no
+ledger fact has `retry_of` equal to this firing", "a retry of a retry is never retried") made the second and third
+usage-limit deferrals impossible. So every attempt is now tied to the firing that started the chain, and the two
+budgets are counted separately:
+
+- The **origin** is the original firing id. Every heartbeat recovery item for it carries `retry_of: <origin>` (always
+  the origin, never an intermediate attempt), `follows: <the attempt whose failure it answers>`, and `attempt`:
+  `retry` or `deferral`. A deferral also carries `deferral: n` (1, 2 or 3).
+- **Budgets per origin:** at most **1 ordinary retry** and at most **3 usage-limit deferrals**. Each is counted over
+  the items in `wakes.json` and the `enqueued` facts with that `retry_of`.
+- **Deciding**, for the latest attempt of an origin (the origin itself, or the newest item that follows it) once it
+  is `never-started`, `crashed` or `failed`: if a usage limit refused it, add deferral n+1 when n < 3, else report
+  `usage limit, deferrals used up`. Otherwise, add the ordinary retry if none has been made, else report the state.
+  A usage limit doesn't use up the ordinary retry, and the ordinary retry doesn't reset the deferral count.
+- **An attempt is answered at most once:** it is handled exactly when some item has `follows` equal to its id, or its
+  report key exists. Racing beats can't both answer it (phase 1 holds `heartbeat.lock`).
+- **Before adding**, under `heartbeat.lock` → `wakes.lock`, with a fresh look at the ledger under `fired.lock`: the
+  owner session holds no process, the grace for that state has passed, no attempt for this origin is queued or
+  `running`, the attempt isn't answered yet, and the hourly cap has room.
+
+So one origin costs at most five launches (the original, one ordinary retry, three deferrals), with every attempt
+named by the same origin id. Why a counter of 3 rather than one deferral: a usage refusal says nothing about the
+work, the reset may only parse to the 2 h fallback, and other sessions can use up the new window just after the
+reset. A refused call is cheap, and three bounds both cost and delay (at most three resets).
+
+The same rule covers A's `open`/`handoff` retry (the origin is the hand-off's firing) and a heartbeat nudge (the
+origin is the nudge's firing; a nudge has no ordinary retry, since a failed nudge goes to the report row, but a usage
+refusal of a nudge is deferred). Recovery decisions run before row A's report decision in the beat, so a
+usage-refused nudge is deferred, not reported as a stall. When the failure that a nudge answers was itself a usage
+limit, the nudge's `at` is the reset (below), not now.
+
+**`work` firings A doesn't own are reported, never retried** (an item with `work: true`, from `pwake`). That is every
+`work` firing when claims are off, whatever its `claim` field says, and a `work` firing with no `claim` when they are
+on. Its task is in the reason text, and a retry with fixed text couldn't carry it without copying text into a new
+actionable item. With claims on, a hand-off's task is in the claim record, so A recovers the start and the worker reads
+the task with `ptask show`.
 
 ### Usage limit
 
@@ -195,9 +323,8 @@ The sample is Claude's `state/wake-b88e7b01-20261111-113653.json`. It has `is_er
 - The reset is the **next occurrence** of that local time after the run's `finished` time.
 - It must fall in a **bounded future window**: after the finish time and no more than 24 h after it. Malformed,
   unknown zone, or outside the window: a **fixed conservative delay of 2 h** from the finish time.
-- The retry item's `at` is the reset plus 5 min. A usage-limit failure doesn't use up the firing's one retry, but
-  at most **3 usage-limit deferrals** are made per firing; the fourth is reported and not retried. Deferrals count
-  against the hourly cap like any heartbeat wake.
+- A deferral item's `at` is the reset plus 5 min. Deferrals are counted as above (at most 3 per origin; the fourth
+  refusal is reported) and count against the hourly cap like any heartbeat wake.
 
 This is CLI output read as a status, never room text, and only `is_error`, the api error fields and the anchored
 pattern over `result` are read; the rest of `result` is never used for anything.
@@ -205,11 +332,15 @@ pattern over `result` are read; the rest of `result` is never used for anything.
 ## How a nudge or retry happens
 
 The heartbeat **does not start processes.** A nudge or a retry is a wake item, added through one new function in
-`hook.py`, `add_heartbeat_wake(kind, session, claim=None, retry_of=None, cwd=None)`, under `wakes.lock`. `add_wake`,
-which peers call, keeps dropping unknown keys, so no peer can write `by`, `claim` or `retry_of` (Claude's point 2).
+`hook.py`, `add_heartbeat_wake(id, kind, session, launch, claim=None, retry_of=None, follows=None, attempt=None,
+deferral=None, at=None, cwd=None)`, under `wakes.lock`. `add_wake`, which peers call, keeps dropping unknown keys, so
+no peer can write `by`, `claim`, `launch`, `retry_of`, `follows`, `attempt` or `deferral` (Claude's point 2).
 `add_heartbeat_wake`:
 
-- validates `session`, `claim` and `retry_of` as full UUIDs, and refuses the room's own session (from
+- takes the firing `id` from its caller (minted before any write, so a nudge's two writes share it) and is
+  **idempotent by id**: if that id is already in `wakes.json` or has any ledger fact, it writes nothing;
+- validates `id`, `session`, `claim`, `retry_of` and `follows` as full UUIDs, `launch` as `session-id` or `resume`,
+  `attempt` as `retry` or `deferral`, and `deferral` as 1–3, and refuses the room's own session (from
   `session.json`);
 - builds the reason itself from a fixed table keyed by `kind`, with the UUIDs as the only variables. Callers pass no
   text. For a nudge: *"The heartbeat found claim <claim> claimed by you, with no session running and no wake set.
@@ -217,10 +348,11 @@ which peers call, keeps dropping unknown keys, so no peer can write `by`, `claim
   firing <firing>, which <never started | stopped without finishing | ended in an error | hit the usage limit>. Its
   prompt is `state/wake-<firing>.txt` if you want it."* The old reason is **never copied**; a self that wants it reads
   its own file by choice;
-- writes `{"id", "session", "at", "cwd", "by": "heartbeat", "claim" or "retry_of", "reason", "set"}`.
+- writes `{"id", "session", "at", "cwd", "by": "heartbeat", "launch", "claim" and/or "retry_of", "follows",
+  "attempt", "deferral", "reason", "set"}`, leaving out the optional keys that don't apply.
 
-**`at`** is now for a nudge or a plain retry (so `run_due`, which fires only items with `at`, takes it within its
-grace), and the reset time for a usage-limit retry. **`cwd`** comes only from an already-authorised record: the
+**`at`** is now for a nudge or an ordinary retry (so `run_due`, which fires only items with `at`, takes it within
+its grace), and the reset plus 5 min for a deferral, or for a nudge answering a usage-limit failure. **`cwd`** comes only from an already-authorised record: the
 claim's `cwd` for a nudge or a hand-off retry, or the `enqueued` fact's `cwd` for a claim-less retry. Never from text.
 Claims §1 fixes what that value is and how it's used, and the heartbeat follows it:
 - **Stored canonical.** The claim holds the canonical real path, computed when the claim was made. The heartbeat
@@ -236,9 +368,12 @@ Claims §1 fixes what that value is and how it's used, and the heartbeat follows
   I ask that run-due launch **every** item through `cwd-exec`, claim-less retries included, so no heartbeat item uses
   a path string any other way.
 
-**The session is kept structurally.** A retry resumes the firing's exact `session` (`--resume`), or, if the ledger
-shows the session never started (no transcript), starts it with `--session-id <session>`. The id and the claim stay
-the same.
+**The session is kept structurally.** Every heartbeat item names the firing's exact `session`, and the heartbeat
+decides how to start it, in the item's `launch` field: `resume` when a transcript exists for that id, `session-id`
+when none does (a `never-started` firing, or `owner-never-started`). run-due builds `--resume <session>` or
+`--session-id <session>` from that field only. If `launch` is `session-id` and a transcript has appeared since, run-due
+refuses the launch (it would fail anyway, and no second owner may be made), and the ledger shows `never-started`. The
+id and the claim stay the same; a recovery never mints a new session id.
 
 That gives:
 
@@ -262,9 +397,12 @@ wipes the queue. So:
 
 ### The heartbeat's own state
 
-`state/heartbeat.json` holds report keys, first-seen times for `crashed`, and the hourly-cap window. A beat takes
-`state/heartbeat.lock` with a **non-blocking** `flock` for its whole run: a second beat that can't get it exits at
-once. Every write is write-then-rename. So two beats racing can't both retry, and the cap can't be counted twice.
+`state/heartbeat.json` holds report keys, the report outbox, first-seen times for `crashed`, and the hourly-cap
+window. A beat takes `state/heartbeat.lock` with a **non-blocking** `flock` for phase 1 (decide and write): a second
+beat that can't get it exits at once. It releases the lock before phase 2 writes to the journal, and retakes it for
+phase 3 (see "Lock order"). Every write is write-then-rename. Every retry, deferral, nudge and cap count happens in
+phase 1, so two beats racing can't both make one, and the cap can't be counted twice. Only report emission can
+overlap, and that is allowed to repeat a line (see Reports).
 
 ## Reports: journal only in v1
 
@@ -285,13 +423,32 @@ later room change below, with its own consent. "Reported" never means "posted to
 - **The heartbeat's other reports** use the same shape with their own closed sets, which are this doc's to define:
   `heartbeat wake <firing>: <overdue | never started | crashed | failed | usage limit, deferrals used up | no valid
   cwd>, owner <first 8>, at HH:MMZ`; `heartbeat unit <name>: failed, invocation <id>, at HH:MMZ`; `heartbeat cap:
-  reached, at HH:MMZ`. The only non-id value in any line is a unit name, from the fixed list.
+  reached, at HH:MMZ`; `heartbeat ledger: unreadable, at HH:MMZ`. The only non-id value in any line is a unit name,
+  from the fixed list.
 - No report ever includes task, reason, outcome, pause-reason or result text.
-- **Durable state.** A claim's `reported` (with its `action: report`, `by: heartbeat` history entry), or a non-claim
-  report key in `heartbeat.json`, is written **only after the sink confirms delivery**. For the journal, that means the
-  line is written and flushed (Claude's point 5). If delivery fails, nothing is marked and the next beat tries again.
-  Once marked, the line isn't repeated this spell (or, for a non-claim key, for that firing, unit invocation or cap
-  window).
+- **Delivery is at least once, not exactly once** (Ember's point 5). The line goes to one store (the journal) and
+  the mark to another (the claim, or `heartbeat.json`), and no write order makes that pair atomic. Earlier revisions'
+  "report once" and "isn't repeated" promised exactly once without saying so; that overclaimed. What the heartbeat promises: every report has a **stable idempotency key**; it is
+  delivered **at least once**; and after a crash between flushing the journal and marking, it is delivered again as an
+  **identical line with the same key**. In this doc "report once" means one key, delivered at least once.
+- **The key** is built from ids and a closed kind slug only, never text: `wake:<firing>:<kind>` for a wake report
+  (the firing id plus the report kind, e.g. `wake:<firing>:failed`); `claim:<claim>:<spell>:<kind>` for a claim report,
+  where `<spell>` is the history sequence number that began the spell; `unit:<name>:<invocation>:failed`;
+  `cap:<window start>`; `ledger:<first byte offset of the bad line>:unreadable`. The kind slugs are a closed set
+  (`overdue`, `never-started`, `crashed`, `failed`, `usage-deferrals-used-up`, `no-valid-cwd`, `stalled`, `unowned`,
+  `liveness-unknown`, `start-failed`). Wording that depends on later facts (`touched since`) is fixed when the line
+  enters the outbox, so a repeat is byte-identical.
+- **The emitted line** is the content line followed by ` key=<key>`. That suffix is sink framing, the heartbeat's
+  part. Claims fix the content before it, unchanged. I'm asking claims revision 4 to name the suffix, so a reader of
+  either doc can dedupe.
+- **The outbox carries it.** In phase 1 the beat stores each decided report in `heartbeat.json` as `key → exact
+  line`; a key already there, or already marked, isn't decided again. Phase 2 emits every outbox line, including any
+  left by an earlier beat. Phase 3 marks the confirmed ones: a claim's `reported` (with its `action: report`, `by:
+  heartbeat` history entry, under `tasks/.lock`) only if the claim is still in the key's spell, otherwise the entry is
+  just dropped; or the key in `heartbeat.json`. Then it deletes the outbox entry.
+- **Where duplicates can come from**, all with the same key: a crash, kill or timeout after phase 2 flushed and
+  before phase 3 marked; a phase 3 that couldn't retake the lock; and two beats whose phase 2 overlap. If the journal
+  refuses the write, nothing is marked and the next beat emits again. Once marked, a key is never emitted again.
 - Reading them: `journalctl -u persistence-heartbeat@<self>`.
 - **A room channel later**, as a separate change, only when every bridge on the server has a mechanical
   excluded-channel setting the heartbeat can verify. John picks the channel after that, not before.
@@ -316,8 +473,8 @@ shell. It **never** starts, restarts, stops or resets a unit.
 - **A quiet beat calls no model.** It reads a few JSON files, `/proc` and `systemctl`, using the standard
   library only. It runs every **10 minutes** (`persistence-heartbeat@.timer`, `OnUnitActiveSec=10min`), as the
   self's user, with `KillMode=process` like `persistence-wakes@`.
-- **Model calls only through nudges and retries:** at most one per claim per spell, and at most one retry per
-  failed firing (plus bounded usage-limit deferrals). Above both sits a per-self cap of **3 heartbeat wakes per
+- **Model calls only through nudges, retries and deferrals:** at most one nudge per claim per spell, and per origin
+  firing at most one ordinary retry plus at most three usage-limit deferrals. Above both sits a per-self cap of **3 heartbeat wakes per
   hour** (`PERSISTENCE_HEARTBEAT_PER_HOUR`), kept in `heartbeat.json` under the lock. Once the cap is reached, the
   rest wait, and that is reported once.
 - **`wakes_per_hour`:** the bridge's guard counts room wakes. Heartbeat wakes resume working sessions and never
@@ -336,7 +493,8 @@ shell. It **never** starts, restarts, stops or resets a unit.
 ## Consent and the way back
 
 Each self opts in for itself. `PERSISTENCE_HEARTBEAT=true` turns on checks B–D. Claims' `PERSISTENCE_TASKCLAIMS`
-also has to be on for A. All switches are read from **the self's `~/.claude/settings.json` env block only**
+also has to be on for A; with the heartbeat on and claims off, claim firings get only C's report, never a retry
+(see "Who owns a fired hand-off"). All switches are read from **the self's `~/.claude/settings.json` env block only**
 (Claude's point 6): not through `setting()`, which prefers `os.environ`, so a unit's `Environment=` can't split
 them. The heartbeat, `ptask` and the hooks read the same file. Default: off, and the timer isn't even installed.
 
@@ -344,7 +502,7 @@ them. The heartbeat, `ptask` and the hooks read the same file. Default: off, and
 (Ember's decision).
 
 **Way back:** turn the setting off; the next beat exits at its first line. Stopping the timer stops everything.
-`fired.jsonl` and `heartbeat.json` are plain files that nothing else reads for decisions. The `wakes.json` lock,
+`fired.jsonl`, `fired.lock` and `heartbeat.json` are plain files that nothing else reads for decisions. The `wakes.json` lock,
 write-then-rename, firing ids and the exact-id liveness check stay, since claims need them either way. Reverting the
 commit removes the script and unit.
 
@@ -358,7 +516,7 @@ calls a model.
 - **Contract A, row by row:** nudge once; report once; nothing when paused, done or abandoned; nothing when a wake
   is pending (by `session` or by `claim`); unknown liveness reports without nudging; `open`/`none` reports once and
   adds no item; `open`/`handoff` with a never-started worker is retried once and the second failure reported.
-  **Silent stall:** nudge, then `touch`, then the owner gone, gives exactly one report, saying `touched since`.
+  **Silent stall:** nudge, then `touch`, then the owner gone, gives one report key (at least one identical line), saying `touched since`.
   `touch` after a nudge doesn't start a second nudge. Mutation: consulting `updated` in the decision to report.
 - **Pause expiry through the beat:** a claim paused with `pause_until` in the past is settled by the beat's
   `settle_pauses` call before the rows run. Its history entry has `by: pause-expiry` (never `heartbeat`), with
@@ -367,9 +525,63 @@ calls a model.
 - **History from the heartbeat:** each nudge and each report mark appends exactly one entry (`action: nudge` or
   `report`, `by: heartbeat`, statuses equal). The heartbeat never appends a `touch`. Mutation: a mark that skips the
   append.
-- **Lock order:** a nudge racing run-due's claim at spawn and a `take` completes without deadlock, under a timeout in
-  the test. A fault hook that takes `state/tasks/.lock` before `wakes.lock` in the heartbeat is caught.
-- **Hand-off firings are A's:** a failed firing whose `enqueued` fact has a `claim` makes no C retry and no C report.
+- **Lock order, every multi-lock path** (Ember's point 1). The test wraps `flock` in a recorder that keeps each
+  process's held locks with their ranks (`heartbeat` 1, `wakes` 2, `tasks` 3, `fired` 4) and fails on any acquisition
+  whose rank isn't above every lock held, and on any lock taken while `fired.lock` is held. A fake `exec`/`Popen` and a
+  fake journal writer fail if any of the four locks is held when they're called. Under the recorder, each path in the
+  "Lock order" table is run alone and then raced against each other one, under a timeout: beat snapshot; beat
+  settle/reconcile/nudge; beat retry and deferral; beat mark; run-due's transition with the spawn claim; the Stop
+  waiter's `take` of a heartbeat item; and the run line's `started`/`finished` appends racing all of them. Mutations
+  caught: the heartbeat taking `tasks/.lock` before `wakes.lock`; run-due appending `enqueued` before taking
+  `wakes.lock`; the run line launching `claude` before releasing `fired.lock`; phase 2 emitting while holding
+  `heartbeat.lock`.
+- **Split nudge, both crash halves** (Ember's point 1). A fault hook kills the nudge after the item rename and before
+  the mark: the next beat completes the mark with **that item's firing id**, adds no item, and the run-due that fires
+  it fires it once. The same with the item already fired (only an `enqueued` fact left) and already taken (only a
+  `taken` fact left). The reverse half, built as a fixture (mark with firing F; F in neither the queue nor the
+  ledger): the next beat re-adds **F with the same id**, once; a second beat adds nothing (idempotent by id). An item
+  or mark from an ended spell is left alone. A nudge item taken by a live session is never re-added. Mutation:
+  reconciling with a fresh id instead of F.
+- **Owner never started, both routes, cross-document** (Ember's point 2; these run the claims module and run-due
+  for real, with a fake `claude`). Route 1, failure **before** the spawn claim (fault hook before claims §2.4's
+  write): the record stays `open`/`handoff`, the firing is `never-started`, A's hand-off row makes one retry whose
+  item has `launch: "session-id"` and the same pre-minted id, run-due's argv has `--session-id <id>` and no
+  `--resume`, and a second failure is reported once as `start failed`. Route 2, failure **after** the spawn claim
+  (the fake `claude` exits non-zero and leaves no transcript): the record is `claimed` by the harness with that owner,
+  the heartbeat derives `owner-never-started`, the one nudge has `launch: "session-id"`, the argv has `--session-id
+  <same id>` and no `--resume`, no claim gets a new owner and no second claim appears; when that fails too, one
+  report and nothing more. Route 2 with a transcript present: the nudge has `launch: "resume"`. **C never duplicates
+  A:** across both routes and every ledger state (`never-started`, `crashed`, `failed`, usage limit), with claims on,
+  C adds no item and emits no line for a firing whose `enqueued` has a `claim`, and the total over a run of beats is
+  at most one recovery and one report per route.
+- **Heartbeat on, claims off** (Ember's point 3). A failed `work` firing with a `claim` field set, in every ledger
+  state: exactly one C report key, no wake item, no retry, no deferral, and the claim file byte-identical before and
+  after (C never reads or writes it). The same with no `claim` field. A does nothing: no `settle_pauses` call, no
+  nudge, no mark. Run-due still makes the spawn claim. Then claims are switched **on**: the claim is visible in its
+  state, A takes no action on it (no nudge, no retry, no report) across several beats, and C's reported firing is
+  never retried; after the session's own `ptask resume`, A treats the new spell normally.
+- **`fired.jsonl` concurrency** (Ember's point 4). Eight writer processes each append 500 `started`/`finished`
+  facts while a beat snapshots in a loop: every snapshot parses with no partial line, and the final file has exactly
+  4000 lines, each valid JSON. A writer killed with `SIGKILL` mid-append (a fault hook between two halves of a
+  deliberately split write, test-only): the next beat makes **no ledger-based decision** (no item, no report, no
+  mark), records nothing as `failed` or `crashed` from the fragment, moves the fragment to
+  `fired.partial-<offset>` byte for byte, truncates to the last `\n`; the following beat decides normally. An
+  appender finding the same tail repairs it before appending. A bad line that isn't the tail gives one `ledger:
+  unreadable` report and no decisions. Mutation: reading the partial tail as a fact.
+- **Reporting is at least once, with a key** (Ember's point 5). A fault hook kills the beat after phase 2 flushes
+  and before phase 3 marks: the next beat emits a **byte-identical** line with the same `key=`, then marks it, and no
+  third emission follows. The same for each report type (claim, wake, unit, cap, ledger). Two beats whose phase 2
+  overlap emit at most two identical lines for a key. A claim whose spell ends between emission and marking gets no
+  `reported`, and its outbox entry is dropped. Every key matches its grammar (ids and a closed kind slug, no other
+  text). Mutation: deriving `touched since` at emission instead of at decision (a repeat then differs).
+- **Deferrals and the ordinary retry, attempt by attempt** (Ember's point 6). Origin F0 refused by a usage limit four
+  times in a row: F0 → deferral 1 (`retry_of` F0, `follows` F0) → deferral 2 (`retry_of` F0, `follows` D1) →
+  deferral 3 → the fourth refusal reported once as `usage limit, deferrals used up`; each deferral's `at` is the reset
+  plus 5 min; no ordinary retry is made along the way. Mixed: F0 refused, D1 fails ordinarily, so the one ordinary
+  retry R1 is made (`retry_of` F0, `follows` D1); R1 refused, so D2 (the counter carries on, not reset); D2 fails
+  ordinarily, so the failure is reported with no second retry. Every item in every case has `retry_of` equal to F0.
+  Two racing beats answer each attempt at most once. The same sequences for A's hand-off retry and a refused nudge
+  (deferred, not reported as a stall). Mutation: setting `retry_of` to the previous attempt.
 - **The ledger:** `enqueued` with no `started` past the start grace is `never-started`; `started` with a live
   session is `running` and never retried; `started` with neither session nor wrapper alive is `crashed` only after a
   full beat; a recycled pid with a different start time doesn't count as alive.
@@ -382,12 +594,13 @@ calls a model.
   line, the argv `run_due` builds, the environment it passes, or any file name the heartbeat or `run_due` creates.
 - **Racing beats:** two beats started together over the same failed firing produce exactly one retry item (and one
   cap count). A beat that can't take `heartbeat.lock` exits without writing.
-- **Retry bounds:** a retry that fails is reported, not retried; a `work: true` firing with claims off is reported,
-  not retried; a peer's `add_wake` with `by`, `claim` or `retry_of` keys stores none of them.
+- **Retry bounds:** an ordinary retry that fails is reported, not retried; a `work: true` firing with claims off is
+  reported, not retried; a peer's `add_wake` with `by`, `claim`, `launch`, `retry_of`, `follows`, `attempt` or
+  `deferral` keys stores none of them.
 - **Usage limit, pinned to the real sample text** (`resets 2pm (America/New_York)`, `subtype: "success"`,
   `is_error: true`): reset is the next 2pm New York after the finish; a sample with `subtype` changed but `is_error`
   and the api error unchanged is still a usage limit; malformed text, an unknown zone or a reset outside 24 h takes
-  the fixed 2 h; a fourth deferral is reported, not retried.
+  the fixed 2 h. The attempt-by-attempt sequences are under Ember's point 6 above.
 - **`wakes.json`:** a reader during a write never sees `[]` (write-then-rename); an `add_wake` racing a `run_due`
   rewrite and a Stop-waiter `take` loses no item; corrupt JSON under an update is left untouched and nothing is
   written. (Red today.)
@@ -399,7 +612,7 @@ calls a model.
 - **Exact-id liveness in `run_due`:** a live process for another id, or for a prefix of this one, doesn't hold the
   wake; shares one case table with `ProcessHoldsSession`'s tests. (Red today: `pgrep -f`.)
 - **Reports:** with a fake sink that refuses, `reported` (and the `heartbeat.json` key) stay unset and the next beat
-  tries again. On the beat the sink confirms, it is set once, and later beats emit nothing. Every claim line matches
+  tries again. Once a key is marked, later beats never emit it. Every claim line matches
   claims' fixed shape, with a condition from its closed set. Every other line matches its own closed set. No code
   path opens the bridge socket, and there's no setting that changes the sink.
 - **Units:** the list for `arden` is exactly the seven names above; every name in every tuple matches
@@ -415,6 +628,38 @@ calls a model.
 - **v1 defaults:** a 10-minute beat and 3 heartbeat wakes per hour (both agreed).
 - **Report channel:** journal-only in v1. John picks a room channel only after the exclusion is mechanical (Ember).
 - **Ember's Codex self:** off until claims and the reply-text parser are separated (Ember).
+
+## What changed in revision 3 (from 7433a3b)
+
+Ember's paired review of `d163367` + `7433a3b` (room 1570157282808045569, 1570157284074459168), heartbeat side:
+
+1. **Lock order and split writes.** One global order, in a sentence shared word for word with claims revision 4,
+   with `state/fired.lock` added last as a leaf. No lock is held across a launch or a journal write, so a beat now
+   runs in three phases (decide and write; emit with no lock held; mark). A table of every multi-lock path. A nudge
+   mints its firing id first, writes the item then the mark, and the next beat reconciles both crash halves by that
+   id; `take` of a heartbeat item leaves a `taken` fact so this stays exact. Tests: a lock-rank recorder over every
+   path, alone and raced, and both halves.
+2. **Claimed but never started.** A failure after the spawn claim leaves the record `claimed`; the heartbeat derives
+   `owner-never-started`, and the nudge is the single recovery, with `launch: "session-id"` on the same pre-minted id,
+   never `--resume`, never a second owner. A failure before the spawn claim stays on the `open`/`handoff` row. Items
+   carry `launch` explicitly. Cross-document tests for both routes, plus a proof that C never duplicates A. The claims
+   §4 wording, and the report condition (I propose `start failed`), are Claude's.
+3. **Claims off.** Ember's routing (1570157489196896399): the spawn claim stays. With claims off, C reports a failed
+   `work` firing once, never retries it, and never touches the claim, whatever its `claim` field says. Turning claims
+   on later retries nothing C already reported, and A leaves that claim alone until a session's own transition starts
+   a new spell. Test: heartbeat on, claims off, then claims on.
+4. **`fired.jsonl` concurrency.** Its own lock, `state/fired.lock`, for every append and every snapshot; one `write`
+   per line on `O_APPEND`, then `fsync`. A partial trailing line means "incomplete snapshot, retry next beat": no
+   ledger-based decision that beat, the fragment moved aside verbatim, the file truncated to its last newline. Tests:
+   concurrent writers, and a writer killed mid-append.
+5. **Reporting.** The implied "exactly once" is dropped. Every report has a stable idempotency key (firing id plus report kind
+   for wake reports, and the analogue for the others), carried as a ` key=` suffix. Delivery is at least once, with
+   identical duplicates possible after a crash between the journal flush and the mark; an outbox in `heartbeat.json`
+   keeps repeats byte-identical. Tests cover that crash window for each report type.
+6. **Deferrals vs retry identity.** Every recovery names the original firing in `retry_of`, the attempt it answers in
+   `follows`, and its kind in `attempt`. Each origin gets one ordinary retry and, counted separately, up to three
+   usage-limit deferrals (kept at three, with the reason given). Tests walk every attempt through the fourth refusal,
+   plus a mixed retry/deferral chain. The same rule now covers A's hand-off retry and a usage-refused nudge.
 
 ## What changed in the re-pin (from 20f7f5b)
 
