@@ -261,6 +261,9 @@ def settings_of(exe, path, layer, diagnostics, labels):
     for k, v in (("PERSISTENCE_RECALL_WANDER", "1"), ("PERSISTENCE_RECALL_SAID", "3"),
                  ("PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE", "off")):
         knobs[k] = (os.environ.get(k, v), "env" if k in os.environ else "hook default")
+    # The store reads these from the environment too; recorded so a chunking arm says what it ran (Arden 1570584755471130766).
+    for k, v in (("PERSISTENCE_EMBEDDING_QUERYCHUNKCHARS", "0"), ("PERSISTENCE_EMBEDDING_QUERYCHUNKSCORE", "max")):
+        knobs[k] = (os.environ.get(k, v), "env" if k in os.environ else "store default")
     return {"exe": exe, "exe_sha256": sha256(exe)[:16], "diagnostics": diagnostics, "layer": layer,
             "labels_sha256": sha256(labels)[:16], "knobs": knobs}
 

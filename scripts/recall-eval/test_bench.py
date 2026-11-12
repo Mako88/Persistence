@@ -86,6 +86,14 @@ class StrippedQueries(unittest.TestCase):
             knobs = bench.settings_of("exe", "semantic", "hook", True, "labels")["knobs"]
         self.assertEqual(("1", "env"), knobs["PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE"])
 
+    def test_the_chunk_settings_are_in_the_report_settings(self):
+        with mock.patch.object(bench, "sha256", return_value="0" * 64), \
+                mock.patch.dict(bench.os.environ, {"PERSISTENCE_EMBEDDING_QUERYCHUNKCHARS": "1000",
+                                                   "PERSISTENCE_EMBEDDING_QUERYCHUNKSCORE": "mean"}):
+            knobs = bench.settings_of("exe", "semantic", "hook", True, "labels")["knobs"]
+        self.assertEqual(("1000", "env"), knobs["PERSISTENCE_EMBEDDING_QUERYCHUNKCHARS"])
+        self.assertEqual(("mean", "env"), knobs["PERSISTENCE_EMBEDDING_QUERYCHUNKSCORE"])
+
 
 if __name__ == "__main__":
     unittest.main()
