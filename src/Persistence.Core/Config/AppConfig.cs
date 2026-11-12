@@ -441,6 +441,23 @@ public class AppConfig : IAppConfig
         if (Env("FUSIONK") is { } k && int.TryParse(k, out var fk)) config.Embedding.FusionK = fk;
         if (Env("QUALITYWEIGHT") is { } q && double.TryParse(q, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var qw)) config.Embedding.QualityWeight = qw;
         if (Env("QUERYTAILCHARS") is { } qt && int.TryParse(qt, out var qtc)) config.Embedding.QueryTailChars = qtc;
+
+        // The chunk settings fail at start when unreadable, not left at a default nobody chose (QueryChunkProblem).
+        void Chunk(string suffix, Action<int> set)
+        {
+            if (Env(suffix) is { } raw)
+            {
+                if (int.TryParse(raw, out var value)) set(value);
+                else config.Embedding.Unreadable.Add($"{EnvPrefix}EMBEDDING_{suffix}");
+            }
+        }
+
+        Chunk("QUERYCHUNKCHARS", v => config.Embedding.QueryChunkChars = v);
+        Chunk("QUERYCHUNKOVERLAP", v => config.Embedding.QueryChunkOverlap = v);
+        Chunk("QUERYCHUNKMAX", v => config.Embedding.QueryChunkMax = v);
+        Chunk("QUERYCHUNKBATCH", v => config.Embedding.QueryChunkBatch = v);
+        Chunk("QUERYCHUNKBUDGETMS", v => config.Embedding.QueryChunkBudgetMs = v);
+        if (Env("QUERYCHUNKSCORE") is { Length: > 0 } score) config.Embedding.QueryChunkScore = score.Trim().ToLowerInvariant();
     }
 
     private static async Task<AppConfig> LoadFromFileAsync(string path) =>

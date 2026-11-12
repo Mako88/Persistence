@@ -655,7 +655,12 @@ internal sealed partial class FragmentStore(
 
         var utterances = await conversation.RecallAsync(text, said, skip, before, Session);
         var (path, why) = RecallPath.Of(embeddings.IsEnabled, queryEmbedder);
-        return new Recalled(kept, elsewhere, utterances, await FramesAsync(kept, skip, project), queryEmbedder.Fallback, path, why);
+        // Chunked only: the content-free line, with each shown item's best semantic chunk (never text, never vectors).
+        var shown = kept.Concat(elsewhere).Concat(utterances).Select(f => f.Id).ToHashSet();
+        var chunks = queryEmbedder.Query is { Chunked: true } query
+            ? query.Line(queryEmbedder.BestChunks.Where(b => shown.Contains(b.Key)).ToDictionary(b => b.Key, b => b.Value))
+            : null;
+        return new Recalled(kept, elsewhere, utterances, await FramesAsync(kept, skip, project), queryEmbedder.Fallback, path, why, chunks);
     }
 
     /// <summary>Embeds up to <paramref name="limit"/> past utterances that have none yet, for conversation recall.</summary>
@@ -673,7 +678,8 @@ internal sealed partial class FragmentStore(
         IReadOnlyList<ContextFragmentEntity> Frames,
         string? Fallback = null,
         string Path = RecallPath.Unknown,
-        string? PathWhy = null);
+        string? PathWhy = null,
+        string? Chunks = null);
 
     /// <summary>
     /// The projects whose names a text says as words: <c>minecraft-mods</c> is named by "the Minecraft mods

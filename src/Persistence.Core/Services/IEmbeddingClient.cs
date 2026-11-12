@@ -22,4 +22,20 @@ public interface IEmbeddingClient
     /// result as "no semantic signal available" and fall back.
     /// </summary>
     Task<IReadOnlyList<float[]>> EmbedAsync(IReadOnlyList<string> texts, CancellationToken ct = default);
+
+    /// <summary>
+    /// <see cref="EmbedAsync"/>, saying why when there are no vectors (a <see cref="ChunkFailure"/> category), so chunked
+    /// query embedding splits a chunk the embedder found too large and does not split one it failed for another reason.
+    /// A client that cannot tell says <see cref="ChunkFailure.Refused"/>.
+    /// </summary>
+    async Task<EmbedOutcome> TryEmbedAsync(IReadOnlyList<string> texts, CancellationToken ct = default)
+    {
+        var vectors = await EmbedAsync(texts, ct);
+        return vectors.Count == texts.Count && vectors.All(v => v.Length > 0)
+            ? new EmbedOutcome(vectors, null)
+            : new EmbedOutcome([], ChunkFailure.Refused);
+    }
 }
+
+/// <summary>The vectors of an embedding call, or none and why (<see cref="ChunkFailure"/>).</summary>
+public sealed record EmbedOutcome(IReadOnlyList<float[]> Vectors, string? Failure);

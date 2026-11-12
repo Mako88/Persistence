@@ -123,15 +123,16 @@ public class EmbeddingMemorySurfacer : IMemorySurfacer
             return [];
         }
 
-        if (await queryEmbedder.EmbedAsync(queryText, ct) is not { } queryVector)
+        if (await queryEmbedder.EmbedQueryAsync(queryText, ct) is not { } query)
         {
             return [];
         }
 
         // Rank ids by similarity first, then hydrate only the top of the list: the vectors are the
-        // cheap part, the fragment rows are not.
+        // cheap part, the fragment rows are not. Unchunked, the score is the cosine to the one query vector, as always.
         var topIds = stored.Values
-            .Select(e => (e.ContextFragmentId, score: VectorMath.Cosine(queryVector, e.Vector)))
+            .Select(e => (e.ContextFragmentId, best: query.Score(e.Vector)))
+            .Select(x => (x.ContextFragmentId, score: x.best.Score, chunk: x.best.Chunk))
             .Where(x => x.score > 0)
             .OrderByDescending(x => x.score)
             .Take(pool * 2)
@@ -143,7 +144,7 @@ public class EmbeddingMemorySurfacer : IMemorySurfacer
             return [];
         }
 
-        var scoreById = topIds.ToDictionary(x => x.ContextFragmentId, x => x.score);
+        var scoreById = topIds.ToDictionary(x => x.ContextFragmentId, x => (x.score, x.chunk));
         var fragments = await fragmentRepo.GetByIdsAsync(topIds.Select(x => x.ContextFragmentId), ct);
 
         var exclude = excludeIds as ISet<long> ?? new HashSet<long>(excludeIds);
@@ -153,20 +154,27 @@ public class EmbeddingMemorySurfacer : IMemorySurfacer
         var standsFor = await SupersessionHeads.ResolveAsync(
             fragmentRepo, fragments.Where(SupersessionHeads.IsCandidate), ct);
 
-        return fragments
+        var ranked = fragments
             .Where(f => standsFor.ContainsKey(f.Id))
-            .Select(f => (head: standsFor[f.Id], similarity: scoreById[f.Id]))
+            .Select(f => (head: standsFor[f.Id], similarity: scoreById[f.Id].score, scoreById[f.Id].chunk))
             .Where(x => !x.head.IsDeleted
                         && x.head.Status == ContextFragmentStatus.Active
                         && authorable.Contains(x.head.FragmentType)
                         && !exclude.Contains(x.head.Id))
-            .Select(x => (x.head, score: x.similarity * MemorySurfacer.Quality(x.head, config.Embedding.QualityWeight)))
+            .Select(x => (x.head, score: x.similarity * MemorySurfacer.Quality(x.head, config.Embedding.QualityWeight), x.chunk))
             .GroupBy(x => x.head.Id)
             .Select(g => g.OrderByDescending(x => x.score).First()) // old and head both matching: the better score
             .OrderByDescending(x => x.score)
             .Take(pool)
-            .Select(x => x.head)
             .ToList();
+
+        // Each candidate's best semantic chunk (chunked max only); the recall reports it for the items it shows.
+        foreach (var x in ranked)
+        {
+            queryEmbedder.Attribute(x.head.Id, x.chunk);
+        }
+
+        return ranked.Select(x => x.head).ToList();
     }
 
     /// <summary>

@@ -145,6 +145,10 @@ try
     var config = (AppConfig)await AppConfig.LoadAsync(Path.Combine(AppContext.BaseDirectory, "persistence-store.json"));
     config.PeerName = line.Get("peer") ?? (config.PeerName is { Length: > 0 } named ? named : "Claude");
     config.DatabasePath = Path.GetFullPath(path);
+    if (config.Embedding.QueryChunkProblem() is { } problem)
+    {
+        throw new UsageException($"Query chunking cannot start: {problem}");
+    }
 
     var store = await FragmentStore.OpenAsync(config, line.Has("debug"));
     store.Identity = $"{config.PeerName} {config.DatabasePath}";
@@ -163,6 +167,14 @@ try
         if (socket is not null)
         {
             allowed.Add(Server.CurrentUser());
+        }
+
+        if (config.Embedding is { Enabled: true, QueryChunkChars: > 0 } chunking)
+        {
+            // Said once, at start (the design's rollout): chunking wins over the tail, so a set tail is not what runs.
+            Console.Error.WriteLine($"query chunking on: {chunking.QueryChunkChars:N0} characters a chunk, overlap {chunking.QueryChunkOverlap}, "
+                + $"score {chunking.QueryChunkScore}, at most {chunking.QueryChunkMax} chunks, {chunking.QueryChunkBatch} a request, "
+                + $"{chunking.QueryChunkBudgetMs:N0} ms" + (chunking.QueryTailChars > 0 ? $"; the query tail ({chunking.QueryTailChars:N0}) is not used" : ""));
         }
 
         return await Server.ServeAsync(store, config.DatabasePath, port, Run, socket is null ? null : Path.GetFullPath(socket), allowed);
@@ -480,6 +492,10 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
             if (line.Has("diagnostics"))
             {
                 Console.Error.WriteLine($"recall-path: {recalled.Path}" + (recalled.PathWhy is { } why ? $" ({why})" : ""));
+                if (recalled.Chunks is { } chunks)
+                {
+                    Console.Error.WriteLine(chunks);
+                }
             }
 
             if (line.Has("json"))

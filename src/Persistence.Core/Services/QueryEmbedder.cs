@@ -51,12 +51,31 @@ public class QueryEmbedder(IEmbeddingClient embeddings, IAppConfig config, IDisp
     /// <summary>The parts of this recall that asked for meaning and ran on words instead, each with why: the negative evidence.</summary>
     public IReadOnlyDictionary<string, string> FellBack => fellBack;
 
+    /// <summary>The chunked query of this recall, embedded or not (null when chunking is off or nothing was asked).</summary>
+    public QueryVectors? Query { get; private set; }
+
+    private readonly Dictionary<long, int> bestChunks = [];
+
+    /// <summary>For max scoring, each shown item's best semantic chunk, by fragment id (the design's attribution).</summary>
+    public IReadOnlyDictionary<long, int> BestChunks => bestChunks;
+
+    /// <summary>Notes that item <paramref name="id"/>'s best semantic chunk was <paramref name="chunk"/> (0: none, as for mean).</summary>
+    public void Attribute(long id, int chunk)
+    {
+        if (chunk > 0)
+        {
+            bestChunks[id] = chunk;
+        }
+    }
+
     /// <summary>Starts a recall afresh: no fallback noted, nothing compared, nothing remembered as failed.</summary>
     public void Clear()
     {
         Fallback = null;
         failed = null;
         failedWhy = null;
+        Query = null;
+        bestChunks.Clear();
         compared.Clear();
         fellBack.Clear();
     }
@@ -87,6 +106,183 @@ public class QueryEmbedder(IEmbeddingClient embeddings, IAppConfig config, IDisp
     /// <summary>The text actually sent for <paramref name="text"/> under a tail of <paramref name="tailChars"/> (0: all of it).</summary>
     public static string Tail(string text, int tailChars) =>
         tailChars > 0 && text.Length > tailChars ? text[^tailChars..] : text;
+
+    /// <summary>
+    /// The query as vectors to score stored ones against, or null (noted in <see cref="Fallback"/>) when none embedded.
+    /// With <see cref="EmbeddingSettings.QueryChunkChars"/> 0 (the default) this is <see cref="EmbedAsync"/>, unchanged:
+    /// one vector, scored by cosine. Set, the query is chunked (<see cref="EmbedChunksAsync"/>), once per recall.
+    /// </summary>
+    public async Task<QueryVectors?> EmbedQueryAsync(string text, CancellationToken ct = default, string part = Fragments)
+    {
+        var settings = config.Embedding;
+        if (settings.QueryChunkChars <= 0)
+        {
+            return await EmbedAsync(text, ct, part) is { } vector ? QueryVectors.Single(vector, text.Length) : null;
+        }
+
+        if (text == failed)
+        {
+            fellBack.TryAdd(part, failedWhy!);
+            return null;
+        }
+
+        // The fragment rounds and the utterance round share one embedding of the message: the budget is per recall.
+        if (Query is null || chunkedText != text)
+        {
+            Query = await EmbedChunksAsync(text, settings, ct);
+            chunkedText = text;
+        }
+
+        if (Query.Embedded.Count > 0)
+        {
+            return Query;
+        }
+
+        failed = text;
+        failedWhy = Query.NoneEmbedded();
+        Note(failedWhy, part);
+        return null;
+    }
+
+    private string? chunkedText;
+
+    /// <summary>
+    /// Embeds every chunk of <paramref name="text"/> under the design's budget: batches of at most
+    /// <see cref="EmbeddingSettings.QueryChunkBatch"/>, sent first, then last, then inward (acceptance 5); a failed batch
+    /// retried chunk by chunk, each success kept the moment it arrives; a chunk refused as too large halved, at most two
+    /// levels and never under <see cref="MinTailChars"/>; over <see cref="EmbeddingSettings.QueryChunkMax"/> chunks, the
+    /// first and last halves only; within <see cref="EmbeddingSettings.QueryChunkBudgetMs"/>, a deadline linked into the
+    /// request in flight (acceptance 2). Nothing is dropped silently: every piece comes back, embedded or with why not.
+    /// The caller's own cancellation escapes, as since PR 17: a cancelled recall returns nothing to report.
+    /// </summary>
+    private async Task<QueryVectors> EmbedChunksAsync(string text, EmbeddingSettings settings, CancellationToken ct)
+    {
+        var spans = QueryChunker.Split(text, settings.QueryChunkChars, settings.QueryChunkOverlap);
+        var chunks = spans.Select((s, i) => (Chunk: i + 1, s.Start, s.End)).ToList();
+        var results = new Dictionary<int, List<QueryPiece>>();
+
+        // Over the cap: the first and last halves, where the addressed message and the ask usually are.
+        var cap = settings.QueryChunkMax;
+        var kept = chunks.Count <= cap ? chunks
+            : chunks.Take((cap + 1) / 2).Concat(chunks.Skip(chunks.Count - cap / 2)).ToList();
+        // The skipped middle is one over-cap record spanning the skipped chunks, so the reported pieces stay bounded however
+        // long the message (Ember's CHANGES on 90fbe72): at most 96 attempted, plus this one. The characters it leaves
+        // uncovered (its overlap with kept neighbours excluded) are QueryVectors.Gaps, as for any piece.
+        if (kept.Count < chunks.Count)
+        {
+            var first = chunks[(cap + 1) / 2];
+            var last = chunks[chunks.Count - cap / 2 - 1];
+            results[first.Chunk] = [new QueryPiece(first.Chunk, first.Start, last.End, null, ChunkFailure.OverCap) { Through = last.Chunk }];
+        }
+
+        var batches = kept.Chunk(settings.QueryChunkBatch).ToList();
+        var order = new List<int>();
+        for (int low = 0, high = batches.Count - 1; low <= high; low++, high--)
+        {
+            order.Add(low);
+            if (high != low)
+            {
+                order.Add(high);
+            }
+        }
+
+        // The pieces bound (acceptance 3) is structural: a chunk is halved at most MaxShrinks (2) levels deep, so it ends as
+        // at most four pieces, and 24 chunks as at most 96 attempted (QueryVectors.Attempted); the skipped middle is the one
+        // over-cap record above. Both counts are reported (QueryVectors.Line).
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(settings.QueryChunkBudgetMs);
+        var stopped = (string?)null;
+
+        foreach (var b in order)
+        {
+            var batch = batches[b];
+            if (stopped is not null)
+            {
+                foreach (var c in batch)
+                {
+                    results[c.Chunk] = [new QueryPiece(c.Chunk, c.Start, c.End, null, stopped)];
+                }
+
+                continue;
+            }
+
+            try
+            {
+                var (vectors, failure) = await embeddings.TryEmbedAsync(batch.Select(c => text[c.Start..c.End]).ToList(), deadline.Token);
+                if (vectors.Count == batch.Length)
+                {
+                    for (var i = 0; i < batch.Length; i++)
+                    {
+                        results[batch[i].Chunk] = [new QueryPiece(batch[i].Chunk, batch[i].Start, batch[i].End, vectors[i], null)];
+                    }
+
+                    continue;
+                }
+
+                // llama-server fails the whole request when any one input is too long: each chunk on its own. A batch of
+                // one has already been tried on its own, and its failure is that chunk's.
+                foreach (var c in batch)
+                {
+                    var pieces = new List<QueryPiece>();
+                    results[c.Chunk] = pieces;
+                    await EmbedPieceAsync(c.Chunk, c.Start, c.End, 0, batch.Length == 1 ? failure : null);
+
+                    async Task EmbedPieceAsync(int chunk, int start, int end, int depth, string? known)
+                    {
+                        var why = known;
+                        if (why is null)
+                        {
+                            var (one, oneFailure) = await embeddings.TryEmbedAsync([text[start..end]], deadline.Token);
+                            if (one.Count == 1 && one[0].Length > 0)
+                            {
+                                pieces.Add(new QueryPiece(chunk, start, end, one[0], null));
+                                return;
+                            }
+
+                            why = oneFailure ?? ChunkFailure.Refused;
+                        }
+
+                        if (why is not (ChunkFailure.TooLarge or ChunkFailure.Refused) || depth == MaxShrinks)
+                        {
+                            pieces.Add(new QueryPiece(chunk, start, end, null, why));
+                            return;
+                        }
+
+                        if (QueryChunker.Halve(text, start, end, MinTailChars) is not { } halves)
+                        {
+                            pieces.Add(new QueryPiece(chunk, start, end, null, ChunkFailure.Floor));
+                            return;
+                        }
+
+                        await EmbedPieceAsync(chunk, halves.Head.Start, halves.Head.End, depth + 1, null);
+                        await EmbedPieceAsync(chunk, halves.Tail.Start, halves.Tail.End, depth + 1, null);
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+            {
+                // The budget, or the recall's own token. Spans of this batch not yet embedded join the rest as stopped.
+                stopped = ct.IsCancellationRequested ? ChunkFailure.Cancelled : ChunkFailure.OverTime;
+                foreach (var c in batch)
+                {
+                    var done = results.GetValueOrDefault(c.Chunk) ?? [];
+                    var covered = done.Where(p => p.Vector is not null || p.Failure is not null).ToList();
+                    results[c.Chunk] = covered.Count > 0 && covered.Max(p => p.End) >= c.End
+                        ? covered
+                        : [.. covered, new QueryPiece(c.Chunk, covered.Count == 0 ? c.Start : covered.Max(p => p.End), c.End, null, stopped)];
+                }
+            }
+        }
+
+        if (stopped == ChunkFailure.Cancelled)
+        {
+            // Recorded above as the design classes it; the caller's cancellation is its decision and escapes (PR 17).
+            ct.ThrowIfCancellationRequested();
+        }
+
+        var all = results.OrderBy(r => r.Key).SelectMany(r => r.Value.OrderBy(p => p.Start)).ToList();
+        return new QueryVectors(settings.QueryChunkScore, text.Length, chunks.Count, Math.Min(settings.QueryChunkOverlap, settings.QueryChunkChars / 4), all);
+    }
 
     /// <summary>The query's vector, or null (noted in <see cref="Fallback"/>) when the embedder gave none.</summary>
     public async Task<float[]?> EmbedAsync(string text, CancellationToken ct = default, string part = Fragments)
@@ -157,8 +353,16 @@ public static class RecallPath
         }
 
         var meaning = query.Compared.Where(p => !query.FellBack.ContainsKey(p)).ToList();
-        var words = string.Join("; ", query.FellBack.OrderBy(f => f.Key, StringComparer.Ordinal).Select(f => $"{f.Key}: {f.Value}"));
-        return (meaning.Count > 0, query.FellBack.Count > 0) switch
+        // A chunked query partly embedded is degraded by the part not embedded (component `query`), never clean semantic;
+        // with nothing embedded at all, the parts fell back and it is words-fallback (docs/design/chunked-query-embedding.md).
+        var missing = new Dictionary<string, string>(query.FellBack);
+        if (query.Query?.Degraded() is { } partly)
+        {
+            missing["query"] = partly;
+        }
+
+        var words = string.Join("; ", missing.OrderBy(f => f.Key, StringComparer.Ordinal).Select(f => $"{f.Key}: {f.Value}"));
+        return (meaning.Count > 0, missing.Count > 0) switch
         {
             (true, false) => (Semantic, null),
             (true, true) => (SemanticDegraded, words),
