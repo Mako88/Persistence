@@ -9,6 +9,7 @@ import os
 import random
 import re
 import stat
+import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field, asdict
@@ -899,14 +900,43 @@ class RoomStore:
         return items[-limit:]
 
     def session(self):
+        """session.json as a dict, {} when there is none. A file that won't parse, or parses to anything but an object
+        (null, [], a number), raises ValueError: it is corrupt, never read as a session (Arden's review of 06b4ba6)."""
         p = self.dir / "session.json"
-        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+        if not p.exists():
+            return {}
+        d = json.loads(p.read_text(encoding="utf-8"))
+        if not isinstance(d, dict):
+            raise ValueError(f"session.json holds {type(d).__name__}, not an object")
+        return d
 
     def save_session(self, d):
-        """Atomic: written to a temporary file beside it, then renamed over it, so a reader never sees half a file."""
+        """Atomic: written to a temporary file beside it, flushed to disk, then renamed over it, so a reader never sees
+        half a file, and a power cut can't leave the rename pointing at data never written (Arden's review of 06b4ba6)."""
         tmp = self.dir / f"session.json.{os.getpid()}.tmp"
         tmp.write_text(json.dumps(d), encoding="utf-8")
+        _fsync(tmp)
         os.replace(tmp, self.dir / "session.json")
+        _fsync(self.dir)
+
+    def set_aside_session(self):
+        """Move an unreadable session.json aside, kept for inspection, to session.json.corrupt-<UTC>; returns that path.
+        Nothing is left in its place, so the next wake starts a fresh room session, as a rollover does (Arden)."""
+        stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+        aside, n = self.dir / f"session.json.corrupt-{stamp}", 1
+        while aside.exists():
+            aside, n = self.dir / f"session.json.corrupt-{stamp}-{n}", n + 1
+        os.replace(self.dir / "session.json", aside)
+        return aside
+
+
+def _fsync(path):
+    """Flush a file's (or a directory's) contents to disk."""
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def wake_argv(config, store, session_id=None, reply_file=None):
@@ -975,6 +1005,15 @@ def last_wake_note(saved):
         return (f"This is the last wake in this session: it has grown to {saved.get('context')} tokens, and a fresh room "
                 "session takes over after this wake ends. Before anything else, update your working note (`note`) so the "
                 "fresh session starts from where things stand; then answer the room as usual.\n\n")
+    return ""
+
+
+def moved_aside_note(aside):
+    """A line for the prompt of the wake that found session.json unreadable and moved it aside; empty otherwise."""
+    if aside:
+        return (f"This is a fresh room session: the room's session record (session.json) was unreadable, so it was moved "
+                f"aside to {aside.name} and kept for inspection. Your core above carries your note and recent "
+                "conversation; `room read` shows the room.\n\n")
     return ""
 
 

@@ -226,15 +226,31 @@ class Bridge:
         started = time.time()
         # Everything from reading session.json on is inside the try, so the turn always ends (finish) whatever fails:
         # a session.json that won't parse used to kill the task here and leave the room waiting forever (Arden's review
-        # of ceaac74). It is said and the wake skipped; save_session's write is atomic, so the bridge never tears it.
+        # of ceaac74). save_session's write is atomic, so the bridge never tears it. If it is unreadable anyway, it heals
+        # itself (Arden's review of 06b4ba6): the file is moved aside, kept for inspection, said loudly, and this wake
+        # starts a fresh session, as a rollover does. A fresh session is normal; a bridge that wakes nobody is not.
         try:
+            aside = None
             try:
                 saved = self.store.session()
+            except ValueError as e:
+                try:
+                    aside = self.store.set_aside_session()
+                except OSError as e2:
+                    print(f"wake could not start: session.json is unreadable ({e}) and could not be moved aside ({e2}); "
+                          "fix or remove it", flush=True)
+                    return
+                self.log_rollover(f"SESSION.JSON UNREADABLE ({e}): moved aside to {aside}; this wake starts a fresh "
+                                  "room session")
+                saved = {}
+            try:
                 argv, new_session = rc.wake_argv(self.config, self.store, reply_file=reply_file)
             except ValueError as e:
                 print(f"wake could not start: session.json is unreadable ({e}); fix or remove it", flush=True)
                 return
-            if new_session:
+            if aside:
+                prompt = rc.moved_aside_note(aside) + prompt
+            elif new_session:
                 prompt = rc.fresh_session_note(saved) + prompt
             else:
                 prompt = rc.last_wake_note(saved) + prompt
