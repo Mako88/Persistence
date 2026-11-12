@@ -33,6 +33,9 @@ began (`HOP_TOKEN_SECONDS`), not forever. That is long enough for work the wake 
 dropped at the next wake, so the set stays bounded (Ember). `PERSISTENCE_ROOM_WAKE` joined the hook server's
 per-session variables, so a server started during a hop wake doesn't carry its token (Arden). The README now says a
 loud hop post addressed to a person is safe only while every bridge has the same names for people (Arden).
+Then Arden's minors from the review of bc3617a: token ages are on `time.monotonic()`, so a wall-clock jump neither
+ends a token early nor keeps it, and the README says the tokens live in memory, so a bridge restart within the 12
+hours makes posts from work left running go out loud.
 
 ## 2026-11-12 — Room turns: the next self wakes at the previous one's reply
 

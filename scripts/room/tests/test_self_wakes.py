@@ -253,21 +253,44 @@ class BridgeHop(unittest.TestCase):
         from unittest import mock
         b, sent = self.bridge()
         t0 = 1_000_000.0
-        with mock.patch.object(br.time, "time", return_value=t0):
+        with mock.patch.object(br.time, "monotonic", return_value=t0):
             b.begin(rc.Wake(triggers=[], unread=[], channel_id="10", speaker="x", hop=True))
             token = b.wake_token
             b.begin(None)
         self.assertGreaterEqual(br.HOP_TOKEN_SECONDS, 3600)               # hours, not minutes
         late = t0 + br.HOP_TOKEN_SECONDS - 1
-        with mock.patch.object(br.time, "time", return_value=late):
+        with mock.patch.object(br.time, "monotonic", return_value=late):
             asyncio.run(b.say({"text": "detached work, late", "channel": "10", "wake": token}))
             b.begin(None)
             self.assertIn(token, b.hop_tokens)                            # still young: kept
-        with mock.patch.object(br.time, "time", return_value=t0 + br.HOP_TOKEN_SECONDS):
+        with mock.patch.object(br.time, "monotonic", return_value=t0 + br.HOP_TOKEN_SECONDS):
             asyncio.run(b.say({"text": "too late", "channel": "10", "wake": token}))
             b.begin(None)
         self.assertEqual(sent, [True, False])
         self.assertNotIn(token, b.hop_tokens)                             # dropped: the set is bounded
+
+    def test_a_hop_token_ignores_wall_clock_jumps(self):
+        # Arden's review of bc3617a: ages are on time.monotonic(), so a wall-clock jump forward (NTP, a manual set)
+        # doesn't make a young token's posts loud early, and one backward doesn't keep an old token alive.
+        import bridge as br
+        from unittest import mock
+        b, sent = self.bridge()
+        t0 = 1_000_000.0
+        with mock.patch.object(br.time, "monotonic", return_value=t0):
+            b.begin(rc.Wake(triggers=[], unread=[], channel_id="10", speaker="x", hop=True))
+            token = b.wake_token
+            b.begin(None)
+        with mock.patch.object(br.time, "monotonic", return_value=t0 + 60), \
+                mock.patch.object(br.time, "time", return_value=t0 + 10 * br.HOP_TOKEN_SECONDS):
+            asyncio.run(b.say({"text": "a minute later, clock jumped ahead", "channel": "10", "wake": token}))
+            b.begin(None)
+        self.assertIn(token, b.hop_tokens)
+        with mock.patch.object(br.time, "monotonic", return_value=t0 + br.HOP_TOKEN_SECONDS), \
+                mock.patch.object(br.time, "time", return_value=t0 - 10 * br.HOP_TOKEN_SECONDS):
+            asyncio.run(b.say({"text": "twelve hours later, clock jumped back", "channel": "10", "wake": token}))
+            b.begin(None)
+        self.assertEqual(sent, [True, False])
+        self.assertNotIn(token, b.hop_tokens)
 
     def test_a_hop_post_to_people_only_goes_out_loud(self):
         # Arden's minor item: after C2, one that addresses only a person may ping them; one that addresses a self not.

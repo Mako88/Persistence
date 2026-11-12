@@ -283,18 +283,20 @@ class Bridge:
         own; a hop wake's (Wake.hop) is kept, so the posts that carry it, and only those, go out @silent: a work
         session's report or anything else said while a hop wake runs is not its post (Arden's review of d846149, C1).
         A token stays a hop token after its wake ends, so a post the wake left running behind it stays silent too, for
-        HOP_TOKEN_SECONDS; older ones are dropped here, so the set stays bounded (Ember's review of b2eb6df)."""
+        HOP_TOKEN_SECONDS; older ones are dropped here, so the set stays bounded (Ember's review of b2eb6df). Ages are
+        on time.monotonic(), so a wall-clock jump neither ends a token early nor keeps it (Arden's review of bc3617a).
+        The tokens live in memory: a bridge restart forgets them, and posts from work left running go out loud."""
         self.current_channel = wake.channel_id if wake else None
         self.wake_token = secrets.token_hex(16) if wake else None
-        now = time.time()
+        now = time.monotonic()
         self.hop_tokens = {t: at for t, at in self.hop_tokens.items() if now - at < HOP_TOKEN_SECONDS}
         if wake and wake.hop:
             self.hop_tokens[self.wake_token] = now
 
     def is_hop(self, token, now=None):
-        """Whether `token` is a hop wake's, begun less than HOP_TOKEN_SECONDS ago."""
+        """Whether `token` is a hop wake's, begun less than HOP_TOKEN_SECONDS ago (`now` on time.monotonic())."""
         at = self.hop_tokens.get(token) if token else None
-        return at is not None and (now if now is not None else time.time()) - at < HOP_TOKEN_SECONDS
+        return at is not None and (now if now is not None else time.monotonic()) - at < HOP_TOKEN_SECONDS
 
     def log_rollover(self, said):
         """A step of the room session's rollover (or why there was none), to stdout and timings.jsonl."""
