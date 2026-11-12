@@ -611,6 +611,84 @@ public sealed class FragmentStoreTests : IDisposable
         Assert.Null(embedded.Fallback); // cleared for each recall
     }
 
+    [Fact]
+    public async Task Recall_reports_the_path_it_actually_took()
+    {
+        // From what happened, never from the settings (Ember, 2026-11-12): a benchmark labels each turn by this.
+        var store = await OpenAsync(embedder: new WordsEmbedder { RefuseOverChars = 100 }, queryTailChars: 1200);
+        await store.AddAsync("Personal", "The checkpoint resumes after the game closes on the shared card.", null, null, null, [], false);
+
+        var embedded = await store.RecallAsync("checkpoint resumes", 3, []);
+        var refused = await store.RecallAsync(new string('7', 2000) + " checkpoint", 3, []);
+        var again = await store.RecallAsync("checkpoint resumes", 3, []);
+        var off = await (await OpenAsync()).RecallAsync("checkpoint resumes", 3, []);
+
+        Assert.Equal(("semantic", null), (embedded.Path, embedded.PathWhy));
+        Assert.Equal("words-fallback", refused.Path);
+        Assert.StartsWith("fragments: the embedder gave no vector", refused.PathWhy);
+        Assert.Equal("semantic", again.Path); // reset for each recall: one fallback doesn't stick
+        Assert.Equal(("words-setting", "embedding is off"), (off.Path, off.PathWhy));
+    }
+
+    [Fact]
+    public async Task Recall_whose_past_utterances_fail_by_meaning_is_semantic_degraded_not_words()
+    {
+        // Ember's CHANGES on f922439: the fragments compared meaning and the utterances' vectors failed. That recall
+        // did not run on words alone, and it is not clean semantic either: it says semantic-degraded, naming the part.
+        File.WriteAllLines(transcript, [
+            $$$"""{"type":"user","uuid":"u1","timestamp":"2026-11-07T01:00:00Z","message":{"role":"user","content":"the checkpoint resumes {{{new string('w', 100)}}} UTTERANCE"}}""",
+        ]);
+        var store = await OpenAsync(embedder: new WordsEmbedder { ThrowOn = "UTTERANCE" });
+        await store.KeepConversationAsync(transcript, "John");
+        await store.AddAsync("Personal", "The checkpoint resumes after the game closes on the shared card.", null, null, null, [], false);
+
+        var recalled = await store.RecallAsync("checkpoint resumes after the game closes, said before?", 3, [], said: 3);
+
+        Assert.Equal("semantic-degraded", recalled.Path);
+        Assert.StartsWith("past utterances: recall of past utterances by meaning failed", recalled.PathWhy);
+        Assert.DoesNotContain("fragments:", recalled.PathWhy);
+        Assert.StartsWith("Recall of past utterances ran on exact words alone", recalled.Fallback); // and the notice says which part
+    }
+
+    [Fact]
+    public async Task Recall_whose_fragments_fall_back_while_utterances_compare_is_semantic_degraded()
+    {
+        // The other way round: the fragments' meaning side fails (the embedder throws on the fragment's text), but the
+        // past utterances were embedded and compared. Still degraded, never words-fallback.
+        File.WriteAllLines(transcript, [
+            """{"type":"user","uuid":"u1","timestamp":"2026-11-07T01:00:00Z","message":{"role":"user","content":"the checkpoint resumes when the game closes, said long ago, before the card was ever shared"}}""",
+        ]);
+        var store = await OpenAsync(embedder: new WordsEmbedder { ThrowOn = "shared card" });
+        await store.KeepConversationAsync(transcript, "John");
+        await store.AddAsync("Personal", "The checkpoint resumes after the game closes on the shared card.", null, null, null, [], false);
+
+        var recalled = await store.RecallAsync("checkpoint resumes after the game closes, said before?", 3, [], said: 3);
+
+        Assert.Equal("semantic-degraded", recalled.Path);
+        Assert.Equal("fragments: semantic recall failed (embedder down for these)", recalled.PathWhy);
+    }
+
+    [Fact]
+    public async Task Recall_with_every_part_on_meaning_is_semantic_and_with_none_is_words_fallback()
+    {
+        File.WriteAllLines(transcript, [
+            """{"type":"user","uuid":"u1","timestamp":"2026-11-07T01:00:00Z","message":{"role":"user","content":"the checkpoint resumes when the game closes, said long ago, before the card was ever shared"}}""",
+        ]);
+        var store = await OpenAsync(embedder: new WordsEmbedder { RefuseOverChars = 100 });
+        await store.KeepConversationAsync(transcript, "John");
+        await store.AddAsync("Personal", "The checkpoint resumes after the game closes.", null, null, null, [], false);
+
+        var both = await store.RecallAsync("checkpoint resumes, said before?", 3, [], said: 3);
+        var neither = await store.RecallAsync(new string('7', 200) + " checkpoint resumes", 3, [], said: 3);
+
+        Assert.Equal(("semantic", null), (both.Path, both.PathWhy));
+        Assert.NotEmpty(both.Said); // the utterances' part ran too, so semantic covers both parts
+        Assert.Equal("words-fallback", neither.Path); // the query itself was refused: no part compared meaning
+        Assert.Contains("fragments: the embedder gave no vector", neither.PathWhy);
+        Assert.Contains("past utterances: the embedder gave no vector", neither.PathWhy);
+        Assert.Contains("past utterances: the embedder gave no vector", neither.PathWhy);
+    }
+
     /// <summary>~3,000 characters whose head and tail share no words, so a head and a tail embed far apart.</summary>
     private static readonly string LongText = string.Join(' ', Enumerable.Range(0, 400).Select(i => $"word{i:D4}"));
 
@@ -618,6 +696,7 @@ public sealed class FragmentStoreTests : IDisposable
     private sealed class WordsEmbedder : Persistence.Services.IEmbeddingClient
     {
         public int RefuseOverChars { get; init; }
+        public string? ThrowOn { get; init; }
         public bool IsEnabled => true;
         public string Model => "words";
 
@@ -626,6 +705,11 @@ public sealed class FragmentStoreTests : IDisposable
             if (RefuseOverChars > 0 && texts.Any(t => t.Length > RefuseOverChars))
             {
                 return Task.FromResult<IReadOnlyList<float[]>>([]);
+            }
+
+            if (ThrowOn is not null && texts.Any(t => t.Contains(ThrowOn)))
+            {
+                throw new HttpRequestException("embedder down for these");
             }
 
             return Task.FromResult<IReadOnlyList<float[]>>(texts.Select(Embed).ToList());

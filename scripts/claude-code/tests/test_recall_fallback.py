@@ -50,6 +50,13 @@ class RecallFallback(unittest.TestCase):
         self.assertIn("exact words alone", shown)
         self.assertIn("nothing", shown.lower())
 
+    def test_empty_recall_with_one_part_on_words_shows_that_notice(self):
+        # Semantic-degraded (Ember's CHANGES on f922439): the fragments compared meaning, the past utterances did not;
+        # the store's notice names the part, and an empty recall must still show it.
+        self.reply = "(Recall of past utterances ran on exact words alone, without meaning: recall of past utterances by meaning failed (down).)\n\n"
+        shown = self.run_recall()
+        self.assertIn("Recall of past utterances ran on exact words alone", shown)
+
     def test_empty_recall_with_meaning_prints_nothing(self):
         self.reply = ""
         self.assertEqual("", self.run_recall())

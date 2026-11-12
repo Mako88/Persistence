@@ -25,6 +25,62 @@ number) counts as corrupt, not as a session. `save_session` flushes the new file
 power cut can't leave an empty `session.json`. Only when the file can't be moved aside does the wake still end with
 "wake could not start".
 
+## 2026-11-12 — Recall benchmark revised for Ember's review; recall says which path it took
+
+**A fallback no longer outranks meaning: `semantic-degraded` (Ember's CHANGES on f922439).** A recall has two parts
+that compare meaning, the authored fragments and the past utterances. f922439 called a recall `words-fallback`
+whenever either part fell back, so one whose fragments compared meaning and whose utterances failed was counted as
+"exact words alone", which it wasn't. Now `QueryEmbedder` records, per part, that meaning was compared (the query
+vector ranked against stored ones) or that it ran on words and why, and `RecallPath.Of` reads them: `semantic` when
+every part that asked compared, `semantic-degraded (<part>: <why>)` when one did and another fell back,
+`words-fallback (<part>: <why>)` when none did. A part that compared and then failed counts as words. The notice for
+a part other than the fragments names it ("Recall of past utterances ran on exact words alone ..."), since "recall
+ran on exact words alone" would be false there, and the hook shows it like the other. Conversation recall with
+utterances found by words but none with a vector now says so too. The benchmark reports `semantic-degraded` as its
+own bucket and rate, outside the semantic numbers, and a hook turn whose recall calls disagree is `mixed` (each
+call's path listed) instead of taking the first call's on trust.
+
+**`recall --diagnostics`: the store's own account of the path a recall took.** Asking for meaning doesn't make
+recall use it: with no query vector it falls back to exact words. The fallback was already said (a head line and
+stderr), but nothing said positively that meaning *was* compared, so a benchmark could only infer "semantic" from
+silence or from the prompt's length, and a floor tuned on that could be tuned on words-only results (Ember's review
+of 7789c50). Now `Recalled` carries `Path` (`semantic` when the query got a vector, `words-setting` when embedding is
+off, `words-fallback` with why when meaning was asked for but not used, else `unknown`; the two words paths
+behave differently, Claude found, so they are never one bucket), and `--diagnostics` writes it as one `recall-path:` line on stderr. Also:
+conversation recall swallowed a failure of its meaning side without a word; it is now noted like every other
+fallback, so a recall that compared meaning for fragments but not for past utterances doesn't claim `semantic`.
+
+**The benchmark, revised (Ember's three changes).** (1) Every turn records its actual path from `--diagnostics`
+(`unknown` with an older exe, `none` where the hook made no recall); each arm is scored only over turns that took its
+path, with the fall-back rate its own number. (2) Recall writes as it reads (`LastAccessedUtc`, backfilled vectors),
+so every case, and every turn of an evolving session, runs on a throwaway copy of a pristine read-only base built in
+a private dir; the snapshot's hash is checked unchanged. (3) Session cases run twice: on a store rebuilt as of each
+turn (the real session's id, so its own words stay out of "said before"), and on the store fixed at the first turn,
+now labelled a repeat test. **Fixed in the as-of rebuild:** sqlite there runs without foreign keys, so a deleted
+fragment's embedding stayed, took a place among the most similar, then hydrated to nothing; those embeddings now go
+with their fragments, and tags, concepts and facts created later are dropped. The baseline is reframed: within one
+window repeats are already 0, so the dedup target is surviving compaction; automated turns are a regression test.
+
+**And Claude's review of 7789c50.** The report opens with the settings in effect and where each came from (the
+bench's defaults are Arden's, and query tail 1200 would have hidden Claude's 77% fall-back rate at tail 0); the
+words-only notice the peer was shown is recorded per turn; repeats are split into one window and across a
+compaction; `report --labels` judges with the labels as they are now, so relabelling needs no rerun; `--watch` is
+opt-in; temp dirs are removed. Gold numbers are given for real and synthetic prompts apart. A store call that fails
+now stops the run: the hook reads a failed call as "nothing", so a full /tmp scored as recall showing nothing.
+
+## 2026-11-12 — Recall benchmark (`scripts/recall-eval/bench.py`)
+
+**A labelled, reproducible benchmark for recall, so the three cheap fixes can be shown to help or not.** John's
+work Claude reported recall with no relevance floor, the same broad fragments on every prompt, repeats within a
+session, and recall on automated turns. The agreed fixes (a floor that can say "nothing relevant", per-session
+dedup, no recall on automated turns) are Claude's to build; this is what they are measured against. Each case runs
+through the real `hook.py recall` (its gate, its context-window memory, core ids held at session start), with only
+the store calls redirected to the CLI on a read-only snapshot rebuilt as of the question, so a fix in either the
+hook or the store shows. Case kinds: gold, nothing-relevant, automated (real task notifications), and a
+multi-turn session; the semantic and words-only paths are scored apart. The report holds ids and counts only, so
+another self (or John's work Claude, with its own labels) can share numbers without sharing its store. Labels stay
+outside the repo; the format is in `scripts/recall-eval/README.md`.
+
 ## 2026-11-12 — Room: a self talking to the room wakes the other selves, one hop
 
 **A self's unaddressed post wakes the other selves (`wake_on_self`, on by default).** John found that a self talking

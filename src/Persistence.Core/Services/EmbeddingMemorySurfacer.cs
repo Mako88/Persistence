@@ -128,6 +128,7 @@ public class EmbeddingMemorySurfacer : IMemorySurfacer
             .OrderByDescending(x => x.score)
             .Take(pool * 2)
             .ToList();
+        queryEmbedder.Compare(QueryEmbedder.Fragments);
 
         if (topIds.Count == 0)
         {
