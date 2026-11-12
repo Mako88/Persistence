@@ -1718,6 +1718,71 @@ def add_wake(event):
     return {"set": item}
 
 
+# add_heartbeat_wake (heartbeat.md, "How a nudge or retry happens"): the one writer of heartbeat items. Callers pass ids
+# only; the reason is built here from a fixed table, and never copies another item's text.
+HEARTBEAT_REASONS = {
+    "nudge": "The heartbeat found claim {claim} claimed by you, with no session running and no wake set. `ptask show "
+             "{claim}` has it. Carry on, pause it, or close it.",
+    "never-started": "The heartbeat is retrying wake firing {origin}, which never started. Its prompt is "
+                     "`state/wake-{origin}.txt` if you want it.",
+    "crashed": "The heartbeat is retrying wake firing {origin}, which stopped without finishing. Its prompt is "
+               "`state/wake-{origin}.txt` if you want it.",
+    "failed": "The heartbeat is retrying wake firing {origin}, which ended in an error. Its prompt is "
+              "`state/wake-{origin}.txt` if you want it.",
+    "usage-limit": "The heartbeat is retrying wake firing {origin}, which hit the usage limit. Its prompt is "
+                   "`state/wake-{origin}.txt` if you want it.",
+}
+
+
+def room_sessions():
+    try:
+        d = json.loads(ROOM_SESSION_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    return {d.get(k) for k in ("id", "previous") if isinstance(d, dict) and d.get(k)}
+
+
+def add_heartbeat_wake(id, kind, session, launch, claim=None, retry_of=None, follows=None, attempt=None, deferral=None,
+                       at=None, cwd=None):
+    """Add one heartbeat item under wakes.lock, idempotent by id (in the queue or with any ledger fact: writes nothing,
+    returns None). Every value is validated; the room's own session is refused. Returns the item written."""
+    import coordination
+
+    for name, value in (("id", id), ("session", session), ("claim", claim), ("retry_of", retry_of), ("follows", follows)):
+        if (value is not None or name in ("id", "session")) and not full_uuid(value):
+            raise ValueError(f"{name} must be a full id")
+    if kind not in HEARTBEAT_REASONS or (kind == "nudge") != (claim is not None and retry_of is None):
+        raise ValueError(f"{kind!r} is not a heartbeat item kind here")
+    if launch not in ("resume", "session-id"):
+        raise ValueError("launch is resume or session-id")
+    if kind != "nudge" and (attempt not in ("retry", "deferral") or not retry_of or not follows):
+        raise ValueError("a retry or deferral names its origin, the attempt it follows, and its kind")
+    if attempt == "deferral" and deferral not in (1, 2, 3):
+        raise ValueError("a deferral is numbered 1 to 3")
+    if attempt != "deferral" and deferral is not None:
+        raise ValueError("only a deferral has a number")
+    if session in room_sessions():
+        raise ValueError("the heartbeat never wakes the room's own session")
+    item = {"id": id, "session": session, "at": float(at if at is not None else datetime.now().timestamp()),
+            "by": "heartbeat", "launch": launch,
+            "reason": HEARTBEAT_REASONS[kind].format(claim=claim, origin=retry_of),
+            "set": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    for key, value in (("cwd", cwd), ("claim", claim), ("retry_of", retry_of), ("follows", follows),
+                       ("attempt", attempt), ("deferral", deferral)):
+        if value is not None:
+            item[key] = value
+    # The nudge holds wakes.lock across its two writes (the item, then the mark); a retry takes it here.
+    with (_no_lock() if "wakes" in coordination.held_locks() else coordination.lock(STATE, "wakes")):
+        items = queue_locked()
+        if any(isinstance(w, dict) and w.get("id") == id for w in items):
+            return None
+        facts, _ = coordination.snapshot(STATE)
+        if any(f.get("firing") == id for f in facts):
+            return None
+        write_queue_locked(items + [item])
+    return item
+
+
 def run_due(grace=120, home=None):
     """`hook.py run-due`, from a server's timer every minute: wakes past due for a session no live process holds.
     A wake fires through a running session's Stop waiter; a peer run as `claude -p` has none once the run ends,
@@ -1732,6 +1797,10 @@ def run_due(grace=120, home=None):
     already enqueued (a run that died before its rewrite) is only removed, firing nothing. Liveness is by exact id."""
     import claims
 
+    if not RUN_LINE.is_file():
+        # Fail loudly, fire nothing: the queue, the ledger and every claim are left as they are (Claude's review Q3).
+        print(f"run-due: {RUN_LINE} is missing, so nothing fires; install all six files beside hook.py", file=sys.stderr)
+        return
     now = datetime.now().timestamp()
     at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     c = claims.Claims(STATE, home=home)
@@ -1740,8 +1809,9 @@ def run_due(grace=120, home=None):
         _run_due_locked(c, claims, now, at, grace, launches)
     except BaseException:
         for launch in launches:
-            if launch[0] == "claim" and launch[3] is not None:
-                os.close(launch[3])  # a run that dies mid-transition launches nothing and leaks no descriptor
+            fd = launch[3] if launch[0] == "claim" else launch[2] if launch[0] == "heartbeat" else None
+            if fd is not None:
+                os.close(fd)  # a run that dies mid-transition launches nothing and leaks no descriptor
         raise
     # Each launch on its own (Arden 1570199516513046549, nit): one that fails doesn't drop the ones after it, and its
     # descriptor is closed. The first failure is raised once all have been tried, so the run still shows it.
@@ -1751,8 +1821,11 @@ def run_due(grace=120, home=None):
             if launch[0] == "claim":
                 _, w, record, fd = launch
                 handoff = {k: record[k] for k in TASK_FIELDS}
+                speaker = heartbeat_speaker() if w.get("by") == "heartbeat" else None
                 print(start_work_session(record["cwd"], w["reason"], "room", w["session"], handoff=handoff, cwd_fd=fd,
-                                         claim=record["id"]))
+                                         claim=record["id"], firings=[w["id"]], speaker=speaker))
+            elif launch[0] == "heartbeat":
+                _launch_heartbeat(*launch[1:])
             else:
                 _resume_or_start(*launch[1:])
         except Exception as e:
@@ -1805,7 +1878,14 @@ def _run_due_locked(c, claims, now, at, grace, launches):
                 if alive:
                     continue  # a run of it is going: its wake waits for the next minute
                 for w in mine:
-                    if w.get("claim"):
+                    if w.get("by") == "heartbeat" and not _heartbeat_spawn(c, w):
+                        # A heartbeat nudge or retry (heartbeat.md, "How a nudge or retry happens"): its launch is
+                        # checked and bound here; a refusal leaves the firing on record as never started.
+                        try:
+                            launches.append(("heartbeat", w, _bind_heartbeat(c, w)))
+                        except claims.Refused as e:
+                            print(f"run-due: firing {w['id']} refused: {e}", file=sys.stderr)
+                    elif w.get("claim"):
                         try:
                             record, fd, _ = c.spawn_locked(w["claim"], session, w["id"], w.get("cwd"))
                             launches.append(("claim", w, record, fd))
@@ -1815,10 +1895,69 @@ def _run_due_locked(c, claims, now, at, grace, launches):
                             print(f"run-due: firing {w['id']} refused: {e}", file=sys.stderr)
                     coordination.append(STATE, coordination.enqueued_fact(w, at))
                     gone.append(w)
-                plain = [w for w in mine if not w.get("claim")]
+                plain = [w for w in mine if not w.get("claim") and w.get("by") != "heartbeat"]
                 if plain:
                     launches.append(("plain", session, plain))
             write_queue_locked([w for w in items if w not in gone])
+
+
+def heartbeat_speaker():
+    return f"{os.environ.get('PERSISTENCE_PEERNAME') or 'me'} (the heartbeat)"
+
+
+def full_uuid(value):
+    import uuid
+
+    try:
+        return isinstance(value, str) and str(uuid.UUID(value)) == value
+    except ValueError:
+        return False
+
+
+def _heartbeat_spawn(c, w):
+    """A heartbeat retry of a hand-off that never started: its claim is still open, so it goes through the spawn claim
+    like the first firing did (heartbeat.md, A's open/handoff row), with launch session-id."""
+    if not w.get("claim") or w.get("launch") != "session-id":
+        return False
+    try:
+        return c._load(c._path(w["claim"]))["status"] == "open"
+    except Exception:
+        return False
+
+
+def _bind_heartbeat(c, w):
+    """The checks run-due makes before a heartbeat launch, then the cwd bound to a descriptor. Refused: nothing starts."""
+    import claims
+
+    if w.get("launch") not in ("resume", "session-id") or not full_uuid(w.get("session")):
+        raise claims.Refused("a heartbeat item needs launch and a full session id")
+    if w["launch"] == "session-id" and transcript_exists(w["session"]):
+        raise claims.Refused("launch session-id, but a transcript exists: no second owner")
+    if w.get("claim"):
+        record = c._load(c._path(w["claim"]))
+        if record["cwd"] != w.get("cwd"):
+            raise claims.Refused(f"no valid cwd: the item's cwd differs from claim {w['claim']}'s")
+    return c.open_cwd(w.get("cwd"))
+
+
+def _launch_heartbeat(w, fd):
+    """Through cwd-exec and the run line, with the session kept structurally: --resume or --session-id from `launch`
+    only. The prompt is the item's fixed reason; the heartbeat's speaker says a machine woke it."""
+    import claims
+
+    STATE.mkdir(parents=True, exist_ok=True)
+    prompt, out = STATE / f"wake-{w['id']}.txt", STATE / f"wake-{w['id']}.json"
+    prompt.write_text(f"A wake the heartbeat set came due: {w['reason']}", encoding="utf-8")
+    if w["launch"] == "resume":
+        args = ["--resume", w["session"], "--output-format", "json"]
+    else:
+        args = ["--session-id", w["session"], "--permission-mode", "bypassPermissions", "--output-format", "json"]
+    env = {**server_environ(os.environ), "PERSISTENCE_SPEAKER": heartbeat_speaker(),
+           **firing_env([w["id"]], w["session"], out.name)}
+    with open(prompt, "rb") as stdin, open(out, "wb") as stdout:
+        claims.launch(fd, [*WORK_ARGV, *args], env=env, stdin=stdin, stdout=stdout, stderr=subprocess.STDOUT,
+                      start_new_session=True)
+    print(f"woke {w['session'][:8]} for the heartbeat: firing {w['id']}")
 
 
 class _no_lock:
@@ -1835,23 +1974,28 @@ def _resume_or_start(session, mine):
     compact = any(w["reason"].strip() == "/compact" for w in mine)
     reasons = "; ".join(w["reason"] for w in mine if w["reason"].strip() != "/compact") or "you compacted yourself; carry on"
     STATE.mkdir(parents=True, exist_ok=True)
+    firings = [w["id"] for w in mine if full_uuid(w.get("id"))]
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    prompt = STATE / f"wake-{session[:8]}-{stamp}.txt"
+    name = f"wake-{firings[0]}" if firings else f"wake-{session[:8]}-{stamp}"  # by firing id (heartbeat.md, "Firing id")
+    prompt = STATE / f"{name}.txt"
     prompt.write_text(f"A wake you set came due: {reasons}", encoding="utf-8")
-    out = STATE / f"wake-{session[:8]}-{stamp}.json"
+    out = STATE / f"{name}.json"
     cwd = next((w["cwd"] for w in mine if w.get("cwd")), str(Path.home()))
     run = f"cd {shlex.quote(cwd)} && "
     if any(w.get("work") for w in mine):
         # A wake set from the room before claims: a new working session with full permissions, never the room session.
         handoff = next((w["handoff"] for w in mine if w.get("handoff")), None)
-        print(start_work_session(cwd, reasons, "room", session, handoff=handoff))
+        print(start_work_session(cwd, reasons, "room", session, handoff=handoff, firings=firings or None))
         return
     if compact:
         # Kept, not thrown away: Arden's 19:07 compact failed and /dev/null hid why (Arden, 2026-11-09).
         run += f"claude -p --resume {session} /compact --output-format json > {shlex.quote(str(out.with_suffix('.compact.json')))} 2>&1; "
-    run += f"claude -p --resume {session} --output-format json < {shlex.quote(str(prompt))} > {shlex.quote(str(out))} 2>&1"
+    run += (f"{run_line_prefix() if firings else ''}claude -p --resume {session} --output-format json "
+            f"< {shlex.quote(str(prompt))} > {shlex.quote(str(out))} 2>&1")
     # The words are the peer's own, from the wake it set, entered under the login's account.
     env = {**os.environ, "PERSISTENCE_SPEAKER": f"{os.environ.get('PERSISTENCE_PEERNAME') or 'me'} (a wake I set)"}
+    if firings:
+        env.update(firing_env(firings, session, out.name))
     subprocess.Popen(["bash", "-lc", run], env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                      stderr=subprocess.DEVNULL, start_new_session=True)
     print(f"woke {session[:8]}: {reasons}{' (compacted first)' if compact else ''}")
@@ -1901,15 +2045,41 @@ WORK_PROMPTS = {
 }
 
 
-WORK_ARGV = ["bash", "-lc", 'exec claude -p "$@"', "claude"]  # the worker cwd-exec execs; its arguments follow, none from text
+# The worker cwd-exec execs, through the run line (heartbeat.md, "The ledger of fired wakes"): run_line.py appends
+# `started` before claude and `finished` after it for the firings named in its environment. Its arguments follow,
+# none from text; "$0" is the run line's own path.
+RUN_LINE = Path(__file__).resolve().with_name("run_line.py")
+# No fallback to a bare claude (Claude's review Q3): a firing launched without the run line has only its enqueued fact,
+# so a resume wake that ran reads as never started and is retried, running twice. run_due refuses to fire anything
+# when run_line.py is missing (one line saying so); these launch through it unconditionally.
+WORK_ARGV = ["bash", "-lc", 'exec python3 -I "$0" claude -p "$@"', str(RUN_LINE)]
 
 
-def start_work_session(cwd, reasons, origin, session=None, handoff=None, cwd_fd=None, claim=None):
+def run_line_prefix():
+    """The run line before `claude` in a shell launch string."""
+    return f"python3 -I {shlex.quote(str(RUN_LINE))} "
+# The room's own session (its bridge's session.json): a heartbeat wake never resumes it (heartbeat.md, "Staying out
+# of a running room turn").
+ROOM_SESSION_FILE = Path.home() / ".config" / "persistence-room" / "state" / "session.json"
+
+
+def firing_env(firings, session, output):
+    """What the run line reads: ids and a file name only."""
+    return {"PERSISTENCE_FIRINGS": ",".join(firings), "PERSISTENCE_FIRING_SESSION": session,
+            "PERSISTENCE_FIRING_STATE": str(STATE), "PERSISTENCE_FIRING_OUTPUT": output}
+
+
+def transcript_exists(session):
+    """A stat of the session's transcript path, never opened (heartbeat.md, "Owner never started")."""
+    return any((Path.home() / ".claude" / "projects").glob(f"*/{session}.jsonl"))
+
+
+def start_work_session(cwd, reasons, origin, session=None, handoff=None, cwd_fd=None, claim=None, firings=None, speaker=None):
     """A new working session with full permissions, started for work handed to it: a wake set from the room (on home),
     or messages sent from home to this machine (`link`, on John's PC; John approved full auto, 2026-11-10). Never a
     resumed session, so never the room's. Its output is kept in state/wake-<id>-<time>.json."""
     try:
-        return _start_work_session(cwd, reasons, origin, session, handoff, cwd_fd, claim)
+        return _start_work_session(cwd, reasons, origin, session, handoff, cwd_fd, claim, firings, speaker)
     except BaseException:
         if cwd_fd is not None and _fd_open(cwd_fd):
             os.close(cwd_fd)  # failed before cwd-exec took it (claims.launch closes it once called, whatever happens)
@@ -1924,14 +2094,15 @@ def _fd_open(fd):
         return False
 
 
-def _start_work_session(cwd, reasons, origin, session, handoff, cwd_fd, claim):
+def _start_work_session(cwd, reasons, origin, session, handoff, cwd_fd, claim, firings=None, speaker=None):
     import shutil
     import uuid
 
     session = session or str(uuid.uuid4())
     STATE.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    prompt, out = STATE / f"wake-{session[:8]}-{stamp}.txt", STATE / f"wake-{session[:8]}-{stamp}.json"
+    name = f"wake-{firings[0]}" if firings else f"wake-{session[:8]}-{stamp}"  # by firing id when run-due fired it
+    prompt, out = STATE / f"{name}.txt", STATE / f"{name}.json"
     text = WORK_PROMPTS[origin].format(reasons=reasons, cwd=cwd)
     if claim:
         text += (f"\n\nThis task is claim {claim}, claimed for this session when it started (`ptask show {claim}`). "
@@ -1949,7 +2120,9 @@ def _start_work_session(cwd, reasons, origin, session, handoff, cwd_fd, claim):
             text += "\n\n" + evidence_block(handoff)
     prompt.write_text(text, encoding="utf-8")
     me = os.environ.get("PERSISTENCE_PEERNAME") or "me"
-    env = {**server_environ(os.environ), "PERSISTENCE_SPEAKER": f"{me} (a wake I set from the {origin})"}
+    env = {**server_environ(os.environ), "PERSISTENCE_SPEAKER": speaker or f"{me} (a wake I set from the {origin})"}
+    if firings:
+        env.update(firing_env(firings, session, out.name))
     args = ["--session-id", session, "--permission-mode", "bypassPermissions", "--output-format", "json"]
     if cwd_fd is not None:
         # Launched from the verified directory descriptor through cwd-exec, never the path string again (task-claims.md
@@ -1965,7 +2138,8 @@ def _start_work_session(cwd, reasons, origin, session, handoff, cwd_fd, claim):
             subprocess.Popen([claude, "-p", *args], cwd=str(cwd), env=env, stdin=stdin, stdout=stdout,
                              stderr=subprocess.STDOUT, creationflags=BACKGROUND, close_fds=True)
     else:
-        run = (f"cd {shlex.quote(str(cwd))} && claude -p {' '.join(args)} "
+        # A launch with no firing ids (link) has nothing for the run line to record, and runs claude as before.
+        run = (f"cd {shlex.quote(str(cwd))} && {run_line_prefix() if firings else ''}claude -p {' '.join(args)} "
                f"< {shlex.quote(str(prompt))} > {shlex.quote(str(out))} 2>&1")
         subprocess.Popen(["bash", "-lc", run], env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL, start_new_session=True)
@@ -2334,6 +2508,15 @@ def wait_for_wake(event, poll=10):
             keep = []
             for w in items:
                 (due if mine_now(w) and (("at" in w and w["at"] <= now) or ("pid" in w and not alive(w["pid"]))) else keep).append(w)
+            for w in due:
+                if w.get("by") == "heartbeat":
+                    # Under wakes.lock -> fired.lock, before the rewrite: the nudge went to a live session, so the
+                    # heartbeat never takes it for a lost one (heartbeat.md, "Split writes in a nudge").
+                    import coordination
+
+                    coordination.append(STATE, {"firing": w["id"], "fact": "taken",
+                                                "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                                "session": w.get("session"), "claim": w.get("claim")})
             return keep
 
         if any(mine_now(w) and ("at" in w and w["at"] <= now or "pid" in w) for w in wakes()):

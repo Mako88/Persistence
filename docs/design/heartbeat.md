@@ -145,6 +145,10 @@ owner = the pre-minted id) just before it launches the worker. The two failure r
 - **Failure after the owner ran** (a transcript exists): the ordinary claimed path, a nudge with `launch: "resume"`.
 
 Neither route touches C while claims are on. Each is bounded: one retry then one report, or one nudge then one report.
+The bound is **one recovery total per logical spawn attempt per spell** (Q4, Ember 1570222344146780254): when route 1's
+retry is what took the spawn claim and its owner then never ran, that retry was the one recovery, so there is no
+owner-never-started nudge after it; its failure is reported once as `start failed`. Usage-limit deferrals keep their
+own budget of three in either route.
 
 **Writes go through the claims module.** Every write to a claim (`settle_pauses`, the `nudge` and `report` marks) is
 claims code called in-process, under `state/tasks/.lock`, write-then-rename. Each write appends **exactly one history
@@ -230,7 +234,7 @@ are named by it (`state/wake-<id>.txt`, `.json`), not by a time stamp and sessio
 
 | Fact | Written by | Carries (structure only, no text) |
 |---|---|---|
-| `enqueued` | `run_due`, in the locked transition below | the item's `session`, `cwd`, `at`, `work`, `by`, `claim`, `launch`, `retry_of`, `follows`, `attempt`, `deferral`, and `reason_sha256`; never the reason |
+| `enqueued` | `run_due`, in the locked transition below | the item's `session`, `cwd`, `at` (carried as `item_at`, since the fact's own `at` is when it was written), `work`, `by`, `claim`, `launch`, `retry_of`, `follows`, `attempt`, `deferral`, and `reason_sha256`; never the reason |
 | `started` | the run line, as its first step, before `claude` | the wrapper's pid and its `/proc/<pid>/stat` start time; for a working session, the new session's full id |
 | `finished` | the run line, after `claude` exits, whatever the exit | the exit status and the output file name |
 | `taken` | the Stop waiter's `take`, for an item with `by: heartbeat` | the item's `id`, `session` and `claim`; the firing went to a live session, not to run-due |
@@ -406,6 +410,12 @@ beat that can't get it exits at once. It releases the lock before phase 2 writes
 phase 3 (see "Lock order"). Every write is write-then-rename. Every retry, deferral, nudge and cap count happens in
 phase 1, so two beats racing can't both make one, and the cap can't be counted twice. Only report emission can
 overlap, and that is allowed to repeat a line (see Reports).
+
+Only a **missing** file is empty, for `heartbeat.json` and for the heartbeat's plain read of `wakes.json` (Ember's B1
+and B2, 1570222344146780254). A malformed or unreadable `heartbeat.json` fails closed: nothing is decided, emitted or
+marked, the file is kept as it is, a diagnostic goes to the journal and the beat exits non-zero. A malformed or
+unreadable `wakes.json` stops that beat's wake decisions (B, C, A) before any is made, leaves the file alone, and
+says so the same way; D and the emission of earlier reports still run.
 
 ## Reports: journal only in v1
 

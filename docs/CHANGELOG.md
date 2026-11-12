@@ -9,6 +9,40 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-11 — The heartbeat: a script that finds stalled work and wakes it, off by default
+
+**Built to `docs/design/heartbeat.md` (approved by Ember at 027382d), on top of the task claims.** Work moved only when
+one self woke another, so it could stall with nobody awake, and a wake that failed took its only continuation with it
+(John's observation). `scripts/claude-code/heartbeat.py` runs every 10 minutes (`persistence-heartbeat@.timer`, not
+installed or enabled anywhere) as the self's own user, compares facts and calls no model. It reads only records it or
+the harness wrote, the process table and systemd: never the room, a reply, a note, a transcript, a wake's reason or
+a task's text. Off unless `PERSISTENCE_HEARTBEAT` is `true` or `1` in the self's `settings.json` (never the
+environment); claim checks also need `PERSISTENCE_TASKCLAIMS`.
+- **The ledger gets the rest of its facts.** `run_line.py` wraps every run-due launch: `started` (its pid and /proc
+  start time) before `claude`, `finished` (exit, output name) after. Without it run-due fires nothing and says so
+  once (no bare-`claude` fallback, which would make a wake that ran look never-started and run it twice).
+  The Stop waiter writes `taken` when a live session takes a heartbeat item. Prompts and outputs are named by firing id.
+- **What it does:** an overdue wake is reported (B). A fired wake that never started, crashed or failed gets one
+  ordinary retry and up to three usage-limit deferrals (at the reset plus 5 min), every attempt tied to the origin
+  firing, then a report (C). A claim whose owner has stopped is nudged once and reported once if it stays stalled,
+  with `touched since` fixed when decided (A, claims section 4 row by row, including the owner that never started and
+  the hand-off that never started). Failed units on a fixed list are reported, never restarted (D).
+- **Reports go to the journal only**, each with a stable ` key=`, delivered at least once through an outbox in
+  `heartbeat.json`, written with no lock held. At most 3 heartbeat wakes an hour.
+- **Wakes only through wake items:** `hook.add_heartbeat_wake` builds the reason from a fixed table (ids only, no
+  copied text), refuses the room's session, and is idempotent by id. run-due launches them through cwd-exec with
+  `--resume` or `--session-id` from the item, speaker `<self> (the heartbeat)`.
+- **Claims code touched, additively:** `Claims.mark_nudged` and `mark_reported` (one history entry each, `by:
+  heartbeat`); `coordination.lock` can wait or not; `LedgerError` carries the bad line's offset.
+- **Review fixes (Claude, Ember):** the usage limit reads the real `api_error`; a malformed or unreadable `wakes.json`
+  or `heartbeat.json`, a `heartbeat.json` section set to null, a `cap` that isn't empty or whole (an aware window and
+  a non-negative int count, both there) or a non-text outbox line is never read as empty or reset (the beat decides
+  nothing, keeps the file, exits non-zero); the latest recovery attempt is picked by structure, so the ledger-written,
+  queue-not-yet-removed crash window can't raise; and one recovery per spawn attempt per spell (a hand-off retry that
+  took the spawn claim gets no nudge after it).
+- Tests: four new files, 99 tests, including every multi-lock path alone and raced, 8 writers of 500 facts, a writer
+  killed mid-append, and the cross-document run through the real cwd-exec and run line with the fake claude.
+
 ## 2026-11-11 — A room session can be replaced by a fresh one past a size
 
 **`fresh_session_above_tokens`, per self, off by default.** The bridge resumed one room session for good, so by

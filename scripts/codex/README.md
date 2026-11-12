@@ -3,10 +3,11 @@
 `codex_hook.py` is `hook.py`'s Codex side (Ember's trial, `docs/design/ember-trial.md` step 3): the same store
 calls, wired to Codex CLI's hooks (0.144.1). Its docstring says what each hook does and what isn't carried over.
 
-1. Put `codex_hook.py` beside `../claude-code/hook.py`, `coordination.py`, `claims.py` and `cwd_exec.py`, e.g. in
-   `~/.codex/persistence/` (it imports hook.py, which imports the other three where it uses them). Copy all five
-   again on every update: hook.py alone still runs session-start and recall, but setting or firing a wake needs
-   coordination.py, and claims need claims.py and cwd_exec.py.
+1. Put `codex_hook.py` beside `../claude-code/hook.py`, `coordination.py`, `claims.py`, `cwd_exec.py` and
+   `run_line.py`, e.g. in `~/.codex/persistence/` (it imports hook.py, which imports the others where it uses them).
+   Copy all six again on every update: hook.py alone still runs session-start and recall, but setting or firing a
+   wake needs coordination.py, claims need claims.py and cwd_exec.py, and run-due fires nothing without run_line.py
+   (it says so once per run and leaves the queue as it is).
 2. `~/.codex/persistence.json` (mode 600), read before hook.py is imported:
 
 ```json

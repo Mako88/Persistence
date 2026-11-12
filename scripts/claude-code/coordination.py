@@ -41,8 +41,33 @@ def observe(event):
         LOCK_OBSERVER(event)
 
 
+class LockBusy(RuntimeError):
+    """A lock asked for with a wait (0 = don't wait) that another holder kept past it."""
+
+
+def _take(fd, name, wait):
+    """flock, blocking when wait is None (every claims and run-due path), else trying until `wait` seconds pass: the
+    heartbeat's phase 1 doesn't wait (a second beat exits at once) and its phase 3 waits 30 s (heartbeat.md)."""
+    if not fcntl:
+        return
+    if wait is None:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        return
+    import time
+
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                raise LockBusy(f"{name}.lock is held")
+            time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+
+
 @contextmanager
-def lock(state, name):
+def lock(state, name, wait=None):
     names = held_locks()
     if "fired" in names:
         raise LockOrderError(f"{name}.lock taken while holding fired.lock, which is a leaf")
@@ -52,8 +77,7 @@ def lock(state, name):
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(path), os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
     try:
-        if fcntl:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+        _take(fd, name, wait)
         _held.names = names + [name]
         observe(("acquire", name))
         try:
@@ -69,7 +93,8 @@ def lock(state, name):
 # `firing`, `fact`, `at`. Appended and read under state/fired.lock only.
 LEDGER = "fired.jsonl"
 # What an `enqueued` fact carries from its item: structure only, never the reason (its sha256 instead). The item's own
-# `at` is carried as `item_at`, since every fact's `at` is the time it was written (heartbeat.md lists both as `at`).
+# `at` is carried as `item_at`, since every fact's `at` is the time it was written (heartbeat.md names it `item_at`
+# too, since 1e4f42e).
 ENQUEUED_FIELDS = ("session", "cwd", "item_at", "work", "by", "claim", "launch", "retry_of", "follows", "attempt",
                    "deferral", "reason_sha256")
 
@@ -161,7 +186,9 @@ def snapshot(state):
             if not isinstance(fact, dict):
                 raise ValueError("not an object")
         except ValueError:
-            raise LedgerError(f"ledger line at byte {offset} can't be read")
+            err = LedgerError(f"ledger line at byte {offset} can't be read")
+            err.offset = offset  # the heartbeat's report key names it
+            raise err
         facts.append(fact)
         offset += len(raw) + 1
     return facts, not repaired

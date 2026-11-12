@@ -1,0 +1,13 @@
+[Unit]
+Description=%i's Persistence heartbeat: compare facts, nudge or retry only through wakes, report to the journal
+
+[Service]
+Type=oneshot
+User=%i
+# The self's own user, so it reads only that self's state, wakes.json and its own fixed unit list (heartbeat.md).
+# It starts no process itself: nudges and retries are wake items run-due starts. KillMode=process as for
+# persistence-wakes@, so nothing a beat touches is killed with its cgroup.
+KillMode=process
+# Off unless PERSISTENCE_HEARTBEAT is "true" or "1" in the self's ~/.claude/settings.json env block; a beat with it off
+# exits at its first line. Reports are journal lines: journalctl -u persistence-heartbeat@<self>.
+ExecStart=/bin/bash -lc 'python3 "$HOME/.claude/persistence/heartbeat.py"'
