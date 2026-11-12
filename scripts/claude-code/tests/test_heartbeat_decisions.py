@@ -405,6 +405,9 @@ class A_Open(Base):
         self.beat()
         r1, = self.items()
         coordination.append(self.state, coordination.enqueued_fact(r1, self.now.isoformat()))  # and then a crash
+        b = heartbeat.Beat(self.state, self.home, lambda: self.now, None, None, "nobody")
+        b.enq = {f["firing"]: f for f in coordination.snapshot(self.state)[0] if f["fact"] == "enqueued"}
+        self.assertEqual([a["firing"] for a in b.chain(f0)], [r1["id"]])  # once, from its fact
         self.assertEqual(self.beat(1), "ok")
         self.assertEqual([w["id"] for w in self.items()], [r1["id"]])
         self.assertEqual(self.lines, [])
@@ -485,6 +488,9 @@ class OneRecoveryPerSpawn(Base):
         d1, = self.items()
         self.assertEqual((d1["attempt"], d1["deferral"], d1["retry_of"], d1["follows"], d1["claim"], d1["launch"]),
                          ("deferral", 1, f0, r1["id"], record["id"], "session-id"))
+        # A beat while the deferral waits: the chain holds a fired attempt (`at` ISO text) and a queued one (a number).
+        self.assertEqual(self.beat(1), "ok")
+        self.assertEqual(([w["id"] for w in self.items()], self.lines), ([d1["id"]], []))
         self.drain(how="failed")
         self.now += timedelta(hours=1)
         for _ in range(2):
