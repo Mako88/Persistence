@@ -74,22 +74,36 @@ internal sealed class ConversationRecaller(
                     queryEmbedder.Note("no past utterance has a vector yet, so there is nothing to compare meaning with", QueryEmbedder.PastUtterances);
                 }
             }
+            catch (OperationCanceledException)
+            {
+                // Cancellation is the caller's decision, not a failure of meaning: it escapes, never turned into a
+                // words-only recall that reads as a success (Ember's CHANGES on 5113d24; the chunking design's
+                // linked-deadline contract). Covers TaskCanceledException.
+                throw;
+            }
             catch (Exception ex)
             {
                 // Meaning is the enrichment; the words are the floor. Never silent, as the fragments' fallback isn't:
                 // a recall that says it compared meaning must not have dropped it here unseen (Ember, 2026-11-12).
-                queryEmbedder.Note($"recall of past utterances by meaning failed ({ex.Message})", QueryEmbedder.PastUtterances);
+                // The type only, never the message, which can quote the query (content-free diagnostics).
+                semantic = [];
+                queryEmbedder.Note($"recall of past utterances by meaning failed ({ex.GetType().Name})", QueryEmbedder.PastUtterances);
             }
         }
 
-        if (!embeddings.IsEnabled)
+        // Meaning counts for this part only when it compared and did not fall back afterwards (RecallPath's rule).
+        // Off by setting, refused, failed or nothing to compare: the words are all there is. Intersecting with a
+        // meaning that never ran returned nothing at all: on 77% of one store's recalls (the query too long for the
+        // embedder), no past utterance ever came back (2026-11-12).
+        if (!queryEmbedder.Compared.Contains(QueryEmbedder.PastUtterances)
+            || queryEmbedder.FellBack.ContainsKey(QueryEmbedder.PastUtterances))
         {
-            return Fuse(lexical, semantic, count);
+            return Fuse(lexical, [], count);
         }
 
         // Fusion always fills its count, so a message about nothing in particular brought back three
-        // acknowledgements ("Sounds good!" matched "Sounds good!"). With both senses on, an utterance comes
-        // back only when the words and the meaning both find it; none is better than a weak one.
+        // acknowledgements ("Sounds good!" matched "Sounds good!"). When meaning ran, an utterance comes back
+        // only when the words and the meaning both find it; none is better than a weak one.
         var agreed = lexical.Select(f => f.Id).Intersect(semantic.Select(f => f.Id)).ToHashSet();
         return Fuse(lexical.Where(f => agreed.Contains(f.Id)).ToList(), semantic.Where(f => agreed.Contains(f.Id)).ToList(), count);
     }

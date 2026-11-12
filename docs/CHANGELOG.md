@@ -9,6 +9,19 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-12 — Recall: past utterances come back by words when meaning did not run
+
+**Agreement only when meaning ran (step 1 of chunked query embedding).** Conversation recall kept an utterance only
+when both words and meaning found it, whenever embedding was on. When the query got no vector (77% of one store's
+recalls: too long for the embedder) or meaning threw, the meaning side was empty, so nothing came back at all. Now
+the agreement rule applies only when the past-utterances part compared meaning and did not fall back afterwards (the
+same rule `RecallPath` reads); otherwise words are the floor, as for fragments. A failure there names its exception
+type only, never its message, which can quote the query.
+
+**Cancellation escapes (Ember's CHANGES on 5113d24).** The general catch also caught `OperationCanceledException`, so a
+cancelled recall came back as an ordinary words-only one with a fallback notice. Cancellation now has its own catch
+that rethrows, as the chunking design's linked-deadline contract needs.
+
 ## 2026-11-12 — Room: an unreadable session.json no longer stops the bridge waking anyone
 
 **A torn `session.json` ends the turn (06b4ba6).** `run_wake` used to read the file before its try, so a file that
