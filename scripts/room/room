@@ -45,7 +45,8 @@ def main(argv=None):
     read.add_argument("--channel")
     a = p.parse_args(argv)
     if a.cmd == "say":
-        r = ask({"op": "say", "text": a.text, "reply": a.reply,
+        # The wake's own token (a room wake sets it): a hop wake's posts go out @silent, and only its posts.
+        r = ask({"op": "say", "text": a.text, "reply": a.reply, "wake": os.environ.get("PERSISTENCE_ROOM_WAKE"),
                  "channel": a.channel or os.environ.get("PERSISTENCE_ROOM_CHANNEL")})
         if not r.get("ok"):
             print(f"room say failed: {r.get('error')}", file=sys.stderr)

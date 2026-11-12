@@ -91,6 +91,27 @@ class Delay(unittest.TestCase):
         self.assertIsNone(r.tick(1000))
 
 
+class HopThroughAddress(unittest.TestCase):
+    def test_a_silent_post_that_addresses_this_self_wakes_it_as_a_hop(self):
+        # C2 (Arden, d846149): Ember's hop post "Claude, ..." woke Claude directly with hop=False, so Claude's
+        # unaddressed reply went out loud and woke everyone again.
+        r = room()
+        self.assertEqual(r.on_message(msg(1, "Claude, what do you think?", author=EMBER, silent=True), 0), "direct")
+        w = r.tick(1000)
+        self.assertTrue(w.hop)
+
+    def test_a_loud_post_that_addresses_this_self_is_not_a_hop(self):
+        r = room()
+        r.on_message(msg(1, "Claude, what do you think?", author=EMBER), 0)
+        self.assertFalse(r.tick(1000).hop)
+
+    def test_a_persons_message_alongside_still_makes_it_theirs(self):
+        r = room()
+        r.on_message(msg(1, "Claude, what do you think?", author=EMBER, silent=True), 0)
+        r.on_message(msg(2, "Claude?", author=JOHN, bot=False, mentions=[ME]), 1)
+        self.assertFalse(r.tick(1000).hop)
+
+
 class WithTurns(unittest.TestCase):
     def test_a_selfs_reply_in_turns_does_not_wake_the_next_before_its_turn(self):
         # Before the guard, the first self's reply (a self's unaddressed post) was ready after self_delay and brought
@@ -152,6 +173,16 @@ class SkipIfAnswered(unittest.TestCase):
         self.assertFalse(w.hop)
 
 
+    def test_a_late_older_post_does_not_undo_a_newer_one(self):
+        # The monotonic guard in note_posted (Arden's mutation of it survived): out-of-order delivery never lowers it.
+        r = room()
+        r.on_message(msg(15), 0)
+        r.note_posted("c1", 20)
+        r.note_posted("c1", 16)
+        self.assertEqual(r.newest["c1"], 20)
+        self.assertIsNone(r.tick(1000))
+
+
 class Caps(unittest.TestCase):
     def test_they_count_against_wakes_per_hour(self):
         r = room(wakes_per_hour=2, bot_message_cap=100)
@@ -175,7 +206,7 @@ class Caps(unittest.TestCase):
 class BridgeHop(unittest.TestCase):
     """The bridge's side of one hop: posts in a hop wake go out @silent; a self's @silent post is read as such."""
 
-    def test_posts_in_a_hop_wake_go_out_silent_and_others_do_not(self):
+    def bridge(self, history=()):
         import bridge as br
         sent = []
 
@@ -186,20 +217,92 @@ class BridgeHop(unittest.TestCase):
                 sent.append(silent)
                 return NS(id=555 + len(sent), jump_url="x")
 
-        ch = Channel()
+            async def fetch_message(self, i):
+                raise LookupError(i)
+
         config = dict(rc.DEFAULTS, people=PEOPLE, selves=SELVES)
         b = br.Bridge(config, rc.RoomStore(tempfile.mkdtemp()))
-        b.client = NS(user=NS(id=int(ME), display_name="Cloud"), get_channel=lambda i: ch)
+        for h in history:
+            b.store.append_history(h)
+        b.client = NS(user=NS(id=int(ME), display_name="Cloud"), get_channel=lambda i: Channel())
         b.room = rc.Room(ME, "Cloud", config, store=b.store)
+        return b, sent
+
+    def test_only_the_hop_wakes_own_posts_go_out_silent(self):
+        # C1 (Arden, d846149): silent went by time, so a work session's report during a hop wake went out @silent.
+        b, sent = self.bridge()
 
         async def main():
-            b.current_hop = True
-            await b.say({"text": "hop", "channel": "10"})
-            b.current_hop = False
-            await b.say({"text": "plain", "channel": "10"})
+            b.begin(rc.Wake(triggers=[], unread=[], channel_id="10", speaker="x", hop=True))
+            token = b.wake_token
+            await b.say({"text": "hop", "channel": "10", "wake": token})        # the wake's own
+            await b.say({"text": "a work session's report", "channel": "10"})   # no token: not the wake's
+            await b.say({"text": "forged", "channel": "10", "wake": "nope"})
+            b.begin(None)
+            await b.say({"text": "left running by the hop wake", "channel": "10", "wake": token})
+            b.begin(rc.Wake(triggers=[], unread=[], channel_id="10", speaker="x", hop=False))
+            await b.say({"text": "a person's wake", "channel": "10", "wake": b.wake_token})
         asyncio.run(main())
-        self.assertEqual(sent, [True, False])
-        self.assertEqual(b.room.newest["10"], 557)       # its own posts count as posted after
+        self.assertEqual(sent, [True, False, False, True, False])
+        self.assertEqual(b.room.newest["10"], 560)      # its own posts count as posted after
+
+    def test_a_hop_post_to_people_only_goes_out_loud(self):
+        # Arden's minor item: after C2, one that addresses only a person may ping them; one that addresses a self not.
+        b, sent = self.bridge(history=[{"id": "70", "channel_id": "10", "author_id": JOHN, "author": "John", "text": "q"},
+                                       {"id": "71", "channel_id": "10", "author_id": ARDEN, "author": "Arden", "text": "q"}])
+
+        async def main():
+            b.begin(rc.Wake(triggers=[], unread=[], channel_id="10", speaker="x", hop=True))
+            for text, reply in [("John, have a look", None), (f"<@{JOHN}> see this", None), ("answering you", "70"),
+                                ("Arden, have a look", None), (f"<@{JOHN}> and <@{EMBER}>", None),
+                                ("answering you", "71"), ("answering you", "999"), ("to no one", None),
+                                (f"<@{OTHER_BOT}> hi", None), (f"<@{JOHN}> and <@&5>", None),
+                                ("John, look @everyone", None)]:
+                await b.say({"text": text, "channel": "10", "reply": reply, "wake": b.wake_token})
+        asyncio.run(main())
+        self.assertEqual(sent, [False, False, False, True, True, True, True, True, True, True, True])
+
+    def test_a_command_wakes_room_say_carries_its_token(self):
+        # End to end: a hop wake's process runs the real `room say` over the bridge's socket, and the request it sends
+        # carries the wake's hop token (the env var the bridge sets, the CLI reads and sends).
+        import bridge as br
+        import contextlib
+        import io
+        d = Path(tempfile.mkdtemp())
+        sock = d / "room.sock"
+        cli = Path(__file__).resolve().parent.parent / "room"
+        (d / "wake.py").write_text("import subprocess, sys\n"
+                                   f"subprocess.run([sys.executable, {str(cli)!r}, 'say', 'a hop post'], check=True)\n")
+        config = {**rc.DEFAULTS, "wake_timeout": 20, "cwd": str(d)}
+        b = br.Bridge(config, rc.RoomStore(d))
+        b.client = NS(user=NS(id=int(ME), display_name="Cloud"))
+        b.room = NS(finish=lambda now: None)
+        seen = []
+
+        async def say(req):
+            seen.append(req.get("wake") in b.hop_tokens)
+            return {"ok": True, "id": "1", "link": "x"}
+
+        async def mark(turns, which):
+            pass
+        b.say, b.mark = say, mark
+        br.STATE = d
+        real_argv, real_sock = rc.wake_argv, rc.socket_path
+        rc.wake_argv = lambda *a, **k: ([sys.executable, str(d / "wake.py")], None)
+        rc.socket_path = lambda: sock
+        t = [{"id": "7", "channel_id": "c1", "author": "Arden", "author_id": ARDEN, "text": "musing", "is_bot": True,
+              "ts": time.time()}]
+
+        async def main():
+            server = await asyncio.start_unix_server(b.handle, path=str(sock))
+            async with server:
+                await b.run_wake(rc.Wake(triggers=t, unread=t, channel_id="c1", speaker="the room", hop=True))
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                asyncio.run(main())
+        finally:
+            rc.wake_argv, rc.socket_path = real_argv, real_sock
+        self.assertEqual(seen, [True])
 
     def test_a_bots_silent_flag_is_read(self):
         import bridge as br
@@ -227,7 +330,7 @@ class BridgeHop(unittest.TestCase):
             b.room = th.FakeRoom()
 
             async def say(req):
-                seen.append(b.current_hop)
+                seen.append(req.get("wake") in b.hop_tokens)
                 return {"ok": True}
 
             async def mark(turns, which):
@@ -238,7 +341,7 @@ class BridgeHop(unittest.TestCase):
             asyncio.run(b.run_wake(rc.Wake(triggers=t, unread=t, channel_id="c1", speaker="the room", hop=hop)))
             app.server.shutdown()
             self.assertEqual(seen, [hop])
-            self.assertFalse(b.current_hop)             # cleared when the wake ends
+            self.assertIsNone(b.wake_token)             # cleared when the wake ends
 
 
 if __name__ == "__main__":

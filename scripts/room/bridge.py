@@ -7,6 +7,7 @@ and posts what the self says through `room say` over a local unix socket. See RE
 import asyncio
 import json
 import os
+import secrets
 import subprocess
 import sys
 import time
@@ -100,7 +101,8 @@ class Bridge:
         self.room = None
         self.client = None
         self.current_channel = None     # the channel of the wake that is running
-        self.current_hop = False        # the running wake came by a self's unaddressed post: its posts go out @silent
+        self.wake_token = None          # the running wake's own token: its `room say` sends it (PERSISTENCE_ROOM_WAKE)
+        self.hop_tokens = set()         # tokens of hop wakes (Wake.hop): a post that carries one goes out @silent
         self.in_order = rc.InOrder()
         self.taken = set()              # ids of messages taken in this run, so catching up and live never take one twice
         self.caught_up = None           # an asyncio.Event: set once the catch-up's messages are in line
@@ -149,6 +151,7 @@ class Bridge:
                 if m.author.id == self.client.user.id:
                     if not self.store.history(1, message_id=m.id):
                         self.store.append_history(self.own_record(m.id, m.channel.id, m.content) | {"ts": m.created_at.timestamp()})
+                    self.room.note_posted(m.channel.id, m.id)       # a post after any self's post waiting here
                     continue
                 wake = now - m.created_at.timestamp() < self.config["backfill_wake_seconds"]
                 old += not wake
@@ -214,10 +217,10 @@ class Bridge:
             prompt = rc.fresh_session_note(saved) + prompt
         else:
             prompt = rc.last_wake_note(saved) + prompt
-        env = {**os.environ, "PERSISTENCE_SPEAKER": wake.speaker, "PERSISTENCE_ROOM_CHANNEL": wake.channel_id,
-               "PERSISTENCE_ROOM_SOCKET": str(rc.socket_path())}
-        cwd = self.config["cwd"] or (str(Path.home() / "work") if (Path.home() / "work").is_dir() else str(Path.home()))
         self.begin(wake)
+        env = {**os.environ, "PERSISTENCE_SPEAKER": wake.speaker, "PERSISTENCE_ROOM_CHANNEL": wake.channel_id,
+               "PERSISTENCE_ROOM_SOCKET": str(rc.socket_path()), "PERSISTENCE_ROOM_WAKE": self.wake_token}
+        cwd = self.config["cwd"] or (str(Path.home() / "work") if (Path.home() / "work").is_dir() else str(Path.home()))
         log = STATE / f"wake-{int(time.time())}.json"
         await self.mark(wake.to_mark, "start")
         started = time.time()
@@ -259,8 +262,14 @@ class Bridge:
             self.room.finish(time.time())
 
     def begin(self, wake):
-        """The wake now running (None: none). `room say` posts to its channel, @silent when it is a hop (Wake.hop)."""
-        self.current_channel, self.current_hop = (wake.channel_id, wake.hop) if wake else (None, False)
+        """The wake now running (None: none). `room say` posts to its channel by default. The wake gets a token of its
+        own; a hop wake's (Wake.hop) is kept, so the posts that carry it, and only those, go out @silent: a work
+        session's report or anything else said while a hop wake runs is not its post (Arden's review of d846149, C1).
+        A token stays a hop token after its wake ends, so a post the wake left running behind it stays silent too."""
+        self.current_channel = wake.channel_id if wake else None
+        self.wake_token = secrets.token_hex(16) if wake else None
+        if wake and wake.hop:
+            self.hop_tokens.add(self.wake_token)
 
     def log_rollover(self, said):
         """A step of the room session's rollover (or why there was none), to stdout and timings.jsonl."""
@@ -274,7 +283,8 @@ class Bridge:
         newest = rc.in_discord_order(wake.triggers)[-1]
         reply_to = newest["id"] if not newest.get("is_bot") else None
         for i, part in enumerate(rc.split_post(text) if text else []):
-            said = await self.say({"text": part, "channel": wake.channel_id, "reply": reply_to if i == 0 else None})
+            said = await self.say({"text": part, "channel": wake.channel_id, "reply": reply_to if i == 0 else None,
+                                   "wake": self.wake_token})
             if not said.get("ok"):
                 print(f"could not post the reply: {said.get('error')}", flush=True)
                 break
@@ -350,6 +360,18 @@ class Bridge:
                 "author": rc.name_of(me.id, me.display_name, self.config["people"]), "text": text, "is_bot": True,
                 "ts": time.time()}
 
+    async def reply_author(self, channel, message_id):
+        """The author id of the message a post replies to (history first, else Discord), or None if none or unknown."""
+        if not message_id:
+            return None
+        known = self.store.history(1, message_id=message_id)
+        if known:
+            return known[0]["author_id"]
+        try:
+            return str((await channel.fetch_message(int(message_id))).author.id)
+        except Exception:
+            return None
+
     async def say(self, req):
         import discord
         req["text"] = rc.outgoing_text(req.get("text", ""))
@@ -364,10 +386,13 @@ class Bridge:
         if req.get("reply"):
             ref = discord.MessageReference(message_id=int(req["reply"]), channel_id=int(channel_id), fail_if_not_exists=True)
         # No @everyone/@here or role pings from a self: a loop hazard. Mentioning people and selves works.
-        # In a wake a self's unaddressed post caused, posts go out @silent: other bridges then take them as the second
-        # hop and wake no one for them (Arden's first condition). The flag is on the message itself, so a bridge
-        # catching up after a restart reads it too. It also spares phones a notification.
-        sent = await channel.send(req["text"], reference=ref, silent=self.current_hop,
+        # A hop wake's own posts go out @silent: other bridges then take them as the second hop and wake no one for
+        # them by the self rule, and a self one addresses wakes as a hop (Arden's first condition). The flag is on the
+        # message itself, so a bridge catching up after a restart reads it too. One that addresses only people goes out
+        # loud, so their phones hear it; it wakes no self either way.
+        silent = req.get("wake") in self.hop_tokens and not rc.hop_post_may_ping(
+            req["text"], await self.reply_author(channel, req.get("reply")), self.config)
+        sent = await channel.send(req["text"], reference=ref, silent=silent,
                                   allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=True, replied_user=True))
         self.room.note_own(channel_id, time.time(), sent.id)
         self.store.append_history(self.own_record(sent.id, channel_id, req["text"]))

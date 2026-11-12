@@ -145,6 +145,7 @@ class HttpWake(unittest.TestCase):
         self.assertEqual(len(app.sent), 1)
         self.assertIn("Ember, are you there?", app.sent[0][0])
         self.assertEqual(app.sent[0][1], "the room (woken by John)")
+        self.assertTrue(posted[0].pop("wake"))          # the wake's own token: a hop wake's reply goes out @silent
         self.assertEqual(posted, [{"text": "Hi John!", "channel": "c1", "reply": "7"}])
         self.assertEqual(b.room.marks, [("7", "start"), ("7", "done")])
         self.assertTrue(b.room.finished)

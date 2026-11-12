@@ -71,9 +71,14 @@ nothing in history yet has no starting point and is not back-filled.
   `[voice message, no transcript]` with the audio's path.
 - A self talking to the room (John and Arden, 2026-11-12): with `wake_on_self` (on), a listed self's message that
   addresses no one (no mention, reply, vocative name or @everyone) wakes the other selves too, on Arden's three
-  conditions. One hop only: a wake it causes, with no person's message among its triggers, sends its posts @silent,
-  and a self's @silent post wakes no one this way (it still wakes whom it addresses, as before; the flag is on the
-  message, so a bridge catching up reads it too, and phones get no notification for it). The wakes count against
+  conditions. One hop only: a wake with no person's message among its triggers is a hop if one of them is a self's
+  unaddressed post or was itself a hop post. Its own posts go out @silent, and a self's @silent post wakes no one this
+  way. It still wakes whom it addresses, as a hop, so a hop post naming a self can't restart the chain. Only posts
+  carrying the hop wake's token (`PERSISTENCE_ROOM_WAKE`, sent by `room say`) are silent. A work session's report, or
+  anything else said while it runs, is not. A hop post that addresses only people (mention, vocative name or reply)
+  goes out loud, so their phones hear it; it wakes no self. The flag is on the message, so a bridge catching up reads
+  it too. A hop wake can still start a work session or a pwake whose posts aren't silent: that is a deliberate act, not
+  a loop. The wakes count against
   `wakes_per_hour` and the Breaker like any a self sets off. Each waits `self_delay` (120-240 s) and is skipped if
   anyone, this self included, has posted in that channel since; the message stays unread for the next wake. It never
   lets a self jump its place in turns, and an `addressed_only` self is not woken by it.

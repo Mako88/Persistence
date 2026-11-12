@@ -149,7 +149,7 @@ class Msg:
     named: list = field(default_factory=list)           # ids addressed by name, used vocatively (vocatives())
     mention_everyone: bool = False                      # @everyone or @here
     reply_to_author_id: str = None                      # author of the message this replies to
-    silent: bool = False                                # sent @silent: from a self, posted in a wake a self's post caused
+    silent: bool = False                                # sent @silent: from a self, a hop wake's post (Wake.hop)
     channel_name: str = ""
     ts: float = 0.0
 
@@ -374,6 +374,23 @@ def wakes_on_human(config, self_id):
 def wakes_on_self(config, self_id):
     """Whether another self's unaddressed message wakes this self: `wake_on_self`, unless it is `addressed_only`."""
     return bool(config.get("wake_on_self")) and str(self_id) not in map(str, config.get("addressed_only") or [])
+
+
+MENTION = re.compile(r"<@!?(\d+)>")
+
+
+def hop_post_may_ping(text, reply_to_author_id, config):
+    """Whether a post from a hop wake may go out loud (Arden's review of d846149): only one that addresses people and
+    no self, by mention, vocative name or reply, so John's phone gets it and no self is woken by it. Anything else, an
+    unknown id, a role, @everyone, a reply whose author is unknown, or a post that addresses no one, stays @silent."""
+    if re.search(r"<@&\d+>|@everyone|@here", text or ""):
+        return False
+    selves = set(map(str, config.get("selves") or []))
+    people = set(map(str, config.get("people") or {})) - selves
+    addressed = set(MENTION.findall(text or "")) | set(vocatives(text, names_by_id(config)))
+    if reply_to_author_id is not None:
+        addressed.add(str(reply_to_author_id))
+    return bool(addressed) and addressed <= people
 
 
 def snowflake(message_id):
@@ -631,8 +648,8 @@ class Wake:
     # person's, so John can see who is working on what and how long a reply takes (John, 2026-11-10). Only the marks
     # on `turns` move anyone's turn.
     to_mark: list = field(default_factory=list)
-    # Some trigger came by a self's unaddressed post and none is a person's: what this self posts in the wake goes out
-    # @silent, so it wakes no one by that rule (one hop only, Arden's first condition).
+    # No trigger is a person's, and one came by a self's unaddressed post or was itself a hop post (@silent): what this
+    # self posts in the wake goes out @silent, so it wakes no one by that rule (one hop only, Arden's first condition).
     hop: bool = False
 
 
@@ -790,7 +807,10 @@ class Room:
         kept = [(d, kind) for d, kind in self.pending if not self._muted(d, now) and not (kind == "self" and self._answered(d))]
         triggers = [d for d, _ in kept]
         # A wake a person's message is part of is theirs: what this self says in it may wake the others once more.
-        hop = any(kind == "self" for _, kind in kept) and all(d["is_bot"] for d in triggers)
+        # Otherwise it is a hop if a trigger came by a self's unaddressed post, or was itself a hop post (sent @silent):
+        # a hop post that addresses a self ("Claude, ...") wakes it directly, and that wake stays a hop, or its reply
+        # would wake everyone again (Arden's review of d846149, C2).
+        hop = all(d["is_bot"] for d in triggers) and any(kind == "self" or d.get("silent") for d, kind in kept)
         # A direct address that met the Breaker during its delay waits for it to lift, like one that met it on arrival.
         self.deferred += [d for d, kind in self.pending if kind == "direct" and self._muted(d, now)]
         self.pending, self.due = [], None

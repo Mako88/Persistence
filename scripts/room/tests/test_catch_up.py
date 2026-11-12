@@ -166,6 +166,7 @@ class CatchUp(unittest.TestCase):
         b = asyncio.run(main())
         self.assertEqual(logged(self.state), ["100", "101"])
         self.assertEqual(b.room.unread, [])
+        self.assertEqual(b.room.newest.get(str(CH)), 101)  # a post after any self's post waiting (Arden's review)
 
     def test_a_message_is_taken_once_however_it_arrives(self):
         (first,) = self.ch.post(msg(100, "seen", ago=60))
