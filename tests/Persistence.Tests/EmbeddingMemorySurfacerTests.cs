@@ -1,4 +1,7 @@
 using Moq;
+using SimpleHttpClient;
+using SimpleHttpClient.Models;
+using System.Net;
 using Persistence.Config;
 using Persistence.Data.Entities;
 using Persistence.Data.Repositories;
@@ -120,6 +123,58 @@ public class EmbeddingMemorySurfacerTests
         Assert.Empty(OpenAiEmbeddingClient.ParseEmbeddings(null));
         Assert.Empty(OpenAiEmbeddingClient.ParseEmbeddings("{}"));
         Assert.Empty(OpenAiEmbeddingClient.ParseEmbeddings("""{"data":"nope"}"""));
+    }
+
+    // -- Embedding client: cancellation versus failure --
+
+    private static (OpenAiEmbeddingClient Client, Mock<ISimpleClient> Http) EmbeddingClientOver(
+        Func<ISimpleRequest, CancellationToken, Task<ISimpleResponse>> respond)
+    {
+        var http = new Mock<ISimpleClient>();
+        http.Setup(c => c.MakeRequest(It.IsAny<ISimpleRequest>(), It.IsAny<CancellationToken>()))
+            .Returns(respond);
+        var settings = new EmbeddingSettings { Enabled = true, ApiBaseUrl = "http://localhost:8080/v1" };
+        return (new OpenAiEmbeddingClient(settings, new Mock<IDisplayProvider>().Object, http.Object), http);
+    }
+
+    [Fact]
+    public async Task EmbedAsync_PassesTheCallersTokenToTheRequest()
+    {
+        // A caller's deadline (chunking passes one) can only stop a hung request if it reaches it.
+        using var cts = new CancellationTokenSource();
+        var (client, http) = EmbeddingClientOver((_, _) => Task.FromResult<ISimpleResponse>(new SimpleResponse
+        {
+            StatusCode = HttpStatusCode.OK,
+            IsSuccessful = true,
+            StringBody = """{"data":[{"index":0,"embedding":[1.0]}]}""",
+        }));
+
+        await client.EmbedAsync(["a"], cts.Token);
+
+        Assert.Equal(cts.Token, (CancellationToken)http.Invocations.Single().Arguments[1]);
+    }
+
+    [Fact]
+    public async Task EmbedAsync_LetsTheCallersCancellationEscape()
+    {
+        // Cancellation is the caller's decision, not an embedder failure: it must not be turned into
+        // an empty result that the surfacer would read as "fall back to words".
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var (client, _) = EmbeddingClientOver((_, t) => Task.FromCanceled<ISimpleResponse>(t));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.EmbedAsync(["a"], cts.Token));
+    }
+
+    [Fact]
+    public async Task EmbedAsync_OwnRequestTimeoutStillReturnsEmpty()
+    {
+        // The client's own timeout surfaces as a TaskCanceledException while the caller's token is
+        // live. That is a hung embedder, and recall falls back to words as before.
+        var (client, _) = EmbeddingClientOver((_, _) =>
+            Task.FromException<ISimpleResponse>(new TaskCanceledException("timed out", new TimeoutException())));
+
+        Assert.Empty(await client.EmbedAsync(["a"], CancellationToken.None));
     }
 
     // -- End-to-end surfacing --

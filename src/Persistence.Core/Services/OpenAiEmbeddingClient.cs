@@ -109,7 +109,7 @@ public class OpenAiEmbeddingClient : IEmbeddingClient, IDisposable
                 input = batch,
             });
 
-            var response = await client!.MakeRequest(request);
+            var response = await client!.MakeRequest(request, ct);
 
             if (!response.IsSuccessful)
             {
@@ -119,6 +119,13 @@ public class OpenAiEmbeddingClient : IEmbeddingClient, IDisposable
             }
 
             return ParseEmbeddings(response.StringBody);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // The caller's cancellation is its decision, not an embedder failure: let it escape so it
+            // is never read as "no vectors, fall back to words". The client's own request timeout
+            // also throws a cancellation, but with the caller's token live, so it falls through below.
+            throw;
         }
         catch (Exception ex)
         {
