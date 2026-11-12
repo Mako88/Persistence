@@ -86,11 +86,19 @@ public class EmbeddingMemorySurfacer : IMemorySurfacer
                 ? lexicalRanked.Take(count).ToList()
                 : Fuse(lexicalRanked, semanticRanked, config.Embedding.FusionK, count);
         }
+        catch (OperationCanceledException)
+        {
+            // Cancellation is the caller's decision, not a failure of meaning: it escapes, never turned into a
+            // words-only recall that reads as a success (as ConversationRecaller since PR #15; the chunking
+            // design's linked-deadline contract). Covers TaskCanceledException.
+            throw;
+        }
         catch (Exception ex)
         {
             // Semantic recall is the enrichment, the lexical result is the floor. A store that cannot
-            // be embedded today still recalls the way it did yesterday, and says so.
-            queryEmbedder.Note($"semantic recall failed ({ex.Message})");
+            // be embedded today still recalls the way it did yesterday, and says so. The type only, never
+            // the message, which can quote the query (content-free diagnostics).
+            queryEmbedder.Note($"semantic recall failed ({ex.GetType().Name})");
             return lexicalRanked.Take(count).ToList();
         }
     }

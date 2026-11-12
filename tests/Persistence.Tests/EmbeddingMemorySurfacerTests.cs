@@ -291,8 +291,26 @@ public class EmbeddingMemorySurfacerTests
 
         Assert.Equal([1L], surfaced.Select(f => f.Id)); // the lexical floor
         Assert.Contains("exact words alone", queryEmbedder.Fallback);
-        Assert.Contains("embedding service unreachable", queryEmbedder.Fallback);
+        Assert.Contains("semantic recall failed (InvalidOperationException)", queryEmbedder.Fallback);
+        Assert.DoesNotContain("embedding service unreachable", queryEmbedder.Fallback); // the message can quote the query
         display.Verify(d => d.ShowError(queryEmbedder.Fallback!), Times.Once);
+    }
+
+    [Fact]
+    public async Task SurfaceAsync_EmbedderCancelled_EscapesWithNoWordsAndNoNotice()
+    {
+        // catch (Exception) absorbed cancellation and returned the lexical floor as an ordinary recall with a
+        // fallback notice. Cancellation is the caller's; it escapes, and nothing is noted or shown.
+        var embeddings = new FakeEmbeddingClient { Cancels = true };
+        var display = new Mock<IDisplayProvider>();
+        var queryEmbedder = new QueryEmbedder(embeddings, Config(), display.Object);
+        var surfacer = Build(lexicalHits: [Frag(1)], embeddings: embeddings, stored: [(2L, [1f, 0f])],
+            knownFragments: [Frag(2)], queryEmbedder: queryEmbedder);
+
+        await Assert.ThrowsAsync<TaskCanceledException>(
+            () => surfacer.SurfaceAsync([], "intent and outcome", count: 2, CancellationToken.None));
+        Assert.Null(queryEmbedder.Fallback);
+        display.Verify(d => d.ShowError(It.IsAny<string>()), Times.Never);
     }
 
     [Fact]
@@ -523,6 +541,7 @@ public class EmbeddingMemorySurfacerTests
         public bool IsEnabled { get; set; } = true;
         public string Model => "fake-embed";
         public bool Throws { get; set; }
+        public bool Cancels { get; set; }
         public float[] QueryVector { get; set; } = [1f, 0f];
         public int EmbedCallCount { get; private set; }
         public List<string> Texts { get; } = [];
@@ -535,6 +554,11 @@ public class EmbeddingMemorySurfacerTests
         {
             EmbedCallCount++;
             Texts.AddRange(texts);
+
+            if (Cancels)
+            {
+                throw new TaskCanceledException("cancelled while embedding the secret query");
+            }
 
             if (Throws)
             {

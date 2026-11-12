@@ -665,7 +665,7 @@ public sealed class FragmentStoreTests : IDisposable
         var recalled = await store.RecallAsync("checkpoint resumes after the game closes, said before?", 3, [], said: 3);
 
         Assert.Equal("semantic-degraded", recalled.Path);
-        Assert.Equal("fragments: semantic recall failed (embedder down for these)", recalled.PathWhy);
+        Assert.Equal("fragments: semantic recall failed (HttpRequestException)", recalled.PathWhy);
     }
 
     [Fact]
@@ -758,6 +758,18 @@ public sealed class FragmentStoreTests : IDisposable
         Assert.Equal([Checkpoint], recalled.Said.Select(f => f.Content));
     }
 
+    [Fact]
+    public async Task With_embedding_off_past_utterances_come_back_by_words()
+    {
+        // Arden's gap on PR #15: the off-by-setting case. Meaning never runs, so nothing compared; the words are the
+        // floor and must not be intersected with an empty meaning.
+        var store = await WithUtterancesAsync(new WordsEmbedder { IsEnabled = false }, embed: false);
+
+        var recalled = await store.RecallAsync("where does the checkpoint resume after the game", 3, [], said: 3);
+
+        Assert.Contains(recalled.Said, f => f.Content == Checkpoint);
+    }
+
     /// <summary>~3,000 characters whose head and tail share no words, so a head and a tail embed far apart.</summary>
     private static readonly string LongText = string.Join(' ', Enumerable.Range(0, 400).Select(i => $"word{i:D4}"));
 
@@ -767,7 +779,7 @@ public sealed class FragmentStoreTests : IDisposable
         public int RefuseOverChars { get; init; }
         public string? ThrowOn { get; init; }
         public string? CancelOn { get; init; }
-        public bool IsEnabled => true;
+        public bool IsEnabled { get; init; } = true;
         public string Model => "words";
 
         public Task<IReadOnlyList<float[]>> EmbedAsync(IReadOnlyList<string> texts, CancellationToken ct = default)
