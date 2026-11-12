@@ -67,7 +67,11 @@ def as_of_db(snap, as_of):
     later are deleted; a fragment changed later gets back the OldData of its first later change (status, content,
     type...), so a message archived after the question, or a fragment edited after it, reads as it did then
     (#14594 was archived 5 minutes after John's question; #14110 gained the "Emma" line hours after). A rolled-back
-    fragment's embedding is dropped, being of the newer text. Not rolled back: tags, concepts, facts."""
+    fragment's embedding is dropped, being of the newer text. A deleted fragment's embedding goes with it: sqlite here
+    runs without foreign keys, so the CASCADE never fired, and a later fragment's vector took a place among the most
+    similar, then hydrated to nothing, shrinking the meaning side's pool (found 2026-11-12). Tags, concepts and facts
+    created later are dropped with their links. NOT rolled back: a tag put on (or taken off) an older fragment later,
+    since EntityTags has no time and tagging isn't audited; a concept or fact changed later."""
     out = f"{snap}.asof-{ts(as_of).replace(' ', 'T').replace(':', '')}.db"
     if os.path.exists(out):
         return out
@@ -90,11 +94,34 @@ def as_of_db(snap, as_of):
         if n and "Content" in d:
             c.execute("DELETE FROM FragmentEmbeddings WHERE ContextFragmentId=?", (fid,))
         rolled += n
+    dropped = later_rows(c, cut)
     c.commit()
     c.close()
     os.replace(out + ".tmp", out)
+    if any(dropped.values()):
+        print(f"(store as of {as_of}: dropped " + ", ".join(f"{n} {k}" for k, n in dropped.items() if n) + ")", file=sys.stderr)
     print(f"(store as of {as_of}: {rolled} fragments rolled back)", file=sys.stderr)
     return out
+
+
+def later_rows(c, cut):
+    """What as_of_db drops beside the fragments: rows that hang off a fragment, tag, concept or fact that no longer
+    exists, and tags, concepts and facts created after `cut`. Counts by kind."""
+    when = lambda col: f"replace(substr({col},1,19),'T',' ') > ?"
+    tables = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    steps = [
+        ("fragment embeddings", "FragmentEmbeddings", "ContextFragmentId NOT IN (SELECT Id FROM ContextFragments)", ()),
+        ("tags", "Tags", when("CreatedUtc"), (cut,)),
+        ("tag links", "EntityTags", "TagId NOT IN (SELECT Id FROM Tags) OR (EntityType LIKE '%Fragment%' "
+                                    "AND EntityId NOT IN (SELECT Id FROM ContextFragments))", ()),
+        ("concepts", "Concepts", when("CreatedUtc"), (cut,)),
+        ("concept aliases", "ConceptAliases", "ConceptId NOT IN (SELECT Id FROM Concepts)", ()),
+        ("facts", "Facts", when("CreatedUtc"), (cut,)),
+        ("fact sources", "FactSources", "FactId NOT IN (SELECT Id FROM Facts) OR FragmentId NOT IN (SELECT Id FROM ContextFragments)", ()),
+        ("fact flags", "FactFlags", "FactId NOT IN (SELECT Id FROM Facts)", ()),
+    ]
+    return {name: c.execute(f"DELETE FROM {table} WHERE {where}", args).rowcount
+            for name, table, where, args in steps if table in tables}
 
 
 def store_recall(item, db, limit, exclude, wander=None, env=None):

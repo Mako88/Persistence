@@ -33,10 +33,17 @@ public class QueryEmbedder(IEmbeddingClient embeddings, IAppConfig config, IDisp
     /// <summary>Why the last query since <see cref="Clear"/> ran on words alone, or null when none did.</summary>
     public string? Fallback { get; private set; }
 
-    /// <summary>Starts a recall afresh: no fallback noted, nothing remembered as failed.</summary>
+    /// <summary>
+    /// Whether a query since <see cref="Clear"/> got a vector, so meaning was compared: the positive evidence for a
+    /// recall's path (<see cref="Persistence.Services.RecallPath"/>), where <see cref="Fallback"/> is the negative.
+    /// </summary>
+    public bool Embedded { get; private set; }
+
+    /// <summary>Starts a recall afresh: no fallback noted, nothing embedded, nothing remembered as failed.</summary>
     public void Clear()
     {
         Fallback = null;
+        Embedded = false;
         failed = null;
     }
 
@@ -75,6 +82,7 @@ public class QueryEmbedder(IEmbeddingClient embeddings, IAppConfig config, IDisp
             var vectors = await embeddings.EmbedAsync([sent], ct);
             if (vectors.Count > 0 && vectors[0].Length > 0)
             {
+                Embedded = true;
                 return vectors[0];
             }
 
@@ -92,4 +100,27 @@ public class QueryEmbedder(IEmbeddingClient embeddings, IAppConfig config, IDisp
             : $"the embedder gave no vector for the message ({text.Length:N0} characters; tried its last {string.Join(", then ", tried.Select(n => n.ToString("N0")))})");
         return null;
     }
+}
+
+/// <summary>
+/// Which way a recall actually ran, read off what happened rather than inferred from the settings or the
+/// message's length (Ember, 2026-11-12): <c>semantic</c> when the query got a vector and meaning was compared
+/// (fused with the words); <c>words-setting</c> when embedding is off, so exact words were the choice;
+/// <c>words-fallback</c> when meaning was asked for but not used (no query vector, no stored vectors, a failure),
+/// with why; and <c>unknown</c> when neither was seen (an empty query, nothing asked of the surfacer). The two
+/// words paths are kept apart because they behave differently: a fallback can bring back less than words by choice.
+/// </summary>
+public static class RecallPath
+{
+    public const string Semantic = "semantic";
+    public const string WordsBySetting = "words-setting";
+    public const string WordsByFallback = "words-fallback";
+    public const string Unknown = "unknown";
+
+    /// <summary>The path and, for words, why: a fallback outranks an embedded query (the surfacer then dropped meaning).</summary>
+    public static (string Path, string? Why) Of(bool embeddingEnabled, QueryEmbedder query) =>
+        !embeddingEnabled ? (WordsBySetting, "embedding is off")
+        : query.Fallback is not null ? (WordsByFallback, query.Fallback)
+        : query.Embedded ? (Semantic, null)
+        : (Unknown, null);
 }

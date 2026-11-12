@@ -9,6 +9,36 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-12 — Recall benchmark revised for Ember's review; recall says which path it took
+
+**`recall --diagnostics`: the store's own account of the path a recall took.** Asking for meaning doesn't make
+recall use it: with no query vector it falls back to exact words. The fallback was already said (a head line and
+stderr), but nothing said positively that meaning *was* compared, so a benchmark could only infer "semantic" from
+silence or from the prompt's length, and a floor tuned on that could be tuned on words-only results (Ember's review
+of 7789c50). Now `Recalled` carries `Path` (`semantic` when the query got a vector, `words-setting` when embedding is
+off, `words-fallback` with why when meaning was asked for but not used, else `unknown`; the two words paths
+behave differently, Claude found, so they are never one bucket), and `--diagnostics` writes it as one `recall-path:` line on stderr. Also:
+conversation recall swallowed a failure of its meaning side without a word; it is now noted like every other
+fallback, so a recall that compared meaning for fragments but not for past utterances doesn't claim `semantic`.
+
+**The benchmark, revised (Ember's three changes).** (1) Every turn records its actual path from `--diagnostics`
+(`unknown` with an older exe, `none` where the hook made no recall); each arm is scored only over turns that took its
+path, with the fall-back rate its own number. (2) Recall writes as it reads (`LastAccessedUtc`, backfilled vectors),
+so every case, and every turn of an evolving session, runs on a throwaway copy of a pristine read-only base built in
+a private dir; the snapshot's hash is checked unchanged. (3) Session cases run twice: on a store rebuilt as of each
+turn (the real session's id, so its own words stay out of "said before"), and on the store fixed at the first turn,
+now labelled a repeat test. **Fixed in the as-of rebuild:** sqlite there runs without foreign keys, so a deleted
+fragment's embedding stayed, took a place among the most similar, then hydrated to nothing; those embeddings now go
+with their fragments, and tags, concepts and facts created later are dropped. The baseline is reframed: within one
+window repeats are already 0, so the dedup target is surviving compaction; automated turns are a regression test.
+
+**And Claude's review of 7789c50.** The report opens with the settings in effect and where each came from (the
+bench's defaults are Arden's, and query tail 1200 would have hidden Claude's 77% fall-back rate at tail 0); the
+words-only notice the peer was shown is recorded per turn; repeats are split into one window and across a
+compaction; `report --labels` judges with the labels as they are now, so relabelling needs no rerun; `--watch` is
+opt-in; temp dirs are removed. Gold numbers are given for real and synthetic prompts apart. A store call that fails
+now stops the run: the hook reads a failed call as "nothing", so a full /tmp scored as recall showing nothing.
+
 ## 2026-11-12 — Recall benchmark (`scripts/recall-eval/bench.py`)
 
 **A labelled, reproducible benchmark for recall, so the three cheap fixes can be shown to help or not.** John's

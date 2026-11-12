@@ -611,6 +611,43 @@ public sealed class FragmentStoreTests : IDisposable
         Assert.Null(embedded.Fallback); // cleared for each recall
     }
 
+    [Fact]
+    public async Task Recall_reports_the_path_it_actually_took()
+    {
+        // From what happened, never from the settings (Ember, 2026-11-12): a benchmark labels each turn by this.
+        var store = await OpenAsync(embedder: new WordsEmbedder { RefuseOverChars = 100 }, queryTailChars: 1200);
+        await store.AddAsync("Personal", "The checkpoint resumes after the game closes on the shared card.", null, null, null, [], false);
+
+        var embedded = await store.RecallAsync("checkpoint resumes", 3, []);
+        var refused = await store.RecallAsync(new string('7', 2000) + " checkpoint", 3, []);
+        var again = await store.RecallAsync("checkpoint resumes", 3, []);
+        var off = await (await OpenAsync()).RecallAsync("checkpoint resumes", 3, []);
+
+        Assert.Equal(("semantic", null), (embedded.Path, embedded.PathWhy));
+        Assert.Equal("words-fallback", refused.Path);
+        Assert.Contains("exact words alone", refused.PathWhy);
+        Assert.Equal("semantic", again.Path); // reset for each recall: one fallback doesn't stick
+        Assert.Equal(("words-setting", "embedding is off"), (off.Path, off.PathWhy));
+    }
+
+    [Fact]
+    public async Task Recall_of_past_utterances_failing_by_meaning_is_not_silent()
+    {
+        // The fragments embedded and the query did, but the utterances' vectors failed: that recall did not compare
+        // meaning everywhere, so it must not say semantic (it used to swallow the error unseen).
+        File.WriteAllLines(transcript, [
+            $$$"""{"type":"user","uuid":"u1","timestamp":"2026-11-07T01:00:00Z","message":{"role":"user","content":"the checkpoint resumes {{{new string('w', 100)}}} UTTERANCE"}}""",
+        ]);
+        var store = await OpenAsync(embedder: new WordsEmbedder { ThrowOn = "UTTERANCE" });
+        await store.KeepConversationAsync(transcript, "John");
+        await store.AddAsync("Personal", "The checkpoint resumes after the game closes on the shared card.", null, null, null, [], false);
+
+        var recalled = await store.RecallAsync("checkpoint resumes after the game closes, said before?", 3, [], said: 3);
+
+        Assert.Equal("words-fallback", recalled.Path);
+        Assert.Contains("past utterances by meaning failed", recalled.PathWhy);
+    }
+
     /// <summary>~3,000 characters whose head and tail share no words, so a head and a tail embed far apart.</summary>
     private static readonly string LongText = string.Join(' ', Enumerable.Range(0, 400).Select(i => $"word{i:D4}"));
 
@@ -618,6 +655,7 @@ public sealed class FragmentStoreTests : IDisposable
     private sealed class WordsEmbedder : Persistence.Services.IEmbeddingClient
     {
         public int RefuseOverChars { get; init; }
+        public string? ThrowOn { get; init; }
         public bool IsEnabled => true;
         public string Model => "words";
 
@@ -626,6 +664,11 @@ public sealed class FragmentStoreTests : IDisposable
             if (RefuseOverChars > 0 && texts.Any(t => t.Length > RefuseOverChars))
             {
                 return Task.FromResult<IReadOnlyList<float[]>>([]);
+            }
+
+            if (ThrowOn is not null && texts.Any(t => t.Contains(ThrowOn)))
+            {
+                throw new HttpRequestException("embedder down for these");
             }
 
             return Task.FromResult<IReadOnlyList<float[]>>(texts.Select(Embed).ToList());

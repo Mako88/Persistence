@@ -654,7 +654,8 @@ internal sealed partial class FragmentStore(
         }
 
         var utterances = await conversation.RecallAsync(text, said, skip, before, Session);
-        return new Recalled(kept, elsewhere, utterances, await FramesAsync(kept, skip, project), queryEmbedder.Fallback);
+        var (path, why) = RecallPath.Of(embeddings.IsEnabled, queryEmbedder);
+        return new Recalled(kept, elsewhere, utterances, await FramesAsync(kept, skip, project), queryEmbedder.Fallback, path, why);
     }
 
     /// <summary>Embeds up to <paramref name="limit"/> past utterances that have none yet, for conversation recall.</summary>
@@ -662,14 +663,17 @@ internal sealed partial class FragmentStore(
 
     /// <summary>
     /// What a recall brought back: this project's fragments, a wander from elsewhere, and things said before; and,
-    /// when it ran on exact words alone because the message could not be embedded, why (<see cref="QueryEmbedder"/>).
+    /// when it ran on exact words alone because the message could not be embedded, why (<see cref="QueryEmbedder"/>);
+    /// and the path it actually took (<see cref="RecallPath"/>), with why when it was words.
     /// </summary>
     public sealed record Recalled(
         IReadOnlyList<ContextFragmentEntity> Here,
         IReadOnlyList<ContextFragmentEntity> Elsewhere,
         IReadOnlyList<ContextFragmentEntity> Said,
         IReadOnlyList<ContextFragmentEntity> Frames,
-        string? Fallback = null);
+        string? Fallback = null,
+        string Path = RecallPath.Unknown,
+        string? PathWhy = null);
 
     /// <summary>
     /// The projects whose names a text says as words: <c>minecraft-mods</c> is named by "the Minecraft mods

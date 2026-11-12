@@ -56,12 +56,15 @@ const string Usage = """
       list [--type <type>] [--tag <a/b>] [--archived] [--limit 50]
       search <words...> [--limit 20]        full text, conversation included
       recall <words...> [--text <text|->] [--limit 3] [--exclude <id,id>]... [--snippet 300] [--project <name>]
-             [--wander 0] [--said 0] [--before <when>]
+             [--wander 0] [--said 0] [--before <when>] [--diagnostics]
                                             associative recall: the authored fragments most related, by
                                             meaning (PERSISTENCE_EMBEDDING_*) fused with exact words; other
                                             projects' fragments are left out, as the core leaves them out,
                                             but for --wander of the best of them, labelled; --said adds past
                                             utterances (said before --before, so not this session's)
+                                            --diagnostics: one stderr line, recall-path: semantic |
+                                            words-setting | words-fallback (why) | unknown, the path
+                                            this recall actually took
       embed-conversation [--batch 64]      embed every past utterance not yet embedded (recall does a few a call)
       recent [--limit 20]                   the latest of the conversation, oldest first
       sleep-list [--over 1500] [--limit 25] [--sample 8]
@@ -471,6 +474,13 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
                 exclude, line.Get("project"), line.GetInt("wander", 0), line.GetInt("said", 0), before);
             // Never silent: QueryEmbedder.Note has already put the fallback on stderr (through QuietDisplay.ShowError)
             // for a script; here it goes at the head of what a reader sees. Writing it to stderr again doubled it.
+            // --diagnostics: the path recall actually took, one line on stderr, so a benchmark labels each turn from the
+            // store's own account (semantic, words or unknown) and never from the settings it asked for.
+            if (line.Has("diagnostics"))
+            {
+                Console.Error.WriteLine($"recall-path: {recalled.Path}" + (recalled.PathWhy is { } why ? $" ({why})" : ""));
+            }
+
             if (line.Has("json"))
             {
                 Print(line, [.. recalled.Here, .. recalled.Frames, .. recalled.Elsewhere, .. recalled.Said]);

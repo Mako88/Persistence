@@ -66,9 +66,11 @@ internal sealed class ConversationRecaller(
             {
                 semantic = await SemanticAsync(text, Wanted);
             }
-            catch
+            catch (Exception ex)
             {
-                // Meaning is the enrichment; the words are the floor.
+                // Meaning is the enrichment; the words are the floor. Never silent, as the fragments' fallback isn't:
+                // a recall that says it compared meaning must not have dropped it here unseen (Ember, 2026-11-12).
+                queryEmbedder.Note($"recall of past utterances by meaning failed ({ex.Message})");
             }
         }
 
