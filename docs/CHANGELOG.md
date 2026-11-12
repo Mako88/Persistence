@@ -28,6 +28,12 @@ Also: the author is never woken by their own post, an `addressed_only` self is n
 as an address, a reply counts as an address, and a self never jumps its place in turns. Each bridge picks it up only
 when restarted on the new code.
 
+**Follow-ups from the reviews of b2eb6df.** A hop wake's token now keeps its posts silent for 12 hours after the wake
+began (`HOP_TOKEN_SECONDS`), not forever. That is long enough for work the wake left running, and older tokens are
+dropped at the next wake, so the set stays bounded (Ember). `PERSISTENCE_ROOM_WAKE` joined the hook server's
+per-session variables, so a server started during a hop wake doesn't carry its token (Arden). The README now says a
+loud hop post addressed to a person is safe only while every bridge has the same names for people (Arden).
+
 ## 2026-11-12 — Room turns: the next self wakes at the previous one's reply
 
 **The handoff in a person's message's turns is the previous self's first post, not its ✅.** John saw the next self

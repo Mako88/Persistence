@@ -95,6 +95,12 @@ def http_json(method, url, body=None, headers=None, timeout=30):
     return json.loads(raw) if raw.strip() else None
 
 
+# How long a hop wake's token keeps its posts @silent after the wake began: long enough for detached work the wake left
+# running (a `room say` from a background job hours later), short enough that the set is bounded (Ember's review of
+# b2eb6df). A post carrying an expired token goes out as any other: loud, and by the self rule it may wake the others.
+HOP_TOKEN_SECONDS = 12 * 3600
+
+
 class Bridge:
     def __init__(self, config, store):
         self.config, self.store = config, store
@@ -102,7 +108,7 @@ class Bridge:
         self.client = None
         self.current_channel = None     # the channel of the wake that is running
         self.wake_token = None          # the running wake's own token: its `room say` sends it (PERSISTENCE_ROOM_WAKE)
-        self.hop_tokens = set()         # tokens of hop wakes (Wake.hop): a post that carries one goes out @silent
+        self.hop_tokens = {}            # token -> when its hop wake began (Wake.hop): a post that carries one goes out @silent
         self.in_order = rc.InOrder()
         self.taken = set()              # ids of messages taken in this run, so catching up and live never take one twice
         self.caught_up = None           # an asyncio.Event: set once the catch-up's messages are in line
@@ -265,11 +271,19 @@ class Bridge:
         """The wake now running (None: none). `room say` posts to its channel by default. The wake gets a token of its
         own; a hop wake's (Wake.hop) is kept, so the posts that carry it, and only those, go out @silent: a work
         session's report or anything else said while a hop wake runs is not its post (Arden's review of d846149, C1).
-        A token stays a hop token after its wake ends, so a post the wake left running behind it stays silent too."""
+        A token stays a hop token after its wake ends, so a post the wake left running behind it stays silent too, for
+        HOP_TOKEN_SECONDS; older ones are dropped here, so the set stays bounded (Ember's review of b2eb6df)."""
         self.current_channel = wake.channel_id if wake else None
         self.wake_token = secrets.token_hex(16) if wake else None
+        now = time.time()
+        self.hop_tokens = {t: at for t, at in self.hop_tokens.items() if now - at < HOP_TOKEN_SECONDS}
         if wake and wake.hop:
-            self.hop_tokens.add(self.wake_token)
+            self.hop_tokens[self.wake_token] = now
+
+    def is_hop(self, token, now=None):
+        """Whether `token` is a hop wake's, begun less than HOP_TOKEN_SECONDS ago."""
+        at = self.hop_tokens.get(token) if token else None
+        return at is not None and (now if now is not None else time.time()) - at < HOP_TOKEN_SECONDS
 
     def log_rollover(self, said):
         """A step of the room session's rollover (or why there was none), to stdout and timings.jsonl."""
@@ -390,7 +404,7 @@ class Bridge:
         # them by the self rule, and a self one addresses wakes as a hop (Arden's first condition). The flag is on the
         # message itself, so a bridge catching up after a restart reads it too. One that addresses only people goes out
         # loud, so their phones hear it; it wakes no self either way.
-        silent = req.get("wake") in self.hop_tokens and not rc.hop_post_may_ping(
+        silent = self.is_hop(req.get("wake")) and not rc.hop_post_may_ping(
             req["text"], await self.reply_author(channel, req.get("reply")), self.config)
         sent = await channel.send(req["text"], reference=ref, silent=silent,
                                   allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=True, replied_user=True))

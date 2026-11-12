@@ -76,8 +76,11 @@ nothing in history yet has no starting point and is not back-filled.
   way. It still wakes whom it addresses, as a hop, so a hop post naming a self can't restart the chain. Only posts
   carrying the hop wake's token (`PERSISTENCE_ROOM_WAKE`, sent by `room say`) are silent. A work session's report, or
   anything else said while it runs, is not. A hop post that addresses only people (mention, vocative name or reply)
-  goes out loud, so their phones hear it; it wakes no self. The flag is on the message, so a bridge catching up reads
-  it too. A hop wake can still start a work session or a pwake whose posts aren't silent: that is a deliberate act, not
+  goes out loud, so their phones hear it; it wakes no self. That is safe only while every bridge has the same names
+  for people (`people` and the selves' names): a name one bridge reads as a person and another as a self would let a
+  loud hop post wake that self and restart the chain. A hop token keeps its posts silent for 12 hours after its wake
+  began (`HOP_TOKEN_SECONDS`), long enough for work the wake left running; after that they go out as any other post.
+  The flag is on the message, so a bridge catching up reads it too. A hop wake can still start a work session or a pwake whose posts aren't silent: that is a deliberate act, not
   a loop. The wakes count against
   `wakes_per_hour` and the Breaker like any a self sets off. Each waits `self_delay` (120-240 s) and is skipped if
   anyone, this self included, has posted in that channel since; the message stays unread for the next wake. It never
