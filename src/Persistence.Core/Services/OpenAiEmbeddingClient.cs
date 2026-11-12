@@ -123,8 +123,9 @@ public class OpenAiEmbeddingClient : IEmbeddingClient, IDisposable
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             // The caller's cancellation is its decision, not an embedder failure: let it escape so it
-            // is never read as "no vectors, fall back to words". The client's own request timeout
-            // also throws a cancellation, but with the caller's token live, so it falls through below.
+            // is never read as "no vectors, fall back to words". SimpleHttpClient 5.1.0's own request
+            // timeout does not arrive here: it catches its internal cancellation while the caller's token
+            // is live and throws TimeoutException, which the catch below turns into no vectors.
             throw;
         }
         catch (Exception ex)

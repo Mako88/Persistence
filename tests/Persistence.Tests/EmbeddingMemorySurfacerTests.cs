@@ -167,12 +167,13 @@ public class EmbeddingMemorySurfacerTests
     }
 
     [Fact]
-    public async Task EmbedAsync_OwnRequestTimeoutStillReturnsEmpty()
+    public async Task EmbedAsync_OwnRequestTimeoutExceptionStillReturnsEmpty()
     {
-        // The client's own timeout surfaces as a TaskCanceledException while the caller's token is
-        // live. That is a hung embedder, and recall falls back to words as before.
+        // SimpleHttpClient 5.1.0 turns its own timeout into a TimeoutException (its linked CTS catches the
+        // internal cancellation while the caller's token is live). That is a hung embedder, and recall
+        // falls back to words as before.
         var (client, _) = EmbeddingClientOver((_, _) =>
-            Task.FromException<ISimpleResponse>(new TaskCanceledException("timed out", new TimeoutException())));
+            Task.FromException<ISimpleResponse>(new TimeoutException("timed out")));
 
         Assert.Empty(await client.EmbedAsync(["a"], CancellationToken.None));
     }
