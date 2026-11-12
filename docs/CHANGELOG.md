@@ -9,6 +9,19 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-12 — Recall: fragments' meaning step lets cancellation escape and names failures by type only
+
+**Cancellation escapes in fragment recall too.** `EmbeddingMemorySurfacer.SurfaceAsync` caught every exception from the
+meaning step, cancellation included, and returned the lexical floor with a "semantic recall failed" notice. A
+cancelled recall therefore looked like an ordinary words-only one. It now rethrows `OperationCanceledException` before
+the general catch, as `ConversationRecaller` does since PR #15. This has to land before chunking passes a deadline token.
+
+**Type only in the notice.** The fragments' failure notice quoted `ex.Message`, which can quote the query. It now
+names the exception type only, the rule Ember set for past utterances.
+
+**Embedding off: past utterances by words (test only).** One of Arden's two gaps on PR #15. A new test covers it and
+fails if the agreement rule ignores whether meaning compared.
+
 ## 2026-11-12 — Recall: past utterances come back by words when meaning did not run
 
 **Agreement only when meaning ran (step 1 of chunked query embedding).** Conversation recall kept an utterance only
