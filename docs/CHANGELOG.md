@@ -16,7 +16,9 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
   so a caller's deadline could neither stop a hung request nor be told apart from an embedder failure.
   Chunking passes a deadline, so this goes first. The client's own request timeout still returns empty:
   SimpleHttpClient 5.1.0 surfaces it as `TimeoutException`, not a cancellation, so a hung embedder still
-  falls back to words. A test pins that shape (corrected in review by Ember). Raised by Arden in
+  falls back to words. A test pins that shape (corrected in review by Ember). A second test throws a
+  `TaskCanceledException` under a live caller token and expects empty, so the escape is pinned to the
+  caller's token, not the exception type (added from Arden's review 5881360057). Raised by Arden in
   review 5880775913.
 
 ## 2026-11-12 — Recall: fragments' meaning step lets cancellation escape and names failures by type only

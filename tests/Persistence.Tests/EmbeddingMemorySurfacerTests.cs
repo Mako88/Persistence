@@ -178,6 +178,20 @@ public class EmbeddingMemorySurfacerTests
         Assert.Empty(await client.EmbedAsync(["a"], CancellationToken.None));
     }
 
+    [Fact]
+    public async Task EmbedAsync_CancellationNotFromTheCallerStillReturnsEmpty()
+    {
+        // A cancellation the caller did not ask for, under a live caller token (raw HttpClient.Timeout,
+        // or a future library version that stops translating its timeout), is still a failed embedder:
+        // no vectors. This pins that the escape is decided by the caller's token, not the exception type.
+        // From Arden's review 5881360057.
+        using var live = new CancellationTokenSource();
+        var (client, _) = EmbeddingClientOver((_, _) =>
+            Task.FromException<ISimpleResponse>(new TaskCanceledException("timed out", new TimeoutException())));
+
+        Assert.Empty(await client.EmbedAsync(["a"], live.Token));
+    }
+
     // -- End-to-end surfacing --
 
     [Fact]
