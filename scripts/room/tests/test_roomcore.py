@@ -792,6 +792,48 @@ class TurnTests(unittest.TestCase):
         r.on_message(msg(91, author="B", author_id=B, bot=True), 9)
         self.assertEqual(r.marks["89"][B]["replied"], 5)
 
+    def test_a_post_in_another_channel_does_not_hand_over(self):
+        # Ember's review of 07cca60: the awaited self posting after its 👀, but in another channel this bridge also
+        # listens to, is not its reply to this message; the next self stays blocked.
+        rooms = self.rooms()
+        m = self.john(92)
+        for r in rooms.values():
+            r.on_message(m, 0)
+        order = rc.turn_order(m, [A, B, C], self.conf())
+        second = rooms[order[1]]
+        second.on_mark("92", order[0], "start", 4)
+        second.on_message(msg(93, author="first", author_id=order[0], bot=True, channel="c2"), 10)
+        self.assertIsNone(second.tick(50))
+        second.on_message(msg(94, author="first", author_id=order[0], bot=True), 60)
+        self.assertIsNotNone(second.tick(60))           # its post in the message's own channel still hands over
+
+    def test_a_post_in_an_unlistened_channel_does_not_hand_over(self):
+        # Ember's review of 07cca60: a post the bridge does not listen to is not looked at for a reply at all.
+        rooms = self.rooms(channels=["c1"])
+        m = self.john(95)
+        for r in rooms.values():
+            r.on_message(m, 0)
+        order = rc.turn_order(m, [A, B, C], self.conf())
+        second = rooms[order[1]]
+        second.on_mark("95", order[0], "start", 4)
+        second.on_message(msg(96, author="first", author_id=order[0], bot=True, channel="elsewhere"), 10)
+        self.assertIsNone(second.tick(50))
+
+    def test_the_earlier_of_reply_and_done_ends_a_turn(self):
+        # Arden's review of 07cca60: pins min(). The first replied at 60 and marked done at 100; the second never
+        # starts, so the third passes it over turn_start_timeout (90) after the first's turn ended: 150, not 190.
+        rooms = self.rooms()
+        m = self.john(97)
+        for r in rooms.values():
+            r.on_message(m, 0)
+        order = rc.turn_order(m, [A, B, C], self.conf())
+        third = rooms[order[2]]
+        third.on_mark("97", order[0], "start", 4)
+        third.on_message(msg(98, author="first", author_id=order[0], bot=True), 60)
+        third.on_mark("97", order[0], "done", 100)
+        self.assertIsNone(third.tick(149))
+        self.assertIsNotNone(third.tick(150))
+
     def test_a_self_that_never_starts_is_passed_over(self):
         rooms = self.rooms()
         m = self.john(78)

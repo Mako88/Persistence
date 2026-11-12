@@ -18,6 +18,12 @@ self's turn on it, and ✅ still ends the turn of a self that stays silent; whic
 keeps working after replying overlaps the next one, accepted. A post before its 👀 is from an earlier wake and moves
 nothing. Each self still wakes once per message: the message leaves pending when its wake starts. Timeouts unchanged.
 
+**Only a post in the message's own channel hands over (Ember's review of 07cca60).** The first cut looked for the
+reply before checking the channel, so the awaited self posting anywhere, even in a channel the bridge does not listen
+to, ended its turn on every pending message. The reply is now looked for only after the bridge accepts the channel,
+and only in the pending message's channel. Arden's follow-ups in the same commit: a test pinning that the earlier of
+reply and ✅ ends a turn, and a README line that any post under the self's bot id counts, a work session's included.
+
 ## 2026-11-11 — The heartbeat: a script that finds stalled work and wakes it, off by default
 
 **Built to `docs/design/heartbeat.md` (approved by Ember at 027382d), on top of the task claims.** Work moved only when

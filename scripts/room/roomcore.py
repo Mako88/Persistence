@@ -630,11 +630,10 @@ class Room:
         `wake=False` (an old message found on catching up) keeps it unread for the next wake and wakes no one."""
         if str(msg.author_id) == self.me_id:
             return None
-        if wake:
-            self._note_reply(str(msg.author_id), now)
         if not listens(self.config, msg.channel_id, msg.is_dm):
             return None
         if wake:
+            self._note_reply(str(msg.author_id), str(msg.channel_id), now)
             self.breaker.note(msg.channel_id, msg.is_bot, now)
         # A name used vocatively addresses its owner directly, from a person or a self alike; a self's vocative still
         # meets the bot-message cap like any bot message.
@@ -672,12 +671,14 @@ class Room:
             for k in list(self.marks)[:100]:
                 del self.marks[k]
 
-    def _note_reply(self, author_id, now):
-        """A post by a self that is in its turn on a message waiting here (marked start, not yet done): its reply, and
-        the next in line may go (John, Ember and Arden, 2026-11-12). It may keep working and overlap the next self.
-        Only its first post after its start counts; one before its start is from an earlier wake."""
+    def _note_reply(self, author_id, channel_id, now):
+        """A post by a self that is in its turn on a message waiting here (marked start, not yet done), in that
+        message's channel: its reply, and the next in line may go (John, Ember and Arden, 2026-11-12). It may keep
+        working and overlap the next self. Only its first post after its start counts; one before its start is from an
+        earlier wake. Called only for a post in a channel this bridge listens to, and a post in any other channel than
+        the message's hands nothing over (Ember's review of 07cca60)."""
         for d, kind in self.pending:
-            if kind != "turn" or author_id not in d["turn_order"]:
+            if kind != "turn" or author_id not in d["turn_order"] or str(d["channel_id"]) != channel_id:
                 continue
             m = self.marks.get(d["id"], {}).get(author_id, {})
             if "start" in m and "done" not in m and now >= m["start"]:
