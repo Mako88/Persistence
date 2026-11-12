@@ -228,7 +228,9 @@ class Beat:
     def take_cap(self):
         """One heartbeat wake against the hourly cap; False (and one `cap: reached` report per window) when full."""
         cap = self.data["cap"]
-        start = _time(cap.get("window")) if cap.get("window") else None
+        start = _time(cap.get("window")) if cap else None
+        if cap and (start is None or not _count(cap.get("count"))):
+            raise StateUnreadable("heartbeat.json's cap can't be read")  # never a silent reset to 0 (Ember's B2)
         if start is None or self.now - start >= timedelta(hours=1):
             start = self.now.replace(second=0, microsecond=0)
             cap.update(window=start.isoformat(), count=0)
@@ -641,6 +643,10 @@ def _time(value):
     return moment if moment.tzinfo else None
 
 
+def _count(value):
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
 EMPTY = {"reported": {}, "outbox": {}, "crashed_seen": {}, "cap": {}}
 
 
@@ -648,7 +654,9 @@ def load(state):
     """heartbeat.json. Missing initializes; malformed, unreadable or the wrong shape raises StateUnreadable (Ember's
     B2): starting clean would drop the hourly cap, the outbox and the reported keys and then go on deciding. Only an
     absent file or an absent section is missing; a section that is present must be an object, so an explicit null is
-    the wrong shape, not an empty section."""
+    the wrong shape, not an empty section. Inside: `cap` is {} or whole (an aware ISO window and an int count >= 0,
+    not a bool, both there), since anything else would reset or weaken the hourly limit; every outbox line is a str.
+    crashed_seen's timestamps aren't checked here (a follow-up in the issue drafts)."""
     path = Path(state) / "heartbeat.json"
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -658,6 +666,11 @@ def load(state):
         raise StateUnreadable(f"{path} can't be read ({type(e).__name__})") from None
     if not isinstance(data, dict) or any(k in data and not isinstance(data[k], dict) for k in EMPTY):
         raise StateUnreadable(f"{path} isn't the heartbeat's state")
+    cap = data.get("cap", {})
+    if cap and not ("window" in cap and "count" in cap and _time(cap["window"]) and _count(cap["count"])):
+        raise StateUnreadable(f"{path} has a cap that isn't empty or whole")
+    if not all(isinstance(line, str) for line in data.get("outbox", {}).values()):
+        raise StateUnreadable(f"{path} has an outbox line that isn't text")
     return {k: dict(data[k]) if k in data else {} for k in EMPTY}
 
 

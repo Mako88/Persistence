@@ -608,6 +608,48 @@ class CorruptState(Base):
                 self.assert_no_decision()
                 self.assertIn("heartbeat.json", err)
 
+    # Inside `cap` and `outbox` (Ember 1570232805114519616, Claude 1570232754514432143): a cap that isn't {} or a
+    # whole one (an aware window, a non-negative int count, both there) would reset or weaken the hourly limit, and a
+    # non-str outbox line can't be emitted. Each case runs from a fresh setUp: subtests sharing state leaked (#2196).
+    BAD_CAPS = ({"window": "garbage", "count": 1}, {"window": None, "count": 1}, {"window": "2026-11-11T22:30:00", "count": 1},
+                {"window": "2026-11-11T22:30:00+00:00"}, {"window": "2026-11-11T22:30:00+00:00", "count": "1"},
+                {"window": "2026-11-11T22:30:00+00:00", "count": True}, {"window": "2026-11-11T22:30:00+00:00", "count": -1},
+                {"window": "2026-11-11T22:30:00+00:00", "count": 1.0}, {"count": 1}, {"window": 5, "count": 1})
+
+    def fresh(self):
+        self.tearDown()
+        self.setUp()
+
+    def test_a_malformed_cap_or_outbox_line_fails_closed_and_is_kept(self):
+        bads = [json.dumps({"cap": cap}).encode() for cap in self.BAD_CAPS] + [b'{"outbox": {"k": 1}}', b'{"outbox": {"k": null}}']
+        for bad in bads:
+            with self.subTest(bad=bad):
+                self.fresh()
+                self.hb.write_bytes(bad)
+                with self.assertRaises(heartbeat.StateUnreadable):
+                    heartbeat.load(self.state)
+                result, err = self.quiet_beat(10)
+                self.assertEqual(result, "state-unreadable")
+                self.assertEqual(self.hb.read_bytes(), bad)
+                self.assertEqual(self.items(), [])
+                self.assert_no_decision()
+                self.assertIn("heartbeat.json", err)
+                self.assertNotIn("Traceback", err)
+
+    def test_an_empty_or_whole_cap_is_read_and_kept(self):
+        window = (T0 - timedelta(minutes=50)).isoformat()
+        for cap in ({}, {"window": window, "count": 0}, {"window": window, "count": 2}):
+            with self.subTest(cap=cap):
+                self.fresh()
+                self.hb.write_bytes(json.dumps({"cap": cap}).encode())
+                self.assertEqual(heartbeat.load(self.state)["cap"], cap)
+                result, _ = self.quiet_beat()
+                self.assertEqual(result, "ok")
+                after = json.loads(self.hb.read_bytes())["cap"]
+                if cap:  # same window, counted on from where it was, never reset to 0
+                    self.assertEqual(after["window"], window)
+                    self.assertEqual(after["count"], cap["count"] + 1)
+
     def test_a_beat_that_fails_closed_exits_non_zero(self):
         self.hb.write_bytes(b"{")
         with mock.patch.object(heartbeat, "beat", return_value="state-unreadable"):

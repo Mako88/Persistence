@@ -264,6 +264,20 @@ class Cap(Base):
         with heartbeat.Beat(self.state, self.home, lambda: self.now, self.sink, self.systemctl, "nobody") as b:
             self.assertTrue(b.take_cap())
 
+    def test_an_unreadable_cap_is_never_reset_or_counted_on(self):
+        """Even past load() (Ember's B2): take_cap fails closed on a cap it can't read, rather than starting a new window
+        or counting from a bad count."""
+        aware = "2026-11-11T22:30:00+00:00"
+        for cap in ({"window": "garbage", "count": 3}, {"window": None, "count": 3}, {"window": "2026-11-11T22:30:00", "count": 3},
+                    {"count": 3}, {"window": aware}, {"window": aware, "count": True}, {"window": aware, "count": -5},
+                    {"window": aware, "count": "1"}):
+            with self.subTest(cap=cap):
+                with self.assertRaises(heartbeat.StateUnreadable):
+                    with heartbeat.Beat(self.state, self.home, lambda: self.now, self.sink, self.systemctl, "nobody") as b:
+                        b.data["cap"] = dict(cap)
+                        b.take_cap()
+                self.assertFalse((self.state / "heartbeat.json").exists())
+
     def test_cap_from_settings(self):
         self.settings({"PERSISTENCE_HEARTBEAT": "true", "PERSISTENCE_HEARTBEAT_PER_HOUR": "1"})
         with heartbeat.Beat(self.state, self.home, lambda: self.now, self.sink, self.systemctl, "nobody") as b:
