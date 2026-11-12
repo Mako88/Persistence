@@ -211,12 +211,6 @@ class Bridge:
         prompt = rc.build_prompt(wake.unread, wake.triggers, self.client.user.display_name, self.client.user.id,
                                  by_reply=by_output, tail=self.config["context_tail"])
         reply_file = STATE / f"reply-{int(time.time() * 1000)}.txt"
-        saved = self.store.session()
-        argv, new_session = rc.wake_argv(self.config, self.store, reply_file=reply_file)
-        if new_session:
-            prompt = rc.fresh_session_note(saved) + prompt
-        else:
-            prompt = rc.last_wake_note(saved) + prompt
         self.begin(wake)
         env = {**os.environ, "PERSISTENCE_SPEAKER": wake.speaker, "PERSISTENCE_ROOM_CHANNEL": wake.channel_id,
                "PERSISTENCE_ROOM_SOCKET": str(rc.socket_path()), "PERSISTENCE_ROOM_WAKE": self.wake_token}
@@ -224,7 +218,20 @@ class Bridge:
         log = STATE / f"wake-{int(time.time())}.json"
         await self.mark(wake.to_mark, "start")
         started = time.time()
+        # Everything from reading session.json on is inside the try, so the turn always ends (finish) whatever fails:
+        # a session.json that won't parse used to kill the task here and leave the room waiting forever (Arden's review
+        # of ceaac74). It is said and the wake skipped; save_session's write is atomic, so the bridge never tears it.
         try:
+            try:
+                saved = self.store.session()
+                argv, new_session = rc.wake_argv(self.config, self.store, reply_file=reply_file)
+            except ValueError as e:
+                print(f"wake could not start: session.json is unreadable ({e}); fix or remove it", flush=True)
+                return
+            if new_session:
+                prompt = rc.fresh_session_note(saved) + prompt
+            else:
+                prompt = rc.last_wake_note(saved) + prompt
             with log.open("w") as out:
                 proc = await asyncio.create_subprocess_exec(
                     *argv, cwd=cwd, env=env, stdin=asyncio.subprocess.PIPE, stdout=out, stderr=asyncio.subprocess.STDOUT)
@@ -234,9 +241,13 @@ class Bridge:
                     proc.kill()
                     print(f"wake timed out after {self.config['wake_timeout']}s", flush=True)
             if new_session and proc.returncode == 0:
-                self.store.save_session(rc.created_session(new_session, saved))
-                if saved.get("rotate"):
-                    self.log_rollover(f"rollover: fresh room session {new_session} replaced {saved['id']}")
+                # Guarded on its own: failing to record the session must not cost the reply or after_wake (Arden).
+                try:
+                    self.store.save_session(rc.created_session(new_session, saved))
+                    if saved.get("rotate"):
+                        self.log_rollover(f"rollover: fresh room session {new_session} replaced {saved['id']}")
+                except OSError as e:
+                    self.log_rollover(f"could not record room session {new_session}: {e}")
             elif proc.returncode:
                 print(f"wake exited {proc.returncode}; see {log}", flush=True)
             if by_output and proc.returncode == 0 and reply_file.exists():
