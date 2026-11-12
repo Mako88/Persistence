@@ -9,6 +9,22 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-12 — Room: an unreadable session.json no longer stops the bridge waking anyone
+
+**A torn `session.json` ends the turn (06b4ba6).** `run_wake` used to read the file before its try, so a file that
+would not parse killed the wake task, the turn never ended, and the bridge never woke again until restarted. The read
+and spawn now sit inside the try, and `save_session` writes a temporary file and renames it over the old one.
+Recording a fresh session is guarded on its own, so a failed save no longer costs the reply. (Arden's review of the
+bridge-core audit.)
+
+**It heals itself (Arden's review of 06b4ba6).** Only logging the problem and waking nobody is worse than a fresh
+session, which is normal for us. Now an unreadable `session.json` is moved aside to `session.json.corrupt-<UTC>` and
+kept for inspection. The bridge says so loudly in its log and in `timings.jsonl`, and that wake starts a fresh room
+session whose prompt says the old record was moved aside. A file that parses but isn't an object (`null`, `[]`, a
+number) counts as corrupt, not as a session. `save_session` flushes the new file to disk before renaming it, so a
+power cut can't leave an empty `session.json`. Only when the file can't be moved aside does the wake still end with
+"wake could not start".
+
 ## 2026-11-12 — Room: a self talking to the room wakes the other selves, one hop
 
 **A self's unaddressed post wakes the other selves (`wake_on_self`, on by default).** John found that a self talking
