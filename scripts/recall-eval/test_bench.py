@@ -51,5 +51,41 @@ class TurnPath(unittest.TestCase):
         self.assertEqual(("none", None), self.turn())
 
 
+class StrippedQueries(unittest.TestCase):
+    """Rerunning tail/max/mean on queries without the room's wrapper (Ember 1570582618414649497): the same switch the
+    hook reads, PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE, so a run measures what a store that turns it on would get."""
+
+    def setUp(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "room"))
+        import roomcore
+        t = {"id": "12", "channel_id": "c1", "author": "John", "text": "what did the chunking bench show?"}
+        self.wake = roomcore.build_prompt([t], [t], "Claude", "100")
+
+    def store_turn_asks(self, env):
+        seen = []
+
+        def cli(exe, db, args, stdin=None, env=None):
+            seen.append(stdin)
+            return 0, "", "recall-path: semantic\n"
+        with mock.patch.dict(bench.os.environ), mock.patch.object(bench, "cli", cli):
+            bench.os.environ.pop("PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE", None)
+            bench.os.environ.update(env)
+            bench.store_turn("exe", "db", {}, self.wake, "work", 3, set(), True)
+        return seen
+
+    def test_store_layer_strips_when_on(self):
+        self.assertEqual(["John: what did the chunking bench show?"],
+                         self.store_turn_asks({"PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE": "1"}))
+
+    def test_store_layer_asks_whole_when_off(self):
+        self.assertEqual([self.wake], self.store_turn_asks({}))
+
+    def test_the_setting_is_in_the_report_settings(self):
+        with mock.patch.object(bench, "sha256", return_value="0" * 64), \
+                mock.patch.dict(bench.os.environ, {"PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE": "1"}):
+            knobs = bench.settings_of("exe", "semantic", "hook", True, "labels")["knobs"]
+        self.assertEqual(("1", "env"), knobs["PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -20,7 +20,8 @@ touched. `--layer store` calls the store's `recall` alone, as the hook would, wi
 Paths (f): `semantic` runs with the PERSISTENCE_EMBEDDING_* the served store runs with (defaults below are my
 store's live settings since 2026-11-11: bge-small on :8081, query tail 1200, quality weight 0; override from the
 environment). `words` turns embedding off: the exact-words fallback the store uses when the embedder refuses a
-long message, scored on its own.
+long message, scored on its own. PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE=1 asks recall about a room wake's messages
+without the room's fixed wrapper, as the hook does with it on (both layers; `query_chars` records what was asked).
 
 Which path a turn ACTUALLY took is recorded per turn (`actual`), from the store's own account of that recall
 (`recall --diagnostics`, one `recall-path:` line on stderr): `semantic`, `words-setting` (embedding off),
@@ -105,15 +106,37 @@ def snapshot(live, out, exe):
 
 # --- one turn through the hook ----------------------------------------------------------------------------------
 
+def load_hook(state):
+    """hook.py, imported with its state in `state` (hook.STATE is read at import)."""
+    os.environ["PERSISTENCE_STATE_DIR"] = state
+    spec = importlib.util.spec_from_file_location("bench_hook", HOOK)
+    h = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(h)
+    return h
+
+
+_query_hook = []
+
+
+def recall_query(prompt):
+    """What the hook would ask recall about for this prompt (PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE): the store layer
+    asks the same, so both layers measure one switch. The hook's own function, from a private import."""
+    if not _query_hook:
+        before = os.environ.get("PERSISTENCE_STATE_DIR")
+        _query_hook.append(load_hook(tempfile.mkdtemp(prefix="recall-bench-qstate-")))
+        if before is None:
+            os.environ.pop("PERSISTENCE_STATE_DIR", None)
+        else:
+            os.environ["PERSISTENCE_STATE_DIR"] = before
+    return _query_hook[0].recall_query(prompt)
+
+
 class HookTurns:
     """The real hook.py, imported once, its store calls bent to the CLI on a snapshot, its state in a temp dir."""
 
     def __init__(self, exe, path, diagnostics):
         self.state = tempfile.mkdtemp(prefix="recall-bench-state-")
-        os.environ["PERSISTENCE_STATE_DIR"] = self.state      # before import: hook.STATE is read at import
-        spec = importlib.util.spec_from_file_location("bench_hook", HOOK)
-        h = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(h)
+        h = load_hook(self.state)
         # Belt and braces: nothing below may reach a served store, local or remote.
         h.SOCKET, h.PORT = None, 1
         h.remote = lambda: None
@@ -183,6 +206,7 @@ class HookTurns:
 
 def store_turn(exe, db, env, prompt, project, count, exclude, diagnostics):
     """`--layer store`: the store's recall as the hook calls it, without the hook's gate or memory."""
+    prompt = recall_query(prompt)
     code, out, err = cli(exe, db, ["recall", "--text", "-", "--limit", str(count), "--snippet", "300",
                                    "--project", project, "--wander", os.environ.get("PERSISTENCE_RECALL_WANDER", "1"),
                                    "--said", os.environ.get("PERSISTENCE_RECALL_SAID", "3") if len(prompt) >= 40 else "0",
@@ -234,7 +258,8 @@ def settings_of(exe, path, layer, diagnostics, labels):
     (my store's settings) can hide a finding, as query tail 1200 would have hidden Claude's fallback rate."""
     env = store_env(path)
     knobs = {k: (env[k], "env" if k in os.environ else "bench default") for k in LIVE_ENV}
-    for k, v in (("PERSISTENCE_RECALL_WANDER", "1"), ("PERSISTENCE_RECALL_SAID", "3")):
+    for k, v in (("PERSISTENCE_RECALL_WANDER", "1"), ("PERSISTENCE_RECALL_SAID", "3"),
+                 ("PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE", "off")):
         knobs[k] = (os.environ.get(k, v), "env" if k in os.environ else "hook default")
     return {"exe": exe, "exe_sha256": sha256(exe)[:16], "diagnostics": diagnostics, "layer": layer,
             "labels_sha256": sha256(labels)[:16], "knobs": knobs}
@@ -415,6 +440,7 @@ def run_case(ev, bases, work, hook, env, exe, diagnostics, config, case, n, kind
             row = {"case": case["id"] + (f"#{t + 1}" if kind == "session" else ""), "kind": kind, "path": path,
                    "layer": layer, "count": count, "session_store": mode, "as_of": as_of,
                    "actual": actual[0], "actual_why": actual[1], "prompt_chars": len(q),
+                   "query_chars": len(recall_query(q.strip())),
                    "synthetic": case.get("synthetic", "query" in turn),
                    "shown": ids, "chars": chars, "notice": notice, "words_notice": said_words,
                    "held": sorted(map(int, held)),

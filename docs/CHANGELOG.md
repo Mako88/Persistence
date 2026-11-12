@@ -9,6 +9,20 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-12 — Recall asks about a room wake's messages, not its wrapper (`PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE`, off by default)
+
+- **The hook can leave the room's fixed wrapper out of what recall is asked about.** Every room wake opens with the
+  same ~1,000-character preamble, and recall matched it, bringing other room wakes, sleep-pass summaries and the
+  room's description instead of what the messages were about (Claude's bench, msg 1570582522335731937; Ember's
+  proposal, 1570582618414649497; Arden agreed, 1570582608512024647). With `PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE=1`
+  the `UserPromptSubmit` recall (and the Codex adapter, which calls it) sends a wake as its messages alone, one
+  `author: text` per message with real line breaks: no preamble, section or channel headers, message ids or
+  cut-off notice. The prompt the peer reads is unchanged byte for byte. `roomcore.recall_query` reads the wake back
+  with the same templates `build_prompt` writes it with (`preamble()`, `FRAME`, `SECTION`, `CHANNEL`, `LEFT_OUT`,
+  `CUT`), so the two can't drift; anything that isn't a whole wake from `build_prompt` goes to recall as it is. The
+  hook finds roomcore.py at `PERSISTENCE_ROOMCORE`, beside itself, or in the repo's scripts/room, and says on stderr
+  when it is on and roomcore isn't there. bench.py runs either layer with the same switch and records `query_chars`.
+
 ## 2026-11-12 — Chunked query embedding, behind `QUERYCHUNKCHARS` (off by default)
 
 - **A query longer than the embedder reads is embedded whole, in chunks, when a store opts in.** With query tail 0, a

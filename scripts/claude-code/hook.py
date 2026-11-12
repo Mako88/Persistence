@@ -1323,6 +1323,46 @@ def stop_cue(event):
                           "If you meant to start something, start it now; if not, end the turn again.\n\n" + found}))
 
 
+_ROOMCORE = []
+
+
+def roomcore():
+    """The room's roomcore.py, for the wake prompt's own templates, or None: PERSISTENCE_ROOMCORE, else beside this file
+    (an installed copy), else the repo's scripts/room. Loaded once; a copy-only install without it still runs."""
+    if not _ROOMCORE:
+        import importlib.util
+        here = Path(__file__).resolve().parent
+        found = next((c for c in (os.environ.get("PERSISTENCE_ROOMCORE"), here / "roomcore.py",
+                                  here.parent / "room" / "roomcore.py") if c and Path(c).is_file()), None)
+        mod = None
+        if found:
+            try:
+                spec = importlib.util.spec_from_file_location("roomcore_for_recall", found)
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+            except Exception as e:
+                print(f"persistence hook: could not load {found}: {e!r}", file=sys.stderr)
+                mod = None
+        _ROOMCORE.append(mod)
+    return _ROOMCORE[0]
+
+
+def recall_query(prompt):
+    """What recall is asked about. A room wake opens with the same fixed preamble every time, and recall matched that
+    wrapper instead of the messages (my bench, 1570582522335731937). With PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE on
+    (off by default: Ember 1570582618414649497, Arden 1570582608512024647), a wake prompt goes to recall as its
+    messages alone, read back by the room's own templates so the two can't drift. The prompt the peer reads is
+    unchanged; anything not a wake goes as it is."""
+    if os.environ.get("PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE", "").strip().lower() not in ("1", "true", "yes", "on"):
+        return prompt
+    rc = roomcore()
+    if rc is None or not hasattr(rc, "recall_query"):
+        print("persistence hook: PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE is on, but no roomcore.py with recall_query was "
+              "found (set PERSISTENCE_ROOMCORE); recall was asked with the whole prompt", file=sys.stderr)
+        return prompt
+    return rc.recall_query(prompt) or prompt
+
+
 def recall(event):
     keep_soon(event)
     count = int(os.environ.get("PERSISTENCE_RECALL_COUNT", "3"))
@@ -1334,13 +1374,14 @@ def recall(event):
     # A short message ("sounds good") matches past acknowledgements, not what it is about: no past utterances for it.
     reminded = cued(event, "prompt", prompt)
     already = seen(event)
+    query = recall_query(prompt)
     since = STATE / f"{event.get('session_id', 'unknown')}.since"
     found = store("recall", "--text", "-", *session_args(event), "--limit", str(count), "--snippet", "300", "--project", project(event),
                   "--wander", os.environ.get("PERSISTENCE_RECALL_WANDER", "1"),
-                  "--said", os.environ.get("PERSISTENCE_RECALL_SAID", "3") if len(prompt) >= 40 else "0",
+                  "--said", os.environ.get("PERSISTENCE_RECALL_SAID", "3") if len(query) >= 40 else "0",
                   *(["--before", since.read_text().strip()] if since.exists() else []),
                   # A cue's text joins what is looked for: "receiving" also finds what was said about receipting.
-                  *(["--exclude", ",".join(already)] if already else []), stdin=prompt + ("\n\n" + reminded if reminded else ""), cold=False)
+                  *(["--exclude", ",".join(already)] if already else []), stdin=query + ("\n\n" + reminded if reminded else ""), cold=False)
     ids = re.findall(r"^\[#(\d+) \|", found, re.M)
     # The store opens its output with this when the message could not be embedded; never silent (Ember's
     # requirement), so it is shown even when nothing came back (Arden, 2026-11-11). Since f922439's revision it may
@@ -1352,7 +1393,7 @@ def recall(event):
         lines = []
         if already:
             again = store("recall", "--text", "-", *session_args(event), "--limit", str(count), "--snippet", "0",
-                          "--project", project(event), "--wander", "0", "--said", "0", stdin=prompt, cold=False)
+                          "--project", project(event), "--wander", "0", "--said", "0", stdin=query, cold=False)
             shown = [i for i in re.findall(r"^\[#(\d+) \|", again, re.M) if i in already]
             if shown:
                 lines.append(f"Recall: {len(shown)} matched, all already in this window ({', '.join('#' + i for i in shown)}).")

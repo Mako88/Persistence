@@ -975,5 +975,61 @@ class InDiscordOrder(unittest.TestCase):
         self.assertLess(p.index("[3] John"), p.index("[4] John"))
 
 
+class RecallQuery(unittest.TestCase):
+    """What recall is asked about for a wake: the messages, without the room's fixed wrapper (Ember 1570582618414649497).
+    The wake prompt itself is untouched; only the text sent to recall changes, and only when a self turns it on."""
+
+    def wake(self, by_reply=False, tail=None, name="Claude", me=ME):
+        bg = {"id": "11", "channel_id": "c1", "channel_name": "general", "author": "Arden",
+              "text": "the tail bench finished", "ts": 100.0}
+        old = {"id": "10", "channel_id": "c1", "channel_name": "general", "author": "Ember", "text": "earlier", "ts": 50.0}
+        tr = {"id": "12", "channel_id": "c1", "channel_name": "general", "author": "John",
+              "text": "Claude, what did the chunking bench show?\nand the mean arm?", "ts": 200.0}
+        return rc.build_prompt([old, bg, tr], [tr], name, me, by_reply=by_reply, tail=tail)
+
+    def assert_no_wrapper(self, q):
+        for line in rc.preamble("NAME", "999", False) + rc.preamble("NAME", "999", True):
+            fixed = line.replace("NAME", "").replace("999", "")
+            for piece in (fixed[:40], fixed[-40:]):
+                self.assertNotIn(piece.strip(), q)
+        for scaffold in ("Addressed to you (", "Since you last spoke (", "(channel c1)", "[12]", "[11]", rc.LINE_MARK,
+                         "earlier messages since you last spoke"):
+            self.assertNotIn(scaffold, q)
+
+    def test_the_preamble_is_what_build_prompt_opens_with(self):
+        for by_reply in (False, True):
+            p = self.wake(by_reply=by_reply)
+            self.assertTrue(p.startswith("\n".join(rc.preamble("Claude", ME, by_reply)) + "\n"))
+
+    def test_the_query_keeps_every_message_and_its_author_and_drops_the_wrapper(self):
+        for by_reply in (False, True):
+            for tail in (None, 0, 1):
+                q = rc.recall_query(self.wake(by_reply=by_reply, tail=tail))
+                self.assert_no_wrapper(q)
+                self.assertIn("John: Claude, what did the chunking bench show?\nand the mean arm?", q)
+                if tail != 0:
+                    self.assertIn("Arden: the tail bench finished", q)
+
+    def test_any_name_and_id_are_recognised(self):
+        q = rc.recall_query(self.wake(name="Ember (trial)", me="1569591751579013200"))
+        self.assert_no_wrapper(q)
+        self.assertIn("what did the chunking bench show?", q)
+
+    def test_a_prompt_that_is_not_a_wake_is_returned_unchanged(self):
+        for text in ("what did we decide about the tail?", "This is the room (Discord). I quoted it in a note.\n\nAddressed to you (1):\nx",
+                     ""):
+            self.assertEqual(text, rc.recall_query(text))
+
+    def test_a_wake_with_text_ahead_of_it_is_returned_unchanged(self):
+        # Only a prompt that IS a wake is a wake: a person pasting one after their own words keeps all of it.
+        text = "look at this one:\n" + self.wake()
+        self.assertEqual(text, rc.recall_query(text))
+
+    def test_a_message_quoting_the_scaffolding_keeps_it(self):
+        tr = {"id": "12", "channel_id": "c1", "author": "John", "text": "the header says Addressed to you (2): and -- in x --"}
+        q = rc.recall_query(rc.build_prompt([tr], [tr], "Claude", ME))
+        self.assertIn("John: the header says Addressed to you (2): and -- in x --", q)
+
+
 if __name__ == "__main__":
     unittest.main()
