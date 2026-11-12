@@ -79,12 +79,14 @@ nothing in history yet has no starting point and is not back-filled.
   goes out loud, so their phones hear it; it wakes no self. That is safe only while every bridge has the same names
   for people (`people` and the selves' names): a name one bridge reads as a person and another as a self would let a
   loud hop post wake that self and restart the chain. A hop token keeps its posts silent for 12 hours after its wake
-  began (`HOP_TOKEN_SECONDS`), long enough for work the wake left running; after that they go out as any other post.
-  The flag is on the message, so a bridge catching up reads it too. A hop wake can still start a work session or a pwake whose posts aren't silent: that is a deliberate act, not
-  a loop. The wakes count against
-  `wakes_per_hour` and the Breaker like any a self sets off. Each waits `self_delay` (120-240 s) and is skipped if
-  anyone, this self included, has posted in that channel since; the message stays unread for the next wake. It never
-  lets a self jump its place in turns, and an `addressed_only` self is not woken by it.
+  began (`HOP_TOKEN_SECONDS`, timed on the monotonic clock), long enough for work the wake left running; after that
+  they go out as any other post. The tokens are kept in memory only, so a bridge restart within those 12 hours forgets
+  them: a post from work a hop wake left running then goes out loud and, by the self rule, may wake the others. The
+  flag is on the message, so a bridge catching up reads it too. A hop wake can still start a work session or a pwake
+  whose posts aren't silent: that is a deliberate act, not a loop. The wakes count against `wakes_per_hour` and the
+  Breaker like any a self sets off. Each waits `self_delay` (120-240 s) and is skipped if anyone, this self included,
+  has posted in that channel since; the message stays unread for the next wake. It never lets a self jump its place in
+  turns, and an `addressed_only` self is not woken by it.
 - Breaker: after `bot_message_cap` (6) bot messages in a channel (a thread counts as its own channel) with no human
   message, bot messages stop waking the self until a human posts or `breaker_reset_seconds` (600) pass. The self's
   own posts count. A self's message that addresses this self directly is deferred, not dropped: it wakes the self
