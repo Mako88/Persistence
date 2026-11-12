@@ -903,7 +903,10 @@ class RoomStore:
         return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
 
     def save_session(self, d):
-        (self.dir / "session.json").write_text(json.dumps(d), encoding="utf-8")
+        """Atomic: written to a temporary file beside it, then renamed over it, so a reader never sees half a file."""
+        tmp = self.dir / f"session.json.{os.getpid()}.tmp"
+        tmp.write_text(json.dumps(d), encoding="utf-8")
+        os.replace(tmp, self.dir / "session.json")
 
 
 def wake_argv(config, store, session_id=None, reply_file=None):
