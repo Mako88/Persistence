@@ -48,7 +48,8 @@ DEFAULTS = {
     # Turn-taking (John and Arden, 2026-11-10): the bot ids of every self with a bridge. A person's message that wakes
     # several of them wakes them one at a time, @mentioned selves first, the rest in an order every bridge derives
     # alike from a shuffle seeded by the message id. No shared server: a self marks the message with a reaction when
-    # its turn starts and another when it ends (spoken or silent), and the next in line goes when it sees the second.
+    # its turn starts and another when it ends (spoken or silent), and the next in line goes when it sees the first
+    # post that self makes after its start, or the end mark if it stays silent (2026-11-12).
     # Empty: no turns, the delays above alone.
     "selves": [],
     "turn_delay": [1, 3],           # seconds before the first self in line wakes (batches a burst of messages)
@@ -629,6 +630,8 @@ class Room:
         `wake=False` (an old message found on catching up) keeps it unread for the next wake and wakes no one."""
         if str(msg.author_id) == self.me_id:
             return None
+        if wake:
+            self._note_reply(str(msg.author_id), now)
         if not listens(self.config, msg.channel_id, msg.is_dm):
             return None
         if wake:
@@ -669,10 +672,21 @@ class Room:
             for k in list(self.marks)[:100]:
                 del self.marks[k]
 
+    def _note_reply(self, author_id, now):
+        """A post by a self that is in its turn on a message waiting here (marked start, not yet done): its reply, and
+        the next in line may go (John, Ember and Arden, 2026-11-12). It may keep working and overlap the next self.
+        Only its first post after its start counts; one before its start is from an earlier wake."""
+        for d, kind in self.pending:
+            if kind != "turn" or author_id not in d["turn_order"]:
+                continue
+            m = self.marks.get(d["id"], {}).get(author_id, {})
+            if "start" in m and "done" not in m and now >= m["start"]:
+                m.setdefault("replied", now)
+
     def my_turn(self, d, now):
-        """Whether this self's turn on message `d` has come: every self before it in line has finished, or was passed
-        over (no start mark within turn_start_timeout of its turn coming, or still not done wake_timeout after its
-        start), so a self that is down or stuck never holds the room."""
+        """Whether this self's turn on message `d` has come: every self before it in line has replied or finished, or
+        was passed over (no start mark within turn_start_timeout of its turn coming, or neither a reply nor a done mark
+        wake_timeout after its start), so a self that is down or stuck never holds the room."""
         order = d.get("turn_order")
         if not order or self.me_id not in order:
             return True
@@ -680,8 +694,9 @@ class Room:
         t = d["arrived"]                # when the turn of the self being looked at came
         for q in order[:order.index(self.me_id)]:
             m = marks.get(q, {})
-            if "done" in m:
-                t = max(t, m["done"])
+            ended = [m[k] for k in ("replied", "done") if k in m]
+            if ended:
+                t = max(t, min(ended))
             elif "start" in m:
                 if now < m["start"] + self.config["wake_timeout"]:
                     return False

@@ -739,6 +739,59 @@ class TurnTests(unittest.TestCase):
             r.on_mark("77", order[1], "done", 650)
         self.assertIsNotNone(third.tick(650))
 
+    def test_the_next_self_wakes_when_the_previous_one_posts(self):
+        # John, Ember and Arden, 2026-11-12: a posted reply is the handoff; the done mark only covers a silent self.
+        rooms = self.rooms()
+        m = self.john(81)
+        for r in rooms.values():
+            r.on_message(m, 0)
+        order = rc.turn_order(m, [A, B, C], self.conf())
+        second, third = rooms[order[1]], rooms[order[2]]
+        for r in rooms.values():
+            r.on_mark("81", order[0], "start", 4)
+        self.assertIsNone(second.tick(50))
+        for r in (second, third):
+            r.on_message(msg(82, author="first", author_id=order[0], bot=True), 60)
+        self.assertIsNotNone(second.tick(60))           # replied at 60, still working, no done mark
+        self.assertIsNone(third.tick(60))               # the second's turn has only just come
+        for r in rooms.values():
+            r.on_mark("81", order[0], "done", 400)      # the first's later done moves nothing back
+        third.on_mark("81", order[1], "start", 61)
+        third.on_message(msg(83, author="second", author_id=order[1], bot=True), 70)
+        self.assertIsNotNone(third.tick(70))
+
+    def test_a_post_before_the_selfs_turn_started_does_not_hand_over(self):
+        # A self still finishing an earlier wake posts before its 👀 on this message: that is not this turn's reply.
+        rooms = self.rooms()
+        m = self.john(84)
+        for r in rooms.values():
+            r.on_message(m, 0)
+        order = rc.turn_order(m, [A, B, C], self.conf())
+        second = rooms[order[1]]
+        second.on_message(msg(85, author="first", author_id=order[0], bot=True), 2)
+        second.on_mark("84", order[0], "start", 4)
+        self.assertIsNone(second.tick(50))
+
+    def test_a_post_by_someone_else_does_not_hand_over(self):
+        rooms = self.rooms()
+        m = self.john(86)
+        for r in rooms.values():
+            r.on_message(m, 0)
+        order = rc.turn_order(m, [A, B, C], self.conf())
+        second, third = rooms[order[1]], rooms[order[2]]
+        second.on_mark("86", order[0], "start", 4)
+        second.on_message(msg(87, author="third", author_id=order[2], bot=True), 10)
+        second.on_message(self.john(88), 11)
+        self.assertIsNone(second.tick(50))
+
+    def test_only_the_first_reply_counts(self):
+        r = rc.Room(A, "A", self.conf(), rng=Rng())
+        r.on_message(self.john(89), 0)
+        r.on_mark("89", B, "start", 1)
+        r.on_message(msg(90, author="B", author_id=B, bot=True), 5)
+        r.on_message(msg(91, author="B", author_id=B, bot=True), 9)
+        self.assertEqual(r.marks["89"][B]["replied"], 5)
+
     def test_a_self_that_never_starts_is_passed_over(self):
         rooms = self.rooms()
         m = self.john(78)

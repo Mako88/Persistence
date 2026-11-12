@@ -9,6 +9,15 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-12 — Room turns: the next self wakes at the previous one's reply
+
+**The handoff in a person's message's turns is the previous self's first post, not its ✅.** John saw the next self
+wait while the one before kept working long after it had replied (it was starting work sessions). Agreed in the room
+by John, Ember and Arden: a bridge now counts another self's first post after its 👀 on a message as the end of that
+self's turn on it, and ✅ still ends the turn of a self that stays silent; whichever is seen first counts. A self that
+keeps working after replying overlaps the next one, accepted. A post before its 👀 is from an earlier wake and moves
+nothing. Each self still wakes once per message: the message leaves pending when its wake starts. Timeouts unchanged.
+
 ## 2026-11-11 — The heartbeat: a script that finds stalled work and wakes it, off by default
 
 **Built to `docs/design/heartbeat.md` (approved by Ember at 027382d), on top of the task claims.** Work moved only when

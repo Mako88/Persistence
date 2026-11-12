@@ -36,10 +36,12 @@ nothing in history yet has no starting point and is not back-filled.
 - Turns (John and Arden, 2026-11-10), when `selves` lists the bot id of every self with a bridge: a person's message
   that wakes several selves wakes them one at a time. Selves it @mentions go first, then the rest, in an order every
   bridge derives alike from a shuffle seeded by the message id, so no shared server is needed. A self reacts to the
-  message with 👀 when its turn starts and ✅ when it ends, whether it spoke or kept silent, and the next in line wakes
-  when it sees the ✅. Since each wake starts with the room as it is then, a later self sees what the earlier ones
+  message with 👀 when its turn starts and ✅ when it ends, whether it spoke or kept silent. The next in line wakes
+  when it sees that self's first post after its 👀, or its ✅ if it keeps silent, whichever comes first (John, Ember
+  and Arden, 2026-11-12: a posted reply is the handoff). A self still working after its reply overlaps the next one;
+  a post made before its 👀 belongs to an earlier wake and hands nothing over. Since each wake starts with the room as it is then, a later self sees what the earlier ones
   said. A self that has not reacted 👀 within `turn_start_timeout` (90 s) of its turn coming is passed over, and so
-  is one still without ✅ `wake_timeout` after its 👀: a self that is down never holds the room. John sees the
+  is one with neither a post nor ✅ `wake_timeout` after its 👀: a self that is down never holds the room. John sees the
   reactions too, so he can tell who has read his message. A self also reacts 👀 and ✅ to every other message that
   wakes it, a self's included, so John can see selves working on each other's messages and how long a reply takes;
   those marks move no turns. Only listed selves' reactions count. A self mentioning a
