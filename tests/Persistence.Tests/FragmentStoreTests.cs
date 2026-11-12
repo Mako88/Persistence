@@ -689,6 +689,75 @@ public sealed class FragmentStoreTests : IDisposable
         Assert.Contains("past utterances: the embedder gave no vector", neither.PathWhy);
     }
 
+    private const string Checkpoint = "The checkpoint resumes after the game closes on the shared card, and the next run picks up there.";
+    private const string Weather = "We walked by the river this morning and the herons were standing in the shallows near the bridge.";
+
+    /// <summary>A store with a fragment and two past utterances, said a day ago in another session; embedded now unless <paramref name="embed"/> is false.</summary>
+    private async Task<FragmentStore> WithUtterancesAsync(Persistence.Services.IEmbeddingClient embedder, string checkpoint = Checkpoint, bool embed = true)
+    {
+        var store = await OpenAsync(embedder: embedder);
+        await store.AddAsync("Personal", "The shared card runs one game at a time.", null, null, null, [], false); // so the fragments compare too
+        await store.KeepConversationAsync(SessionTranscript("utter000-1", TimeSpan.FromDays(1), ("user", checkpoint), ("user", Weather)), "John");
+        if (embed)
+        {
+            Assert.Equal(2, await store.EmbedConversationAsync(10));
+        }
+
+        return store;
+    }
+
+    [Fact]
+    public async Task Past_utterances_come_back_by_words_when_the_embedder_refuses_the_query()
+    {
+        // The 77% case (2026-11-12): a query too long for the embedder gave no vector, and keeping only what words
+        // AND meaning found kept nothing, since meaning never ran. Words are the floor, as for fragments.
+        var store = await WithUtterancesAsync(new WordsEmbedder { RefuseOverChars = 300 });
+
+        var recalled = await store.RecallAsync(new string('7', 400) + " where does the checkpoint resume", 3, [], said: 3);
+
+        Assert.Contains(recalled.Said, f => f.Content == Checkpoint);
+        Assert.Contains("past utterances: the embedder gave no vector", recalled.PathWhy);
+    }
+
+    [Fact]
+    public async Task Past_utterances_come_back_by_words_when_meaning_throws_naming_the_type_only()
+    {
+        // The catch in ConversationRecaller noted the failure, and the intersection then dropped everything. The
+        // exception's message can quote the query, so only its type reaches the path and the notice.
+        var store = await WithUtterancesAsync(new WordsEmbedder { ThrowOn = "UTTERANCE" }, Checkpoint + " UTTERANCE", embed: false);
+
+        var recalled = await store.RecallAsync("where does the checkpoint resume after the game", 3, [], said: 3);
+
+        Assert.Contains(recalled.Said, f => f.Content.StartsWith(Checkpoint, StringComparison.Ordinal));
+        Assert.Equal("semantic-degraded", recalled.Path);
+        Assert.Equal("past utterances: recall of past utterances by meaning failed (HttpRequestException)", recalled.PathWhy);
+        Assert.DoesNotContain("embedder down", recalled.Fallback);
+    }
+
+    [Fact]
+    public async Task A_cancelled_meaning_step_escapes_and_is_never_a_words_recall()
+    {
+        // Ember's CHANGES on 5113d24: catch (Exception) absorbed cancellation and returned the words as an ordinary
+        // recall with a fallback notice. Cancellation is the caller's; it escapes, with no words and no notice.
+        var store = await WithUtterancesAsync(new WordsEmbedder { CancelOn = "UTTERANCE" }, Checkpoint + " UTTERANCE", embed: false);
+
+        await Assert.ThrowsAsync<TaskCanceledException>(() => store.RecallAsync("where does the checkpoint resume after the game", 3, [], said: 3));
+    }
+
+    [Fact]
+    public async Task When_meaning_ran_past_utterances_need_words_and_meaning_both()
+    {
+        // The control: with a vector for the query, recall keeps only what words and meaning both found. Meaning ranks
+        // both utterances; words match only the checkpoint, so the river one is cut by the agreement, not by fusion.
+        var store = await WithUtterancesAsync(new WordsEmbedder());
+
+        var recalled = await store.RecallAsync("checkpoint resumes after the game closes on the shared card", 3, [], said: 3);
+
+        Assert.Equal(("semantic", null), (recalled.Path, recalled.PathWhy));
+        Assert.Null(recalled.Fallback);
+        Assert.Equal([Checkpoint], recalled.Said.Select(f => f.Content));
+    }
+
     /// <summary>~3,000 characters whose head and tail share no words, so a head and a tail embed far apart.</summary>
     private static readonly string LongText = string.Join(' ', Enumerable.Range(0, 400).Select(i => $"word{i:D4}"));
 
@@ -697,6 +766,7 @@ public sealed class FragmentStoreTests : IDisposable
     {
         public int RefuseOverChars { get; init; }
         public string? ThrowOn { get; init; }
+        public string? CancelOn { get; init; }
         public bool IsEnabled => true;
         public string Model => "words";
 
@@ -705,6 +775,11 @@ public sealed class FragmentStoreTests : IDisposable
             if (RefuseOverChars > 0 && texts.Any(t => t.Length > RefuseOverChars))
             {
                 return Task.FromResult<IReadOnlyList<float[]>>([]);
+            }
+
+            if (CancelOn is not null && texts.Any(t => t.Contains(CancelOn)))
+            {
+                throw new TaskCanceledException("cancelled while embedding the secret query");
             }
 
             if (ThrowOn is not null && texts.Any(t => t.Contains(ThrowOn)))
