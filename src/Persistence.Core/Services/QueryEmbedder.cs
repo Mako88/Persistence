@@ -165,9 +165,14 @@ public class QueryEmbedder(IEmbeddingClient embeddings, IAppConfig config, IDisp
         var cap = settings.QueryChunkMax;
         var kept = chunks.Count <= cap ? chunks
             : chunks.Take((cap + 1) / 2).Concat(chunks.Skip(chunks.Count - cap / 2)).ToList();
-        foreach (var skipped in chunks.Except(kept))
+        // The skipped middle is one over-cap record spanning the skipped chunks, so the reported pieces stay bounded however
+        // long the message (Ember's CHANGES on 90fbe72): at most 96 attempted, plus this one. The characters it leaves
+        // uncovered (its overlap with kept neighbours excluded) are QueryVectors.Gaps, as for any piece.
+        if (kept.Count < chunks.Count)
         {
-            results[skipped.Chunk] = [new QueryPiece(skipped.Chunk, skipped.Start, skipped.End, null, ChunkFailure.OverCap)];
+            var first = chunks[(cap + 1) / 2];
+            var last = chunks[chunks.Count - cap / 2 - 1];
+            results[first.Chunk] = [new QueryPiece(first.Chunk, first.Start, last.End, null, ChunkFailure.OverCap) { Through = last.Chunk }];
         }
 
         var batches = kept.Chunk(settings.QueryChunkBatch).ToList();
@@ -182,7 +187,8 @@ public class QueryEmbedder(IEmbeddingClient embeddings, IAppConfig config, IDisp
         }
 
         // The pieces bound (acceptance 3) is structural: a chunk is halved at most MaxShrinks (2) levels deep, so it ends as
-        // at most four pieces, and 24 chunks as at most 96. Both counts are reported (QueryVectors.Line).
+        // at most four pieces, and 24 chunks as at most 96 attempted (QueryVectors.Attempted); the skipped middle is the one
+        // over-cap record above. Both counts are reported (QueryVectors.Line).
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(settings.QueryChunkBudgetMs);
         var stopped = (string?)null;

@@ -218,5 +218,10 @@ From the two approvals of 91e11f9: Ember (msg 1570489216608108609) and Arden (ms
 - **An `embedder-error` chunk is not split.** Splitting can't help a down server. A failed batch is still retried chunk
   by chunk whatever the reason, so one bad input never costs its batch-mates.
 - **Breaks only in a chunk's second half.** A paragraph break ten characters in would make a ten-character chunk.
-- **The 96-piece bound is structural.** At most two halving levels per chunk; both counts are in `recall-chunks:`.
+- **The 96-piece bound is structural, and true of what's reported** (Ember's CHANGES on 90fbe72). At most two
+  halving levels per chunk, so at most 96 attempted pieces. The chunks skipped over the cap are one `over-cap` record
+  (`over-cap: chunks 13-188 chars ...`), not one each, so `recall-chunks:` reports at most 96 pieces plus that record
+  however long the message, and nothing in the line grows with the skipped chunks.
+- **Logs are content-free too** (Ember's CHANGES on 90fbe72). The embedding client logs a failed request's status and
+  category, and an exception's type, never the response body or exception message: a provider may echo the input.
 - **Spans read 1-based and inclusive** (`chars 1-1,000`). The "on at start" line is printed by `serve` only.

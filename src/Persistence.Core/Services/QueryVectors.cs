@@ -33,7 +33,11 @@ public static class ChunkFailure
 /// <c>[Start, End)</c> in the original message, and its vector or why it has none. A chunk the embedder refused is
 /// split into pieces, each with its own span.
 /// </summary>
-public sealed record QueryPiece(int Chunk, int Start, int End, float[]? Vector, string? Failure);
+public sealed record QueryPiece(int Chunk, int Start, int End, float[]? Vector, string? Failure)
+{
+    /// <summary>The last chunk this piece stands for: <see cref="Chunk"/>, except for the one over-cap record of the skipped middle.</summary>
+    public int Through { get; init; } = Chunk;
+}
 
 /// <summary>
 /// A recall's query as chunk vectors, and how it scores a stored vector: <see cref="Max"/>, the best cosine over the
@@ -63,7 +67,7 @@ public sealed class QueryVectors
                 var norm = Math.Sqrt(piece.Vector!.Sum(x => (double)x * x));
                 for (var i = 0; norm > 0 && i < mean.Length; i++)
                 {
-                    mean[i] += (float)(piece.Vector[i] / norm);
+                    mean[i] += (float)(piece.Vector![i] / norm);
                 }
             }
         }
@@ -90,6 +94,9 @@ public sealed class QueryVectors
     public IReadOnlyList<QueryPiece> Pieces { get; }
 
     public IReadOnlyList<QueryPiece> Embedded => Pieces.Where(p => p.Vector is not null).ToList();
+
+    /// <summary>The pieces of the chunks within the cap: at most four a chunk, so at most 96 (acceptance 3). Not the over-cap record.</summary>
+    public IReadOnlyList<QueryPiece> Attempted => Pieces.Where(p => p.Failure != ChunkFailure.OverCap).ToList();
 
     /// <summary>
     /// A stored vector's similarity to the query and the chunk that gave it (0 for <see cref="Mean"/>, which has no
@@ -136,7 +143,7 @@ public sealed class QueryVectors
             if (start > at)
             {
                 var missing = Pieces.Where(p => p.Vector is null && p.Start < start && p.End > at).ToList();
-                var chunks = missing.Select(p => p.Chunk).Distinct().ToList();
+                var chunks = missing.SelectMany(p => new[] { p.Chunk, p.Through }).Distinct().ToList();
                 var why = string.Join(", ", missing.Select(p => p.Failure).Distinct());
                 var which = chunks.Count == 1 ? $"chunk {chunks[0]}" : $"chunks {chunks.Min()}-{chunks.Max()}";
                 gaps.Add((at, start, $"{which} of {Chunks}: {why}"));
@@ -158,8 +165,12 @@ public sealed class QueryVectors
 
     /// <summary>Why no piece embedded, for the words-fallback reason.</summary>
     public string NoneEmbedded() =>
-        $"no chunk of the {Length:N0}-character message embedded ({Chunks} chunks, {Pieces.Count} pieces: "
-        + string.Join(", ", Pieces.GroupBy(p => p.Failure).Select(g => $"{g.Key} {g.Count()}")) + ")";
+        $"no chunk of the {Length:N0}-character message embedded ({Chunks} chunks, {Attempted.Count} pieces: "
+        + string.Join(", ", Attempted.GroupBy(p => p.Failure).Select(g => $"{g.Key} {g.Count()}"))
+        + (Skipped is { } s ? $"; over-cap: chunks {s.Chunk}-{s.Through}" : "") + ")";
+
+    /// <summary>The one over-cap record (the chunks skipped in the middle of a message over the cap), or null.</summary>
+    public QueryPiece? Skipped => Pieces.FirstOrDefault(p => p.Failure == ChunkFailure.OverCap);
 
     /// <summary>
     /// The one diagnostics line for a chunked recall: strategy, both counts, what failed by category with chunk and span,
@@ -168,11 +179,15 @@ public sealed class QueryVectors
     /// </summary>
     public string Line(IReadOnlyDictionary<long, int> bestChunks)
     {
-        var failed = Pieces.Where(p => p.Vector is null).GroupBy(p => p.Failure)
+        // Attempted pieces (at most 96) and the skipped middle (one record) are reported apart, so the line is bounded
+        // however long the message: nothing in it grows with the number of chunks past the cap.
+        var attempted = Attempted;
+        var failed = attempted.Where(p => p.Vector is null).GroupBy(p => p.Failure)
             .Select(g => $"{g.Key} {g.Count()}: " + string.Join(", ", g.Select(p => $"chunk {p.Chunk} chars {Chars(p.Start, p.End)}")));
         var counts = string.Join("; ", new[] { $"embedded {Embedded.Count}" }.Concat(failed));
-        var spans = string.Join(" ", Pieces.GroupBy(p => p.Chunk).Select(g => $"{g.Key}:{Chars(g.Min(p => p.Start), g.Max(p => p.End))}"));
-        var line = $"recall-chunks: {Strategy}; {Chunks} chunks, {Pieces.Count} pieces ({counts}); overlap {Overlap}; spans {spans}";
+        var skipped = Skipped is { } s ? $"; over-cap: chunks {s.Chunk}-{s.Through} chars {Chars(s.Start, s.End)}" : "";
+        var spans = string.Join(" ", attempted.GroupBy(p => p.Chunk).Select(g => $"{g.Key}:{Chars(g.Min(p => p.Start), g.Max(p => p.End))}"));
+        var line = $"recall-chunks: {Strategy}; {Chunks} chunks, {attempted.Count} pieces ({counts}){skipped}; overlap {Overlap}; spans {spans}";
         if (Strategy == Mean)
         {
             var missing = Gaps();
@@ -180,7 +195,7 @@ public sealed class QueryVectors
                    + (missing.Count == 0 ? "" : $"; missing chars {string.Join(", ", missing.Select(g => Chars(g.Start, g.End)))}");
         }
 
-        var shown = string.Join(" ", Enumerable.Range(1, Chunks).Select(c => $"{c}:{bestChunks.Values.Count(b => b == c)}"));
+        var shown = string.Join(" ", attempted.Select(p => p.Chunk).Distinct().Select(c => $"{c}:{bestChunks.Values.Count(b => b == c)}"));
         var items = string.Join(" ", bestChunks.OrderBy(b => b.Key).Select(b => $"#{b.Key}:{b.Value}"));
         return $"{line}; shown by chunk: {shown}" + (items.Length == 0 ? "" : $"; best chunk: {items}");
     }

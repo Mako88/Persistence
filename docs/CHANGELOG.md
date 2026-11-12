@@ -22,6 +22,9 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
   `recall --diagnostics` adds one content-free `recall-chunks:` line (spans, counts, categories, each shown item's best
   chunk). Out-of-range settings fail at start. The embedding client now says why it gave no vector (`too-large` or
   `embedder-error`), so only a too-large chunk is split. Design: docs/design/chunked-query-embedding.md (63b2f54).
+- **The embedding client's logs no longer carry what the provider said.** A failed request logged its response body
+  and a thrown one its exception message; a provider may echo the input in either, so query text could reach a debug
+  log. Now: status and category, or the exception's type. A sentinel test watches every log call (Ember, PR #18).
 
 ## 2026-11-12 — Embedding client: the caller's cancellation reaches the request and escapes
 

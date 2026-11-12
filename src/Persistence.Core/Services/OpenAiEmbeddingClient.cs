@@ -131,9 +131,11 @@ public class OpenAiEmbeddingClient : IEmbeddingClient, IDisposable
 
             if (!response.IsSuccessful)
             {
-                display.ShowDebugInfo(
-                    $"Embedding request failed ({response.StatusCode}): {response.StringBody}");
-                return ([], Classify(response.StatusCode, response.StringBody));
+                // Status and category only, never the body: a provider may echo the input in it, and the query text
+                // must not reach a log any more than the diagnostics (Ember's CHANGES on 90fbe72).
+                var failure = Classify(response.StatusCode, response.StringBody);
+                display.ShowDebugInfo($"Embedding request failed ({(int)response.StatusCode} {response.StatusCode}): {failure}");
+                return ([], failure);
             }
 
             return (ParseEmbeddings(response.StringBody), ChunkFailure.EmbedderError);
@@ -148,7 +150,8 @@ public class OpenAiEmbeddingClient : IEmbeddingClient, IDisposable
         }
         catch (Exception ex)
         {
-            display.ShowDebugInfo($"Embedding request threw: {ex.Message}");
+            // The type only, never the message, which can quote the input (as the surfacer and recaller since PR 15).
+            display.ShowDebugInfo($"Embedding request threw ({ex.GetType().Name}): {ChunkFailure.EmbedderError}");
             return ([], ChunkFailure.EmbedderError);
         }
     }

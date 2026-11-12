@@ -231,6 +231,36 @@ public sealed class QueryChunkingTests
     }
 
     [Fact]
+    public async Task Far_over_the_cap_the_reported_pieces_stay_bounded_and_the_skipped_middle_is_one_span()
+    {
+        // Acceptance 3 as reported (Ember's CHANGES on 90fbe72): 200 chunks, every kept one split to the depth bound.
+        // At most 96 pieces are attempted, and the 176 skipped chunks are one over-cap record, not 176.
+        // Every chunk 1,400 characters (50 whole sentences), so each splits to quarters of 350, over the 300 floor.
+        var text = Prose(1400 * 200);
+        var spans = QueryChunker.Split(text, 1400, 0);
+        Assert.Equal(200, spans.Count);
+        var client = new ChunkEmbedder { RefuseOverChars = 1 };
+        var query = Embedder(client, Chunked(1400, overlap: 0));
+
+        Assert.Null(await query.EmbedQueryAsync(text));
+
+        var record = query.Query!;
+        Assert.Equal(200, record.Chunks);
+        Assert.Equal(96, record.Attempted.Count);
+        Assert.All(record.Attempted, p => Assert.Equal(ChunkFailure.TooLarge, p.Failure));
+        var skipped = Assert.Single(record.Pieces, p => p.Failure == ChunkFailure.OverCap);
+        Assert.Equal((13, 188), (skipped.Chunk, skipped.Through));
+        Assert.Equal((spans[12].Start, spans[187].End), (skipped.Start, skipped.End));
+        Assert.Equal(97, record.Pieces.Count);
+
+        var line = record.Line(new Dictionary<long, int>());
+        Assert.Contains("200 chunks, 96 pieces (embedded 0; too-large 96:", line);
+        Assert.Contains($"over-cap: chunks 13-188 chars {spans[12].Start + 1:N0}-{spans[187].End:N0}", line);
+        Assert.DoesNotContain(" 13:", line); // no per-chunk entry for a skipped chunk
+        Assert.Contains("over-cap: chunks 13-188", record.NoneEmbedded());
+    }
+
+    [Fact]
     public async Task Batches_are_sent_first_then_last_then_inward()
     {
         // Acceptance 5 (Arden): the deadline cuts the middle, never the last chunks, where the ask usually is.
@@ -441,6 +471,62 @@ public sealed class QueryChunkingTests
 
         Assert.Empty(outcome.Vectors);
         Assert.Equal(failure, outcome.Failure);
+    }
+
+    // -- Content-free logs (Ember's CHANGES on 90fbe72): a provider may echo the query in its body or its errors --
+
+    private const string Sentinel = "SENTINEL-QUERY-TEXT-7f3a";
+
+    public static TheoryData<HttpStatusCode, string> EchoingFailures => new()
+    {
+        { HttpStatusCode.InternalServerError, "{\"error\":{\"message\":\"input '" + Sentinel + "' (525 tokens) is too large to process\"}}" },
+        { HttpStatusCode.BadRequest, "{\"error\":{\"message\":\"bad input: " + Sentinel + "\"}}" },
+        { HttpStatusCode.OK, $"not json {Sentinel}" },
+    };
+
+    [Theory]
+    [MemberData(nameof(EchoingFailures))]
+    public async Task A_response_echoing_the_query_never_reaches_a_log(HttpStatusCode status, string body)
+    {
+        var http = new Mock<ISimpleClient>();
+        http.Setup(c => c.MakeRequest(It.IsAny<ISimpleRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SimpleResponse { StatusCode = status, IsSuccessful = status == HttpStatusCode.OK, StringBody = body });
+
+        await AssertNeverLogged(http);
+    }
+
+    [Fact]
+    public async Task An_exception_quoting_the_query_never_reaches_a_log()
+    {
+        var http = new Mock<ISimpleClient>();
+        http.Setup(c => c.MakeRequest(It.IsAny<ISimpleRequest>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException($"could not send '{Sentinel}'"));
+
+        await AssertNeverLogged(http);
+    }
+
+    /// <summary>
+    /// A chunked recall over the real client, every log call and every reported string watched: the sentinel is in the
+    /// query and in what the provider says back, and must appear in none of them. The failure is still logged, by class.
+    /// </summary>
+    private static async Task AssertNeverLogged(Mock<ISimpleClient> http)
+    {
+        var display = new Mock<IDisplayProvider>();
+        var settings = Chunked(1000);
+        var client = new OpenAiEmbeddingClient(settings, display.Object, http.Object);
+        var config = new Mock<IAppConfig>();
+        config.SetupGet(c => c.Embedding).Returns(settings);
+        var query = new QueryEmbedder(client, config.Object, display.Object);
+        var text = $"{Prose(1500)} {Sentinel} {Prose(1500)}";
+
+        Assert.Null(await query.EmbedQueryAsync(text));
+
+        Assert.NotEmpty(display.Invocations);
+        var logged = display.Invocations.SelectMany(i => i.Arguments).Select(a => a?.ToString() ?? "").ToList();
+        Assert.All(logged, a => Assert.DoesNotContain(Sentinel, a));
+        Assert.Contains(logged, a => a.StartsWith("Embedding request", StringComparison.Ordinal));
+        Assert.DoesNotContain(Sentinel, query.Fallback ?? "");
+        Assert.DoesNotContain(Sentinel, query.Query!.Line(new Dictionary<long, int>()));
     }
 
     // -- Helpers --
