@@ -171,6 +171,29 @@ Ember). The store must stay correct for arbitrary full queries, so chunking neve
 Discord wrapper. This issue records the dependency: if the bench shows the preamble chunk dominating max, that
 issue is opened with the comparative numbers.
 
+## Implementation acceptance (pinned in tests)
+
+From the two approvals of 91e11f9: Ember (msg 1570489216608108609) and Arden (msg 1570489542249816226).
+
+1. **Progress** (Ember). Each next chunk starts before the prior chunk's end when overlap is possible, and ends
+   strictly after it. If boundary alignment cannot keep that, cut at the numeric overlap point instead. Never zero
+   progress, never a gap.
+2. **The deadline cancels in flight** (Ember). The 8 s budget is a linked cancellation token passed into the
+   embedding request that is running, not only checked between batches. Spans left over are classed `over-time`
+   (budget) or `cancelled` (the recall's own token).
+3. **Two counts** (Ember, Arden). 24 original chunks can become at most 96 embedded pieces under two split levels.
+   That bound is enforced, and both counts are reported, so "24 chunks" never hides the real upper bound. With
+   1,000-character chunks, the 300 floor blocks the second split (500 to 250), so in practice it's 2 pieces a chunk
+   (48). When the floor stops a split, the path says so (`floor`), not only `too-large`.
+4. **"Best semantic chunk"** (Ember). Attribution names the chunk with the best cosine for an item. It is not "the
+   chunk that surfaced it": lexical rank, fusion and quality weighting may be what put the item in the shown set.
+5. **Order of batches** (Arden). Send the first batch, then the last, then work inward, so the deadline cuts the
+   middle and never the kept last chunks, where the ask usually is.
+6. **Missing spans are uncovered characters** (Arden). Report a gap as the characters that no embedded piece covers,
+   not the refused chunk's whole span, so overlap with an embedded neighbour doesn't overstate the gap.
+7. **Bench note for mean** (Ember). Overlap weights boundary text more than once in a mean. That's a measured
+   property of the arm, not a reason to block it.
+
 ## Settings and rollout
 
 - `PERSISTENCE_EMBEDDING_QUERYCHUNKCHARS`, default 0: off, today's behaviour exactly. When set, it wins over
