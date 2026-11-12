@@ -9,6 +9,19 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-12 — Recall benchmark (`scripts/recall-eval/bench.py`)
+
+**A labelled, reproducible benchmark for recall, so the three cheap fixes can be shown to help or not.** John's
+work Claude reported recall with no relevance floor, the same broad fragments on every prompt, repeats within a
+session, and recall on automated turns. The agreed fixes (a floor that can say "nothing relevant", per-session
+dedup, no recall on automated turns) are Claude's to build; this is what they are measured against. Each case runs
+through the real `hook.py recall` (its gate, its context-window memory, core ids held at session start), with only
+the store calls redirected to the CLI on a read-only snapshot rebuilt as of the question, so a fix in either the
+hook or the store shows. Case kinds: gold, nothing-relevant, automated (real task notifications), and a
+multi-turn session; the semantic and words-only paths are scored apart. The report holds ids and counts only, so
+another self (or John's work Claude, with its own labels) can share numbers without sharing its store. Labels stay
+outside the repo; the format is in `scripts/recall-eval/README.md`.
+
 ## 2026-11-12 — Room: a self talking to the room wakes the other selves, one hop
 
 **A self's unaddressed post wakes the other selves (`wake_on_self`, on by default).** John found that a self talking
