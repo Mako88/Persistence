@@ -246,6 +246,29 @@ class BridgeHop(unittest.TestCase):
         self.assertEqual(sent, [True, False, False, True, False])
         self.assertEqual(b.room.newest["10"], 560)      # its own posts count as posted after
 
+    def test_a_hop_token_expires_and_is_dropped(self):
+        # Ember's review of b2eb6df: hop_tokens grew forever. A token keeps its posts silent for HOP_TOKEN_SECONDS
+        # (hours, for detached work), then goes out loud like any other, and the next wake drops it.
+        import bridge as br
+        from unittest import mock
+        b, sent = self.bridge()
+        t0 = 1_000_000.0
+        with mock.patch.object(br.time, "time", return_value=t0):
+            b.begin(rc.Wake(triggers=[], unread=[], channel_id="10", speaker="x", hop=True))
+            token = b.wake_token
+            b.begin(None)
+        self.assertGreaterEqual(br.HOP_TOKEN_SECONDS, 3600)               # hours, not minutes
+        late = t0 + br.HOP_TOKEN_SECONDS - 1
+        with mock.patch.object(br.time, "time", return_value=late):
+            asyncio.run(b.say({"text": "detached work, late", "channel": "10", "wake": token}))
+            b.begin(None)
+            self.assertIn(token, b.hop_tokens)                            # still young: kept
+        with mock.patch.object(br.time, "time", return_value=t0 + br.HOP_TOKEN_SECONDS):
+            asyncio.run(b.say({"text": "too late", "channel": "10", "wake": token}))
+            b.begin(None)
+        self.assertEqual(sent, [True, False])
+        self.assertNotIn(token, b.hop_tokens)                             # dropped: the set is bounded
+
     def test_a_hop_post_to_people_only_goes_out_loud(self):
         # Arden's minor item: after C2, one that addresses only a person may ping them; one that addresses a self not.
         b, sent = self.bridge(history=[{"id": "70", "channel_id": "10", "author_id": JOHN, "author": "John", "text": "q"},

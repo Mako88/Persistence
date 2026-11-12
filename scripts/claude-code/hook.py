@@ -2599,6 +2599,7 @@ def answer(name, part, event):
 # every later session's speaker fell back on that wake's ("Arden (a wake I set from the room)", Arden #1109,
 # 2026-11-10) and a call without its own session was filed under the starter's.
 PER_SESSION = ("PERSISTENCE_SPEAKER", "PERSISTENCE_SESSION", "PERSISTENCE_ROOM_CHANNEL", "PERSISTENCE_ROOM_SOCKET",
+               "PERSISTENCE_ROOM_WAKE",  # a hop wake's token: a server it started must not make later posts @silent
                "PERSISTENCE_SLEEP_CWD", "PERSISTENCE_WAKE_SECONDS", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_SESSION_ATTENDED")
 
 

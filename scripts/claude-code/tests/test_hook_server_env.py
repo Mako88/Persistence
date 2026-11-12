@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import hook
 
 WAKE = {"PERSISTENCE_SPEAKER": "Arden (a wake I set from the room)", "PERSISTENCE_ROOM_CHANNEL": "c9",
-        "PERSISTENCE_ROOM_SOCKET": "/tmp/x.sock", "CLAUDE_CODE_SESSION_ID": "5a0b681f", "PERSISTENCE_SESSION": "5a0b681f"}
+        "PERSISTENCE_ROOM_SOCKET": "/tmp/x.sock", "PERSISTENCE_ROOM_WAKE": "9f3c", "CLAUDE_CODE_SESSION_ID": "5a0b681f", "PERSISTENCE_SESSION": "5a0b681f"}
 
 
 class ServerEnvironment(unittest.TestCase):
