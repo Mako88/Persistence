@@ -35,6 +35,12 @@ DEFAULTS = {
     # self's list belongs in every bridge's config, so all bridges agree on who a message addresses and the turn order.
     "misheard": {},
     "wake_on_human": True,          # a listed person's unaddressed message wakes every self, after room_delay
+    # A listed self's unaddressed message wakes the other selves too (John and Arden, 2026-11-12, Arden's three
+    # conditions): one hop only (a post made in a wake it caused goes out @silent and wakes no one this way), the
+    # wakes count against wakes_per_hour and the Breaker, and each waits self_delay and is skipped if anyone has
+    # posted in that channel since. Off for an addressed_only self, as for a person's message.
+    "wake_on_self": True,
+    "self_delay": [120, 240],       # seconds before a wake caused by a self's unaddressed message
     # Bot ids of selves that wake only when addressed, never for a person's unaddressed message (Ember asked,
     # 2026-11-10). The same list in every self's config: each bridge works out every self's place in line.
     "addressed_only": [],
@@ -143,6 +149,7 @@ class Msg:
     named: list = field(default_factory=list)           # ids addressed by name, used vocatively (vocatives())
     mention_everyone: bool = False                      # @everyone or @here
     reply_to_author_id: str = None                      # author of the message this replies to
+    silent: bool = False                                # sent @silent: from a self, posted in a wake a self's post caused
     channel_name: str = ""
     ts: float = 0.0
 
@@ -201,9 +208,10 @@ def names_by_id(config):
     return out
 
 
-def classify(msg, me_id, room_roles=(), people=None, wake_on_human=False):
+def classify(msg, me_id, room_roles=(), people=None, wake_on_human=False, selves=(), wake_on_self=False):
     """'direct' (a DM, a mention of me, a reply to me), 'room' (@everyone/@here or a configured role, or with
-    `wake_on_human` a listed person's message that addresses no one), or None."""
+    `wake_on_human` a listed person's message that addresses no one), 'self' (with `wake_on_self`, a message from
+    another of the `selves` that addresses no one and was not sent @silent), or None."""
     me = str(me_id)
     if msg.is_dm or me in map(str, msg.mentions) or me in map(str, msg.named) or (msg.reply_to_author_id is not None and str(msg.reply_to_author_id) == me):
         return "direct"
@@ -217,6 +225,13 @@ def classify(msg, me_id, room_roles=(), people=None, wake_on_human=False):
     addressed = msg.mentions or msg.role_mentions or msg.reply_to_author_id is not None
     if wake_on_human and not addressed and not msg.is_bot and str(msg.author_id) in (people or {}):
         return "room"
+    # A self talking to the room wakes the others too (John and Arden, 2026-11-12), with Arden's conditions: one hop
+    # only, so a post sent @silent (made in a wake this rule caused) wakes no one here; a name used vocatively counts
+    # as an address, since a self's "Arden, I agree" is to Arden, not the room. The delay, the skip if anyone has
+    # posted since, and the caps are Room's.
+    if (wake_on_self and msg.is_bot and not msg.silent and not addressed and not msg.named
+            and not msg.mention_everyone and str(msg.author_id) in map(str, selves) and str(msg.author_id) != str(me_id)):
+        return "self"
     return None
 
 
@@ -356,6 +371,16 @@ def wakes_on_human(config, self_id):
     return config["wake_on_human"] and str(self_id) not in map(str, config.get("addressed_only") or [])
 
 
+def wakes_on_self(config, self_id):
+    """Whether another self's unaddressed message wakes this self: `wake_on_self`, unless it is `addressed_only`."""
+    return bool(config.get("wake_on_self")) and str(self_id) not in map(str, config.get("addressed_only") or [])
+
+
+def snowflake(message_id):
+    """A message id as a number that orders by send time (Discord ids are snowflakes), or None."""
+    return int(message_id) if str(message_id).isdigit() else None
+
+
 def turn_order(msg, selves, config):
     """The order the selves a person's message wakes take their turns in: those it addresses directly first, then the
     rest, each group shuffled by a generator seeded with the message id, so every bridge computes the same order."""
@@ -402,7 +427,7 @@ class Breaker:
 
 
 def pick_delay(kind, config, rng=random):
-    lo, hi = config["room_delay"] if kind == "room" else config["direct_delay"]
+    lo, hi = config["room_delay"] if kind == "room" else config["self_delay"] if kind == "self" else config["direct_delay"]
     return rng.uniform(lo, hi)
 
 
@@ -606,6 +631,9 @@ class Wake:
     # person's, so John can see who is working on what and how long a reply takes (John, 2026-11-10). Only the marks
     # on `turns` move anyone's turn.
     to_mark: list = field(default_factory=list)
+    # Some trigger came by a self's unaddressed post and none is a person's: what this self posts in the wake goes out
+    # @silent, so it wakes no one by that rule (one hop only, Arden's first condition).
+    hop: bool = False
 
 
 class Room:
@@ -623,6 +651,7 @@ class Room:
         self.human_wake_times = deque() # wakes a person set off, counted apart
         self.store = store          # a RoomStore, or None in tests
         self.marks = {}             # message id -> {self's bot id -> {"start": t, "done": t}}, as seen here
+        self.newest = {}            # channel id -> the newest message id seen posted there, anyone's, this self's too
 
     # -- intake
     def on_message(self, msg, now, wake=True):
@@ -632,6 +661,7 @@ class Room:
             return None
         if not listens(self.config, msg.channel_id, msg.is_dm):
             return None
+        self.note_posted(msg.channel_id, msg.id)
         if wake:
             self._note_reply(str(msg.author_id), str(msg.channel_id), now)
             self.breaker.note(msg.channel_id, msg.is_bot, now)
@@ -645,7 +675,8 @@ class Room:
             self.store.append_unread(d)
         if not wake:
             return None
-        kind = classify(msg, self.me_id, self.config["room_roles"], self.config["people"], wakes_on_human(self.config, self.me_id))
+        kind = classify(msg, self.me_id, self.config["room_roles"], self.config["people"], wakes_on_human(self.config, self.me_id),
+                        self.config["selves"], wakes_on_self(self.config, self.me_id))
         if kind == "direct" and self._muted(d, now):
             self.deferred.append(d)
         elif kind and not self._muted(d, now):
@@ -660,9 +691,22 @@ class Room:
             self.due = due if self.due is None else min(self.due, due)
         return kind
 
-    def note_own(self, channel_id, now):
-        """Something this self posted: it counts toward the bot-message cap."""
+    def note_own(self, channel_id, now, message_id=None):
+        """Something this self posted: it counts toward the bot-message cap, and is a post after any pending one."""
         self.breaker.note(str(channel_id), True, now)
+        if message_id is not None:
+            self.note_posted(channel_id, message_id)
+
+    def note_posted(self, channel_id, message_id):
+        n = snowflake(message_id)
+        if n is not None and n > self.newest.get(str(channel_id), -1):
+            self.newest[str(channel_id)] = n
+
+    def _answered(self, d):
+        """Someone has posted in message `d`'s channel since it: a self's post it would wake for is answered already
+        (Arden's third condition), and the wake is skipped. The message stays unread."""
+        n = snowflake(d["id"])
+        return n is not None and self.newest.get(str(d["channel_id"]), -1) > n
 
     def on_mark(self, message_id, self_id, which, now):
         """A self marked a message: its turn on it started ("start") or ended ("done"). The first sighting counts."""
@@ -732,9 +776,21 @@ class Room:
             return None
         # A message in turns waits for this self's turn; any trigger that is ready brings the others along, so two
         # selves each first in line on a different message never wait on each other.
-        if not any(kind != "turn" or self.my_turn(d, now) for d, kind in self.pending):
+        # A self's unaddressed post never makes a wake ready while a turn of this self's is still to come: a self's
+        # reply in turns would otherwise wake the next in line before its turn.
+        waiting_turn = any(kind == "turn" and not self.my_turn(d, now) for d, kind in self.pending)
+
+        def ready(d, kind):
+            if kind == "turn":
+                return self.my_turn(d, now)
+            return not (kind == "self" and waiting_turn)
+        if not any(ready(d, kind) for d, kind in self.pending):
             return None
-        triggers = [d for d, _ in self.pending if not self._muted(d, now)]
+        # A self's unaddressed post someone has posted after is dropped (it stays unread); one muted by the Breaker too.
+        kept = [(d, kind) for d, kind in self.pending if not self._muted(d, now) and not (kind == "self" and self._answered(d))]
+        triggers = [d for d, _ in kept]
+        # A wake a person's message is part of is theirs: what this self says in it may wake the others once more.
+        hop = any(kind == "self" for _, kind in kept) and all(d["is_bot"] for d in triggers)
         # A direct address that met the Breaker during its delay waits for it to lift, like one that met it on arrival.
         self.deferred += [d for d, kind in self.pending if kind == "direct" and self._muted(d, now)]
         self.pending, self.due = [], None
@@ -755,7 +811,7 @@ class Room:
             self.store.consume_unread()
         self.running = True
         return Wake(triggers, unread, triggers[-1]["channel_id"], speaker_env([t["author"] for t in triggers]),
-                    [t for t in triggers if t.get("turn_order")], list(triggers))
+                    [t for t in triggers if t.get("turn_order")], list(triggers), hop)
 
     def finish(self, now):
         """The wake's turn ended. Messages that came during it are already pending, and wait their own delay."""

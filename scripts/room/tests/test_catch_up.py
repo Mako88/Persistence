@@ -203,7 +203,8 @@ class SayLineBreaks(unittest.TestCase):
         ch = FakeChannel(CH)
         sent = []
 
-        async def send(text, reference=None, allowed_mentions=None):
+        async def send(text, reference=None, allowed_mentions=None, silent=False):
+            self.assertFalse(silent)            # no wake running: an ordinary post
             sent.append(text)
             return NS(id=555, jump_url="https://discord/555")
         ch.send = send
