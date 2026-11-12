@@ -63,6 +63,7 @@ const string Usage = """
                                             but for --wander of the best of them, labelled; --said adds past
                                             utterances (said before --before, so not this session's)
                                             --diagnostics: one stderr line, recall-path: semantic |
+                                            semantic-degraded (part: why) |
                                             words-setting | words-fallback (why) | unknown, the path
                                             this recall actually took
       embed-conversation [--batch 64]      embed every past utterance not yet embedded (recall does a few a call)

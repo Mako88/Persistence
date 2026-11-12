@@ -137,3 +137,16 @@ Snapshot sha256: ebe32465883496f0…
 Most often shown @3 over 28 single prompts: #73 on 3, #45 on 3, #77 on 3, #50 on 3, #97 on 3, #2397 on 3, #30 on 2, #1042 on 2
 Most often shown @5 over 28 single prompts: #1042 on 6, #1283 on 5, #1299 on 4, #77 on 4, #50 on 4, #51 on 4, #73 on 3, #132 on 3
 
+
+## Rerun at 7d4de00 (semantic-degraded and mixed paths), 17:10Z snapshot
+
+After Ember's CHANGES on f922439: the path now separates `semantic-degraded` (one part, fragments or past utterances,
+compared meaning and another ran on words) from `words-fallback` (no part compared it), and a hook turn whose recall
+calls disagree is `mixed`. New snapshot (sha256 08301b8a6156e29c…), same labels, a Release build of 7d4de00, my live
+settings (bench defaults).
+
+- **Semantic arm: 152 of 152 recall turns clean `semantic`; 0 `semantic-degraded`, 0 `mixed`, 0 `words-fallback`.**
+  So no turn of the f922439 baseline was a degraded recall hiding in the semantic numbers, on my settings. The words
+  arm is all `words-setting`. 4 automated turns per count made no recall, as before.
+- Headline numbers as before: gold reached 6/12 @3, 5/12 @5; precision 18% / 19%; nothing-relevant 6/6; repeats 0
+  within one window, 16/66 @3 across the compaction (evolving), 19/67 (fixed).

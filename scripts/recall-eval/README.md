@@ -41,10 +41,15 @@ Recall counts: `--counts 3,5` runs every case at `PERSISTENCE_RECALL_COUNT` 3 an
 **Actual path.** Asking for meaning doesn't make recall use it: the store falls back to exact words when the
 embedder gives no vector (a long message, an embedder down) or fails. So every turn records the path it actually
 took (`actual` in results), read from the store's own account of that recall: `recall --diagnostics` writes one
-line to stderr: `semantic` (the query got a vector and meaning was compared), `words-setting` (embedding is off:
-words by choice), `words-fallback (<why>)` (meaning was asked for and not used) or `unknown`, decided in the store
+line to stderr: `semantic` (every part that asked for meaning, fragments and past utterances, compared it),
+`semantic-degraded (<part>: <why>)` (one part compared meaning and another ran on words: neither clean semantic nor
+words alone, so its own bucket, never in the semantic numbers; Ember's review of f922439), `words-setting`
+(embedding is off: words by choice), `words-fallback (<part>: <why>)` (meaning was asked for and no part compared
+it) or `unknown`, decided in the store
 from what happened, never from the prompt's length or whether the embedder answered (Ember, 2026-11-12). The two
-words paths are never one bucket: a fallback can bring back less than words by choice (Claude's baseline). `none` means the hook made no recall (an automated turn). An
+words paths are never one bucket: a fallback can bring back less than words by choice (Claude's baseline). `none` means the hook made no recall (an automated turn). When the hook makes more than one recall
+in a turn (it asks again without its exclusion to say "all already in this window"), the calls must agree; if they
+don't, the turn is `mixed`, each call's path listed, and left out of every arm's numbers like any other path. An
 exe without `--diagnostics` refuses it as an unknown option; the run checks once at the start and then records every
 turn as `unknown`. The report shows each arm's actual paths and, for the semantic arm, the fall-back rate, then
 scores the arm only over turns that took its path (`semantic`, or `words-setting` for the words arm; or none): the others are counted as left out, so a
@@ -123,8 +128,9 @@ The defaults are Arden's live settings, which can hide a finding: with query tai
 (tail 0) doesn't happen. Set yours in the environment and check this line. Then, per arm (path asked for, recall
 count):
 
-- **actual path**: turns by the path they took (semantic, words-setting, words-fallback, unknown) and turns with
-  no recall; for the semantic arm, the fall-back rate and how many of those prompts were over 1,200 characters;
+- **actual path**: turns by the path they took (semantic, semantic-degraded, words-setting, words-fallback, unknown,
+  mixed) and turns with no recall; for the semantic arm, the fall-back rate, the degraded rate, and how many of the
+  fall-backs' prompts were over 1,200 characters;
   turns where what the hook injected told the peer recall ran on words alone (kept even when items were shown);
   turns left out of the numbers below because they took another path.
 - **gold cases**: gold reached (at least one gold id shown) and precision (judged relevant / shown), for all

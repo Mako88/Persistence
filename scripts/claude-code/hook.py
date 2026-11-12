@@ -1343,8 +1343,9 @@ def recall(event):
                   *(["--exclude", ",".join(already)] if already else []), stdin=prompt + ("\n\n" + reminded if reminded else ""), cold=False)
     ids = re.findall(r"^\[#(\d+) \|", found, re.M)
     # The store opens its output with this when the message could not be embedded; never silent (Ember's
-    # requirement), so it is shown even when nothing came back (Arden, 2026-11-11).
-    words_only = re.search(r"\A\s*\((Recall ran on exact words alone.*?)\)\s*(?:\n\n|\Z)", found, re.S)
+    # requirement), so it is shown even when nothing came back (Arden, 2026-11-11). Since f922439's revision it may
+    # name the one part that ran on words ("Recall of past utterances ran on ..."), the rest having compared meaning.
+    words_only = re.search(r"\A\s*\((Recall (?:of [a-z ]+ )?ran on exact words alone.*?)\)\s*(?:\n\n|\Z)", found, re.S)
     if not ids and not reminded:
         # Nothing new can look like recall broke, when it matched only what this window already holds (the work
         # Claude, 2026-11-09): ask again without the exclusion and say so in one line.

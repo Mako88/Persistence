@@ -64,13 +64,21 @@ internal sealed class ConversationRecaller(
         {
             try
             {
-                semantic = await SemanticAsync(text, Wanted);
+                if (await SemanticAsync(text, Wanted) is { } found)
+                {
+                    semantic = found;
+                }
+                else if (lexical.Count > 0)
+                {
+                    // Words found past utterances that meaning had nothing to compare with: this part ran on words.
+                    queryEmbedder.Note("no past utterance has a vector yet, so there is nothing to compare meaning with", QueryEmbedder.PastUtterances);
+                }
             }
             catch (Exception ex)
             {
                 // Meaning is the enrichment; the words are the floor. Never silent, as the fragments' fallback isn't:
                 // a recall that says it compared meaning must not have dropped it here unseen (Ember, 2026-11-12).
-                queryEmbedder.Note($"recall of past utterances by meaning failed ({ex.Message})");
+                queryEmbedder.Note($"recall of past utterances by meaning failed ({ex.Message})", QueryEmbedder.PastUtterances);
             }
         }
 
@@ -135,17 +143,27 @@ internal sealed class ConversationRecaller(
     /// </summary>
     private List<StoredEmbedding>? loaded;
 
-    private async Task<List<ContextFragmentEntity>> SemanticAsync(string text, Func<ContextFragmentEntity, bool> wanted)
+    /// <summary>
+    /// The utterances nearest <paramref name="text"/> in meaning; null when no utterance has a vector, so there was
+    /// nothing to compare. A query the embedder refused is noted by <see cref="QueryEmbedder"/> for this part.
+    /// </summary>
+    private async Task<List<ContextFragmentEntity>?> SemanticAsync(string text, Func<ContextFragmentEntity, bool> wanted)
     {
         await BackfillAsync(BackfillPerCall);
         var stored = loaded ??= (await vectors.GetAllAsync(Model)).ToList();
-        if (stored.Count == 0 || await queryEmbedder.EmbedAsync(text) is not { } query)
+        if (stored.Count == 0)
+        {
+            return null;
+        }
+
+        if (await queryEmbedder.EmbedAsync(text, part: QueryEmbedder.PastUtterances) is not { } query)
         {
             return [];
         }
 
         var top = stored.Select(v => (v.ContextFragmentId, score: VectorMath.Cosine(query, v.Vector)))
             .OrderByDescending(x => x.score).Take(Pool * 2).ToList();
+        queryEmbedder.Compare(QueryEmbedder.PastUtterances);
         var byId = (await fragments.GetByIdsAsync(top.Select(x => x.ContextFragmentId))).ToDictionary(f => f.Id);
         return top.Where(x => byId.TryGetValue(x.ContextFragmentId, out var f) && wanted(f))
             .Select(x => byId[x.ContextFragmentId]).Take(Pool).ToList();

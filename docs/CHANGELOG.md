@@ -11,6 +11,19 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
 
 ## 2026-11-12 — Recall benchmark revised for Ember's review; recall says which path it took
 
+**A fallback no longer outranks meaning: `semantic-degraded` (Ember's CHANGES on f922439).** A recall has two parts
+that compare meaning, the authored fragments and the past utterances. f922439 called a recall `words-fallback`
+whenever either part fell back, so one whose fragments compared meaning and whose utterances failed was counted as
+"exact words alone", which it wasn't. Now `QueryEmbedder` records, per part, that meaning was compared (the query
+vector ranked against stored ones) or that it ran on words and why, and `RecallPath.Of` reads them: `semantic` when
+every part that asked compared, `semantic-degraded (<part>: <why>)` when one did and another fell back,
+`words-fallback (<part>: <why>)` when none did. A part that compared and then failed counts as words. The notice for
+a part other than the fragments names it ("Recall of past utterances ran on exact words alone ..."), since "recall
+ran on exact words alone" would be false there, and the hook shows it like the other. Conversation recall with
+utterances found by words but none with a vector now says so too. The benchmark reports `semantic-degraded` as its
+own bucket and rate, outside the semantic numbers, and a hook turn whose recall calls disagree is `mixed` (each
+call's path listed) instead of taking the first call's on trust.
+
 **`recall --diagnostics`: the store's own account of the path a recall took.** Asking for meaning doesn't make
 recall use it: with no query vector it falls back to exact words. The fallback was already said (a head line and
 stderr), but nothing said positively that meaning *was* compared, so a benchmark could only infer "semantic" from

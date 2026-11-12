@@ -625,16 +625,16 @@ public sealed class FragmentStoreTests : IDisposable
 
         Assert.Equal(("semantic", null), (embedded.Path, embedded.PathWhy));
         Assert.Equal("words-fallback", refused.Path);
-        Assert.Contains("exact words alone", refused.PathWhy);
+        Assert.StartsWith("fragments: the embedder gave no vector", refused.PathWhy);
         Assert.Equal("semantic", again.Path); // reset for each recall: one fallback doesn't stick
         Assert.Equal(("words-setting", "embedding is off"), (off.Path, off.PathWhy));
     }
 
     [Fact]
-    public async Task Recall_of_past_utterances_failing_by_meaning_is_not_silent()
+    public async Task Recall_whose_past_utterances_fail_by_meaning_is_semantic_degraded_not_words()
     {
-        // The fragments embedded and the query did, but the utterances' vectors failed: that recall did not compare
-        // meaning everywhere, so it must not say semantic (it used to swallow the error unseen).
+        // Ember's CHANGES on f922439: the fragments compared meaning and the utterances' vectors failed. That recall
+        // did not run on words alone, and it is not clean semantic either: it says semantic-degraded, naming the part.
         File.WriteAllLines(transcript, [
             $$$"""{"type":"user","uuid":"u1","timestamp":"2026-11-07T01:00:00Z","message":{"role":"user","content":"the checkpoint resumes {{{new string('w', 100)}}} UTTERANCE"}}""",
         ]);
@@ -644,8 +644,49 @@ public sealed class FragmentStoreTests : IDisposable
 
         var recalled = await store.RecallAsync("checkpoint resumes after the game closes, said before?", 3, [], said: 3);
 
-        Assert.Equal("words-fallback", recalled.Path);
-        Assert.Contains("past utterances by meaning failed", recalled.PathWhy);
+        Assert.Equal("semantic-degraded", recalled.Path);
+        Assert.StartsWith("past utterances: recall of past utterances by meaning failed", recalled.PathWhy);
+        Assert.DoesNotContain("fragments:", recalled.PathWhy);
+        Assert.StartsWith("Recall of past utterances ran on exact words alone", recalled.Fallback); // and the notice says which part
+    }
+
+    [Fact]
+    public async Task Recall_whose_fragments_fall_back_while_utterances_compare_is_semantic_degraded()
+    {
+        // The other way round: the fragments' meaning side fails (the embedder throws on the fragment's text), but the
+        // past utterances were embedded and compared. Still degraded, never words-fallback.
+        File.WriteAllLines(transcript, [
+            """{"type":"user","uuid":"u1","timestamp":"2026-11-07T01:00:00Z","message":{"role":"user","content":"the checkpoint resumes when the game closes, said long ago, before the card was ever shared"}}""",
+        ]);
+        var store = await OpenAsync(embedder: new WordsEmbedder { ThrowOn = "shared card" });
+        await store.KeepConversationAsync(transcript, "John");
+        await store.AddAsync("Personal", "The checkpoint resumes after the game closes on the shared card.", null, null, null, [], false);
+
+        var recalled = await store.RecallAsync("checkpoint resumes after the game closes, said before?", 3, [], said: 3);
+
+        Assert.Equal("semantic-degraded", recalled.Path);
+        Assert.Equal("fragments: semantic recall failed (embedder down for these)", recalled.PathWhy);
+    }
+
+    [Fact]
+    public async Task Recall_with_every_part_on_meaning_is_semantic_and_with_none_is_words_fallback()
+    {
+        File.WriteAllLines(transcript, [
+            """{"type":"user","uuid":"u1","timestamp":"2026-11-07T01:00:00Z","message":{"role":"user","content":"the checkpoint resumes when the game closes, said long ago, before the card was ever shared"}}""",
+        ]);
+        var store = await OpenAsync(embedder: new WordsEmbedder { RefuseOverChars = 100 });
+        await store.KeepConversationAsync(transcript, "John");
+        await store.AddAsync("Personal", "The checkpoint resumes after the game closes.", null, null, null, [], false);
+
+        var both = await store.RecallAsync("checkpoint resumes, said before?", 3, [], said: 3);
+        var neither = await store.RecallAsync(new string('7', 200) + " checkpoint resumes", 3, [], said: 3);
+
+        Assert.Equal(("semantic", null), (both.Path, both.PathWhy));
+        Assert.NotEmpty(both.Said); // the utterances' part ran too, so semantic covers both parts
+        Assert.Equal("words-fallback", neither.Path); // the query itself was refused: no part compared meaning
+        Assert.Contains("fragments: the embedder gave no vector", neither.PathWhy);
+        Assert.Contains("past utterances: the embedder gave no vector", neither.PathWhy);
+        Assert.Contains("past utterances: the embedder gave no vector", neither.PathWhy);
     }
 
     /// <summary>~3,000 characters whose head and tail share no words, so a head and a tail embed far apart.</summary>

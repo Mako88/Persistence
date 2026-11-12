@@ -24,8 +24,10 @@ long message, scored on its own.
 
 Which path a turn ACTUALLY took is recorded per turn (`actual`), from the store's own account of that recall
 (`recall --diagnostics`, one `recall-path:` line on stderr): `semantic`, `words-setting` (embedding off),
-`words-fallback` (meaning asked for, not used; with why), `unknown` (the store gave no account: an older exe without
---diagnostics, or none seen), or `none` (the hook made no recall, as on an automated turn). Never inferred from the prompt's length or the arm's settings (Ember, 2026-11-12). The report
+`semantic-degraded` (one part, fragments or past utterances, compared meaning and another ran on words; with which and
+why), `words-fallback` (meaning asked for, no part compared it; with why), `unknown` (the store gave no account: an
+older exe without --diagnostics, or none seen), `mixed` (the hook's recall calls in one turn disagreed; each call's
+path listed), or `none` (the hook made no recall, as on an automated turn). Never inferred from the prompt's length or the arm's settings (Ember, 2026-11-12). The report
 scores each arm only over turns whose actual path is the arm's (or none), and shows the rest as its own numbers.
 
 Isolation. Recall writes as it reads (LastAccessedUtc on every fragment it hydrates; vectors it backfills for
@@ -169,14 +171,12 @@ class HookTurns:
             self.h.recall({"session_id": session, "prompt": prompt, "cwd": os.getcwd()})
         out = buf.getvalue().strip()
         self.check()
-        # The turn's path is its first recall's: a second (the hook asking again without its exclusion, to say
-        # "all already in this window") is the same text, so the same path, and shows nothing new.
-        actual = self.paths[0] if self.paths else ("none", None)
+        actual = turn_path(self.paths)
         if not out:
             return [], 0, None, actual
         ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
         # What the peer was told: the store's words-only notice, kept even when items were shown (Claude's review).
-        self.said_words = "Recall ran on exact words alone" in ctx
+        self.said_words = "ran on exact words alone" in ctx      # all of recall, or one part of it
         recalled = ctx if ctx.startswith(("Recalled", "Cued")) else ""
         return [int(i) for i in ID.findall(recalled)], len(ctx), (None if recalled else ctx[:160]), actual
 
@@ -195,8 +195,20 @@ def store_turn(exe, db, env, prompt, project, count, exclude, diagnostics):
     return [int(i) for i in ID.findall(out)], len(out.strip()), None, actual
 
 
-PATH_LINE = re.compile(r"^recall-path: (semantic|words-setting|words-fallback|unknown)(?: \((.*)\))?\s*$", re.M)
+PATH_LINE = re.compile(r"^recall-path: (semantic-degraded|semantic|words-setting|words-fallback|unknown)(?: \((.*)\))?\s*$", re.M)
 EXPECTED = {"semantic": "semantic", "words": "words-setting"}   # the actual path each arm asks for
+
+
+def turn_path(paths):
+    """One hook turn's path from its recall calls' (Ember's CHANGES on f922439: never the first on trust). None: `none`.
+    All the same: that path (their distinct whys joined). Any disagreement: `mixed`, with each call's path in order, so
+    the turn is reported apart from every clean path rather than taken as whichever call came first."""
+    if not paths:
+        return ("none", None)
+    if len({p for p, _ in paths}) == 1:
+        whys = list(dict.fromkeys(w for _, w in paths if w))
+        return (paths[0][0], "; ".join(whys) or None)
+    return ("mixed", " | ".join(f"call {i + 1}: {p}" + (f" ({w})" if w else "") for i, (p, w) in enumerate(paths)))
 
 
 def path_of(stderr):
@@ -492,15 +504,17 @@ def report(paths, watch=(), labels=None):
         # The path each turn actually took, by the store's own account (results without one: unknown).
         actual = lambda r: r.get("actual", "unknown")
         ran = lambda X: [r for r in X if actual(r) != "none"]
-        for p_ in ("semantic", "words-setting", "words-fallback", "unknown"):
+        for p_ in ("semantic", "semantic-degraded", "words-setting", "words-fallback", "unknown", "mixed"):
             line(f"actual path {p_} / turns recall ran", lambda X, p_=p_: pct(sum(actual(r) == p_ for r in ran(X)), len(ran(X))), everything)
         line("actual path none (the hook made no recall)", lambda X: str(sum(actual(r) == "none" for r in X)), everything)
         if path == "semantic":
             line("FALL-BACK RATE: words-fallback / turns recall ran", lambda X: pct(sum(actual(r) == "words-fallback" for r in ran(X)), len(ran(X))), everything)
+            line("DEGRADED RATE: semantic-degraded / turns recall ran (a part on words; not in the semantic numbers)",
+                 lambda X: pct(sum(actual(r) == "semantic-degraded" for r in ran(X)), len(ran(X))), everything)
             line("  of the fall-backs, prompts over 1,200 chars", lambda X: pct(
                 sum(actual(r) == "words-fallback" and r.get("prompt_chars", 0) > 1200 for r in ran(X)),
                 sum(actual(r) == "words-fallback" for r in ran(X))), everything)
-        line("turns where the peer was told recall ran on words alone", lambda X: str(sum(bool(r.get("words_notice")) for r in X)), everything)
+        line("turns where the peer was told recall, or a part of it, ran on words alone", lambda X: str(sum(bool(r.get("words_notice")) for r in X)), everything)
         # Every number below is over the turns that took this arm's path (or made no recall); the rest are left
         # out, never counted as this arm's, so a floor is never tuned on another path's results.
         want = EXPECTED.get(path, path)
