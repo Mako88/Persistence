@@ -593,7 +593,10 @@ class CorruptState(Base):
 
     def test_malformed_or_unreadable_heartbeat_json_fails_closed_and_is_kept(self):
         for bad, mode in ((b"{", 0o600), (b"[]", 0o600), (b'{"reported": ["x"]}', 0o600), (b'{"outbox": "x"}', 0o600),
-                          (b'{"reported": {}}', 0o000)):
+                          (b'{"reported": {}}', 0o000),
+                          # a present key must hold an object: an explicit null is not "missing" (Ember's B2 follow-up)
+                          (b'{"cap": null}', 0o600), (b'{"outbox": null}', 0o600), (b'{"reported": null}', 0o600),
+                          (b'{"crashed_seen": null}', 0o600), (b'{"cap": 0}', 0o600), (b'{"outbox": false}', 0o600)):
             with self.subTest(bad=bad, mode=mode):
                 self.hb.write_bytes(bad)
                 self.hb.chmod(mode)

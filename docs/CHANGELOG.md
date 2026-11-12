@@ -35,9 +35,9 @@ environment); claim checks also need `PERSISTENCE_TASKCLAIMS`.
 - **Claims code touched, additively:** `Claims.mark_nudged` and `mark_reported` (one history entry each, `by:
   heartbeat`); `coordination.lock` can wait or not; `LedgerError` carries the bad line's offset.
 - **Review fixes (Claude, Ember):** the usage limit reads the real `api_error`; a malformed or unreadable `wakes.json`
-  or `heartbeat.json` is never read as empty (the beat decides nothing, keeps the file, exits non-zero); the latest
-  recovery attempt is picked by structure, so the ledger-written, queue-not-yet-removed crash window can't raise; and
-  one recovery per spawn attempt per spell (a hand-off retry that took the spawn claim gets no nudge after it).
+  or `heartbeat.json`, or a `heartbeat.json` section set to null, is never read as empty (the beat decides nothing,
+  keeps the file, exits non-zero); the latest recovery attempt is picked by structure, so the ledger-written,
+  queue-not-yet-removed crash window can't raise; and one recovery per spawn attempt per spell (a hand-off retry that took the spawn claim gets no nudge after it).
 - Tests: four new files, 99 tests, including every multi-lock path alone and raced, 8 writers of 500 facts, a writer
   killed mid-append, and the cross-document run through the real cwd-exec and run line with the fake claude.
 

@@ -646,7 +646,9 @@ EMPTY = {"reported": {}, "outbox": {}, "crashed_seen": {}, "cap": {}}
 
 def load(state):
     """heartbeat.json. Missing initializes; malformed, unreadable or the wrong shape raises StateUnreadable (Ember's
-    B2): starting clean would drop the hourly cap, the outbox and the reported keys and then go on deciding."""
+    B2): starting clean would drop the hourly cap, the outbox and the reported keys and then go on deciding. Only an
+    absent file or an absent section is missing; a section that is present must be an object, so an explicit null is
+    the wrong shape, not an empty section."""
     path = Path(state) / "heartbeat.json"
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -654,9 +656,9 @@ def load(state):
         data = {}
     except (OSError, ValueError) as e:
         raise StateUnreadable(f"{path} can't be read ({type(e).__name__})") from None
-    if not isinstance(data, dict) or any(data.get(k) is not None and not isinstance(data[k], dict) for k in EMPTY):
+    if not isinstance(data, dict) or any(k in data and not isinstance(data[k], dict) for k in EMPTY):
         raise StateUnreadable(f"{path} isn't the heartbeat's state")
-    return {k: dict(data.get(k) or {}) for k in EMPTY}
+    return {k: dict(data[k]) if k in data else {} for k in EMPTY}
 
 
 def save(state, data):
