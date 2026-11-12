@@ -1,7 +1,7 @@
 # Bridge-to-core audit
 
-Status: proposal, revised after Arden's review (msg 1570462746724536331, approve with changes). No code moves in
-this pass. Asked by John, 2026-11-12 (room msg
+Status: proposal, revised after Arden's review (msg 1570462746724536331, approve with changes) and Ember's wording
+edits (msg 1570463982962086022). No code moves in this pass. Asked by John, 2026-11-12 (room msg
 1570460539597889556): were the things built in the bridge that belong in Persistence moved back? Not yet; this lists
 them so they can move one at a time.
 
@@ -18,8 +18,8 @@ Read: `scripts/room/bridge.py`, `roomcore.py`, `room`, `coverage.py`, `transcrib
 | # | Feature (where) | Why it moves |
 |---|---|---|
 | M1 | **Ember's reply-text action parser**: ```store blocks taken out of the reply (`room_store.py` `take_blocks`, called by `room-wake`) | An action channel read out of content, against principle 2 of `selves-roadmap.md`. Any surface Ember speaks from needs store actions, and claims and heartbeat stay off for Ember's Codex side until it is replaced (`heartbeat.md`, `task-claims.md` §5). Keep the allowlist, validation, result queue and audit log; take actions from somewhere other than the posted text. **How actions arrive instead is UNRESOLVED**, left to the design with Ember; this audit names no input form. This is a redesign inside this repo (`scripts/codex`), not a move out of the bridge. |
-| M2 | **Session lifecycle**: resume one session, roll over past `fresh_session_above_tokens` with a last wake to update the note (`roomcore.wake_argv`, `after_wake`, `created_session`, `last_wake_note`, `fresh_session_note`) | Nothing in it is Discord. Ember's Codex room session (`room-wake`, its own `codex-session` file) needs the same and has no rollover; so would any long-lived session. Pure functions, so it's the cheapest move. The torn-`session.json` fix goes first, as its own PR: branch `claude/torn-session-fix`, 06b4ba6 (atomic `save_session`; the session read and the spawn inside `run_wake`'s try, so the turn always ends). |
-| M3 | **Starting a self's turn**: the three ways a self is run (`run_wake` with `claude -p`, `wake_command` with `reply_by_output`, `run_http_wake`), with env, timeout, log and exit handling | The hook layer starts sessions in at least four more places (`hook.py` run-due, `pwake`, heartbeat, sleep pass), all Claude-only. One "run a turn for this self" in Persistence, knowing each self's harness, would serve the room and the heartbeat alike, and is what Ember's Codex side needs for heartbeat wakes. **Room wakes should go on the run line's ledger**: today the bridge spawns directly (`bridge.py` `run_wake`, `create_subprocess_exec`), while `hook.py` launches through `run_line` (1993, 2142), so the ledger and the heartbeat never see room wakes. Depends on M1 for Ember. |
+| M2 | **Session lifecycle**: resume one session, roll over past `fresh_session_above_tokens` with a last wake to update the note (`roomcore.wake_argv`, `after_wake`, `created_session`, `last_wake_note`, `fresh_session_note`) | Nothing in it is Discord. Ember's Codex room session (`room-wake`, its own `codex-session` file) needs the same and has no rollover; so would any long-lived session. **Target: Persistence's shared hook/operational layer, not the durable store.** Not pure functions: it reads and writes `session.json`, inspects logs and takes part in process startup. It is a small, separable shared operational module, so it's the cheapest move. The torn-`session.json` fix goes first, as its own PR: branch `claude/torn-session-fix`, 06b4ba6 (atomic `save_session`; the session read and the spawn inside `run_wake`'s try, so the turn always ends). |
+| M3 | **Starting a self's turn**: the three ways a self is run (`run_wake` with `claude -p`, `wake_command` with `reply_by_output`, `run_http_wake`), with env, timeout, log and exit handling | The hook layer starts sessions in at least four more places (`hook.py` run-due, `pwake`, heartbeat, sleep pass), all Claude-only. One "run a turn for this self" in Persistence, knowing each self's harness, would serve the room and the heartbeat alike, and is what Ember's Codex side needs for heartbeat wakes. **Room wakes should go on the run line's ledger**: today the bridge spawns directly (`bridge.py` `run_wake`, `create_subprocess_exec`), while `hook.py` launches through `run_line` (1993, 2142), so the ledger and the heartbeat never see room wakes. On the ledger, room wakes are recorded, but that must not authorize the heartbeat to retry them: the bridge stays their lifecycle owner until M3 defines otherwise. **Target: Persistence's shared hook/operational layer, not the durable store.** Depends on M1 for Ember. |
 
 ## Stays in the bridge (Discord-specific)
 
@@ -54,12 +54,13 @@ environment they read (`PERSISTENCE_SPEAKER`, `PERSISTENCE_ROOM_*`).
 - **`hop_tokens`** (`bridge.py`): held only in the bridge's memory. Fine there for now; revisit together with the
   `Breaker` (Arden).
 - **`http_self`** (Ember's PC app path). As far as I know nothing has used it since Ember moved to Codex on home
-  (2026-11-10). Removing it is Ember's call.
+  (2026-11-10). Flagged, not decided: Ember believes it is obsolete; remove it only in its own PR, after checking all
+  three bridges' configs and service files for references.
 
 ## Suggested order
 
 1. **M1**, designed with Ember, since it's their channel and the condition they set for claims and heartbeat.
-2. **M2**: small, pure, and gives Ember's Codex room session a rollover. The torn-file fix (above) first.
+2. **M2**: a small, separable shared operational module that gives Ember's Codex room session a rollover. The torn-file fix (above) first.
 3. **M3**: larger. Do it after M1, so Ember's side is covered.
 4. The shared room facts, together with deployment visibility.
 
