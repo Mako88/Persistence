@@ -9,6 +9,18 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-12 — Embedding client: the caller's cancellation reaches the request and escapes
+
+- **`OpenAiEmbeddingClient` passes the caller's token to the request and lets the caller's cancellation
+  escape.** It used to call `MakeRequest` without the token and catch every exception as "no vectors",
+  so a caller's deadline could neither stop a hung request nor be told apart from an embedder failure.
+  Chunking passes a deadline, so this goes first. The client's own request timeout still returns empty:
+  SimpleHttpClient 5.1.0 surfaces it as `TimeoutException`, not a cancellation, so a hung embedder still
+  falls back to words. A test pins that shape (corrected in review by Ember). A second test throws a
+  `TaskCanceledException` under a live caller token and expects empty, so the escape is pinned to the
+  caller's token, not the exception type (added from Arden's review 5881360057). Raised by Arden in
+  review 5880775913.
+
 ## 2026-11-12 — Recall: fragments' meaning step lets cancellation escape and names failures by type only
 
 **Cancellation escapes in fragment recall too.** `EmbeddingMemorySurfacer.SurfaceAsync` caught every exception from the
