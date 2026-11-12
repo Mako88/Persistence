@@ -17,15 +17,19 @@ internal sealed class RememberingEmbeddingClient(IEmbeddingClient inner) : IEmbe
 
     public string Model => inner.Model;
 
-    public async Task<IReadOnlyList<float[]>> EmbedAsync(IReadOnlyList<string> texts, CancellationToken ct = default)
+    public async Task<IReadOnlyList<float[]>> EmbedAsync(IReadOnlyList<string> texts, CancellationToken ct = default) =>
+        (await TryEmbedAsync(texts, ct)).Vectors;
+
+    public async Task<EmbedOutcome> TryEmbedAsync(IReadOnlyList<string> texts, CancellationToken ct = default)
     {
         var missing = texts.Where(t => !remembered.ContainsKey(t)).Distinct().ToList();
         if (missing.Count > 0)
         {
-            var embedded = await inner.EmbedAsync(missing, ct);
+            var (embedded, failure) = await inner.TryEmbedAsync(missing, ct);
             if (embedded.Count != missing.Count)
             {
-                return []; // a failed call is the callers' to handle, as it was without the memory
+                // A failed call is the callers' to handle, as it was without the memory, with the inner client's why.
+                return new EmbedOutcome([], failure ?? ChunkFailure.Refused);
             }
 
             for (var i = 0; i < missing.Count; i++)
@@ -39,6 +43,6 @@ internal sealed class RememberingEmbeddingClient(IEmbeddingClient inner) : IEmbe
             }
         }
 
-        return texts.Select(t => remembered[t]).ToList();
+        return new EmbedOutcome(texts.Select(t => remembered[t]).ToList(), null);
     }
 }

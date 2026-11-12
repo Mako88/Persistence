@@ -170,17 +170,22 @@ internal sealed class ConversationRecaller(
             return null;
         }
 
-        if (await queryEmbedder.EmbedAsync(text, part: QueryEmbedder.PastUtterances) is not { } query)
+        if (await queryEmbedder.EmbedQueryAsync(text, part: QueryEmbedder.PastUtterances) is not { } query)
         {
             return [];
         }
 
-        var top = stored.Select(v => (v.ContextFragmentId, score: VectorMath.Cosine(query, v.Vector)))
-            .OrderByDescending(x => x.score).Take(Pool * 2).ToList();
+        var top = stored.Select(v => (v.ContextFragmentId, best: query.Score(v.Vector)))
+            .OrderByDescending(x => x.best.Score).Take(Pool * 2).ToList();
         queryEmbedder.Compare(QueryEmbedder.PastUtterances);
         var byId = (await fragments.GetByIdsAsync(top.Select(x => x.ContextFragmentId))).ToDictionary(f => f.Id);
-        return top.Where(x => byId.TryGetValue(x.ContextFragmentId, out var f) && wanted(f))
-            .Select(x => byId[x.ContextFragmentId]).Take(Pool).ToList();
+        var found = top.Where(x => byId.TryGetValue(x.ContextFragmentId, out var f) && wanted(f)).Take(Pool).ToList();
+        foreach (var x in found)
+        {
+            queryEmbedder.Attribute(x.ContextFragmentId, x.best.Chunk);
+        }
+
+        return found.Select(x => byId[x.ContextFragmentId]).ToList();
     }
 
     /// <summary>Reciprocal rank fusion, as <see cref="EmbeddingMemorySurfacer"/> fuses: rank positions, not scores.</summary>

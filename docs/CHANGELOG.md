@@ -9,6 +9,20 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-12 — Chunked query embedding, behind `QUERYCHUNKCHARS` (off by default)
+
+- **A query longer than the embedder reads is embedded whole, in chunks, when a store opts in.** With query tail 0, a
+  message past ~1,800 characters got no vector and recall ran on words alone: every room wake on 2026-11-12 (1,962 to
+  6,159 characters) did. `PERSISTENCE_EMBEDDING_QUERYCHUNKCHARS` (default 0: off, today's behaviour exactly) cuts the
+  query into ordered, overlapping chunks covering all of it (`QueryChunker`), embeds them in bounded batches (first,
+  last, then inward) under an elapsed budget linked into the request in flight, halves a chunk the embedder refuses as
+  too large (never cuts it to its tail), and scores stored items by the best chunk (`max`) or a normalised mean
+  (`mean`). Nothing is dropped silently: what was not embedded is reported as uncovered characters with a category,
+  and a partly embedded query reads `semantic-degraded (query: ...)`, never `semantic` or `words-fallback`.
+  `recall --diagnostics` adds one content-free `recall-chunks:` line (spans, counts, categories, each shown item's best
+  chunk). Out-of-range settings fail at start. The embedding client now says why it gave no vector (`too-large` or
+  `embedder-error`), so only a too-large chunk is split. Design: docs/design/chunked-query-embedding.md (63b2f54).
+
 ## 2026-11-12 — Embedding client: the caller's cancellation reaches the request and escapes
 
 - **`OpenAiEmbeddingClient` passes the caller's token to the request and lets the caller's cancellation

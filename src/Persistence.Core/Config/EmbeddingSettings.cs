@@ -72,4 +72,58 @@ public class EmbeddingSettings
     /// them, always embed a text's head (<see cref="Services.EmbeddingMemorySurfacer.HeadText"/>).
     /// </summary>
     public int QueryTailChars { get; set; }
+
+    /// <summary>
+    /// Chunked query embedding (docs/design/chunked-query-embedding.md): a query longer than this many characters is
+    /// cut into ordered, overlapping chunks covering all of it, each embedded and kept (<see cref="Services.QueryChunker"/>,
+    /// <see cref="Services.QueryEmbedder"/>). 0 (the default) is off: today's behaviour exactly, so no store's recall
+    /// changes until its self opts in. When set, it wins over <see cref="QueryTailChars"/>. At least
+    /// <see cref="Services.QueryEmbedder.MinTailChars"/> when set.
+    /// </summary>
+    public int QueryChunkChars { get; set; }
+
+    /// <summary>How a stored item is scored against the chunks: <c>max</c> (best chunk) or <c>mean</c> (one normalised mean vector).</summary>
+    public string QueryChunkScore { get; set; } = "max";
+
+    /// <summary>Characters each chunk after the first reaches back into the previous one; at most a quarter of <see cref="QueryChunkChars"/>.</summary>
+    public int QueryChunkOverlap { get; set; } = 150;
+
+    /// <summary>Most chunks embedded per recall; over it, the first and last halves are embedded and the middle is reported.</summary>
+    public int QueryChunkMax { get; set; } = 24;
+
+    /// <summary>Most chunks sent in one embedding request.</summary>
+    public int QueryChunkBatch { get; set; } = 8;
+
+    /// <summary>Elapsed-time budget for a recall's query embedding, in milliseconds; what is left when it runs out is reported.</summary>
+    public int QueryChunkBudgetMs { get; set; } = 8000;
+
+    /// <summary>Settings given that could not be read (an environment value that is not a number); a problem at start.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public List<string> Unreadable { get; } = [];
+
+    /// <summary>
+    /// Why the chunk settings cannot run, or null when they can. Out-of-range values fail at start (the design's rollout),
+    /// rather than quietly running with something nobody chose.
+    /// </summary>
+    public string? QueryChunkProblem()
+    {
+        if (Unreadable.Count > 0)
+        {
+            return $"Not a number: {string.Join(", ", Unreadable)}.";
+        }
+
+        if (QueryChunkChars == 0)
+        {
+            return null;
+        }
+
+        var floor = Services.QueryEmbedder.MinTailChars;
+        return QueryChunkChars < floor ? $"QueryChunkChars is {QueryChunkChars}: 0 (off) or at least {floor}."
+            : QueryChunkOverlap < 0 || QueryChunkOverlap > QueryChunkChars / 4 ? $"QueryChunkOverlap is {QueryChunkOverlap}: 0 to a quarter of QueryChunkChars ({QueryChunkChars / 4})."
+            : QueryChunkMax < 1 ? $"QueryChunkMax is {QueryChunkMax}: at least 1."
+            : QueryChunkBatch < 1 ? $"QueryChunkBatch is {QueryChunkBatch}: at least 1."
+            : QueryChunkBudgetMs < 1 ? $"QueryChunkBudgetMs is {QueryChunkBudgetMs}: at least 1."
+            : QueryChunkScore is not ("max" or "mean") ? $"QueryChunkScore is '{QueryChunkScore}': max or mean."
+            : null;
+    }
 }

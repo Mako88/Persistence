@@ -21,11 +21,12 @@ public sealed class FragmentStoreTests : IDisposable
         File.Delete(transcript);
     }
 
-    private Task<FragmentStore> OpenAsync(bool newerNoteInCore = false, Persistence.Services.IEmbeddingClient? embedder = null, int queryTailChars = 0)
+    private Task<FragmentStore> OpenAsync(bool newerNoteInCore = false, Persistence.Services.IEmbeddingClient? embedder = null, int queryTailChars = 0, int queryChunkChars = 0)
     {
         var config = new AppConfig { PeerName = "Claude", NewerNoteInCore = newerNoteInCore };
         config.DatabasePath = db;
         config.Embedding.QueryTailChars = queryTailChars;
+        config.Embedding.QueryChunkChars = queryChunkChars;
         return FragmentStore.OpenAsync(config, embedder: embedder);
     }
 
@@ -704,6 +705,33 @@ public sealed class FragmentStoreTests : IDisposable
         }
 
         return store;
+    }
+
+    [Fact]
+    public async Task A_long_wake_refused_whole_recalls_by_meaning_with_chunking_on_and_by_words_with_it_off()
+    {
+        // The case chunking is for (2026-11-12): every room wake of 1,962 to 6,159 characters fell back to words with query
+        // tail 0, so no past utterance came back by meaning. A wake: the addressed message at the head, the preamble after.
+        var wake = "where does the checkpoint resume after the game closes?\n\n"
+                   + string.Join(' ', Enumerable.Range(0, 300).Select(i => $"preamble{i:D3}"));
+        var off = await WithUtterancesAsync(new WordsEmbedder { RefuseOverChars = 1800 });
+        var offRecall = await off.RecallAsync(wake, 3, [], said: 3);
+        TestDatabase.Cleanup(db);
+        var on = await OpenAsync(embedder: new WordsEmbedder { RefuseOverChars = 1800 }, queryChunkChars: 1000);
+        await on.AddAsync("Personal", "The shared card runs one game at a time.", null, null, null, [], false);
+        await on.KeepConversationAsync(SessionTranscript("utter000-2", TimeSpan.FromDays(1), ("user", Checkpoint), ("user", Weather)), "John");
+        Assert.Equal(2, await on.EmbedConversationAsync(10));
+
+        var onRecall = await on.RecallAsync(wake, 3, [], said: 3);
+
+        Assert.Equal("words-fallback", offRecall.Path);
+        Assert.Null(offRecall.Chunks); // off: nothing new reported
+        Assert.Equal(("semantic", null), (onRecall.Path, onRecall.PathWhy));
+        var said = Assert.Single(onRecall.Said);
+        Assert.Equal(Checkpoint, said.Content);
+        Assert.StartsWith("recall-chunks: max; 5 chunks, 5 pieces (embedded 5)", onRecall.Chunks);
+        Assert.Contains($"#{said.Id}:1", onRecall.Chunks); // found by the head, where the addressed message is
+        Assert.DoesNotContain("checkpoint", onRecall.Chunks);
     }
 
     [Fact]

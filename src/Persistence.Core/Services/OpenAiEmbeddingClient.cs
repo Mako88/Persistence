@@ -3,6 +3,7 @@ using Persistence.DI;
 using Persistence.Runtime;
 using SimpleHttpClient;
 using SimpleHttpClient.Models;
+using System.Net;
 using System.Text.Json;
 
 namespace Persistence.Services;
@@ -72,33 +73,50 @@ public class OpenAiEmbeddingClient : IEmbeddingClient, IDisposable
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<float[]>> EmbedAsync(
-        IReadOnlyList<string> texts, CancellationToken ct = default)
+        IReadOnlyList<string> texts, CancellationToken ct = default) =>
+        (await TryEmbedAsync(texts, ct)).Vectors;
+
+    /// <inheritdoc />
+    public async Task<EmbedOutcome> TryEmbedAsync(IReadOnlyList<string> texts, CancellationToken ct = default)
     {
         if (client == null || texts.Count == 0)
         {
-            return [];
+            return new EmbedOutcome([], client == null ? ChunkFailure.EmbedderError : null);
         }
 
         var results = new List<float[]>(texts.Count);
 
         foreach (var batch in Chunk(texts, Math.Max(1, settings.BatchSize)))
         {
-            var vectors = await EmbedBatchAsync(batch, ct);
+            var (vectors, failure) = await EmbedBatchAsync(batch, ct);
 
             // A partial failure would silently misalign vectors with their texts, which would attach
             // one fragment's meaning to another. Abandon the whole call instead.
             if (vectors.Count != batch.Count)
             {
-                return [];
+                return new EmbedOutcome([], failure ?? ChunkFailure.EmbedderError);
             }
 
             results.AddRange(vectors);
         }
 
-        return results;
+        return new EmbedOutcome(results, null);
     }
 
-    private async Task<IReadOnlyList<float[]>> EmbedBatchAsync(
+    /// <summary>
+    /// Whether a failed response is the embedder refusing an input as too long: llama-server answers 500 with
+    /// "input (525 tokens) is too large to process" (probed 2026-11-12), others 413. Anything else is an embedder error,
+    /// which chunked query embedding does not answer by splitting. Internal for tests.
+    /// </summary>
+    internal static string Classify(HttpStatusCode status, string? body) =>
+        status == HttpStatusCode.RequestEntityTooLarge
+        || (body is not null && (body.Contains("too large", StringComparison.OrdinalIgnoreCase)
+                                 || body.Contains("too long", StringComparison.OrdinalIgnoreCase)
+                                 || body.Contains("maximum context length", StringComparison.OrdinalIgnoreCase)))
+            ? ChunkFailure.TooLarge
+            : ChunkFailure.EmbedderError;
+
+    private async Task<(IReadOnlyList<float[]> Vectors, string? Failure)> EmbedBatchAsync(
         IReadOnlyList<string> batch, CancellationToken ct)
     {
         try
@@ -115,10 +133,10 @@ public class OpenAiEmbeddingClient : IEmbeddingClient, IDisposable
             {
                 display.ShowDebugInfo(
                     $"Embedding request failed ({response.StatusCode}): {response.StringBody}");
-                return [];
+                return ([], Classify(response.StatusCode, response.StringBody));
             }
 
-            return ParseEmbeddings(response.StringBody);
+            return (ParseEmbeddings(response.StringBody), ChunkFailure.EmbedderError);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -131,7 +149,7 @@ public class OpenAiEmbeddingClient : IEmbeddingClient, IDisposable
         catch (Exception ex)
         {
             display.ShowDebugInfo($"Embedding request threw: {ex.Message}");
-            return [];
+            return ([], ChunkFailure.EmbedderError);
         }
     }
 
