@@ -44,6 +44,40 @@ hours (John, room 1570833323406917693). 58 new tests, covering every case the de
 tick ahead of A or R, the cap check skipped, the ack's compare-and-set removed, reconcile removed, `rev` reset.
 Nothing is switched on: enabling it for a self is a separate, reviewed step.
 
+## 2026-11-13 — Heartbeat opt-in: a read-only preflight, and heartbeat.py deployed with the hook (opt-in, step 2)
+
+**`heartbeat_optin.py check [--stalled] --at <commit>`.** Says whether a self is ready to turn its heartbeat on, and writes nothing.
+It reads settings through the beat's own reader (settings.json only), compares the deployed modules the beat loads
+with the tree, checks every unit in the self's tuple and the timer are installed (`systemctl show`/`is-enabled` only)
+and, for `--stalled`, that `heartbeat` is in `PERSISTENCE_OBSERVE_SOURCES` and `pheartbeat` is on PATH. At either
+level it refuses "ready" while STALLED is on without that source (report wakes would fire and never render; Arden's
+`heartbeat-core-interface.md` section 1) or on with the heartbeat off. 20 tests; seven mutations, each caught.
+Why: run on home, it found that `heartbeat.py` was never deployed for Claude and `PERSISTENCE_TASKCLAIMS` was unset
+(row A would have stayed off without a word). **`deploy-remote.sh`** now installs `heartbeat.py` beside the hook,
+because `persistence-heartbeat@.service` runs it from there. Inert with the switch off. The steps and their way
+back are in `docs/design/heartbeat-opt-in-claude.md`. Nothing is switched on.
+
+**Review follow-ups** (Arden's approval of 2dcc997, Ember's staging gaps). The preflight now compares all seven
+deployed modules (`run_line.py` and `cwd_exec.py` were missed) with a commit's blobs, not the working files (`--at
+<commit>`; the ready line names the hash). It refuses STALLED while that commit's `heartbeat.py` has no
+STALLED code, and treats `PERSISTENCE_TASKCLAIMS` unset as a note, anything but `1` as missing. `deploy-remote.sh`
+keeps each file it replaces that differs in `~/.claude/persistence/previous/<UTC stamp>/` and names it. The steps doc
+names only me in deploys, says step 1 restarts every store, and gives the full way back in reverse order (step 1:
+redeploy the previous commit). 14 more tests; the deploy test runs the script itself against fakes; 9 mutations caught.
+
+**`--at` is required** (Arden, on ec69fdf). The preflight exists to certify the commit that was reviewed; falling back
+to HEAD would certify whatever happens to be checked out. `check` without `--at` now exits 2 saying so and checks
+nothing, and `check()` takes `at` keyword-only with no default. Test `test_at_is_required` fails without it.
+
+**Every rule comes from the `--at` commit too** (Arden's non-blocking points on ec69fdf). (b) The deployed files were
+compared with the commit, but `heartbeat` (UNITS, `enabled`, the settings reader, `stalled_on`) was imported from the
+working tree, so a dirty or different checkout could change the verdict. Now `heartbeat.py` and the modules it imports
+are served from the commit's blobs by an in-memory importer: nothing is written, the working tree is never imported,
+and `sys.modules`/`sys.path` are left as they were. A core that won't load is MISSING `core`. (a) No test made
+`stalled_on` and the env rule disagree, so dropping `stalled_on` survived; two tests now do (`OneParser`). The fixture's
+`stalled_on` now has a83ef07's rule instead of always False. 8 new tests; 4 mutations caught (never use `stalled_on`;
+import from the working tree; don't restore `sys.modules`; leave `sys.path` changed).
+
 ## 2026-11-13 — Heartbeat: Claude's unit list (opt-in, step 1 of 2)
 
 **Claude's tuple in `UNITS`.** The heartbeat's unit check (D) only checks a self that has a literal tuple of its
