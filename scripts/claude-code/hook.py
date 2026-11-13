@@ -2005,14 +2005,12 @@ def run_due(grace=120, home=None):
 
 
 def stalled_layer_on(home=None):
-    """PERSISTENCE_HEARTBEAT_STALLED as heartbeat.stalled_on reads it: the settings file's env block only, "true" or
-    "1". run-due reads it to know whether enqueued facts carry coordination.STALLED_FIELDS."""
-    try:
-        env = json.loads((Path(home or Path.home()) / ".claude" / "settings.json").read_text(encoding="utf-8")).get("env")
-    except (OSError, ValueError, AttributeError):
-        return False
-    value = env.get("PERSISTENCE_HEARTBEAT_STALLED") if isinstance(env, dict) else None
-    return str(value or "").strip().lower() in ("true", "1")
+    """PERSISTENCE_HEARTBEAT_STALLED, asked of heartbeat.stalled_on itself: one predicate, no copy here, so run-due and
+    the beat can't disagree (a "false" that run-due read as on would stamp STALLED_FIELDS the beat doesn't expect).
+    run-due reads it to know whether enqueued facts carry coordination.STALLED_FIELDS."""
+    import heartbeat
+
+    return heartbeat.stalled_on(home)
 
 
 def _run_due_locked(c, claims, now, at, grace, launches, stalled=False):
