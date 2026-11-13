@@ -34,6 +34,15 @@ redeploy the previous commit). 14 more tests; the deploy test runs the script it
 to HEAD would certify whatever happens to be checked out. `check` without `--at` now exits 2 saying so and checks
 nothing, and `check()` takes `at` keyword-only with no default. Test `test_at_is_required` fails without it.
 
+**Every rule comes from the `--at` commit too** (Arden's non-blocking points on ec69fdf). (b) The deployed files were
+compared with the commit, but `heartbeat` (UNITS, `enabled`, the settings reader, `stalled_on`) was imported from the
+working tree, so a dirty or different checkout could change the verdict. Now `heartbeat.py` and the modules it imports
+are served from the commit's blobs by an in-memory importer: nothing is written, the working tree is never imported,
+and `sys.modules`/`sys.path` are left as they were. A core that won't load is MISSING `core`. (a) No test made
+`stalled_on` and the env rule disagree, so dropping `stalled_on` survived; two tests now do (`OneParser`). The fixture's
+`stalled_on` now has a83ef07's rule instead of always False. 8 new tests; 4 mutations caught (never use `stalled_on`;
+import from the working tree; don't restore `sys.modules`; leave `sys.path` changed).
+
 ## 2026-11-13 — Heartbeat: Claude's unit list (opt-in, step 1 of 2)
 
 **Claude's tuple in `UNITS`.** The heartbeat's unit check (D) only checks a self that has a literal tuple of its

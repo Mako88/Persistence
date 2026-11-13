@@ -17,8 +17,10 @@ import heartbeat  # noqa: E402
 import heartbeat_optin  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
-# What the core will look like once Arden's STALLED code lands (heartbeat-core-interface.md: heartbeat.stalled_on(home)).
-STALLED_CORE = "\n\ndef stalled_on(home=None):\n    return False\n"
+# What the core will look like once Arden's STALLED code lands (heartbeat-core-interface.md: heartbeat.stalled_on(home)),
+# with a83ef07's rule: the settings file only, "true" or "1".
+STALLED_CORE = ("\n\ndef stalled_on(home=None):\n"
+                "    return _setting(home, \"PERSISTENCE_HEARTBEAT_STALLED\", \"\").strip().lower() in (\"true\", \"1\")\n")
 
 
 def git(repo, *args):
@@ -249,6 +251,89 @@ class TheSilentFailures(Base):
         from unittest import mock
         with mock.patch.dict(os.environ, {"PERSISTENCE_TASKCLAIMS": "1"}):
             self.assertFalse(self.item(self.check(), "PERSISTENCE_TASKCLAIMS").ok)
+
+
+class OneParser(Base):
+    """Arden's non-blocking (a) on ec69fdf: once the core has stalled_on, the preflight asks it, not its own copy of the
+    rule. The fixture's stalled_on agrees with the env rule, so these make the two disagree."""
+
+    def core(self, body):
+        core = (self.repo / "heartbeat.py").read_text() + f"\n\ndef stalled_on(home=None):\n    return {body}\n"
+        (self.repo / "heartbeat.py").write_text(core)
+        git(self.root, "commit", "-qam", f"stalled_on returns {body}")
+        self.reviewed = git(self.root, "rev-parse", "HEAD")
+        shutil.copy(self.repo / "heartbeat.py", self.deployed / "heartbeat.py")
+
+    def test_stalled_on_says_on_while_the_setting_is_unset(self):
+        self.core("True")
+        self.env["PERSISTENCE_OBSERVE_SOURCES"] = "prs"
+        failing = self.failing(self.check())
+        self.assertIn("PERSISTENCE_OBSERVE_SOURCES", failing)  # STALLED is on as the core reads it: the footgun counts
+        self.env["PERSISTENCE_HEARTBEAT"] = "false"
+        self.assertIn("PERSISTENCE_HEARTBEAT_STALLED", self.failing(self.check()))
+
+    def test_stalled_on_says_off_while_the_setting_is_true(self):
+        self.core("False")
+        self.env.update(PERSISTENCE_HEARTBEAT="false", PERSISTENCE_HEARTBEAT_STALLED="true",
+                        PERSISTENCE_OBSERVE_SOURCES="prs")
+        self.assertEqual(self.failing(self.check()), set())  # off as the core reads it: nothing STALLED to refuse
+
+
+class FromTheCommit(Base):
+    """Arden's non-blocking (b) on ec69fdf: the deployed files were compared with the --at commit, but heartbeat (its
+    UNITS, enabled, _setting, stalled_on) was imported from the working tree. Now every rule comes from the commit."""
+
+    def commit_core(self, extra):
+        (self.repo / "heartbeat.py").write_text((self.repo / "heartbeat.py").read_text() + extra)
+        git(self.root, "commit", "-qam", "core change")
+        self.reviewed = git(self.root, "rev-parse", "HEAD")
+        shutil.copy(self.repo / "heartbeat.py", self.deployed / "heartbeat.py")
+
+    def test_units_come_from_the_commit(self):
+        self.commit_core('\nUNITS = {**UNITS, "ubuntu": UNITS["ubuntu"] + ("persistence-only-at-commit.service",)}\n')
+        self.check()
+        self.assertIn("persistence-only-at-commit.service", {c[-1] for c in self.systemctl.calls if c[1] == "show"})
+
+    def test_a_different_heartbeat_already_imported_changes_nothing(self):
+        # Whatever `heartbeat` (and the modules it imports) the process already holds, the verdict is the commit's.
+        from unittest import mock
+        import types
+        before = [(i.name, i.ok, i.required) for i in self.check(stalled=True)]
+        poisoned = types.ModuleType("heartbeat")
+        poisoned.units_for = lambda user: ()
+        poisoned.enabled = lambda home=None: False
+        poisoned.stalled_on = lambda home=None: True
+        poisoned._setting = lambda home, name, default: "nonsense"
+        poisoned.systemctl_run = lambda argv: (1, "")
+        with mock.patch.dict(sys.modules, {"heartbeat": poisoned, "coordination": types.ModuleType("coordination")}):
+            after = [(i.name, i.ok, i.required) for i in self.check(stalled=True)]
+        self.assertEqual(after, before)
+
+    def test_a_dirty_tree_changes_nothing(self):
+        before = [(i.name, i.ok, i.required) for i in self.check(stalled=True)]
+        (self.repo / "heartbeat.py").write_text("raise SystemExit('the working tree was imported')\n")
+        (self.repo / "coordination.py").write_text("raise SystemExit('the working tree was imported')\n")
+        self.assertEqual([(i.name, i.ok, i.required) for i in self.check(stalled=True)], before)
+
+    def test_imports_are_left_as_they_were(self):
+        # Sentinels of its own, so the test doesn't depend on what an earlier test left imported.
+        from unittest import mock
+        import types
+        held = {n: types.ModuleType(n) for n in ("heartbeat", "coordination", "claims", "hook")}
+        with mock.patch.dict(sys.modules, held):
+            path = list(sys.path)
+            self.check(stalled=True)
+            self.assertEqual(sys.path, path)
+            self.assertEqual({n: sys.modules.get(n) for n in held}, held)
+
+    def test_a_core_that_does_not_load_is_not_ready(self):
+        self.commit_core("\ndef broken(:\n")
+        items = self.check()
+        self.assertIn("core", self.failing(items))
+        self.assertIn("SyntaxError", self.item(items, "core").detail)
+
+    def test_the_core_names_the_commit(self):
+        self.assertIn(self.reviewed, self.item(self.check(), "core").detail)
 
 
 class Cli(Base):

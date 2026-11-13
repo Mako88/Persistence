@@ -11,12 +11,17 @@ git objects (`git rev-parse`, `git show`). It writes nothing, starts nothing and
 
 The deployed modules are compared with a commit, never the working files: --at names the reviewed one and is required
 (no fallback to HEAD, which would certify whatever happens to be checked out), and the ready line names the full hash,
-so an unreviewed edit deployed the same way can't pass for reviewed.
+so an unreviewed edit deployed the same way can't pass for reviewed. The rules it checks against (heartbeat's UNITS,
+enabled, its settings reader, stalled_on) come from that commit too: heartbeat.py and the modules it imports are
+loaded from the commit's blobs in memory, never from the working tree, so a dirty or different checkout can't change
+the verdict.
 
 It also refuses "ready" while a switch already on would fail silently, whichever level is asked: STALLED on without
 `heartbeat` in PERSISTENCE_OBSERVE_SOURCES (its R and Q wakes would fire, never render and go undeliverable;
 heartbeat-core-interface.md section 1), STALLED on with the heartbeat itself off, or STALLED on or asked for while the
 commit's heartbeat.py has no STALLED code (no `stalled_on`), when the switch would turn nothing on."""
+import importlib.abc
+import importlib.util
 import os
 import pwd
 import shutil
@@ -24,9 +29,6 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import heartbeat  # noqa: E402
 
 # What deploy-remote.sh installs beside the hook, all of which the beat loads from ~/.claude/persistence: heartbeat.py,
 # the modules it imports (directly or through claims and hook), run_line.py (wrapper_alive imports it) and cwd_exec.py
@@ -53,6 +55,46 @@ def _git(repo, *args):
     return r.stdout if r.returncode == 0 else None
 
 
+class _Commit(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+    """Serves the DEPLOYED modules from a commit's blobs, in memory: nothing is written and no working file is read."""
+
+    def __init__(self, sha, blobs):
+        self.sha, self.sources = sha, {n[:-3]: b for n, b in blobs.items() if b is not None}
+
+    def find_spec(self, name, path=None, target=None):
+        if name in self.sources:
+            return importlib.util.spec_from_loader(name, self, origin=f"{self.sha}:{name}.py")
+
+    def create_module(self, spec):
+        return None
+
+    def exec_module(self, module):
+        # heartbeat.py puts its own directory on sys.path; a directory that can't exist keeps that harmless.
+        module.__file__ = f"/nonexistent/at-{self.sha}/{module.__name__}.py"
+        exec(compile(self.sources[module.__name__], module.__file__, "exec"), module.__dict__)
+
+
+def _core(sha, blobs):
+    """(heartbeat as it is at sha, None) or (None, why). sys.modules and sys.path are left as they were: whatever
+    `heartbeat` this process already holds is neither used nor replaced."""
+    if sha is None or blobs.get("heartbeat.py") is None:
+        return None, f"no heartbeat.py at {sha or 'the commit'} to load"
+    finder = _Commit(sha, blobs)
+    held = {n: sys.modules.pop(n) for n in list(sys.modules) if n in finder.sources}
+    path = list(sys.path)
+    sys.meta_path.insert(0, finder)
+    try:
+        return importlib.import_module("heartbeat"), None
+    except BaseException as e:  # a core that won't load (even one that exits) is a finding, not a crash
+        return None, f"heartbeat.py at {sha} does not load: {e.__class__.__name__}: {e}"
+    finally:
+        sys.meta_path.remove(finder)
+        sys.path[:] = path
+        for n in finder.sources:
+            sys.modules.pop(n, None)
+        sys.modules.update(held)
+
+
 def _loaded(systemctl, unit):
     try:
         _, out = systemctl(["systemctl", "show", "-p", "LoadState", "--value", "--", unit])
@@ -62,13 +104,10 @@ def _loaded(systemctl, unit):
     return state == "loaded", state or "empty"
 
 
-def check(home=None, user=None, repo=None, systemctl=heartbeat.systemctl_run, path=None, stalled=False, *, at):
+def check(home=None, user=None, repo=None, systemctl=None, path=None, stalled=False, *, at):
     home = Path(home or Path.home())
     user = user or pwd.getpwuid(os.geteuid()).pw_name
     repo = Path(repo or Path(__file__).resolve().parent)
-    def env(name):  # the beat's own reader: settings.json only
-        return heartbeat._setting(home, name, "")
-
     items = []
 
     rev = at  # required: the reviewed commit, never a default
@@ -86,6 +125,14 @@ def check(home=None, user=None, repo=None, systemctl=heartbeat.systemctl_run, pa
             items.append(Item(f"deployed {name}", False, f"{deployed} differs from {name} at {sha}"))
         else:
             items.append(Item(f"deployed {name}", True, f"matches {sha}"))
+
+    heartbeat, why = _core(sha, blobs)
+    items.append(Item("core", heartbeat is not None, why or f"heartbeat.py loaded from {sha}"))
+    if heartbeat is None:  # every rule below is the commit's; without it there is nothing to check against
+        return items
+    systemctl = systemctl or heartbeat.systemctl_run
+    def env(name):  # the beat's own reader: settings.json only
+        return heartbeat._setting(home, name, "")
 
     units = heartbeat.units_for(user)
     if not units:

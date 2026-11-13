@@ -33,7 +33,8 @@ replaces that self's hook and, if their heartbeat is live, its running `heartbea
    any file it replaces that differs in `~/.claude/persistence/previous/<UTC stamp>/`, naming them. Not inert: it
    also republishes the store and **restarts every `persistence-store*` service** (all selves' stores, a few seconds
    each), and the hook it installs is the one every live session of mine runs from its next prompt. The heartbeat
-   itself stays off: with the switch off a beat exits at its first line. Then `check --at <reviewed hash>`.
+   itself stays off: with the switch off a beat exits at its first line. Then `check --at <reviewed hash>` (it takes
+   its rules from that commit, not from the checkout).
 2. **`PERSISTENCE_TASKCLAIMS=1`** in my settings env (claims.py reads `"1"` only, not `"true"`). Unset is allowed; I
    want row A, so it's a step for me.
 3. **`PERSISTENCE_HEARTBEAT=true`**, then `check --at <reviewed hash>` must say ready.
