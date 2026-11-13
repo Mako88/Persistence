@@ -179,6 +179,9 @@ def wake_line(firing, condition, owner, at):
 # and tries again after UNKNOWN_RECHECK, and C's and A's deferrals say so in the journal.
 RESET = re.compile(r"resets (1[0-2]|[1-9])(?::([0-5][0-9]))?(am|pm) \(([A-Za-z]+(?:/[A-Za-z_+-]+){0,2})\)")
 UNKNOWN_RECHECK = timedelta(hours=1)
+# How long an ack intent whose owner is alive counts as in flight: the ack's lock wait (observed.HB_ACK_WAIT, 5 s)
+# plus a margin. Past it the owner has given up on the lock, so the intent is abandoned whatever its pid says.
+ACK_INTENT_FRESH = timedelta(seconds=5 + 25)
 
 
 def usage_limited(output):
@@ -818,9 +821,26 @@ class Beat:
         self.note(f"heartbeat: adopted orphan wake {wid}")
 
     # 3.1: queued is not delivered; failure leaves it retryable.
+    def ack_intents(self):
+        """{wake: "live" | "abandoned"} for each ack intent on disk (observed.ack_intent). Live: its owner (pid AND
+        /proc start time) is alive and it is younger than the ack's lock wait plus a margin, so that ack may still
+        record. Anything else is abandoned: a timeout, a crash, a recycled pid, or a file that doesn't parse."""
+        out, root = {}, self.state / "heartbeat-ack-intent"
+        if not root.is_dir():
+            return out
+        for p in root.iterdir():
+            try:
+                i = json.loads(p.read_text(encoding="utf-8"))
+                at = _time(i.get("at"))
+                live = (at is not None and self.now - at <= ACK_INTENT_FRESH
+                        and wrapper_alive(i.get("pid"), i.get("start")))
+            except (OSError, ValueError, AttributeError):
+                live = False
+            out[p.name] = "live" if live else "abandoned"
+        return out
+
     def settle_queued(self):
-        lost_dir = self.state / "heartbeat-ack-lost"
-        lost = {p.name for p in lost_dir.iterdir()} if lost_dir.is_dir() else set()
+        intents = self.ack_intents()
         for firing, e in self.hb_fired.items():
             state = self.states.get(firing)
             if state in ("never-started", "crashed", "failed") and firing not in self.section("fault_seen"):
@@ -836,16 +856,16 @@ class Beat:
                 self.unqueue(key, entry, failed=False)  # cancelled or dropped: back to none
                 continue
             state = self.states.get(wake)
-            if state in (None, "running"):
-                continue
+            if state in (None, "running") or intents.get(wake) == "live":
+                continue  # an ack in flight: no failure, and not unqueued; it records under the lock, or is abandoned
             if state in ("never-started", "crashed", "failed", "ok", "taken"):
-                # ok with the entry still queued: the block never reached the session, or its ack lost the lock (a
-                # marker says so: retryable, not a failed attempt).
-                self.unqueue(key, entry, failed=wake not in lost and not self.usage_hold(wake))
+                # ok with the entry still queued: the block never reached the session, or its ack was abandoned after
+                # the block was shown (an intent says so: retryable, not a failed attempt).
+                self.unqueue(key, entry, failed=wake not in intents and not self.usage_hold(wake))
         live = {e["wake"] for _, e in self.queued_entries()}
-        for name in lost - live:
-            if self.states.get(name) not in (None, "running"):
-                (lost_dir / name).unlink(missing_ok=True)  # consumed (or never ours): its wake has ended
+        for name, kind in intents.items():
+            if kind == "abandoned" and name not in live and self.states.get(name) not in (None, "running"):
+                (self.state / "heartbeat-ack-intent" / name).unlink(missing_ok=True)  # consumed: its wake has ended
         q = self.data.get("quiet")
         if q and q.get("state") == "delivered" and self.states.get(q.get("wake")) not in (None, "running"):
             q["state"] = "none"  # its session ended; if the spell is still this one, nothing happened: back off

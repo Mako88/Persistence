@@ -9,8 +9,10 @@ import json
 import os
 import sys
 import threading
+import time
 import unittest
 import uuid
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -526,8 +528,105 @@ class AckLockLost(Base):
             self.finish(f, {"is_error": False, "result": "x"})
         self.assertIsNone(self.hb()["holds"].get(key))
         self.assertEqual([l for l in self.lines if "undeliverable" in l], [])
-        lost = self.state / "heartbeat-ack-lost"
+        lost = self.state / "heartbeat-ack-intent"
         self.assertEqual(sorted(p.name for p in lost.iterdir()), [f])  # the last one waits for its beat; the rest consumed
+
+    # Ember, 1570867414500114584 and 1570867727046942911: the intent is written ahead of the lock attempt.
+    def fired_and_shown(self):
+        """One R wake fired, started, its block rendered, and finished ok: its entry still queued, the ack not run."""
+        self.activity(at(6, 33))
+        key = "unit:x.service:ab:failed"
+        self.unread(key, when=at(5, 0))
+        self.beat(at(6, 40))
+        [r] = self.hb_items("reports")
+        f = r["id"]
+        coordination.append(self.state, coordination.enqueued_fact(r, self.now.isoformat(), stalled=True))
+        hook.wakes(lambda items: [])
+        self.fact(f, "started", self.now, pid=999999, start_time=1, session=r["session"])
+        obs, ctx = self.source(r["session"])
+        self.finish(f, {"is_error": False, "result": "x"})
+        return key, f, obs, ctx
+
+    def test_a_beat_reading_intents_mid_ack_counts_no_failure_unqueues_nothing_and_the_ack_cleans_up(self):
+        key, f, obs, ctx = self.fired_and_shown()
+        self.now = self.now + timedelta(minutes=10)
+        ctx = replace(ctx, now=self.now)
+        intent = self.state / "heartbeat-ack-intent" / f
+        real, acks, errors = heartbeat.Beat.ack_intents, [], []
+
+        def ack():
+            try:
+                with mock.patch.object(observed, "HB_ACK_WAIT", 10):
+                    observed.heartbeat_ack(obs, {"session_id": "x"}, ctx)
+            except Exception as e:  # noqa: BLE001
+                errors.append(e)
+
+        def mid_ack(beat):
+            # The beat holds heartbeat.lock and is about to read the intents: the ack starts now and blocks on the
+            # lock. Wait until it is past its write-ahead point (or, if it writes nothing ahead, until it is waiting).
+            t = threading.Thread(target=ack)
+            acks.append(t)
+            t.start()
+            deadline = time.monotonic() + 2
+            while not intent.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            return real(beat)
+
+        with mock.patch.object(heartbeat.Beat, "ack_intents", mid_ack):
+            self.beat()
+        e = self.hb()["reports_q"][key]
+        acks[0].join(5)
+        self.assertFalse(acks[0].is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(e.get("failures", 0), 0)  # no failure counted
+        e = self.hb()["reports_q"][key]
+        self.assertEqual(e["state"], "delivered")  # not unqueued early: the ack found it still queued and recorded it
+        self.assertFalse(intent.exists())  # and the ack removed its intent under the lock
+        self.assertNotIn("delivery_fault", self.hb())
+
+    def test_a_crash_after_the_block_before_the_lock_leaves_it_retryable(self):
+        key, f, obs, ctx = self.fired_and_shown()
+        with mock.patch.object(coordination, "lock", side_effect=SystemExit):  # died before taking the lock
+            with self.assertRaises(SystemExit):
+                observed.heartbeat_ack(obs, {"session_id": "x"}, ctx)
+        intent = self.state / "heartbeat-ack-intent" / f
+        self.assertTrue(intent.exists())
+        data = json.loads(intent.read_text(encoding="utf-8"))
+        intent.write_text(json.dumps({**data, "pid": 999999}), encoding="utf-8")  # its owner is gone
+        self.beat(self.now + timedelta(minutes=10))
+        e = self.hb()["reports_q"][key]
+        self.assertEqual((e["state"], e["failures"]), ("none", 0))  # retryable, no failed attempt
+        self.assertFalse(intent.exists())  # consumed
+
+    def test_an_intent_whose_pid_was_recycled_is_abandoned(self):
+        key, f, obs, ctx = self.fired_and_shown()
+        with mock.patch.object(coordination, "lock", side_effect=SystemExit):
+            with self.assertRaises(SystemExit):
+                observed.heartbeat_ack(obs, {"session_id": "x"}, ctx)
+        intent = self.state / "heartbeat-ack-intent" / f
+        data = json.loads(intent.read_text(encoding="utf-8"))
+        self.assertEqual(data["pid"], os.getpid())
+        # A live pid, a fresh intent, another process's start time: the owner is gone, whatever the pid says.
+        intent.write_text(json.dumps({**data, "start": (data["start"] or 0) + 1}), encoding="utf-8")
+        self.beat(self.now + timedelta(seconds=10))
+        e = self.hb()["reports_q"][key]
+        self.assertEqual((e["state"], e["failures"]), ("none", 0))
+        self.assertFalse(intent.exists())
+
+    def test_a_live_fresh_intent_holds_the_entry_and_a_stale_one_releases_it(self):
+        key, f, obs, ctx = self.fired_and_shown()
+        with mock.patch.object(coordination, "lock", side_effect=SystemExit):
+            with self.assertRaises(SystemExit):
+                observed.heartbeat_ack(obs, {"session_id": "x"}, ctx)
+        intent = self.state / "heartbeat-ack-intent" / f
+        self.beat(self.now + timedelta(seconds=10))  # owner (this process) alive, intent fresh: in flight
+        e = self.hb()["reports_q"][key]
+        self.assertEqual((e["state"], e.get("failures", 0)), ("queued", 0))
+        self.assertTrue(intent.exists())
+        self.beat(self.now + heartbeat.ACK_INTENT_FRESH)  # past the window: abandoned, consumed, retryable
+        e = self.hb()["reports_q"][key]
+        self.assertEqual((e["state"], e["failures"]), ("none", 0))
+        self.assertFalse(intent.exists())
 
 
 # ------------------------------------------------------------ Claude: no literal self name in the templates

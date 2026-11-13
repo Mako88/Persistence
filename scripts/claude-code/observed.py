@@ -427,28 +427,37 @@ def heartbeat_read(event, ctx):
     return Observation("heartbeat", ctx.now, lines=tuple(lines), ack=ack, truncated=more)
 
 
-ACK_LOST = "heartbeat-ack-lost"
+ACK_INTENT = "heartbeat-ack-intent"
 UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 
-def mark_ack_lost(state, wake):
-    if isinstance(wake, str) and UUID.match(wake):
-        write_atomic(Path(state) / ACK_LOST / wake, "")
+def ack_intent(state, wake, now):
+    """The write-ahead intent for one ack (Ember, 1570867414500114584): written BEFORE the ack asks for heartbeat.lock,
+    so a beat that already holds the lock can't read the directory before it exists and count a delivered block as a
+    failed attempt. It names its owner (pid and /proc start time, never the pid alone) and when it was written; no
+    content. Returns its path, or None for a wake that isn't an id."""
+    import run_line
+
+    if not (isinstance(wake, str) and UUID.match(wake)):
+        return None
+    path = Path(state) / ACK_INTENT / wake
+    pid = os.getpid()
+    write_atomic(path, json.dumps({"pid": pid, "start": run_line.start_time(pid),
+                                   "at": now.isoformat(timespec="seconds")}, sort_keys=True))
+    return path
 
 
 def heartbeat_ack(obs, event, ctx):
     import coordination
 
     got = json.loads(obs.ack)
-    try:
-        with coordination.lock(ctx.state, "heartbeat", wait=HB_ACK_WAIT):
-            _heartbeat_ack_locked(ctx, got)
-    except coordination.LockBusy:
-        # The block reached the session but the ack couldn't record it. That is an ack failure, not a delivery
-        # failure: a content-free marker (the wake id as a file name) tells the beat to put the entries back without
-        # counting a failed attempt, so they are re-delivered and the undeliverable breaker doesn't move.
-        mark_ack_lost(ctx.state, got["wake"])
-        raise
+    intent = ack_intent(ctx.state, got["wake"], ctx.now)
+    with coordination.lock(ctx.state, "heartbeat", wait=HB_ACK_WAIT):
+        _heartbeat_ack_locked(ctx, got)
+        if intent is not None:
+            intent.unlink(missing_ok=True)  # recorded: removed while still holding the lock
+    # LockBusy, or a crash anywhere above, leaves the intent: the beat treats the block as reached, its entries
+    # retryable without a failed attempt, once the intent is abandoned (heartbeat.Beat.ack_intents).
 
 
 def _heartbeat_ack_locked(ctx, got):
