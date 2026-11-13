@@ -35,13 +35,16 @@ checked against main at 01755e3.
 - The state is a **pure function** of three counts over the concept's eligible fragments, all computed from
   the log: E eligible, C covered, F accepted facts (any standing). The rules are tried in this order and the
   first that holds wins, the way §7.2 computes standing, so every concept the block shows is in exactly one
-  state:
+  state. Every state shows the same counts line, `F facts from C of E fragments` (work-claude's ask, via John
+  1570856993189789909), so coverage is inspectable rather than a badge:
   1. F = 0: `no accepted facts yet`, plus `N pending` if any proposals wait, `not in your focus set` if it
      isn't, and `all E read, none found` if C = E > 0. (This rule comes first, so a concept whose fragments
      are all covered while every fact is still pending reads as `no accepted facts yet; N pending`, never as
      caught up.)
-  2. C < E: `partial: F facts from C/E eligible fragments; N pending`.
+  2. C < E: `partial`, plus `N pending` if any.
   3. Otherwise (F > 0, C = E): `caught up through #3412 (2026-11-13)`, the newest eligible fragment.
+
+  For example: `partial: 4 facts from 9 of 12 fragments; 2 pending`.
 - A half-filled block never reads as complete. With no state named, the self can't tell an empty concept from
   one the extractor hasn't reached. The review predicts exactly that confusion for the first weeks.
 
@@ -52,7 +55,7 @@ Claude Code replaces anything over 10,000 with a file path). Inside it, in this 
 each:
 
 1. **Observed now**: read off the machine, at most 1,500 characters. It is not trimmed for the sections below;
-   past its own bound it ends `N observations omitted`, like any other section.
+   past its own bound it ends `N omitted`, like any other section.
 2. **Pending decisions**, at most 1,200: the first 3 (this session's newest first, then older, ties by event
    id, as in concept-store.md Q6), each one line of at most 300; then the total count and the oldest one's age.
    The count and age are always shown, however small the budget.
@@ -69,8 +72,9 @@ What is unused by one section isn't passed to another; the bounds stay fixed so 
 **Trimming,** when the total would pass CAP: recalled fragments go first, lowest-ranked first; then concepts'
 facts beyond the first, from the lowest-ranked concept up; then whole concepts, lowest-ranked first. Pending
 decisions' count and age, and each shown concept's state line, are never cut. A section is never dropped whole
-without a word: every bounded section ends with `N more omitted` (or `N not yet covered`), with ids where they
-fit. The core already does this ("Fragments that did not fit: …"). The numbers above are starting values. The
+without a word: every bounded section that cut anything ends with one line in one wording, `N omitted`, with
+ids where they fit (work-claude's ask). A concept's uncovered fragments are its state line's business (§1), not
+an omission. The core already does this ("Fragments that did not fit: …"). The numbers above are starting values. The
 recall bench's chars metric (scripts/recall-eval, `report`) is what tunes them, not taste.
 
 ## 3. Old fragments: superseded through the path that works
