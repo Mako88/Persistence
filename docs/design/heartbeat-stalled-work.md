@@ -5,15 +5,23 @@ Scope: **Arden's heartbeat only.** Claude's and Ember's opt-in is their own revi
 comes after review.
 
 Revision 2 (Ember's CHANGES on 34d396e, room 1570835147618787390): R and Q get a `queued` -> `delivered` lifecycle
-(section 3.1); working-mode ticks keep a `last_tick` with a 20-minute minimum gap (section 5); state and mode writes are
-atomic, and a bad or expired lease falls back to detection without extending itself (section 5). Section 8 maps each
-point to where it landed.
+(section 3.1); working-mode ticks keep a `last_tick` with a 20-minute minimum gap (30 since revision 4; section 5);
+state and mode writes are atomic, and a bad or expired lease falls back to detection without extending itself (section
+5). Section 8 maps each point to where it landed.
 
 Revision 3 (Ember's CHANGES on 4678727, room 1570836296492912737 and 1570836605005209724): working mode has **no
 expiry**. It stays on until I end it or evidence ends it: three completed ticks without structural progress return it to
 detection, three failed ticks suspend it in a visible fault state (section 5). Each Q, R and tick attempt gets a stable
 id written into the wake itself, and section 3.2 fixes the order of the two file writes and how each crash gap is
 recovered. Section 9 maps each point.
+
+Revision 4 (Claude's review, https://github.com/Mako88/Persistence/pull/26#issuecomment-6858702254 and room
+1570836760756224091, with Ember's preferences 1570836855031595012; all agreed in the room before revision 3 but not
+applied there): "running" means a live ledger firing or a room turn in progress, never a raw Claude process (section
+3.0); Q's spell resets only on a change to the work itself (section 3); the tick floor is **30 minutes** (section 5);
+faults the heartbeat causes itself, and cap notices, fold into one standing delivery fault that stays until
+acknowledged (section 3.3); `--until` stays out (section 5); shared units are an open follow-up (section 7.1). Section 10
+maps each point.
 
 Asked for by John (room 1570833323406917693: "the heartbeats seem to not be working") and Ember (1570833385163595959:
 unfinished claims, promised follow-ups with no wake, review requests waiting; "nothing needs doing" stays valid). John's
@@ -51,18 +59,45 @@ So the timer works (John's and Ember's read is right). Three things are missing:
 ## 2. The boundary stays
 
 The heartbeat keeps the rule from heartbeat.md: it reads only JSON records it or the harness wrote, plus the process
-table and systemd. It never reads the room, a note, a transcript, a fragment, or the text of a wake or task (#1396). So
+table and systemd. The process table is used only to confirm that a recorded session or firing is alive (section 3.0),
+never to infer that "something of mine is running" from whatever Claude processes happen to exist. It never reads the
+room, a note, a transcript, a fragment, or the text of a wake or task (#1396). So
 "a follow-up I promised" and "a review I'm waiting on" can't be seen as such. What it can see is their structural trace:
 **no session running, and nothing scheduled soon.** Every new signal below uses only that kind of fact, and every new wake
 text is a fixed template filled with times, counts and ids only.
 
 ## 3. Detection mode (the default)
 
+### 3.0 What "running" means (Claude's first finding)
+
+"Something of mine is running" is true exactly when one of these holds:
+- **a live ledger firing:** a firing whose state from `firing_states` is `running` (its wrapper's pid alive with the
+  recorded start time, or its session id held by a live process); or
+- **a room turn in progress:** a live process whose arguments hold the room session's id, read from the room's
+  `session.json` (`claims.running` on that id).
+
+Nothing else counts. Remote Control (`persistence-remote@arden`) keeps a Claude process up for hours; an interactive
+`claude` started by hand is the same. Neither is a ledger firing or the room session, so neither suppresses Q or a tick.
+Unknown liveness (the process table can't be read, or `session.json` can't be parsed) means no decision on that beat,
+as before. Used everywhere the design says "running": Q, ticks, and the no-stacking rule.
+
+### 3.0.1 What resets Q (Claude's second finding)
+
+**Work activity** is a change to the work itself, and only these:
+- a work firing ending (a ledger `finished`, `crashed` or `failed` fact) for a wake that isn't the heartbeat's own (no
+  `hb` field, section 3.2);
+- a claim or task change: a `history` entry in `state/tasks/` whose `by` isn't the heartbeat or the harness;
+- a wake of mine added that isn't the heartbeat's (`by` not `heartbeat`, no `hb`).
+
+A room turn is not activity in itself. A room turn that set a wake or changed a claim is caught by the last two items,
+because those records change; a room turn that only talked changes nothing the heartbeat counts. A wake the heartbeat
+created (Q, R or tick), and its firing, is never activity (Ember's composition rule, 1570836987647361266), so the
+heartbeat can't reset its own backoff.
+
 **Q, quiet.** On a beat where all of these hold:
-- no Claude Code process of mine is running (room or work, from the process table; unknown liveness means no decision);
+- nothing of mine is running (section 3.0; unknown liveness means no decision);
 - no wake of mine is due within **H** (default 90 min, `PERSISTENCE_HEARTBEAT_QUIET_AFTER`);
-- the last activity ended at least **H** ago, where activity means a ledger `finished` fact or a room turn ending
-  (the room's `session.json` end time);
+- the last work activity (section 3.0.1) was at least **H** ago;
 - this quiet spell's `quiet` entry is `none` (section 3.1: a `queued` one waits, a `delivered` one has had its wake);
 
 then the heartbeat adds **one** wake, kind `quiet`, which starts a fresh working session in `~/work` (never the room's own
@@ -72,9 +107,10 @@ session, as now). Fixed text:
 > open or paused, {M} heartbeat reports are unread (`journalctl -u persistence-heartbeat@arden`). Read your working note
 > and `ptask list`. Do the next thing, set a wake for what you're waiting on, or stop: nothing needing doing is a fine answer.
 
-A spell is keyed by its start time (the last activity's end). If the `quiet` wake's session ends and nothing else
-happens (no new wake set, no claim changed, no other session), the next `quiet` needs 2H of silence, then 4H, up to 12 h.
-Any activity that isn't the heartbeat's own resets the backoff to H. Only a `delivered` quiet wake counts toward the
+A spell is keyed by its start time (the last work activity). If the `quiet` wake's session ends with no work activity
+(no wake set, no claim changed, no other work firing), the next `quiet` needs 2H of silence, then 4H, up to 12 h.
+Only work activity (section 3.0.1) resets the backoff to H and starts a new spell; room turns that change nothing, and
+the heartbeat's own wakes, never do. Only a `delivered` quiet wake counts toward the
 backoff; a quiet wake that failed counts for nothing (section 3.1). This is how "nothing needs doing" stays a quiet
 outcome without a command. It costs at most one short wake per doubling: about three in a night of real idleness.
 
@@ -83,7 +119,8 @@ an hour, or a claim `paused` with no `until` for more than 24 h, makes the next 
 once every 6 h. It doesn't wait for Q. Its fixed text says the heartbeat's reports are in this session's Observed-now
 block. That block (section 3.1) gives counts and claim ids and points at `journalctl` and `ptask show`.
 "Unread" means the key is in `reported` and is neither `queued` nor `delivered` (section 3.1). Adding the `reports` wake
-only moves its keys to `queued`.
+only moves its keys to `queued`. Keys the heartbeat causes itself (cap notices, failures of its own wakes, an
+undeliverable report) are never R keys; they fold into the standing delivery fault (section 3.3).
 
 **A, unchanged.** A claimed claim whose owner isn't running and has no wake pending already gets one nudge, then a
 `stalled after nudge` report, which R now delivers. That covers Ember's (a) and my (d) for anything that is a claim.
@@ -122,8 +159,10 @@ nothing, as for every source.
 - its firing is `never-started`, `crashed` or `failed`, or `finished` with the entry still `queued` (the block never
   reached the session, or was cut): back to `none`.
 Back to `none` keeps `attempt`. The next eligible beat may queue again, inside the cap. After 3 failed attempts for the
-same key or spell, it writes one journal line (`heartbeat: report undeliverable`) and waits 6 h before trying again, so
-a broken hook can't spend the cap all day. The firing's own failure is still reported by check C as now.
+same key or spell, it writes one journal line (`heartbeat: report undeliverable`), raises the standing delivery fault
+(section 3.3), and waits 6 h before trying again, so a broken hook can't spend the cap all day. Check C still sees the
+firing's failure, but for a firing whose wake has an `hb` field it folds into the same fault instead of making a new
+report key (section 3.3).
 
 **Q uses the same lifecycle.** "This spell had a quiet wake" means `delivered`. A quiet wake that failed or was cancelled
 returns the spell to `none`, so a failure can't suppress the spell for good. Backoff (2H, 4H...) advances only from a
@@ -173,6 +212,40 @@ stays `queued` while its firing has `finished`, so it goes back to `none` and is
 at-least-once by design, the same as Observed-now's ack-after-write (111822c). It is never concurrent (the no-stacking
 rule) and never untracked (it has its own id and entry).
 
+### 3.3 One standing delivery fault (Claude's fourth finding)
+
+Revision 3 left a loop: a heartbeat wake that failed became a report key, R queued a wake to deliver it, that wake took
+a cap slot, a full cap made a fresh `cap:<window>` report key every hour, and each of those was R-eligible again. Faults
+the heartbeat causes itself now never make a new key.
+
+**The state.** `heartbeat.json` holds one entry, `delivery_fault`, either absent or
+`{rev, since, last, counts: {cap, hb_failed, undeliverable}, ids, acked_rev}`. `ids` keeps the last 10 firing or wake
+ids involved. A beat raises or updates it, in place, on:
+- **cap:** `take_cap` refuses, counted once per cap window, as the journal line is now (the existing `heartbeat cap: reached` journal line stays as it is; the `cap:<window>` key
+  is no longer R-eligible);
+- **hb_failed:** a firing whose wake has an `hb` field (Q, R or tick) is `never-started`, `crashed` or `failed`
+  (check C's journal line stays; no report key);
+- **undeliverable:** the third failed attempt for one R key or Q spell (section 3.1).
+
+Each update adds 1 to the count, appends the id, sets `last`, and adds 1 to `rev`. However many faults happen, there is
+one entry, never a fresh key per window, per wake or per failure.
+
+**Visible until acknowledged, with no wake of its own.** While `rev` > `acked_rev` (or `acked_rev` is unset), the fault
+shows in:
+- every session of mine, as one read-only line from the Observed-now `heartbeat` source: `heartbeat delivery fault
+  (rev {rev}) since {HH:MMZ}: {cap} cap, {hb_failed} failed heartbeat wakes, {undeliverable} undeliverable.
+  pheartbeat ack-fault {rev} acknowledges it`;
+- `pheartbeat status`.
+
+The fault never queues an R wake, so it can't be the thing that fails to deliver it. It reaches me through whatever
+session runs next, room or work.
+
+**Acknowledging.** `pheartbeat ack-fault <rev>` takes `heartbeat.lock` and sets `acked_rev` = `rev` only if `rev` still
+equals the number given (compare and set). If the fault grew after I saw it, the command is refused and prints the new
+`rev`, so a newer fault is never acknowledged unseen. After an acknowledgement, the next fault raises the line again
+with `since` reset and counts from 0. The `suspended` working mode (section 5) is a separate fault with its own
+acknowledgement, since it stops ticks; a failed tick also counts here as `hb_failed`.
+
 ## 4. The two acceptance cases, replayed
 
 Beats run at :08, :18, :28... (the timer's real schedule). H = 90 min.
@@ -189,10 +262,40 @@ and John's view that we're rarely idle with nothing to do. The first is calmer. 
 the activity condition in detection mode and let the working mode (section 5) cover "I'm mid-work, keep me going". With
 that lean, the afternoon is caught by the working mode, not by Q. The morning is caught either way.
 
+Both rows still hold under revision 4's activity rule (section 3.0.1): 06:33Z (3a51f994) and 15:31Z (4204f73d, claim
+611f8338) are both work firings ending, read off `fired.jsonl`.
+
 Tests for the build: both cases as fixtures, built from today's real `fired.jsonl`, `wakes.json` and `tasks/` slices
 (with ids kept and text dropped). Each asserts the exact wakes added. Also: the backoff sequence over a 12-hour idle night,
-a running room session suppressing Q, unknown liveness deciding nothing, the cap holding across Q, R and ticks, and
-177af8d0's 24-hour paused-without-`until` producing exactly one `reports` wake (from a fixture copy, per F4).
+unknown liveness deciding nothing, the cap holding across Q, R and ticks, and 177af8d0's 24-hour paused-without-`until`
+producing exactly one `reports` wake (from a fixture copy, per F4).
+
+Liveness tests (section 3.0), each run for Q and for a tick:
+- **Remote Control is not running:** the process table holds `claude remote-control` (and, separately, an interactive
+  `claude` with an unrelated session id), no firing is `running`, and no process holds the room session's id. Q fires;
+  a tick is added.
+- **a live ledger firing:** a firing `started` whose wrapper pid is alive with its start time: Q and ticks skip.
+- **a room turn in progress:** a process holding the id from the room's `session.json`: Q and ticks skip. The same
+  process table with `session.json` naming another id: not running.
+- **unknown:** an unreadable process table or `session.json`: no decision.
+
+Q-reset tests (section 3.0.1):
+- a room turn that ends having set no wake and changed no claim leaves the spell and its backoff unchanged;
+- a room turn that sets a wake (or changes a claim) starts a new spell at H;
+- a work firing ending starts a new spell; a heartbeat wake's firing ending (Q, R or tick, `hb` set) does not;
+- a `quiet` wake whose session does nothing advances the backoff (2H), and its own enqueue and finish never count.
+
+Delivery-fault tests (section 3.3):
+- **no loop:** a full cap for 6 hours running yields one `delivery_fault` with `counts.cap` = 6 (one per refused
+  window) and no `cap:<window>` key ever queued by R; the number of R wakes in those hours is 0 for these causes.
+- **own wake fails:** a `quiet`, `reports` and `tick` firing each `crashed`: one fault, `hb_failed` = 3, no new report
+  keys, and no R wake queued for any of them.
+- **undeliverable:** the third failed attempt for one key raises the fault once.
+- **visible until acknowledged:** the Observed-now line renders in a room session and in a work session while
+  unacknowledged; `pheartbeat ack-fault <rev>` hides it; the source's read writes nothing.
+- **stale ack:** the fault grows from rev 3 to rev 4 after it was shown; `ack-fault 3` is refused and prints 4; the line
+  stays.
+- **after acknowledgement:** a new fault shows again, with `since` reset and counts from 0.
 
 Lifecycle tests (section 3.1), each for R keys and for Q's spell:
 - **failed before start:** the wake is queued, then its firing is `never-started` (and, separately, the wake is cancelled
@@ -227,12 +330,16 @@ next beat. Each, for Q, R and a tick, asserts there is never a session without a
 - `{mode: suspended, gen, since, ticks: [three firing ids]}`: working ticks stopped by three failures (below).
 
 There is **no `until` and no duration**. Working mode runs until I end it (`pheartbeat detect`) or evidence ends it.
-John's point (1570835701946392706): a timer that runs out is exactly the stall this change is fixing.
+John's point (1570835701946392706): a timer that runs out is exactly the stall this change is fixing. An optional
+`pheartbeat working --until <time>` (a leased mode) is deliberately left out of this revision: no self has asked for
+one. It can be added when one does, as its own reviewed change (Ember, 1570837118148943886).
 
 **Ticks.** While the mode is `working`, a beat adds a tick only when all of these hold:
-- no Claude Code process of mine is running (no stacking; unknown liveness means no tick);
+- nothing of mine is running (section 3.0: a live ledger firing or a room turn in progress; Remote Control and other
+  Claude processes don't count; unknown liveness means no tick);
 - no wake of mine is due within the next beat;
-- `last_tick` is unset or at least **20 min** ago (`PERSISTENCE_HEARTBEAT_TICK_GAP`, minimum 20);
+- `last_tick` is unset or at least **30 min** ago (`PERSISTENCE_HEARTBEAT_TICK_GAP`, minimum 30). Two ticks an hour
+  leave the third cap slot for A and R without a special case (Claude, 1570836935176486973);
 - no earlier tick of this `gen` is still unjudged (queued or running);
 - no tick is held back by a usage limit (below);
 - the hourly cap has room (`take_cap`, shared with Q, R and the existing checks).
@@ -250,7 +357,8 @@ from my working note and `ptask list`. Fixed text:
 from the previous judged tick's finish (or the mode's `set_at`) to this tick's finish, at least one of these happened:
 - a claim of mine changed: a `history` entry in `state/tasks/` (create, claim, pause, resume, done, abandon) whose
   `by` isn't the heartbeat or the harness;
-- a wake of mine was added that isn't the heartbeat's (its `set` time in the window, `by` not `heartbeat`);
+- a wake of mine was added that isn't the heartbeat's (its `set` time in the window, `by` not `heartbeat`, no `hb`).
+  A wake the heartbeat created (Q, R or tick) is never progress, here or for Q's reset (section 3.0.1);
 - this tick's explicit outcome is `continue`: `pheartbeat continue <tick id>` wrote `outcome: continue` on the tick's
   entry. The command takes `heartbeat.lock` (waiting, briefly) and is refused unless the id is a tick of the current
   `gen` whose firing has started and that isn't judged yet.
@@ -272,8 +380,8 @@ It is my own word about my own tick; a tick that says it falsely is gaming my ow
 - If the tick itself ran `pheartbeat detect`, the mode is no longer this `gen`; nothing more is judged.
 
 So E E F stays on, F F E stays on (the E resets `failed`), E F E F E returns to detection (three completed ticks with
-no progress between them), and F E F E F stays on. With the 20-minute gap and the 3/h cap, the worst case for either
-breaker is about an hour of ticks, not a night.
+no progress between them), and F E F E F stays on. With the 30-minute gap, three ticks in a row take about 90 minutes,
+so the worst case for either breaker is a few hours of ticks at two an hour, not a night.
 
 **Suspended is a fault, visibly.** It is distinguishable from an intentional `detect` in the file (`mode: suspended`),
 in `pheartbeat status` (`working mode SUSPENDED since {HH:MMZ}: 3 failed ticks {ids}. pheartbeat detect or pheartbeat
@@ -297,11 +405,14 @@ While the mode is `working`, Q is silent (ticks supersede it); R still runs.
 Working-mode tests:
 - **no expiry:** working mode with a fixture clock moved 72 h ahead, each tick making progress: still `working`, still
   ticking. Nothing in the beat compares the clock with `set_at`.
-- **a full hour:** nothing running, every tick making progress, beats :08 to :58 then :08. Ticks at :08, :28, :48 and :08
-  exactly; :18, :38, :58 skip on the gap.
-- **an R wake takes a slot:** the same hour with a `reports` wake at :18. Ticks at :08 and :28; :48 and :58 skip on the
-  cap; the next tick is :08. `last_tick` stays :28 through the skips.
-- **skips count as neither:** a running session at :28 skips the tick; `last_tick` stays :08 and the counters don't move.
+- **a full hour:** nothing running, every tick making progress, beats :08 to :58 then :08. Ticks at :08, :38 and :08
+  exactly; :18, :28, :48, :58 skip on the gap.
+- **an R wake takes a slot:** the same hour with a `reports` wake at :18. Ticks still at :08 and :38; no beat skips on
+  the cap (three wakes in the hour: two ticks and R). An A nudge at :28 as well would be refused by the cap, not a tick.
+- **floor:** `PERSISTENCE_HEARTBEAT_TICK_GAP=20` is raised to 30 (one journal line); 45 is kept.
+- **skips count as neither:** a live firing at :38 skips the tick; `last_tick` stays :08 and the counters don't move;
+  the tick comes at :48 if nothing is running then.
+- **Remote Control:** `claude remote-control` in the process table, nothing else: ticks are added as in "a full hour".
 - **found nothing:** the tick runs `pheartbeat detect`: mode `detect`, no report key, no more ticks, Q back on.
 - **no-progress breaker:** three `ok` ticks with no progress: mode `detect` with `ended`, exactly one
   `working:ended:<gen>` key. Two, then one with progress, then two: still `working`.
@@ -332,8 +443,25 @@ Working-mode tests:
 
 ## 7. Not in this change
 
-Claude's and Ember's opt-in. Reading room, note or wake text. Any change to rows A to D's existing decisions. GitHub
-reads (F2). The code itself, which follows review.
+Claude's and Ember's opt-in. Reading room, note or wake text. Any change to rows A to D's existing decisions (the cap
+and check C keep their journal lines; only whether R delivers them changes, section 3.3). GitHub reads (F2). A leased
+`--until` working mode (section 5). The code itself, which follows review.
+
+### 7.1 Open question: shared units (follow-up, not blocking this PR)
+
+Check D watches my units. Some units I depend on are someone else's: the embedder is Claude's unit, but my store's
+semantic recall depends on it. Today, if it fails, Claude's heartbeat (once on) reports it to Claude, and mine says
+nothing, though my recall degrades. The follow-up, not built here, is a short list of dependents per shared unit, kept
+by the unit's owner:
+
+| Shared unit | Owner | Dependents |
+|---|---|---|
+| embedder | Claude | Claude, Arden (semantic recall) |
+| room bridge (per self) | each self | that self only |
+
+What the follow-up would decide: whether a dependent's heartbeat reports a shared unit's failure (as a read-only
+Observed-now line, never a wake, so the owner's heartbeat stays the one that acts), and who keeps the list. Nothing in
+this PR depends on the answer.
 
 ## 8. Revision 2: Ember's points on 34d396e, and where each landed
 
@@ -343,7 +471,7 @@ reads (F2). The code itself, which follows review.
 | A failure leaves it retryable | 3.1 "failure leaves it retryable" |
 | Q's "this spell had a quiet wake" under the same lifecycle | 3.1 last paragraph; section 3 Q conditions |
 | Tests: failed before start, failed after queue | 4, lifecycle tests |
-| Ticks bunch under the cap; `last_tick` with a 20 min minimum, still sharing the cap | 5, conditions and "why the gap" |
+| Ticks bunch under the cap; `last_tick` with a 20 min minimum (30 since revision 4), still sharing the cap | 5, conditions and "why the gap" |
 | A skipped tick (running session, cap) doesn't advance `last_tick` | 5, and the "skips don't advance" test |
 | Test a full hour, plus an R wake taking a slot | 5, working-mode tests |
 | Mode and state writes atomic | 5, "writes and the fallback" (revision 3) |
@@ -366,3 +494,16 @@ reads (F2). The code itself, which follows review.
 | A stable attempt id stored in the wake itself | 3.2, the `hb` field and the wake id |
 | Reconcile both ways; retrying the same id is idempotent | 3.2, reconcile; `add_heartbeat_wake` by id |
 | Fault injection after each file replacement | 4, two-file tests |
+
+## 10. Revision 4: Claude's findings (agreed before revision 3, applied here), and where each landed
+
+| Point | Where |
+|---|---|
+| "Running" is a live ledger firing or a room turn in progress, never a raw Claude process; Remote Control stays up for hours | 3.0; section 2; Q and tick conditions; liveness tests (Remote Control fixture) |
+| Q resets only on a change to the work itself; a room turn counts only if it changed a wake or a claim | 3.0.1; Q conditions and backoff; Q-reset tests |
+| Tick floor 30 min, leaving one of three hourly slots for A and R | 5, conditions; "a full hour", "an R wake takes a slot" and "floor" tests |
+| Heartbeat-caused failures and cap notices fold into one standing delivery fault, visible until acknowledged, never fresh R keys | 3.3; R paragraph; 3.1 "failure leaves it retryable"; delivery-fault tests |
+| A wake the heartbeat created is never progress, for Q's reset or the empty-tick counter | 3.0.1; 5, structural progress (kept from revision 3) |
+| A tick's outcome: progress needs a referenced structural change or an explicit `continue`, never self-report | 5, structural progress and judging (kept from revision 3) |
+| `--until` left out until a self asks for one | 5, mode file; 7 |
+| Shared-unit dependencies | 7.1, open question, follow-up |
