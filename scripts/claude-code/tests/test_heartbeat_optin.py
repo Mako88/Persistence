@@ -79,7 +79,7 @@ class Base(unittest.TestCase):
     def check(self, user="ubuntu", stalled=False, at=None):
         self.settings()
         return heartbeat_optin.check(home=self.home, user=user, repo=self.repo, systemctl=self.systemctl,
-                                     path=str(self.bin), stalled=stalled, at=at)
+                                     path=str(self.bin), stalled=stalled, at=at or self.reviewed)
 
     def item(self, items, name):
         return next(i for i in items if i.name == name)
@@ -107,7 +107,7 @@ class Ready(Base):
         self.settings()
         before = sorted((p, p.stat().st_mtime_ns) for p in self.tmp.rglob("*"))
         heartbeat_optin.check(home=self.home, user="ubuntu", repo=self.repo, systemctl=self.systemctl,
-                              path=str(self.bin), stalled=True)
+                              path=str(self.bin), stalled=True, at=self.reviewed)
         self.assertEqual(sorted((p, p.stat().st_mtime_ns) for p in self.tmp.rglob("*")), before)
 
 
@@ -152,11 +152,11 @@ class NotReady(Base):
         self.assertIn(self.reviewed, detail)
 
     def test_pinned_to_the_reviewed_commit(self):
-        # A later commit, deployed, is not the reviewed one: --at <reviewed> refuses it, HEAD accepts it.
+        # A later commit, deployed, is not the reviewed one: --at <reviewed> refuses it, --at HEAD accepts it.
         (self.repo / "claims.py").write_text((self.repo / "claims.py").read_text() + "\n# later\n")
         git(self.root, "commit", "-qam", "later, unreviewed")
         shutil.copy(self.repo / "claims.py", self.deployed / "claims.py")
-        self.assertNotIn("deployed claims.py", self.failing(self.check()))
+        self.assertNotIn("deployed claims.py", self.failing(self.check(at="HEAD")))
         self.assertIn("deployed claims.py", self.failing(self.check(at=self.reviewed)))
         self.assertIn("deployed claims.py", self.failing(self.check(at=self.reviewed[:12])))
 
@@ -222,6 +222,7 @@ class TheSilentFailures(Base):
         self.assertNotIn("def stalled_on(", core)
         (self.repo / "heartbeat.py").write_text(core)
         git(self.root, "commit", "-qam", "core without STALLED")
+        self.reviewed = git(self.root, "rev-parse", "HEAD")  # the commit under review is the one without it
         shutil.copy(self.repo / "heartbeat.py", self.deployed / "heartbeat.py")
         self.env.update(PERSISTENCE_HEARTBEAT_STALLED="true", PERSISTENCE_OBSERVE_SOURCES="heartbeat")
         self.assertIn("STALLED support", self.failing(self.check(stalled=True)))
@@ -258,11 +259,11 @@ class Cli(Base):
 
     def test_exit_status_and_lines(self):
         out = []
-        self.assertEqual(self.main(["check"], out), 0)
+        self.assertEqual(self.main(["check", "--at", self.reviewed], out), 0)
         self.assertEqual(out[-1], f"ready: PERSISTENCE_HEARTBEAT, as deployed from {self.reviewed}")
         self.env["PERSISTENCE_TASKCLAIMS"] = "true"
         out.clear()
-        self.assertEqual(self.main(["check", "--stalled"], out), 1)
+        self.assertEqual(self.main(["check", "--stalled", "--at", self.reviewed], out), 1)
         self.assertTrue(out[-1].startswith("NOT READY for PERSISTENCE_HEARTBEAT_STALLED:"), out[-1])
         self.assertTrue(any(line.startswith("MISSING PERSISTENCE_TASKCLAIMS") for line in out), out)
 
@@ -272,6 +273,18 @@ class Cli(Base):
         self.assertEqual(self.main(["check", "--stalled", "--at", "0" * 40], out), 1)
         for bad in (["check", "--at"], ["check", "--bogus"], ["check", "--at", "a", "--at", "b"]):
             self.assertEqual(self.main(bad, out), 2, bad)
+
+    def test_at_is_required(self):
+        # Arden (msg 1570857831513587753): the preflight certifies the reviewed commit; a HEAD fallback would certify
+        # whatever is checked out. No --at: exit 2, says why, checks nothing.
+        for argv in (["check"], ["check", "--stalled"]):
+            out = []
+            self.assertEqual(self.main(argv, out), 2, argv)
+            self.assertTrue(out[0].startswith("--at <commit> is required"), out)
+            self.assertFalse(any(line.startswith(("ok ", "ready", "NOT READY")) for line in out), out)
+        with self.assertRaises(TypeError):
+            heartbeat_optin.check(home=self.home, user="ubuntu", repo=self.repo, systemctl=self.systemctl,
+                                  path=str(self.bin))
 
 
 class Docs(unittest.TestCase):

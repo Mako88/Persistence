@@ -1,7 +1,7 @@
 """The heartbeat opt-in preflight: is this self ready to turn its heartbeat on? Read-only.
 
-    python3 heartbeat_optin.py check [--at <commit>]              ready for PERSISTENCE_HEARTBEAT (B, C, A, D)?
-    python3 heartbeat_optin.py check --stalled [--at <commit>]    ready for PERSISTENCE_HEARTBEAT_STALLED too?
+    python3 heartbeat_optin.py check --at <commit>              ready for PERSISTENCE_HEARTBEAT (B, C, A, D)?
+    python3 heartbeat_optin.py check --stalled --at <commit>    ready for PERSISTENCE_HEARTBEAT_STALLED too?
 
 Each self opts in for itself (heartbeat.md, "Consent and the way back"); this script only says what is and isn't in
 place, so turning a switch on is never a guess. It reads the self's ~/.claude/settings.json env block (never os.environ,
@@ -9,8 +9,9 @@ as the heartbeat does), the deployed modules beside the hook, PATH, `systemctl s
 git objects (`git rev-parse`, `git show`). It writes nothing, starts nothing and changes no setting. Exit 0 means ready;
 1 lists what's missing.
 
-The deployed modules are compared with a commit, never the working files: --at names the reviewed one (default HEAD),
-and the ready line names the full hash, so an unreviewed edit deployed the same way can't pass for reviewed.
+The deployed modules are compared with a commit, never the working files: --at names the reviewed one and is required
+(no fallback to HEAD, which would certify whatever happens to be checked out), and the ready line names the full hash,
+so an unreviewed edit deployed the same way can't pass for reviewed.
 
 It also refuses "ready" while a switch already on would fail silently, whichever level is asked: STALLED on without
 `heartbeat` in PERSISTENCE_OBSERVE_SOURCES (its R and Q wakes would fire, never render and go undeliverable;
@@ -61,7 +62,7 @@ def _loaded(systemctl, unit):
     return state == "loaded", state or "empty"
 
 
-def check(home=None, user=None, repo=None, systemctl=heartbeat.systemctl_run, path=None, stalled=False, at=None):
+def check(home=None, user=None, repo=None, systemctl=heartbeat.systemctl_run, path=None, stalled=False, *, at):
     home = Path(home or Path.home())
     user = user or pwd.getpwuid(os.geteuid()).pw_name
     repo = Path(repo or Path(__file__).resolve().parent)
@@ -70,7 +71,7 @@ def check(home=None, user=None, repo=None, systemctl=heartbeat.systemctl_run, pa
 
     items = []
 
-    rev = at or "HEAD"
+    rev = at  # required: the reviewed commit, never a default
     sha = _git(repo, "rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}")
     sha = sha.decode().strip() if sha else None
     items.append(Item("commit", bool(sha), sha or f"{rev} is not a commit in {repo}"))
@@ -148,7 +149,7 @@ def ready(items):
 
 
 def _args(argv):
-    """(stalled, at), or None when the line isn't `check [--stalled] [--at <commit>]`."""
+    """(stalled, at), or None when the line isn't `check [--stalled] --at <commit>`; at is None when --at is missing."""
     if not argv or argv[0] != "check":
         return None
     stalled, at, rest = False, None, argv[1:]
@@ -169,6 +170,11 @@ def main(argv=None, out=print, **kw):
         out(__doc__.split("\n\n")[1])
         return 2
     stalled, at = parsed
+    if at is None:
+        out("--at <commit> is required: the preflight certifies the reviewed commit, and HEAD would certify whatever "
+            "happens to be checked out.")
+        out(__doc__.split("\n\n")[1])
+        return 2
     items = check(stalled=stalled, at=at, **kw)
     for i in items:
         out(f"{'ok' if i.ok else ('MISSING' if i.required else 'note')} {i.name}: {i.detail}")

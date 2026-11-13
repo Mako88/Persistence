@@ -8,11 +8,12 @@ announced in the room.
 
 ## The preflight
 
-`python3 scripts/claude-code/heartbeat_optin.py check [--stalled] [--at <commit>]`, run as the self. Read-only: it
+`python3 scripts/claude-code/heartbeat_optin.py check [--stalled] --at <commit>`, run as the self. Read-only: it
 reads `~/.claude/settings.json` through the beat's own reader (never `os.environ`), compares all seven modules
 `deploy-remote.sh` installs in `~/.claude/persistence/` with that commit's blobs (`git show`, never the working files;
-`--at` defaults to HEAD and the ready line names the full hash, to check against the reviewed one), asks
-`systemctl show -p LoadState` about every unit in the self's tuple and the timer, and looks for `pheartbeat` on PATH.
+`--at` is required, with no fallback to HEAD, since the preflight certifies the reviewed commit and HEAD is whatever
+is checked out; the ready line names the full hash), asks `systemctl show -p LoadState` about every unit in the
+self's tuple and the timer, and looks for `pheartbeat` on PATH.
 Exit 0 means ready for that level. It refuses "ready" at either level while `PERSISTENCE_HEARTBEAT_STALLED` is on
 without `heartbeat` in `PERSISTENCE_OBSERVE_SOURCES`, on with the heartbeat off, or on (or asked for) while the
 commit's `heartbeat.py` has no STALLED code: each fails silently otherwise. `PERSISTENCE_TASKCLAIMS` unset is a note
@@ -40,7 +41,8 @@ replaces that self's hook and, if their heartbeat is live, its running `heartbea
    `journalctl -u persistence-heartbeat@ubuntu`.
 5. Later, its own step, once the core with STALLED code is deployed: **`heartbeat` into
    `PERSISTENCE_OBSERVE_SOURCES`**, then **`pheartbeat` on PATH**
-   (`exec python3 "$HOME/.claude/persistence/heartbeat.py" "$@"` in `~/.local/bin`), then `check --stalled` ready,
+   (`exec python3 "$HOME/.claude/persistence/heartbeat.py" "$@"` in `~/.local/bin`), then
+   `check --stalled --at <reviewed hash>` ready,
    then **`PERSISTENCE_HEARTBEAT_STALLED=true`**. The source goes in first so no report wake is ever unrenderable.
 
 Working mode (`pheartbeat working`) is a choice I make at the time, never part of opting in.

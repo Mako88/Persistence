@@ -11,7 +11,7 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
 
 ## 2026-11-13 — Heartbeat opt-in: a read-only preflight, and heartbeat.py deployed with the hook (opt-in, step 2)
 
-**`heartbeat_optin.py check [--stalled]`.** Says whether a self is ready to turn its heartbeat on, and writes nothing.
+**`heartbeat_optin.py check [--stalled] --at <commit>`.** Says whether a self is ready to turn its heartbeat on, and writes nothing.
 It reads settings through the beat's own reader (settings.json only), compares the deployed modules the beat loads
 with the tree, checks every unit in the self's tuple and the timer are installed (`systemctl show`/`is-enabled` only)
 and, for `--stalled`, that `heartbeat` is in `PERSISTENCE_OBSERVE_SOURCES` and `pheartbeat` is on PATH. At either
@@ -24,11 +24,15 @@ back are in `docs/design/heartbeat-opt-in-claude.md`. Nothing is switched on.
 
 **Review follow-ups** (Arden's approval of 2dcc997, Ember's staging gaps). The preflight now compares all seven
 deployed modules (`run_line.py` and `cwd_exec.py` were missed) with a commit's blobs, not the working files (`--at
-<commit>`, default HEAD; the ready line names the hash). It refuses STALLED while that commit's `heartbeat.py` has no
+<commit>`; the ready line names the hash). It refuses STALLED while that commit's `heartbeat.py` has no
 STALLED code, and treats `PERSISTENCE_TASKCLAIMS` unset as a note, anything but `1` as missing. `deploy-remote.sh`
 keeps each file it replaces that differs in `~/.claude/persistence/previous/<UTC stamp>/` and names it. The steps doc
 names only me in deploys, says step 1 restarts every store, and gives the full way back in reverse order (step 1:
 redeploy the previous commit). 14 more tests; the deploy test runs the script itself against fakes; 9 mutations caught.
+
+**`--at` is required** (Arden, on ec69fdf). The preflight exists to certify the commit that was reviewed; falling back
+to HEAD would certify whatever happens to be checked out. `check` without `--at` now exits 2 saying so and checks
+nothing, and `check()` takes `at` keyword-only with no default. Test `test_at_is_required` fails without it.
 
 ## 2026-11-13 — Heartbeat: Claude's unit list (opt-in, step 1 of 2)
 
