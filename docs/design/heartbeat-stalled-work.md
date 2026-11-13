@@ -23,6 +23,14 @@ faults the heartbeat causes itself, and cap notices, fold into one standing deli
 acknowledged (section 3.3); `--until` stays out (section 5); shared units are an open follow-up (section 7.1). Section 10
 maps each point.
 
+Revision 5 (Ember on ee12dab, room 1570839439264055377; Claude's approval of ee12dab with two nits,
+https://github.com/Mako88/Persistence/pull/26#pullrequestreview-5894686531 and room 1570840136336539749): each beat
+decides working-mode ticks **last**, after every non-tick decision, so a tick can never take the cap slot an A nudge or
+an R wake needs (section 3, "order within a beat"); the "R wake takes a slot" test had the cap arithmetic wrong and is
+corrected; a new test covers a tick and a non-tick wake competing for the last slot; `delivery_fault.rev` never resets
+across acknowledgements (section 3.3); section 8's pointer to a missing "why the gap" paragraph is fixed. Section 11
+maps each point.
+
 Asked for by John (room 1570833323406917693: "the heartbeats seem to not be working") and Ember (1570833385163595959:
 unfinished claims, promised follow-ups with no wake, review requests waiting; "nothing needs doing" stays valid). John's
 working-mode idea (1570833900794814497) and Claude's four conditions for it (1570834052209053760) are in section 5.
@@ -132,6 +140,20 @@ directly is fork F2.
 
 Every new wake counts against the existing hourly cap (3/h), so Q, R and the working mode together can't exceed what
 the heartbeat already may do.
+
+**Order within a beat (revision 5, Ember 1570839439264055377).** One beat runs under `heartbeat.lock` in this fixed
+order, and each step's `take_cap` sees the slots the steps before it took:
+1. the existing checks, as now: B (overdue), then the ledger's C and A (C's recovery before A's nudges and reports),
+   then D (units);
+2. R (`reports` wake);
+3. Q (`quiet` wake; silent while the mode is `working`, section 5);
+4. the working-mode tick, **last**.
+
+A tick is decided only after every non-tick decision of the same beat has been made and has taken its slot. So when a
+tick and an A nudge or R wake are both eligible and one slot is left, the non-tick wake gets it, the tick skips on the
+cap, and `last_tick` stays as it was (section 5: a skipped beat never advances it). Nothing reserves a slot for a
+later beat; the floor of 30 minutes is what leaves the third slot free in an ordinary hour, and this order is what
+settles a contest inside one beat.
 
 ### 3.1 Queued is not delivered (Ember's first point)
 
@@ -243,8 +265,11 @@ session runs next, room or work.
 **Acknowledging.** `pheartbeat ack-fault <rev>` takes `heartbeat.lock` and sets `acked_rev` = `rev` only if `rev` still
 equals the number given (compare and set). If the fault grew after I saw it, the command is refused and prints the new
 `rev`, so a newer fault is never acknowledged unseen. After an acknowledgement, the next fault raises the line again
-with `since` reset and counts from 0. The `suspended` working mode (section 5) is a separate fault with its own
-acknowledgement, since it stops ticks; a failed tick also counts here as `hb_failed`.
+with `since` reset and counts from 0. `rev` itself **never resets** (Claude, rev 5 nit): it only grows, across every
+acknowledgement, so a new fault always has `rev` > `acked_rev`. Resetting it to 0 at an ack could make a later fault's
+`rev` equal or fall below `acked_rev` and hide it. Only `since`, `last`, `counts` and `ids` start over. The
+`suspended` working mode (section 5) is a separate fault with its own acknowledgement, since it stops ticks; a failed
+tick also counts here as `hb_failed`.
 
 ## 4. The two acceptance cases, replayed
 
@@ -295,7 +320,8 @@ Delivery-fault tests (section 3.3):
   unacknowledged; `pheartbeat ack-fault <rev>` hides it; the source's read writes nothing.
 - **stale ack:** the fault grows from rev 3 to rev 4 after it was shown; `ack-fault 3` is refused and prints 4; the line
   stays.
-- **after acknowledgement:** a new fault shows again, with `since` reset and counts from 0.
+- **after acknowledgement:** acknowledge at rev 4; a new fault shows again as rev 5 (never 1), with `since` reset and
+  counts from 0; `ack-fault 4` given again is refused and prints 5, so it can't hide the new fault.
 
 Lifecycle tests (section 3.1), each for R keys and for Q's spell:
 - **failed before start:** the wake is queued, then its firing is `never-started` (and, separately, the wake is cancelled
@@ -342,7 +368,8 @@ one. It can be added when one does, as its own reviewed change (Ember, 157083711
   leave the third cap slot for A and R without a special case (Claude, 1570836935176486973);
 - no earlier tick of this `gen` is still unjudged (queued or running);
 - no tick is held back by a usage limit (below);
-- the hourly cap has room (`take_cap`, shared with Q, R and the existing checks).
+- the hourly cap has room (`take_cap`, shared with Q, R and the existing checks), **after** every non-tick decision of
+  this beat has taken its slot: the tick is the last decision of a beat (section 3, "order within a beat").
 
 Then it adds one wake, kind `tick`, `hb` `tick:<gen>`, in the order of section 3.2, starting a fresh working session
 from my working note and `ptask list`. Fixed text:
@@ -408,7 +435,15 @@ Working-mode tests:
 - **a full hour:** nothing running, every tick making progress, beats :08 to :58 then :08. Ticks at :08, :38 and :08
   exactly; :18, :28, :48, :58 skip on the gap.
 - **an R wake takes a slot:** the same hour with a `reports` wake at :18. Ticks still at :08 and :38; no beat skips on
-  the cap (three wakes in the hour: two ticks and R). An A nudge at :28 as well would be refused by the cap, not a tick.
+  the cap (three wakes in the hour: two ticks and R). With an A nudge at :28 as well, the nudge is the third wake of
+  the cap window (opened at :08) and is allowed; the cap then refuses the tick at :38 (and :48, :58), `last_tick` stays
+  :08, the refusal counts once in `delivery_fault.counts.cap`, and the next tick is at :08 when the window reopens.
+- **ticks last on a contested beat:** cap window opened at :08 with two slots used. Case A: a tick at :08 and an R wake
+  at :18; at :38 the tick is eligible (gap 30 min, nothing running) and so is an A nudge. Case R: a tick at :08 and an
+  A nudge at :18; at :38 the tick and an R wake are both eligible (R's 6 h spacing allows it).
+  The non-tick wake is queued and takes the third slot; the tick skips on the cap; `last_tick` stays :08; the tick
+  counters don't move. Run with the beat's steps in their real order, not with the tick first; a variant that moves
+  the tick ahead of A must fail this test (the end-of-block check that the test covers the order).
 - **floor:** `PERSISTENCE_HEARTBEAT_TICK_GAP=20` is raised to 30 (one journal line); 45 is kept.
 - **skips count as neither:** a live firing at :38 skips the tick; `last_tick` stays :08 and the counters don't move;
   the tick comes at :48 if nothing is running then.
@@ -471,7 +506,7 @@ this PR depends on the answer.
 | A failure leaves it retryable | 3.1 "failure leaves it retryable" |
 | Q's "this spell had a quiet wake" under the same lifecycle | 3.1 last paragraph; section 3 Q conditions |
 | Tests: failed before start, failed after queue | 4, lifecycle tests |
-| Ticks bunch under the cap; `last_tick` with a 20 min minimum (30 since revision 4), still sharing the cap | 5, conditions and "why the gap" |
+| Ticks bunch under the cap; `last_tick` with a 20 min minimum (30 since revision 4), still sharing the cap | 5, conditions (the `last_tick` gap bullet; revision 5 fixed this pointer, the "why the gap" paragraph never existed) |
 | A skipped tick (running session, cap) doesn't advance `last_tick` | 5, and the "skips don't advance" test |
 | Test a full hour, plus an R wake taking a slot | 5, working-mode tests |
 | Mode and state writes atomic | 5, "writes and the fallback" (revision 3) |
@@ -507,3 +542,13 @@ this PR depends on the answer.
 | A tick's outcome: progress needs a referenced structural change or an explicit `continue`, never self-report | 5, structural progress and judging (kept from revision 3) |
 | `--until` left out until a self asks for one | 5, mode file; 7 |
 | Shared-unit dependencies | 7.1, open question, follow-up |
+
+## 11. Revision 5: Ember's last change and Claude's two nits on ee12dab, and where each landed
+
+| Point | Where |
+|---|---|
+| Ticks are decided last on each beat, after A, R, Q and the existing safety checks, so a tick can't take the slot a non-tick wake needs (Ember, 1570839439264055377) | 3, "order within a beat"; 5, the cap condition |
+| Test: two slots used, a tick and an A or R wake both eligible; the non-tick wake is queued, the tick skips, `last_tick` doesn't move (Ember) | 5, "ticks last on a contested beat" test |
+| The :28 sentence: tick :08 and R :18 make an A nudge at :28 the third wake, allowed; the cap refuses the :38 tick (Ember) | 5, "an R wake takes a slot" test |
+| `delivery_fault.rev` never resets across acks; only `since`, `last`, counts and ids do (Claude, non-blocking) | 3.3, acknowledging |
+| Section 8 pointed at a "why the gap" paragraph that doesn't exist (Claude, non-blocking) | 8, that row |
