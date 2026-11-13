@@ -92,8 +92,16 @@ plus the fault line while `rev > acked_rev` and the suspended line while the mod
 queued key's actionable identity (its claim for a claim or paused key, else the key) is listed only as far as fits under
 render's 6 lines; the rest is the "N more not shown" count. Its ack moves exactly the listed entries still `queued` under
 that wake id to `delivered`, and the omitted ones back to `none` with no failure, under `heartbeat.lock` (compare and
-set). If the ack can't take the lock in 5 s it writes `state/heartbeat-ack-lost/<wake id>` (no content) and the beat
-puts that wake's entries back to `none` without a failed attempt: re-delivered, the breaker unchanged.
+set). Before it asks for the lock the ack writes a write-ahead intent, `state/heartbeat-ack-intent/<wake id>`: its
+owner (pid and `/proc` start time) and when, no content. It records under the lock and removes the intent while still
+holding it; a 5 s lock timeout or a crash leaves it. So a beat that already holds the lock can never read the
+directory before the intent exists (Ember, 1570867414500114584). The beat reads each intent as **live** or
+**abandoned**. Live means the owner is alive by pid **and** start time (a recycled pid has another) and the intent is
+younger than `ACK_INTENT_FRESH` (the ack's 5 s wait plus a 25 s margin). A live intent counts no failure and leaves the
+entry `queued`: the ack may still record it (Ember, 1570867727046942911). Anything else is abandoned: the beat puts that
+wake's entries back to `none` without a failed attempt (re-delivered, the breaker unchanged) and consumes the intent
+once the wake has ended. A late ack that takes the lock after that finds nothing `queued` under its wake and changes
+nothing.
 
 The stalled layer decides from one snapshot: it reads `wakes.json` and the ledger together under `wakes.lock` (which
 run-due holds across its fact and queue writes) and holds it to its last enqueue (Ember's G3).
@@ -137,7 +145,7 @@ None of the design's names change. New names, which the design left open: `PERSI
 Changed from the first post of this file (ef2695a), once the code was written: the beat order puts `reconcile` first;
 `last_tick` lives in `misc`; the sections in section 3 are the real ones. After a83ef07 (Ember's CHANGES and Claude's
 review): `STALLED_FIELDS` instead of growing `ENQUEUED_FIELDS`, `source_named`, `source_on`, `settings_path`,
-`recheck_usage`, `hold_line`, `UNKNOWN_RECHECK`, `hook.stalled_layer_on`, `observed.mark_ack_lost`, and `pheartbeat status`
+`recheck_usage`, `hold_line`, `UNKNOWN_RECHECK`, `hook.stalled_layer_on`, `observed.ack_intent`, `Beat.ack_intents`, `ACK_INTENT_FRESH`, and `pheartbeat status`
 printing the settings file it reads, `source_off` and the usage hold.
 
 Not in this change (enablement, after review): the `pheartbeat` wrapper on PATH (`exec python3

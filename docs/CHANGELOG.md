@@ -22,7 +22,9 @@ leave a Q or R wake in neither view and cause a second one. A usage limit whose 
 visibly: a structured `holds.usage`, one journal line, `pheartbeat status`, rechecked every beat, a retry after an
 hour; C's and A's deferrals say so in the journal. Before, any missing or malformed reset was silently 2 h.
 STALLED without the `heartbeat` Observed-now source is refused (`source_off`). The source acks only the ids it showed,
-and a lost ack lock is retryable instead of a failed attempt. Why: each was a gap the reviews found; each has a test
+and an ack that loses the lock or dies is retryable instead of a failed attempt: it writes a write-ahead intent before
+asking for the lock, and the beat leaves the entry queued while that intent's owner (pid and start time) is alive and
+it is fresh (Ember's CHANGES on b5efca4, 1570867414500114584). Why: each was a gap the reviews found; each has a test
 that fails when its fix is undone (tests/test_heartbeat_revision.py, checked by mutation).
 
 ## 2026-11-13 — Heartbeat: the stalled-work core (built, off by default)
