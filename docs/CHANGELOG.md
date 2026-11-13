@@ -9,6 +9,41 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-13 — Heartbeat core (PR #28): Ember's and Claude's review changes
+
+**Feature off is main again; one queue/ledger snapshot; a usage reset that is never invented.** After Ember's CHANGES
+(room 1570857894172168193) and Claude's review (1570858021154848909) of a83ef07. With `PERSISTENCE_HEARTBEAT_STALLED`
+off: `PERSISTENCE_HEARTBEAT_PER_HOUR=0` keeps one cap window an hour again (a83ef07 minted one per beat), every
+`enqueued` fact has exactly main's fields (`hb` and `set` ride only on heartbeat-correlated items or with the layer on),
+and heartbeat items keep main's key order in `wakes.json`. **Once deployed with the layer on, every self's ledger
+facts gain `set` (and `hb` on the heartbeat's own wakes): additive, nothing reads them with the layer off.** The
+stalled layer reads the queue and ledger together under `wakes.lock` and holds it while it decides, so run-due can't
+leave a Q or R wake in neither view and cause a second one. A usage limit whose reset can't be read is `unknown`,
+visibly: a structured `holds.usage`, one journal line, `pheartbeat status`, rechecked every beat, a retry after an
+hour; C's and A's deferrals say so in the journal. Before, any missing or malformed reset was silently 2 h.
+STALLED without the `heartbeat` Observed-now source is refused (`source_off`). The source acks only the ids it showed,
+and an ack that loses the lock or dies is retryable instead of a failed attempt: it writes a write-ahead intent before
+asking for the lock, and the beat leaves the entry queued while that intent's owner (pid and start time) is alive and
+it is fresh (Ember's CHANGES on b5efca4, 1570867414500114584). Why: each was a gap the reviews found; each has a test
+that fails when its fix is undone (tests/test_heartbeat_revision.py, checked by mutation).
+
+## 2026-11-13 — Heartbeat: the stalled-work core (built, off by default)
+
+**Q, R, the working mode and one standing delivery fault, behind `PERSISTENCE_HEARTBEAT_STALLED`.** Builds
+`docs/design/heartbeat-stalled-work.md` (PR #26, approved by Claude and Ember at 32642cd) in `heartbeat.py`, with the
+interface in `docs/design/heartbeat-core-interface.md`. With the new switch on, a beat reconciles its two files
+first, runs B, C, A and D as before, then settles what it queued, judges working-mode ticks, and decides R
+(`reports`), Q (`quiet`) and the tick, in that order and the tick last. Q and the tick ask `cap_has_room()` and skip
+quietly on a full cap; only a refused required wake raises the standing `delivery_fault`, whose `rev` never resets.
+Reports reach a session through a new Observed-now source, `heartbeat`, whose ack (after the block reached the
+session) is what makes an entry `delivered`. `pheartbeat working|detect|continue|ack-fault|status` is
+`heartbeat.py <cmd>`. `add_heartbeat_wake` gains the `quiet`, `reports` and `tick` kinds with an `hb` correlation, and
+the ledger's `enqueued` fact keeps `hb` and `set`. With the switch off, a beat and its file are what they were.
+Why: on 2026-11-13 a wait that lived only in a note, and reports that went only to the journal, stalled work for
+hours (John, room 1570833323406917693). 58 new tests, covering every case the design lists. Each was checked by breaking the code it covers:
+tick ahead of A or R, the cap check skipped, the ack's compare-and-set removed, reconcile removed, `rev` reset.
+Nothing is switched on: enabling it for a self is a separate, reviewed step.
+
 ## 2026-11-13 — Heartbeat opt-in: a read-only preflight, and heartbeat.py deployed with the hook (opt-in, step 2)
 
 **`heartbeat_optin.py check [--stalled] --at <commit>`.** Says whether a self is ready to turn its heartbeat on, and writes nothing.

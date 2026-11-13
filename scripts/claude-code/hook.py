@@ -1859,7 +1859,22 @@ HEARTBEAT_REASONS = {
               "`state/wake-{origin}.txt` if you want it.",
     "usage-limit": "The heartbeat is retrying wake firing {origin}, which hit the usage limit. Its prompt is "
                    "`state/wake-{origin}.txt` if you want it.",
+    # heartbeat-stalled-work.md (PR #26, merged at faaa67a): fixed texts filled with times, counts and ids only.
+    "quiet": "The heartbeat found nothing of yours running since {since} and nothing scheduled before {before}. {claims} "
+             "claims are open or paused, {reports} heartbeat reports are unread (`journalctl -u "
+             "persistence-heartbeat@{user}`). Read your working note and `ptask list`. Do the next thing, set a wake for "
+             "what you're waiting on, or stop: nothing needing doing is a fine answer.",
+    "reports": "The heartbeat has reports for you. They are in this session's Observed-now block (source heartbeat), "
+               "with counts and claim ids; `journalctl -u persistence-heartbeat@{user}` and `ptask show` have the rest.",
+    "tick": "Working mode is on (tick {tick}). Take the next item. If nothing is left, run `pheartbeat detect` and stop: "
+            "that's a fine answer. If you made progress that changed no claim or wake (a commit, a review), run "
+            "`pheartbeat continue {tick}` before you stop. `pheartbeat detect` ends working mode at any time.",
 }
+STALLED_KINDS = {"quiet": ("since", "before", "claims", "reports", "user"), "reports": ("user",), "tick": ("tick",)}
+HB_FIELD = re.compile(r"^(quiet:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?\+00:00|reports|tick:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+                      r"[0-9a-f]{4}-[0-9a-f]{12})$")
+FILL_VALUE = re.compile(r"^(\d{2}:\d{2}Z|none|never|\d{1,6}|[a-z_][a-z0-9_-]{0,31}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-"
+                        r"[0-9a-f]{12})$")
 
 
 def room_sessions():
@@ -1871,14 +1886,30 @@ def room_sessions():
 
 
 def add_heartbeat_wake(id, kind, session, launch, claim=None, retry_of=None, follows=None, attempt=None, deferral=None,
-                       at=None, cwd=None):
+                       at=None, cwd=None, hb=None, fill=None, set_at=None):
     """Add one heartbeat item under wakes.lock, idempotent by id (in the queue or with any ledger fact: writes nothing,
-    returns None). Every value is validated; the room's own session is refused. Returns the item written."""
+    returns None). Every value is validated; the room's own session is refused. Returns the item written.
+
+    The stalled-work kinds (quiet, reports, tick) carry `hb`, their correlation (heartbeat-stalled-work.md 3.2), checked
+    as structure only, and `fill`: the template's values, each a time, a count, an id or a user name, never text."""
     import coordination
 
     for name, value in (("id", id), ("session", session), ("claim", claim), ("retry_of", retry_of), ("follows", follows)):
         if (value is not None or name in ("id", "session")) and not full_uuid(value):
             raise ValueError(f"{name} must be a full id")
+    if kind in STALLED_KINDS:
+        if not isinstance(hb, str) or not HB_FIELD.match(hb) or hb.partition(":")[0] != kind:
+            raise ValueError(f"a {kind} item needs its hb correlation")
+        if any(v is not None for v in (claim, retry_of, follows, attempt, deferral)) or launch != "session-id":
+            raise ValueError(f"a {kind} item is a fresh session: launch session-id, no claim and no chain")
+        fill = dict(fill or {})
+        if set(fill) != set(STALLED_KINDS[kind]) or not all(FILL_VALUE.match(str(v)) for v in fill.values()):
+            raise ValueError(f"a {kind} item's template takes {', '.join(STALLED_KINDS[kind])}: times, counts, ids")
+        reason = HEARTBEAT_REASONS[kind].format(**{k: str(v) for k, v in fill.items()})
+        return _write_heartbeat_item(coordination, id, session, {"by": "heartbeat", "launch": launch, "reason": reason,
+                                                                 "hb": hb}, at, cwd, set_at)
+    if hb is not None or fill is not None:
+        raise ValueError("only the quiet, reports and tick kinds carry hb")
     if kind not in HEARTBEAT_REASONS or (kind == "nudge") != (claim is not None and retry_of is None):
         raise ValueError(f"{kind!r} is not a heartbeat item kind here")
     if launch not in ("resume", "session-id"):
@@ -1889,16 +1920,26 @@ def add_heartbeat_wake(id, kind, session, launch, claim=None, retry_of=None, fol
         raise ValueError("a deferral is numbered 1 to 3")
     if attempt != "deferral" and deferral is not None:
         raise ValueError("only a deferral has a number")
+    fields = {"by": "heartbeat", "launch": launch, "reason": HEARTBEAT_REASONS[kind].format(claim=claim, origin=retry_of)}
+    for key, value in (("claim", claim), ("retry_of", retry_of), ("follows", follows), ("attempt", attempt),
+                       ("deferral", deferral)):
+        if value is not None:
+            fields[key] = value
+    return _write_heartbeat_item(coordination, id, session, fields, at, cwd)
+
+
+def _write_heartbeat_item(coordination, id, session, fields, at, cwd, set_at=None):
+    """The item in main's key order (wakes.json is written without sort_keys): id, session, at, by, launch, reason,
+    [hb,] set, cwd, then the claim and chain fields (Ember's G2)."""
     if session in room_sessions():
         raise ValueError("the heartbeat never wakes the room's own session")
+    head = ("by", "launch", "reason", "hb")
     item = {"id": id, "session": session, "at": float(at if at is not None else datetime.now().timestamp()),
-            "by": "heartbeat", "launch": launch,
-            "reason": HEARTBEAT_REASONS[kind].format(claim=claim, origin=retry_of),
-            "set": datetime.now(timezone.utc).isoformat(timespec="seconds")}
-    for key, value in (("cwd", cwd), ("claim", claim), ("retry_of", retry_of), ("follows", follows),
-                       ("attempt", attempt), ("deferral", deferral)):
-        if value is not None:
-            item[key] = value
+            **{k: fields[k] for k in head if k in fields},
+            "set": (set_at or datetime.now(timezone.utc)).isoformat(timespec="seconds")}
+    if cwd is not None:
+        item["cwd"] = cwd
+    item.update({k: v for k, v in fields.items() if k not in head})
     # The nudge holds wakes.lock across its two writes (the item, then the mark); a retry takes it here.
     with (_no_lock() if "wakes" in coordination.held_locks() else coordination.lock(STATE, "wakes")):
         items = queue_locked()
@@ -1934,7 +1975,7 @@ def run_due(grace=120, home=None):
     c = claims.Claims(STATE, home=home)
     launches = []  # what to start once every lock is released
     try:
-        _run_due_locked(c, claims, now, at, grace, launches)
+        _run_due_locked(c, claims, now, at, grace, launches, stalled_layer_on(home))
     except BaseException:
         for launch in launches:
             fd = launch[3] if launch[0] == "claim" else launch[2] if launch[0] == "heartbeat" else None
@@ -1963,7 +2004,18 @@ def run_due(grace=120, home=None):
         raise failed[0]
 
 
-def _run_due_locked(c, claims, now, at, grace, launches):
+def stalled_layer_on(home=None):
+    """PERSISTENCE_HEARTBEAT_STALLED as heartbeat.stalled_on reads it: the settings file's env block only, "true" or
+    "1". run-due reads it to know whether enqueued facts carry coordination.STALLED_FIELDS."""
+    try:
+        env = json.loads((Path(home or Path.home()) / ".claude" / "settings.json").read_text(encoding="utf-8")).get("env")
+    except (OSError, ValueError, AttributeError):
+        return False
+    value = env.get("PERSISTENCE_HEARTBEAT_STALLED") if isinstance(env, dict) else None
+    return str(value or "").strip().lower() in ("true", "1")
+
+
+def _run_due_locked(c, claims, now, at, grace, launches, stalled=False):
     """run_due's locked transition; what it decides to start goes into `launches`, started only after it returns."""
     import coordination
 
@@ -2021,7 +2073,7 @@ def _run_due_locked(c, claims, now, at, grace, launches):
                             # Refused before the spawn claim: the claim stays open, the firing is on record (enqueued,
                             # never started), and nothing is launched.
                             print(f"run-due: firing {w['id']} refused: {e}", file=sys.stderr)
-                    coordination.append(STATE, coordination.enqueued_fact(w, at))
+                    coordination.append(STATE, coordination.enqueued_fact(w, at, stalled=stalled))
                     gone.append(w)
                 plain = [w for w in mine if not w.get("claim") and w.get("by") != "heartbeat"]
                 if plain:
