@@ -314,7 +314,7 @@ class QReset(Base):
         hook.wakes(lambda items: [])  # it was cancelled again, but the enqueued fact never came: use the ledger
         f = sid()
         coordination.append(self.state, coordination.enqueued_fact(
-            {"id": f, "session": sid(), "reason": "x", "set": at(7, 30).isoformat()}, at(7, 31).isoformat()))
+            {"id": f, "session": sid(), "reason": "x", "set": at(7, 30).isoformat()}, at(7, 31).isoformat(), stalled=True))
         self.fact(f, "taken", at(7, 31))
         self.beat(at(8, 8))
         self.assertEqual(self.hb_items(), [])  # 07:30 + 90 is 09:00

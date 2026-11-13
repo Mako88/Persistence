@@ -15,6 +15,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "testguard"))
+import no_real_claude  # noqa: E402,F401  first: no test can start a real claude
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_heartbeat_decisions as D  # noqa: E402
 import test_heartbeat_ledger as L  # noqa: E402

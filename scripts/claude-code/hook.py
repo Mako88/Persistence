@@ -1929,12 +1929,17 @@ def add_heartbeat_wake(id, kind, session, launch, claim=None, retry_of=None, fol
 
 
 def _write_heartbeat_item(coordination, id, session, fields, at, cwd, set_at=None):
+    """The item in main's key order (wakes.json is written without sort_keys): id, session, at, by, launch, reason,
+    [hb,] set, cwd, then the claim and chain fields (Ember's G2)."""
     if session in room_sessions():
         raise ValueError("the heartbeat never wakes the room's own session")
+    head = ("by", "launch", "reason", "hb")
     item = {"id": id, "session": session, "at": float(at if at is not None else datetime.now().timestamp()),
-            **fields, "set": (set_at or datetime.now(timezone.utc)).isoformat(timespec="seconds")}
+            **{k: fields[k] for k in head if k in fields},
+            "set": (set_at or datetime.now(timezone.utc)).isoformat(timespec="seconds")}
     if cwd is not None:
         item["cwd"] = cwd
+    item.update({k: v for k, v in fields.items() if k not in head})
     # The nudge holds wakes.lock across its two writes (the item, then the mark); a retry takes it here.
     with (_no_lock() if "wakes" in coordination.held_locks() else coordination.lock(STATE, "wakes")):
         items = queue_locked()
@@ -1970,7 +1975,7 @@ def run_due(grace=120, home=None):
     c = claims.Claims(STATE, home=home)
     launches = []  # what to start once every lock is released
     try:
-        _run_due_locked(c, claims, now, at, grace, launches)
+        _run_due_locked(c, claims, now, at, grace, launches, stalled_layer_on(home))
     except BaseException:
         for launch in launches:
             fd = launch[3] if launch[0] == "claim" else launch[2] if launch[0] == "heartbeat" else None
@@ -1999,7 +2004,18 @@ def run_due(grace=120, home=None):
         raise failed[0]
 
 
-def _run_due_locked(c, claims, now, at, grace, launches):
+def stalled_layer_on(home=None):
+    """PERSISTENCE_HEARTBEAT_STALLED as heartbeat.stalled_on reads it: the settings file's env block only, "true" or
+    "1". run-due reads it to know whether enqueued facts carry coordination.STALLED_FIELDS."""
+    try:
+        env = json.loads((Path(home or Path.home()) / ".claude" / "settings.json").read_text(encoding="utf-8")).get("env")
+    except (OSError, ValueError, AttributeError):
+        return False
+    value = env.get("PERSISTENCE_HEARTBEAT_STALLED") if isinstance(env, dict) else None
+    return str(value or "").strip().lower() in ("true", "1")
+
+
+def _run_due_locked(c, claims, now, at, grace, launches, stalled=False):
     """run_due's locked transition; what it decides to start goes into `launches`, started only after it returns."""
     import coordination
 
@@ -2057,7 +2073,7 @@ def _run_due_locked(c, claims, now, at, grace, launches):
                             # Refused before the spawn claim: the claim stays open, the firing is on record (enqueued,
                             # never started), and nothing is launched.
                             print(f"run-due: firing {w['id']} refused: {e}", file=sys.stderr)
-                    coordination.append(STATE, coordination.enqueued_fact(w, at))
+                    coordination.append(STATE, coordination.enqueued_fact(w, at, stalled=stalled))
                     gone.append(w)
                 plain = [w for w in mine if not w.get("claim") and w.get("by") != "heartbeat"]
                 if plain:

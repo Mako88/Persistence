@@ -285,6 +285,8 @@ class Beat:
         the stalled layer on, a refused required wake (B, C, A, D or R) also updates the standing delivery fault, once
         per window. An optional one (Q, tick) only gets here after cap_has_room(), under the same lock."""
         start, count = self._cap_window()
+        if count == 0 and self.data["cap"].get("window") != start.isoformat():
+            self.data["cap"].update(window=start.isoformat(), count=0)  # a new window is written even when refused (main)
         if count < per_hour(self.home):
             self.data["cap"].update(window=start.isoformat(), count=count + 1)
             return True

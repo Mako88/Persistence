@@ -96,7 +96,11 @@ LEDGER = "fired.jsonl"
 # `at` is carried as `item_at`, since every fact's `at` is the time it was written (heartbeat.md names it `item_at`
 # too, since 1e4f42e).
 ENQUEUED_FIELDS = ("session", "cwd", "item_at", "work", "by", "claim", "launch", "retry_of", "follows", "attempt",
-                   "deferral", "reason_sha256", "hb", "set")
+                   "deferral", "reason_sha256")
+# The stalled-work layer's two (heartbeat-core-interface.md): `hb`, a heartbeat item's correlation, and `set`, when the
+# item was added (activity and progress read it). Carried only when the item has an hb or the layer is on, so with
+# PERSISTENCE_HEARTBEAT_STALLED off every fact is byte for byte what it was (Ember's G2).
+STALLED_FIELDS = ("hb", "set")
 
 
 class LedgerError(RuntimeError):
@@ -104,10 +108,11 @@ class LedgerError(RuntimeError):
     can't be parsed (real corruption: no ledger-based decision is made)."""
 
 
-def enqueued_fact(item, at):
-    """The `enqueued` fact for a wake item: its firing id and structure, no text."""
+def enqueued_fact(item, at, stalled=False):
+    """The `enqueued` fact for a wake item: its firing id and structure, no text. With `stalled` (the layer's switch, as
+    run-due reads it) or an item that carries hb, STALLED_FIELDS follow."""
     fact = {"firing": item["id"], "fact": "enqueued", "at": at}
-    for key in ENQUEUED_FIELDS:
+    for key in ENQUEUED_FIELDS + (STALLED_FIELDS if stalled or item.get("hb") else ()):
         if key == "item_at":
             fact[key] = item.get("at")
         elif key == "reason_sha256":
