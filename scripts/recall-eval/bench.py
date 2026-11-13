@@ -20,7 +20,8 @@ touched. `--layer store` calls the store's `recall` alone, as the hook would, wi
 Paths (f): `semantic` runs with the PERSISTENCE_EMBEDDING_* the served store runs with (defaults below are my
 store's live settings since 2026-11-11: bge-small on :8081, query tail 1200, quality weight 0; override from the
 environment). `words` turns embedding off: the exact-words fallback the store uses when the embedder refuses a
-long message, scored on its own.
+long message, scored on its own. PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE=1 asks recall about a room wake's messages
+without the room's fixed wrapper, as the hook does with it on (both layers; `query_chars` records what was asked).
 
 Which path a turn ACTUALLY took is recorded per turn (`actual`), from the store's own account of that recall
 (`recall --diagnostics`, one `recall-path:` line on stderr): `semantic`, `words-setting` (embedding off),
@@ -105,15 +106,43 @@ def snapshot(live, out, exe):
 
 # --- one turn through the hook ----------------------------------------------------------------------------------
 
+def load_hook(state):
+    """hook.py, imported with its state in `state` (hook.STATE is read at import)."""
+    os.environ["PERSISTENCE_STATE_DIR"] = state
+    spec = importlib.util.spec_from_file_location("bench_hook", HOOK)
+    h = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(h)
+    return h
+
+
+_query_hook = []
+
+
+def query_hook():
+    """hook.py, imported once with private state, for its recall_query and the roomcore it reads wakes with."""
+    if not _query_hook:
+        before = os.environ.get("PERSISTENCE_STATE_DIR")
+        _query_hook.append(load_hook(tempfile.mkdtemp(prefix="recall-bench-qstate-")))
+        if before is None:
+            os.environ.pop("PERSISTENCE_STATE_DIR", None)
+        else:
+            os.environ["PERSISTENCE_STATE_DIR"] = before
+    return _query_hook[0]
+
+
+def recall_query(prompt):
+    """What the hook would ask recall about for this prompt (PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE): the store layer
+    asks the same, so both layers measure one switch. The hook's own function, from a private import."""
+    query = query_hook().recall_query(prompt)
+    return prompt if query == prompt.strip() else query     # unstripped (the hook strips): the store layer asks as before
+
+
 class HookTurns:
     """The real hook.py, imported once, its store calls bent to the CLI on a snapshot, its state in a temp dir."""
 
     def __init__(self, exe, path, diagnostics):
         self.state = tempfile.mkdtemp(prefix="recall-bench-state-")
-        os.environ["PERSISTENCE_STATE_DIR"] = self.state      # before import: hook.STATE is read at import
-        spec = importlib.util.spec_from_file_location("bench_hook", HOOK)
-        h = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(h)
+        h = load_hook(self.state)
         # Belt and braces: nothing below may reach a served store, local or remote.
         h.SOCKET, h.PORT = None, 1
         h.remote = lambda: None
@@ -183,6 +212,7 @@ class HookTurns:
 
 def store_turn(exe, db, env, prompt, project, count, exclude, diagnostics):
     """`--layer store`: the store's recall as the hook calls it, without the hook's gate or memory."""
+    prompt = recall_query(prompt)
     code, out, err = cli(exe, db, ["recall", "--text", "-", "--limit", str(count), "--snippet", "300",
                                    "--project", project, "--wander", os.environ.get("PERSISTENCE_RECALL_WANDER", "1"),
                                    "--said", os.environ.get("PERSISTENCE_RECALL_SAID", "3") if len(prompt) >= 40 else "0",
@@ -234,8 +264,12 @@ def settings_of(exe, path, layer, diagnostics, labels):
     (my store's settings) can hide a finding, as query tail 1200 would have hidden Claude's fallback rate."""
     env = store_env(path)
     knobs = {k: (env[k], "env" if k in os.environ else "bench default") for k in LIVE_ENV}
-    for k, v in (("PERSISTENCE_RECALL_WANDER", "1"), ("PERSISTENCE_RECALL_SAID", "3")):
+    for k, v in (("PERSISTENCE_RECALL_WANDER", "1"), ("PERSISTENCE_RECALL_SAID", "3"),
+                 ("PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE", "off")):
         knobs[k] = (os.environ.get(k, v), "env" if k in os.environ else "hook default")
+    # The store reads these from the environment too; recorded so a chunking arm says what it ran (Arden 1570584755471130766).
+    for k, v in (("PERSISTENCE_EMBEDDING_QUERYCHUNKCHARS", "0"), ("PERSISTENCE_EMBEDDING_QUERYCHUNKSCORE", "max")):
+        knobs[k] = (os.environ.get(k, v), "env" if k in os.environ else "store default")
     return {"exe": exe, "exe_sha256": sha256(exe)[:16], "diagnostics": diagnostics, "layer": layer,
             "labels_sha256": sha256(labels)[:16], "knobs": knobs}
 
@@ -316,9 +350,22 @@ def resolve(turn, snap):
     if "query" in turn:
         return turn["query"], turn.get("as_of"), None
     content, created, session = fragment(snap, turn["query_from"])
+    content = as_prompted(content)
     from datetime import datetime, timedelta
     when = datetime.fromisoformat(created.replace("Z", "").replace(" ", "T")[:19]) - timedelta(seconds=1)
     return content, turn.get("as_of") or when.isoformat() + "Z", session
+
+
+def as_prompted(stored):
+    """A stored utterance as its turn's prompt arrived. The store keeps an utterance trimmed, so a room wake read back
+    lost the line break build_prompt ends it on, and roomcore's wake_sections (rightly, for a wake cut mid-message)
+    declines a wake without it: every stripped arm on `query_from` wakes was a silent no-op (Arden's CHANGES on PR
+    #19, review 5884624117). A stored utterance that opens with a current room preamble gets that line break back;
+    the live check stays as strict as it is. Anything else, or no roomcore found, comes back as stored."""
+    rc = query_hook().roomcore()
+    if rc is None or stored.endswith("\n") or not any(p.match(stored + "\n") for p in getattr(rc, "_PREAMBLES", ())):
+        return stored
+    return stored + "\n"
 
 
 def active(db, ids):
@@ -415,6 +462,7 @@ def run_case(ev, bases, work, hook, env, exe, diagnostics, config, case, n, kind
             row = {"case": case["id"] + (f"#{t + 1}" if kind == "session" else ""), "kind": kind, "path": path,
                    "layer": layer, "count": count, "session_store": mode, "as_of": as_of,
                    "actual": actual[0], "actual_why": actual[1], "prompt_chars": len(q),
+                   "query_chars": len(recall_query(q)),
                    "synthetic": case.get("synthetic", "query" in turn),
                    "shown": ids, "chars": chars, "notice": notice, "words_notice": said_words,
                    "held": sorted(map(int, held)),
@@ -514,6 +562,9 @@ def report(paths, watch=(), labels=None):
             line("  of the fall-backs, prompts over 1,200 chars", lambda X: pct(
                 sum(actual(r) == "words-fallback" and r.get("prompt_chars", 0) > 1200 for r in ran(X)),
                 sum(actual(r) == "words-fallback" for r in ran(X))), everything)
+        # Whether the strip switch changed what recall was asked, so an arm that silently asked as before can't pass
+        # for a result (Arden, PR #19 review 5884624117: a no-op arm once gave numbers identical to the off arm).
+        line("query stripped (query shorter than prompt) / turns", lambda X: f"{sum(r.get('query_chars', 0) < r.get('prompt_chars', 0) for r in X)}/{len(X)}", everything)
         line("turns where the peer was told recall, or a part of it, ran on words alone", lambda X: str(sum(bool(r.get("words_notice")) for r in X)), everything)
         # Every number below is over the turns that took this arm's path (or made no recall); the rest are left
         # out, never counted as this arm's, so a floor is never tuned on another path's results.
