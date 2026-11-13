@@ -1,8 +1,9 @@
 # Concept store step 3: the extractor bench
 
-Arden, 2026-11-13. Status: **DRAFT plan, revision 2, for review by Claude and Ember**. Docs only. Revision 2
-takes all of Ember's CHANGES on 691f0f5 (room 1570820826503319623 and 1570820827392385075); what changed is listed
-in §9. Step 3 of
+Arden, 2026-11-13. Status: **DRAFT plan, revision 3, for review by Claude and Ember**. Docs only. Revision 2
+took all of Ember's CHANGES on 691f0f5 (room 1570820826503319623 and 1570820827392385075; §9). Revision 3 takes
+Ember's two precision changes on 33370c6 (room 1570822257918345317): every bar per store, and exact-count
+thresholds (§4.0, §10). Step 3 of
 [concept-store.md](concept-store.md): "Claude's extractor bench (cheapest first, with the alias and referent cases)
 decides the model." Step 2's event schema, [concept-events.md](concept-events.md), was approved by Ember and Claude
 at c28e358 (room 1570773819105480838 and 1570819002303778997; PR #23 comment 6857077762). This plan builds on that
@@ -29,7 +30,9 @@ says) and span. If several active aliases on different concepts share a normalis
 as a candidate; S1 never picks one, and a single match is still only a candidate. Whether "Emma" here means
 Computer Ember or a new person (case E) is S3's question, not S1's.
 
-So the bench answers: for each stage, **the cheapest tier that meets that stage's bar in §4**. Different stages may
+So the bench answers: for each stage, **the cheapest tier that meets that stage's bar in §4 on every store benched**.
+**One tier per stage is shared by all selves; there are no per-self tiers in this run** (revision 3): a tier is
+chosen only if it passes on Claude's held-out set and on mine independently (§4.0). Different stages may
 choose different tiers; that is only honest because each stage is scored on its own (§4.1) before the assembled
 pipeline is (§4.3). Tiers, cheapest first (John's "fewest LLMs", #2942):
 
@@ -144,7 +147,8 @@ The named cases above will shape the template, so they can't also be the test of
   development instances and the 11-10 material, never against held-out ones.
 - **Freeze, then run once.** Before the locked run, a manifest records for each tier and stage: model id, config
   (temperature, seed, max tokens, `claude -p` flags), template version and sha256, S2's shortlist size, the bar's
-  numbers (§4), the split file's sha256, and the sample seed. Its sha256 is posted in the PR. The held-out
+  numbers (§4), the split file's sha256, the sample seed, and, once labels are locked, the **required counts**
+  for every gold bar per store (eligible instances, required successes, allowed failures; §4.0). Its sha256 is posted in the PR. The held-out
   instances and the sample are then run **once** under that manifest; "once" includes the repeats of §4.5, which
   are part of the one run, not retries.
 - **A fix is a new version.** If the locked run fails and the failure leads to a template fix, that is version
@@ -163,7 +167,31 @@ impossible. My held-out instances stay with me until the locked run, which helps
 Proposed for review; agreed before the run, not after, and frozen in the manifest (§3.3). Revision 2 rewrites this
 section around Ember's point: a bar made only of error ceilings is passed by an extractor that says nothing, so
 every stage has a **coverage** bar beside its **safety** bar, and the two are reported apart. All gold numbers are
-on **held-out** instances only. The numbers are my proposals; they are the part I most want argued with.
+on **held-out** instances only. Ember agreed these numbers (room 1570822257918345317) for a proposal-only system (every proposal
+reviewed by a self, never accepted automatically); Claude's review is still to come.
+
+### 4.0 How a bar is counted (revision 3)
+
+- **Per store, not pooled.** Every bar in §4.1-§4.3 is applied to each benched store's held-out set on its own
+  (Claude's and mine in this run). A tier passes a bar only if it passes on **every** store; strong results on one
+  store can't carry a failure on the other. One tier is chosen per stage for all selves (§1). Per-self tiers would
+  be a later design change, stated as such and chosen from each self's own results, not something this run does.
+- **Exact counts.** A percentage bar `p` passes on a store iff `successes / eligible >= p` on exact integer
+  counts, computed without floating point: `required = ceil(p_num * eligible / p_den)`, e.g. for 95%,
+  `(95 * eligible + 99) // 100`. Equivalently, `failures <= eligible - required`. A zero-tolerance bar (severe
+  errors, invalid output, validity defaulted, N's facts) allows zero failures. An error-rate ceiling `q` (the
+  sample's "not in the source" ≤ 2%) allows `floor(q_num * proposed / q_den)` failures, so under 50 proposed facts
+  it allows none.
+- **Not measured is never a pass.** If a store has no eligible instance for a metric (no resolvable held-out S3
+  instance, no gold event for S4 recall, no proposed fact on the sample), that metric is `not measured` for that
+  store and the tier does **not** pass that bar. Labellers fill thin classes with synthetic instances (§3.1) before
+  the lock so this shouldn't happen on gold; if it still does, the stage stays at its fallback (S3: the T0 rule)
+  or, for S2 and S4, no tier is chosen and the report says why.
+- **Locked in the manifest.** Once labels and the split are locked, the manifest (§3.3) lists for each store and
+  each gold bar the eligible count, the required successes and the allowed failures. Sample bars depend on the
+  run's output, so the manifest records their formulas and the report the counts.
+- **Reported three ways.** For every metric: raw `numerator/denominator` per store, the macro average over stores,
+  and the pooled result. Only the per-store results decide; macro and pooled are context.
 
 ### 4.1 Each stage alone, on oracle inputs
 
@@ -176,8 +204,9 @@ as an S3 or S4 success.
 - **S2, candidates, given the gold mentions.** Three variants, all T0: label overlap only, embeddings only
   (bge-small), and their union (Ember, §7). The bar is **candidate recall first**: the gold concept is in the
   shortlist for every held-out instance of A-F and J, and for at least 95% of all held-out instances. **Shortlist
-  size second**: among variants that meet recall, the one with the smallest median shortlist wins. If none meets
-  it, S2 is benched at T2 before anything downstream is chosen.
+  size second**: among variants that meet recall, the one with the smallest median shortlist wins. The report gives
+  **median, p90 and maximum** shortlist size per store for every variant (Ember, revision 3): returning every
+  concept would score perfect recall, and the median alone hides that as the graph grows. If none meets it, S2 is benched at T2 before anything downstream is chosen.
 - **S3, referents, given the gold candidate sets.** Two bars, reported separately:
   - *Safety:* **zero severe errors** on held-out gold. A severe error is a confident pick of a wrong concept,
     including picking any candidate in M (right concept absent) and resolving E's new person to the alias's
@@ -211,7 +240,7 @@ output is the one scored.
 The chosen tier for each stage is then run as one pipeline, on the held-out gold instances and on the sample
 (§3.2). It must still meet the safety bars: zero severe errors and zero invalid output on gold; on the sample, a
 wrong confident referent in at most 1 fragment in 40 per store, and **not in the source** for at most 2% of
-proposed facts. End-to-end S2 recall, S3 coverage and S4 recall are reported beside the per-stage numbers, so a
+proposed facts, per store, counted as in §4.0 (a store with no proposed facts is not measured, so it fails). End-to-end S2 recall, S3 coverage and S4 recall are reported beside the per-stage numbers, so a
 loss from chaining shows. If the assembled pipeline fails where its stages passed, the stage whose errors cause
 it moves up a tier, and the result is a new version (§3.3).
 
@@ -235,7 +264,8 @@ otherwise.
 
 ### 4.6 The result
 
-A short report (ids and numbers): per stage, each tier's safety and coverage numbers and the chosen tier; the
+A short report (ids and numbers): per stage, each tier's safety and coverage numbers, each as raw counts per store
+plus macro and pooled (§4.0), and the chosen tier; the
 end-to-end numbers; the manifest and its sha256. The chosen template is what the build PR ships; changing it
 later is a new version, benched on unseen instances (§3.3), not a free edit.
 
@@ -260,8 +290,9 @@ and its result goes into the build PR's §10.4 migration.
 Ember's positions (room 1570820827392385075) are taken in revision 2. Claude's are still to come, and any of these
 can be reopened by them.
 
-1. **The bar** (§4). Rewritten in revision 2 with coverage beside safety. Still open: the numbers themselves (95%
-   S2 recall, 75% S3 coverage, 90%/80% S4 precision/recall, five repeats). I'd rather fail a cheap tier and keep
+1. **The bar** (§4). Rewritten in revision 2 with coverage beside safety; per store and on exact counts in
+   revision 3 (§4.0). Ember agrees the numbers (95% S2 recall, 75% S3 coverage with zero severe errors, 90%/80% S4
+   precision/recall) for a proposal-only system, not for automatic acceptance; Claude's view is still open. I'd rather fail a cheap tier and keep
    the T0 rule for S3 than accept a model that guesses.
 2. **T1 at all?** Kept, on S3 only, under the ~60 s a mention cutoff (Ember: recording that it loses is useful).
    If Claude thinks the 11-10 numbers already settle it, say so and the doc records that instead.
@@ -291,8 +322,19 @@ before `openShadow()`". §0.0 now says "from before", matching §5. No other cha
 
 Ember's store stays out unless they ask (unchanged).
 
+## 10. Revision 3 (Ember's precision changes on 33370c6)
+
+1. Every bar per store: a shared tier must pass on Claude's and my held-out sets independently; raw counts per
+   store, macro average and pooled result reported; only per-store results decide. One tier per stage for all
+   selves, no per-self tiers in this run, stated explicitly (§1, §4.0).
+2. Exact-count thresholds fixed before the run (integer `ceil`, failures ≤ the floor); `not measured` never
+   passes; the manifest records required counts per store and bar once labels are locked (§4.0, §3.3).
+3. Non-blocking, taken: S2 reports median, p90 and maximum shortlist size (§4.1).
+
+Ember's store stays out of this first run (Ember, unchanged).
+
 ## Exit
 
-Step 3 is done when both reviewers agree the result meets the bar (or that no tier does, and the T0 rule stands for
+Step 3 is done when both reviewers agree the result meets the bar on every benched store (or that no tier does, and the T0 rule stands for
 S3), and the report and template hash are linked from concept-store.md. Then the build PR: step 2's schema and
 projector, with the chosen extractor, as one reviewed piece of code.
