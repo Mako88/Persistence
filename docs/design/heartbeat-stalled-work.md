@@ -31,6 +31,13 @@ corrected; a new test covers a tick and a non-tick wake competing for the last s
 across acknowledgements (section 3.3); section 8's pointer to a missing "why the gap" paragraph is fixed. Section 11
 maps each point.
 
+Revision 6 (Ember on fc255a8, room 1570840660490059858): a full cap that defers an optional wake is the priority rule
+working, not a fault. Q and the working-mode tick check the cap's room first (`cap_has_room`, read-only) and, when it is
+full, skip and stay eligible with no `delivery_fault` and no `cap:<window>` report. Only a required wake (B, C, A, D or
+R) that `take_cap` refuses updates `counts.cap` (sections 3, 3.3 and 5). The :38 test now expects no fault, the six-hour
+fixture uses a refused A nudge, and a new test checks that a cap-skipped tick and quiet wake raise none. Section 12 maps
+each point.
+
 Asked for by John (room 1570833323406917693: "the heartbeats seem to not be working") and Ember (1570833385163595959:
 unfinished claims, promised follow-ups with no wake, review requests waiting; "nothing needs doing" stays valid). John's
 working-mode idea (1570833900794814497) and Claude's four conditions for it (1570834052209053760) are in section 5.
@@ -107,6 +114,8 @@ heartbeat can't reset its own backoff.
 - no wake of mine is due within **H** (default 90 min, `PERSISTENCE_HEARTBEAT_QUIET_AFTER`);
 - the last work activity (section 3.0.1) was at least **H** ago;
 - this quiet spell's `quiet` entry is `none` (section 3.1: a `queued` one waits, a `delivered` one has had its wake);
+- the hourly cap has room (`cap_has_room()`, after step 1 and R of this beat have taken theirs). A full cap defers Q:
+  it skips, stays eligible, and raises no fault (section 3, "deferral is not a fault");
 
 then the heartbeat adds **one** wake, kind `quiet`, which starts a fresh working session in `~/work` (never the room's own
 session, as now). Fixed text:
@@ -154,6 +163,19 @@ tick and an A nudge or R wake are both eligible and one slot is left, the non-ti
 cap, and `last_tick` stays as it was (section 5: a skipped beat never advances it). Nothing reserves a slot for a
 later beat; the floor of 30 minutes is what leaves the third slot free in an ordinary hour, and this order is what
 settles a contest inside one beat.
+
+**Deferral is not a fault (revision 6, Ember 1570840660490059858).** The steps split in two by what a full cap means:
+- **required** (step 1 and R: B, C, A, D and the `reports` wake): they call `take_cap` as now. A refusal there means a
+  wake that should have gone out didn't, so it updates the standing delivery fault (section 3.3, `counts.cap`).
+- **optional** (Q and the tick): they first ask `cap_has_room()`, which applies the same window rule as `take_cap` but
+  writes nothing and reports nothing. With no room the step skips: no wake, no `cap:<window>` report, no
+  `delivery_fault`, and its state stays eligible (Q's spell keeps its `quiet` entry at `none` and its backoff where it
+  was; `last_tick` and the tick counters don't move). Only with room does it call `take_cap`, which then succeeds,
+  because both calls run under the same `heartbeat.lock` in one beat. A deferral writes one journal line per cap window
+  (`heartbeat: tick deferred, cap full` or `quiet deferred`), which is not a fault and shows nowhere else.
+
+So in an ordinary working hour where A or R takes the third slot, the :38 tick waits for the next window and nothing
+is raised; a fault means a nudge, report or retry was actually lost to the cap.
 
 ### 3.1 Queued is not delivered (Ember's first point)
 
@@ -243,8 +265,10 @@ the heartbeat causes itself now never make a new key.
 **The state.** `heartbeat.json` holds one entry, `delivery_fault`, either absent or
 `{rev, since, last, counts: {cap, hb_failed, undeliverable}, ids, acked_rev}`. `ids` keeps the last 10 firing or wake
 ids involved. A beat raises or updates it, in place, on:
-- **cap:** `take_cap` refuses, counted once per cap window, as the journal line is now (the existing `heartbeat cap: reached` journal line stays as it is; the `cap:<window>` key
-  is no longer R-eligible);
+- **cap:** `take_cap` refuses a **required** wake (B, C, A, D or R), counted once per cap window, as the journal line is
+  now (the existing `heartbeat cap: reached` journal line stays as it is; the `cap:<window>` key is no longer
+  R-eligible). Q and the tick never reach `take_cap` with the cap full: they check `cap_has_room()` first and defer
+  (section 3, "deferral is not a fault"), so a skipped Q or tick never touches `delivery_fault`;
 - **hb_failed:** a firing whose wake has an `hb` field (Q, R or tick) is `never-started`, `crashed` or `failed`
   (check C's journal line stays; no report key);
 - **undeliverable:** the third failed attempt for one R key or Q spell (section 3.1).
@@ -311,8 +335,16 @@ Q-reset tests (section 3.0.1):
 - a `quiet` wake whose session does nothing advances the backoff (2H), and its own enqueue and finish never count.
 
 Delivery-fault tests (section 3.3):
-- **no loop:** a full cap for 6 hours running yields one `delivery_fault` with `counts.cap` = 6 (one per refused
-  window) and no `cap:<window>` key ever queued by R; the number of R wakes in those hours is 0 for these causes.
+- **no loop:** for 6 hours running, each cap window's three slots are taken by required wakes (B, A), and one more
+  required wake, an A nudge for a stalled claim, is eligible and refused by `take_cap` in every window. That yields one
+  `delivery_fault` with `counts.cap` = 6 (one per window with a refused required wake) and no `cap:<window>` key ever
+  queued by R; the number of R wakes in those hours is 0 for these causes. Run once in working mode (a tick otherwise
+  eligible) and once in detection mode (Q otherwise eligible): `counts.cap` is 6 both times, never more.
+- **deferral raises nothing:** the cap window full with three required wakes, a tick eligible on every other condition
+  (working mode), and, in a second run in detection mode, Q eligible on every other condition. Each beat skips them;
+  `delivery_fault` stays absent, no `cap:<window>` key is written, `take_cap` is never called for them (a spy on it
+  sees only the three required calls), `last_tick` and the tick counters don't move, and Q's spell keeps its `quiet`
+  entry at `none` with its backoff unchanged. When the window reopens, the tick (or Q) is added on the next beat.
 - **own wake fails:** a `quiet`, `reports` and `tick` firing each `crashed`: one fault, `hb_failed` = 3, no new report
   keys, and no R wake queued for any of them.
 - **undeliverable:** the third failed attempt for one key raises the fault once.
@@ -368,8 +400,9 @@ one. It can be added when one does, as its own reviewed change (Ember, 157083711
   leave the third cap slot for A and R without a special case (Claude, 1570836935176486973);
 - no earlier tick of this `gen` is still unjudged (queued or running);
 - no tick is held back by a usage limit (below);
-- the hourly cap has room (`take_cap`, shared with Q, R and the existing checks), **after** every non-tick decision of
-  this beat has taken its slot: the tick is the last decision of a beat (section 3, "order within a beat").
+- the hourly cap has room (`cap_has_room()`, shared with Q, R and the existing checks), **after** every non-tick
+  decision of this beat has taken its slot: the tick is the last decision of a beat (section 3, "order within a beat").
+  A full cap defers the tick with no fault (section 3, "deferral is not a fault"); only then is `take_cap` called.
 
 Then it adds one wake, kind `tick`, `hb` `tick:<gen>`, in the order of section 3.2, starting a fresh working session
 from my working note and `ptask list`. Fixed text:
@@ -436,13 +469,14 @@ Working-mode tests:
   exactly; :18, :28, :48, :58 skip on the gap.
 - **an R wake takes a slot:** the same hour with a `reports` wake at :18. Ticks still at :08 and :38; no beat skips on
   the cap (three wakes in the hour: two ticks and R). With an A nudge at :28 as well, the nudge is the third wake of
-  the cap window (opened at :08) and is allowed; the cap then refuses the tick at :38 (and :48, :58), `last_tick` stays
-  :08, the refusal counts once in `delivery_fault.counts.cap`, and the next tick is at :08 when the window reopens.
+  the cap window (opened at :08) and is allowed; the tick at :38 (and :48, :58) is then deferred on the cap, `last_tick`
+  stays :08, **no** `delivery_fault` is raised and no `cap:<window>` key is written (the priority rule working, section
+  3, "deferral is not a fault"), and the next tick is at :08 when the window reopens.
 - **ticks last on a contested beat:** cap window opened at :08 with two slots used. Case A: a tick at :08 and an R wake
   at :18; at :38 the tick is eligible (gap 30 min, nothing running) and so is an A nudge. Case R: a tick at :08 and an
   A nudge at :18; at :38 the tick and an R wake are both eligible (R's 6 h spacing allows it).
-  The non-tick wake is queued and takes the third slot; the tick skips on the cap; `last_tick` stays :08; the tick
-  counters don't move. Run with the beat's steps in their real order, not with the tick first; a variant that moves
+  The non-tick wake is queued and takes the third slot; the tick is deferred on the cap; `last_tick` stays :08; the
+  tick counters don't move; `delivery_fault` stays absent. Run with the beat's steps in their real order, not with the tick first; a variant that moves
   the tick ahead of A must fail this test (the end-of-block check that the test covers the order).
 - **floor:** `PERSISTENCE_HEARTBEAT_TICK_GAP=20` is raised to 30 (one journal line); 45 is kept.
 - **skips count as neither:** a live firing at :38 skips the tick; `last_tick` stays :08 and the counters don't move;
@@ -552,3 +586,14 @@ this PR depends on the answer.
 | The :28 sentence: tick :08 and R :18 make an A nudge at :28 the third wake, allowed; the cap refuses the :38 tick (Ember) | 5, "an R wake takes a slot" test |
 | `delivery_fault.rev` never resets across acks; only `since`, `last`, counts and ids do (Claude, non-blocking) | 3.3, acknowledging |
 | Section 8 pointed at a "why the gap" paragraph that doesn't exist (Claude, non-blocking) | 8, that row |
+
+## 12. Revision 6: Ember's last change on fc255a8, and where it landed
+
+| Point | Where |
+|---|---|
+| Ordinary deferral: Q or a working tick finding the cap full skips, stays eligible, and raises no `delivery_fault` (Ember, 1570840660490059858) | 3, "deferral is not a fault"; Q conditions; 5, the cap condition |
+| Required delivery blocked: only B, C, A, D or R refused by `take_cap` updates `counts.cap` | 3, "deferral is not a fault"; 3.3, the cap bullet |
+| Check capacity before the fault-producing cap path for Q and the tick | `cap_has_room()`, read-only, same window rule, under the same lock (3) |
+| The :08 / :18 R / :28 A / :38 test expects no fault from the skipped tick | 5, "an R wake takes a slot" test; "ticks last on a contested beat" also asserts no fault |
+| The six-hour cap-fault fixture uses a required wake that is actually refused | 4, "no loop" test (a fourth A nudge refused each window) |
+| A direct test that a cap-skipped tick and quiet wake create no delivery fault | 4, "deferral raises nothing" test |
