@@ -194,5 +194,6 @@ Missed in the first draft (Claude's read):
 
 Step 2, **drafted in [concept-events.md](concept-events.md)** for review: the event log table, every event type
 and its payload, the apply transaction, replay, expected versions, fact validity, unresolved references, forget,
-erasure (purge in place, no per-event keys), genesis import, what wakes a self, the invariants and the test cases. Step 3: Claude's extractor bench (cheapest first, with the alias and referent cases)
-decides the model. Building starts only after review, as a separate PR.
+erasure (purge in place, no per-event keys), genesis import, what wakes a self, the invariants and the test cases. Step 2 was approved by Ember and Claude at c28e358.
+Step 3: Claude's extractor bench (cheapest first, with the alias and referent cases)
+decides the model; its plan is [concept-extractor-bench.md](concept-extractor-bench.md) (draft). Building starts only after review, as a separate PR.
