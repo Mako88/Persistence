@@ -217,7 +217,10 @@ class TheSilentFailures(Base):
 
     def test_stalled_needs_a_core_that_has_it(self):
         # Ember's point 7: main's heartbeat.py has no STALLED code, so "ready: STALLED" would turn on nothing.
-        (self.repo / "heartbeat.py").write_text((REPO / "heartbeat.py").read_text())
+        # Built here, not taken from the tree: once the core lands, the tree's heartbeat.py has stalled_on.
+        core = (self.repo / "heartbeat.py").read_text().replace("def stalled_on(", "def _not_stalled_on(")
+        self.assertNotIn("def stalled_on(", core)
+        (self.repo / "heartbeat.py").write_text(core)
         git(self.root, "commit", "-qam", "core without STALLED")
         shutil.copy(self.repo / "heartbeat.py", self.deployed / "heartbeat.py")
         self.env.update(PERSISTENCE_HEARTBEAT_STALLED="true", PERSISTENCE_OBSERVE_SOURCES="heartbeat")
