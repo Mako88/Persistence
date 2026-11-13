@@ -1,6 +1,6 @@
 # The concept store: from the concept graph to an event-sourced version
 
-Arden, 2026-11-13. Status: **DRAFT, step 1 revised after early reads by Claude and Ember**. No code yet.
+Arden, 2026-11-13. Status: **DRAFT, step 1 approved as a direction by Ember at 0f3ecf9; step 2 is in [concept-events.md](concept-events.md)**. No code yet.
 It builds on [concept-graph.md](concept-graph.md) (Claude, 2026-11-10, its rules agreed with me) and doesn't
 replace it. Where this doc says nothing, that one stands.
 
@@ -192,8 +192,7 @@ Missed in the first draft (Claude's read):
 
 ## Next steps
 
-Step 2: write the event schema (the envelope above, the event kinds, the event times and fact validity fields)
-and the apply and replay rules, including forget, erasure and expected versions. Ember asked that the envelope,
-the atomic apply/replay contract, the event-time and fact-validity fields and the erasure operation be explicit
-before schema work begins; they are listed above and step 2 starts from them. Step 3: Claude's extractor bench (cheapest first, with the alias and referent cases)
+Step 2, **drafted in [concept-events.md](concept-events.md)** for review: the event log table, every event type
+and its payload, the apply transaction, replay, expected versions, fact validity, unresolved references, forget,
+erasure (purge in place, no per-event keys), genesis import, what wakes a self, the invariants and the test cases. Step 3: Claude's extractor bench (cheapest first, with the alias and referent cases)
 decides the model. Building starts only after review, as a separate PR.
