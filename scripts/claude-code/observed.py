@@ -262,14 +262,32 @@ def claims_cursor(event, ctx):
     return ctx.state / f"{event.get('session_id') or 'unknown'}.observed-claims"
 
 
-def claims_done(event, ctx):
-    """Claims done or abandoned in (cursor, now], not this session's own. Reads the cursor, never moves it: the ack
-    moves it to this read's `now`, so a claim finishing between the read and the ack shows on the next wake."""
-    session = event.get("session_id") or "unknown"
+CLAIMS_SETTLE = timedelta(seconds=30)  # how far the cursor stays behind a read's now (Arden on 5d07630)
+
+
+def read_claims_cursor(event, ctx):
+    """(since, {claim id: its updated time} already shown after since). The cursor file is JSON {"at", "seen"}; a bare
+    time (as 5d07630 wrote it) reads as that time with nothing seen. Missing or unreadable: the first look's window."""
     try:
-        since = parse_time(claims_cursor(event, ctx).read_text(encoding="utf-8").strip())
-    except (OSError, ValueError):
-        since = ctx.now - FIRST_LOOK
+        text = claims_cursor(event, ctx).read_text(encoding="utf-8").strip()
+    except OSError:
+        return ctx.now - FIRST_LOOK, {}
+    try:
+        if text.startswith("{"):
+            data = json.loads(text)
+            return parse_time(data["at"]), {str(k): parse_time(v) for k, v in data.get("seen", {}).items()}
+        return parse_time(text), {}
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return ctx.now - FIRST_LOOK, {}
+
+
+def claims_done(event, ctx):
+    """Claims done or abandoned in (cursor, now], not this session's own and not already shown. Reads the cursor, never
+    moves it. The ack moves it to CLAIMS_SETTLE before this read's now, not to now: claims.py stamps `updated` before it
+    writes the file, so a claim stamped just before the read may not be on disk yet (Arden on 5d07630). The ids shown
+    inside that margin ride along as `seen`, so the next read skips them: at-least-once, without repeats."""
+    session = event.get("session_id") or "unknown"
+    since, seen = read_claims_cursor(event, ctx)
     found = []
     for path in sorted((ctx.state / "tasks").glob("*.json")):
         try:
@@ -277,14 +295,19 @@ def claims_done(event, ctx):
             when = parse_time(record["updated"])
         except (OSError, ValueError, KeyError, TypeError):
             continue
-        if record.get("status") in ("done", "abandoned") and record.get("owner") != session and since < when <= ctx.now:
+        if record.get("status") in ("done", "abandoned") and record.get("owner") != session and since < when <= ctx.now \
+                and str(record.get("id")) not in seen:
             found.append((when, record))
     found.sort(key=lambda item: (item[0], str(item[1].get("id"))), reverse=True)
     out = tuple(f"work {r['status']} {hhmm(w)}: claim {str(r.get('id', ''))[:8]} {short(r.get('task'), 70)}"
                 + (f" — {short(r['outcome'], 60)}" if r.get("outcome") else "") for w, r in found[:CLAIMS_SHOWN])
+    at = max(since, (ctx.now - CLAIMS_SETTLE).replace(microsecond=0))  # as written, so `seen` is judged against it
+    still = {**seen, **{str(r.get("id")): w for w, r in found}}
+    ack = {"at": at.isoformat(timespec="seconds"),
+           "seen": {k: w.isoformat(timespec="seconds") for k, w in sorted(still.items()) if w > at}}
     return Observation("claims", ctx.now, lines=out, truncated=max(0, len(found) - CLAIMS_SHOWN),
                        event_range=(found[-1][0].isoformat(timespec="seconds"), found[0][0].isoformat(timespec="seconds")) if found else None,
-                       ack=ctx.now.isoformat(timespec="seconds"))
+                       ack=json.dumps(ack, sort_keys=True))
 
 
 def claims_ack(obs, event, ctx):

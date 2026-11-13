@@ -168,6 +168,34 @@ class Hook(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertIn("SOURCELINE", events[0][1], "the ack ran after the block was written")
 
+    def subagent(self, printed, core="the core"):
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            ps = self.patches(tmp) + [mock.patch.object(hook, "core", return_value=core)]
+            for p in ps:
+                p.start()
+            try:
+                ack = lambda obs, e, c: events.append((obs.source, printed.getvalue()))
+                with mock.patch.object(observed, "observe", return_value=[OBS("prs", NOW, lines=("SOURCELINE",), ack="x")]), \
+                        mock.patch.dict(observed.SOURCES, {"prs": src(None, ack)}, clear=True), mock.patch("sys.stdout", printed):
+                    hook.subagent_start({"session_id": "s-1", "cwd": tmp})
+            finally:
+                for p in ps:
+                    p.stop()
+        return events
+
+    def test_subagent_start_acks_after_it_prints(self):
+        """Arden on 5d07630: both mutants of the SubagentStart path (ack before the print, no ack) stayed green."""
+        printed = __import__("io").StringIO()
+        events = self.subagent(printed)
+        self.assertEqual([source for source, _ in events], ["prs"], "acked once, for what it printed")
+        context = json.loads(events[0][1])["hookSpecificOutput"]
+        self.assertEqual(context["hookEventName"], "SubagentStart")
+        self.assertIn("- SOURCELINE", context["additionalContext"], "the ack ran after the block was written")
+
+    def test_subagent_start_that_prints_nothing_acks_nothing(self):
+        self.assertEqual(self.subagent(__import__("io").StringIO(), core="  "), [])
+
     def test_an_observation_cut_by_cap_is_not_acked(self):
         long = tuple("z" * 190 + str(i) for i in range(observed.MAX_LINES))
         many = [OBS(f"s{i}", NOW, lines=long, ack="x") for i in range(12)]  # ~13.8k chars, over CAP
@@ -497,6 +525,29 @@ class Claims(unittest.TestCase):
         self.claim(1, "done", -0.5)  # finishes after the read's now, before the ack
         observed.acknowledge([obs], {"session_id": "me"}, c)
         self.assertIn("task number 1", "\n".join(self.look(1).lines))
+
+    def test_a_claim_stamped_before_the_read_but_written_after_it_is_not_lost(self):
+        """Arden's repro on 5d07630: claims.py stamps `updated` (second resolution) before the file is written. A read
+        in that gap, acked with cursor = the read's now, skipped the claim for good."""
+        self.now = datetime(2026, 11, 13, 4, 10, 5, 400000, tzinfo=timezone.utc)
+        c = ctx(self.state, now=self.now)
+        obs = observed.claims_done({"session_id": "me"}, c)  # 04:10:05.4, the file not written yet
+        observed.acknowledge([obs], {"session_id": "me"}, c)
+        self.claim(1, "done", 0.4 / 60)  # stamped 04:10:05, written now
+        self.assertIn("task number 1", "\n".join(self.look(5).lines))
+
+    def test_a_claim_shown_inside_the_settle_margin_is_not_shown_again(self):
+        self.claim(1, "done", 0.1)
+        self.assertIn("task number 1", "\n".join(self.look().lines))
+        self.assertEqual(self.look(0.2).lines, (), "at-least-once, without repeats")
+        self.claim(2, "done", -0.3)
+        self.assertEqual(["task number 2" in line for line in self.look(0.5).lines], [True])
+        self.assertEqual(self.look(5).lines, ())
+
+    def test_a_cursor_written_before_the_margin_is_still_read(self):
+        observed.write_atomic(observed.claims_cursor({"session_id": "me"}, ctx(self.state)), (self.now - timedelta(minutes=10)).isoformat())
+        self.claim(1, "done", 20); self.claim(2, "done", 5)
+        self.assertEqual(["task number 2" in line for line in self.look().lines], [True])
 
 
 class Pure(unittest.TestCase):

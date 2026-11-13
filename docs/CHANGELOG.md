@@ -21,7 +21,8 @@ the text, not by matching its lines, so a failed wake consumes nothing. They are
 review, via GitHub REST, cached 120 s in an owner-only file, falling back to the stale cache when offline), `deployed` (installed
 hook files and the deployed store's commit against `main`), `switches` (the recall and query switches that
 are set, on the hook's side and in the store unit) and `claims` (work finished since this session last
-looked). A store turns them on by naming them in `PERSISTENCE_OBSERVE_SOURCES`, so nothing changes until a
+looked; its cursor stays 30 s behind the read and remembers what it showed there, because a claim's time is
+stamped before its file is written). A store turns them on by naming them in `PERSISTENCE_OBSERVE_SOURCES`, so nothing changes until a
 self opts in for itself. Why: wakes acted on notes about state the machine could report live, such as PR
 reviews, deploys, switches and finished work (John's "do it", room 1570645133156950106). Ember's
 event-buffer projection plugs in later as one more source. Design: `docs/design/observed-now-sources.md`.

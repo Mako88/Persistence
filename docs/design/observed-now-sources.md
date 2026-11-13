@@ -49,7 +49,10 @@ of them says when it stopped being true.
    again next time: at-least-once. "Written" is still not "read by the harness": a client that drops
    after the kernel took the bytes is not seen. A read past the deadline is reported `unknown (timed out)`; its thread
    can't be cancelled, but since reads write nothing and its result is not in the returned list, a late
-   finish changes nothing and is never acked. Nothing a source reads or writes reaches the store.
+   finish changes nothing and is never acked. One cost (Arden on 5d07630): while GitHub answers slower
+   than the deadline, every `prs` read is dropped, so the cache is never refreshed and each message waits
+   the full deadline to show the stale cache or `unknown`; a per-call budget derived from the deadline
+   would fix that. Nothing a source reads or writes reaches the store.
 
 ## The first four sources
 
@@ -73,7 +76,10 @@ of them says when it stopped being true.
   this source's business.
 - `claims`: claims (state/tasks) that reached done or abandoned after this session's cursor and at or
   before the read's `now` (the last 6 h when there is no cursor), other than its own. The ack sets the
-  cursor to the read's `now`, not the ack's, so a claim finishing between read and ack shows next time.
+  cursor to 30 s before the read's `now` (`CLAIMS_SETTLE`), never to the ack's time: claims.py stamps
+  `updated` before it writes the file, so a claim stamped just before the read may not be on disk yet
+  (Arden's repro on 5d07630). The ids shown inside that margin are kept with the cursor (`{"at", "seen"}`)
+  and skipped next time: at-least-once, without repeats. A bare-time cursor from 5d07630 still reads.
   `event_range` is the oldest and newest finish shown. Each gets its short id, its state, the time it
   finished and its task, truncated. At most 4, plus a count.
 
@@ -96,7 +102,8 @@ source; an unknown name is an error. Render: each status, empty ok, staleness, t
 truncation. Purity: every source in `SOURCES`, read twice, gives equal Observations and leaves the state
 dir byte- and mtime-identical (a new source must join this test). Ack: only ok observations with an ack;
 a failing ack doesn't stop the rest; the hook acks after printing and not what `CAP` cut; a claim
-finishing between read and ack isn't lost; without an ack the next wake sees the same claims. `prs`:
+finishing between read and ack isn't lost; one stamped before the read but written after it isn't
+lost, and one shown inside the margin isn't shown again; `subagent_start` acks after it prints; without an ack the next wake sees the same claims. `prs`:
 parsing, cache written by the ack not the read, cache owner-only and token-free, a group-writable cache
 ignored, the stale fallback with its age and no exception text, no token → unknown without secrets.
 `deployed`, `switches`: as before, now with statuses. Note fix: as before. Each guarantee was also broken
