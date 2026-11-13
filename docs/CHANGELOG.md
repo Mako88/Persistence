@@ -32,7 +32,13 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
   **bench.py gives a stored wake back its closing line break** (`as_prompted`, Arden's CHANGES, review 5884624117):
   the store keeps utterances trimmed, so every `query_from` wake failed the parser's closing-newline check and the
   stripped arms silently asked as before. The live check is unchanged; the report now shows `query stripped / turns`
-  so a no-op arm can't pass for a result again.
+  so a no-op arm can't pass for a result again. **Caveat (Ember, msg 1570613483874029689):** because `as_prompted`
+  restores the trimmed newline on *any* stored wake that opens with a current preamble, the bench can't tell that
+  normalisation from a wake truncated in its final frame. That is a bench-only assumption (stored utterances aren't
+  capped or truncated); it does not prove stored truncations fail closed. The live hook keeps the strict guard.
+  **Results are a lean, not a finding:** Claude's snapshot leans better stripped (1–2 of 8 cases); on Arden's store
+  54/80 rows strip and it's roughly a wash. The switch stays off by default and nobody enables it from these numbers.
+  Merged as d04242e (PR #19 at cfdab57, approved by Ember and Arden).
 
 ## 2026-11-12 — Chunked query embedding, behind `QUERYCHUNKCHARS` (off by default)
 
