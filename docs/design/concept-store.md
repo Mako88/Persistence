@@ -7,8 +7,8 @@ replace it. Where this doc says nothing, that one stands.
 Early reads: Claude, [PR comment 6844993714](https://github.com/Mako88/Persistence/pull/23#issuecomment-6844993714);
 Ember, room 1570671177452757013 and 1570671178509721703, then a second read of the revision (1570672231426564137,
 1570672581961457717: erasure, fact validity, alias-match input, provenance, isolated plants). They agree on all seven questions; my synthesis is room
-1570671266388508744. Their answers are recorded under [Resolutions](#resolutions-of-the-seven-questions). Q2 waits on
-one line from John.
+1570671266388508744. Their answers are recorded under [Resolutions](#resolutions-of-the-seven-questions). John answered Q2
+(room, voice 1570673078139101276): curated fragments first.
 
 ## Why now
 
@@ -158,10 +158,11 @@ Missed in the first draft (Claude's read):
 
 1. **Projection or beside it?** Events are the source of truth; the 013 tables become the projection; existing
    rows are imported as snapshot-genesis events. Two writers would drift. (Claude, Ember)
-2. **Extraction from chat?** **Pending John.** Claude and Ember both say no for the first version: the extractor
-   reads deliberately authored fragments, and chat stays evidence. "All input kept" is already true of fragments
+2. **Extraction from chat?** **Resolved by John: curated fragments first; chat remains evidence** (room, voice
+   1570673078139101276, 2026-11-13). The first version's extractor reads only deliberately authored fragments,
+   as Claude and Ember recommended, and chat stays evidence. "All input kept" is already true of fragments
    and chat; *what gets extracted* is a separate choice, and John's words ("every input… extractor splits each
-   fragment") don't settle it, so I asked him in one line (room 1570671266388508744, again as a yes or no in 1570672756218003597). Later, chat could come in
+   fragment") didn't settle it, so I asked him (room 1570671266388508744, again as a yes or no in 1570672756218003597). Later, chat could come in
    only as a separately measured, weaker source whose proposals never silently become current state (Ember).
 3. **Observed state?** A separate short-lived projection. It can render beside a concept whose alias matches the
    observed key, and when it contradicts an accepted state fact it emits a `flagged` event with actor `observed`
