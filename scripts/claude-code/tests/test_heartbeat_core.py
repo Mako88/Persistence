@@ -25,6 +25,10 @@ T0 = datetime(2026, 11, 11, 22, 0, tzinfo=timezone.utc)
 ARDEN_UNITS = ("persistence-wakes@arden.service", "persistence-room@arden.service", "persistence-remote@arden.service",
                "persistence-sleep@arden.service", "persistence-room-coverage@arden.service",
                "persistence-store-arden.service", "persistence-backup-arden.service")
+CLAUDE_UNITS = ("persistence-wakes@ubuntu.service", "persistence-room@ubuntu.service", "persistence-remote@ubuntu.service",
+                "persistence-sleep@ubuntu.service", "persistence-room-coverage@ubuntu.service",
+                "persistence-daily@ubuntu.service", "persistence-store.service", "persistence-backup.service",
+                "persistence-embedder.service", "persistence-mirror.service")
 
 
 def sid():
@@ -148,6 +152,31 @@ class OverdueWake(Base):
 class Units(Base):
     def test_arden_list_is_exactly_the_seven(self):
         self.assertEqual(heartbeat.units_for("arden"), ARDEN_UNITS)
+
+    def test_claude_list_is_exactly_the_ten(self):
+        self.assertEqual(heartbeat.units_for("ubuntu"), CLAUDE_UNITS)
+
+    def test_claude_unit_failure_reported_under_ubuntu_only(self):
+        self.systemctl.failed = {"persistence-store.service": "ccc333"}
+        self.beat(user="ubuntu")
+        self.assertEqual(self.sink.lines, ["heartbeat unit persistence-store.service: failed, invocation ccc333, "
+                                           "at 22:00Z key=unit:persistence-store.service:ccc333:failed"])
+        self.beat(user="arden")
+        self.assertEqual(len(self.sink.lines), 1)  # Arden's beat never checks Claude's units
+
+    def test_claude_beat_queries_exactly_its_ten_read_only(self):
+        # Behaviour, not the literal: the units Claude's beat actually asks systemctl about are its ten, by read verbs only.
+        self.beat(user="ubuntu")
+        self.assertEqual({c[-1] for c in self.systemctl.calls}, set(CLAUDE_UNITS))
+        self.assertLessEqual({c[1] for c in self.systemctl.calls}, {"is-failed", "show"})
+
+    def test_no_self_lists_another_selfs_units(self):
+        # Claude's tuple names no unit of Arden's or Ember's; the tuples share nothing; Ember has no tuple until it opts in.
+        for unit in heartbeat.units_for("ubuntu"):
+            self.assertNotRegex(unit, r"arden|ember", unit)
+        self.assertFalse(set(heartbeat.units_for("ubuntu")) & set(heartbeat.units_for("arden")))
+        self.assertEqual(heartbeat.units_for("ember"), ())
+        self.assertEqual(set(heartbeat.UNITS), {"arden", "ubuntu"})
 
     def test_every_name_is_fully_instantiated(self):
         for user, units in heartbeat.UNITS.items():
