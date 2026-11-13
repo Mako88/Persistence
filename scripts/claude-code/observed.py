@@ -393,6 +393,7 @@ def heartbeat_read(event, ctx):
             spell = parse_time(quiet.get("spell"))
             lines.append(f"heartbeat: this is quiet wake {wake[:8]}; the last work activity was at "
                          f"{hhmm(spell) if spell and spell.year > 1970 else 'never'}")
+        shown, omitted, more = keys, [], 0
         if keys:
             kinds = {}
             for k in keys:
@@ -400,37 +401,77 @@ def heartbeat_read(event, ctx):
             lines.append(f"heartbeat: {len(keys)} reports for you (wake {wake[:8]}): "
                          + ", ".join(f"{n} {kind}" for kind, n in sorted(kinds.items()))
                          + f". journalctl -u persistence-heartbeat@{user} has the lines")
-            claims = [k.split(':')[1] for k in keys if k.split(':')[0] in ("claim", "paused")]
-            lines += [f"claim {c} (ptask show {c})" for c in dict.fromkeys(claims)]
-            lines += [k for k in keys if k.split(':')[0] not in ("claim", "paused")]
-        ack = json.dumps({"wake": wake, "keys": keys, "quiet": is_quiet}, sort_keys=True)
+            # Each key's actionable identity is one line: its claim (ptask show), or the key itself. Only as many as fit
+            # under render's MAX_LINES are listed, and the ack delivers exactly those keys; the rest go back to be
+            # offered again, never marked delivered by the "N more not shown" count (Ember, 1570857894172168193).
+            units = {}
+            for k in keys:
+                kind, _, rest = k.partition(":")
+                ident = rest.split(":")[0] if kind in ("claim", "paused") else k
+                units.setdefault(ident, []).append(k)
+            fixed = len(lines) + (mode.get("mode") == "suspended") + fault_showing(data.get("delivery_fault"))
+            room = max(0, MAX_LINES - fixed)
+            idents = list(units)
+            listed, more = idents[:room], len(idents) - min(room, len(idents))
+            lines += [f"claim {i} (ptask show {i})" if units[i][0].split(":")[0] in ("claim", "paused") else i
+                      for i in listed]
+            shown = [k for i in listed for k in units[i]]
+            omitted = [k for i in idents[room:] for k in units[i]]
+        ack = json.dumps({"wake": wake, "keys": shown, "omitted": omitted, "quiet": is_quiet}, sort_keys=True)
+    else:
+        more = 0
     if mode.get("mode") == "suspended":
         lines.insert(0, suspended_line(mode))
     if fault_showing(data.get("delivery_fault")):
         lines.insert(0, fault_line(data["delivery_fault"]))
-    return Observation("heartbeat", ctx.now, lines=tuple(lines), ack=ack)
+    return Observation("heartbeat", ctx.now, lines=tuple(lines), ack=ack, truncated=more)
+
+
+ACK_LOST = "heartbeat-ack-lost"
+UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def mark_ack_lost(state, wake):
+    if isinstance(wake, str) and UUID.match(wake):
+        write_atomic(Path(state) / ACK_LOST / wake, "")
 
 
 def heartbeat_ack(obs, event, ctx):
     import coordination
 
     got = json.loads(obs.ack)
+    try:
+        with coordination.lock(ctx.state, "heartbeat", wait=HB_ACK_WAIT):
+            _heartbeat_ack_locked(ctx, got)
+    except coordination.LockBusy:
+        # The block reached the session but the ack couldn't record it. That is an ack failure, not a delivery
+        # failure: a content-free marker (the wake id as a file name) tells the beat to put the entries back without
+        # counting a failed attempt, so they are re-delivered and the undeliverable breaker doesn't move.
+        mark_ack_lost(ctx.state, got["wake"])
+        raise
+
+
+def _heartbeat_ack_locked(ctx, got):
     wake, at = got["wake"], ctx.now.isoformat(timespec="seconds")
-    with coordination.lock(ctx.state, "heartbeat", wait=HB_ACK_WAIT):
-        path = ctx.state / "heartbeat.json"
-        data = json.loads(path.read_text(encoding="utf-8"))
-        changed = False
-        quiet = data.get("quiet")
-        if got.get("quiet") and isinstance(quiet, dict) and quiet.get("state") == "queued" and quiet.get("wake") == wake:
-            quiet.update(state="delivered", at=at)
+    path = ctx.state / "heartbeat.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    changed = False
+    quiet = data.get("quiet")
+    if got.get("quiet") and isinstance(quiet, dict) and quiet.get("state") == "queued" and quiet.get("wake") == wake:
+        quiet.update(state="delivered", at=at)
+        changed = True
+    for key in got.get("keys", []):
+        e = (data.get("reports_q") or {}).get(key)
+        if isinstance(e, dict) and e.get("state") == "queued" and e.get("wake") == wake:
+            e.update(state="delivered", at=at)
             changed = True
-        for key in got.get("keys", []):
-            e = (data.get("reports_q") or {}).get(key)
-            if isinstance(e, dict) and e.get("state") == "queued" and e.get("wake") == wake:
-                e.update(state="delivered", at=at)
-                changed = True
-        if changed:
-            write_atomic(path, json.dumps(data, indent=1, sort_keys=True))
+    for key in got.get("omitted", []):
+        e = (data.get("reports_q") or {}).get(key)
+        if isinstance(e, dict) and e.get("state") == "queued" and e.get("wake") == wake:
+            e["state"] = "none"  # not shown: offered again by R's next round, no failure counted
+            changed = True
+    if changed:
+        write_atomic(path, json.dumps(data, indent=1, sort_keys=True))
 
 
 SOURCES = {"prs": Source(prs, prs_ack), "deployed": Source(deployed), "switches": Source(switches),

@@ -819,6 +819,8 @@ class Beat:
 
     # 3.1: queued is not delivered; failure leaves it retryable.
     def settle_queued(self):
+        lost_dir = self.state / "heartbeat-ack-lost"
+        lost = {p.name for p in lost_dir.iterdir()} if lost_dir.is_dir() else set()
         for firing, e in self.hb_fired.items():
             state = self.states.get(firing)
             if state in ("never-started", "crashed", "failed") and firing not in self.section("fault_seen"):
@@ -837,8 +839,13 @@ class Beat:
             if state in (None, "running"):
                 continue
             if state in ("never-started", "crashed", "failed", "ok", "taken"):
-                # ok with the entry still queued: the block never reached the session, or CAP cut it.
-                self.unqueue(key, entry, failed=not self.usage_hold(wake))
+                # ok with the entry still queued: the block never reached the session, or its ack lost the lock (a
+                # marker says so: retryable, not a failed attempt).
+                self.unqueue(key, entry, failed=wake not in lost and not self.usage_hold(wake))
+        live = {e["wake"] for _, e in self.queued_entries()}
+        for name in lost - live:
+            if self.states.get(name) not in (None, "running"):
+                (lost_dir / name).unlink(missing_ok=True)  # consumed (or never ours): its wake has ended
         q = self.data.get("quiet")
         if q and q.get("state") == "delivered" and self.states.get(q.get("wake")) not in (None, "running"):
             q["state"] = "none"  # its session ended; if the spell is still this one, nothing happened: back off
