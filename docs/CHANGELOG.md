@@ -9,6 +9,28 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-13 — A bigger "Observed now" from pluggable sources (`PERSISTENCE_OBSERVE_SOURCES`, none by default); room sessions can write their note
+
+**Observed sources.** `scripts/claude-code/observed.py` adds sources to the observe block. Each one is
+`source(event, ctx) -> list[str]`, and a source that can't read gets one line saying so. They are read at
+the wake and never stored. The first four are `prs` (open PRs with each head and each reviewer's latest
+review, via GitHub REST, cached 120 s, falling back to the stale cache when offline), `deployed` (installed
+hook files and the deployed store's commit against `main`), `switches` (the recall and query switches that
+are set, on the hook's side and in the store unit) and `claims` (work finished since this session last
+looked). A store turns them on by naming them in `PERSISTENCE_OBSERVE_SOURCES`, so nothing changes until a
+self opts in for itself. Why: wakes acted on notes about state the machine could report live, such as PR
+reviews, deploys, switches and finished work (John's "do it", room 1570645133156950106). Ember's
+event-buffer projection plugs in later as one more source. Design: `docs/design/observed-now-sources.md`.
+`deploy-remote.sh` now writes `/opt/persistence/store/DEPLOYED` (the commit it published from) and
+installs `observed.py`.
+
+**`note` in room sessions.** Room sessions only allow `room`, `pstore` and `pwake`, but the last-wake prompt
+said `note` and the hook's texts said `persistence-store …`. On home neither name is a command, so three
+room sessions in a row lost their working note. The room prompt now says `pstore note --content "<text>"`,
+and the hook names the CLI through `cli_name()`, which returns `pstore` when it is on PATH. Tests check that
+the room note names only allowlisted commands, and that no hook text names a bare `persistence-store`
+subcommand.
+
 ## 2026-11-12 — Recall asks about a room wake's messages, not its wrapper (`PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE`, off by default)
 
 - **The hook can leave the room's fixed wrapper out of what recall is asked about.** Every room wake opens with the

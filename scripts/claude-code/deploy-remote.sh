@@ -12,10 +12,14 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 dotnet publish "$repo/src/Persistence.Store" -c Release -r linux-x64 --self-contained true -o "$work/pub" >/dev/null
+# The commit the store was published from, for observe's `deployed` source (observed-now-sources.md); "-dirty" if the
+# tree had changes.
+echo "$(git -C "$repo" rev-parse HEAD)$(git -C "$repo" diff --quiet HEAD -- src || echo -dirty)" > "$work/pub/DEPLOYED"
 tar -czf "$work/store.tgz" -C "$work/pub" .
 # hook.py imports coordination.py (the locks and the fired-wake ledger) and, for ptask and run-due, claims.py and
-# cwd_exec.py; run-due launches every firing through run_line.py and refuses to fire without it: all five go beside it.
-py=(hook.py coordination.py claims.py cwd_exec.py run_line.py)
+# cwd_exec.py; run-due launches every firing through run_line.py and refuses to fire without it; observe reads its opted-in
+# sources from observed.py: all six go beside it.
+py=(hook.py coordination.py claims.py cwd_exec.py run_line.py observed.py)
 scp -q "$work/store.tgz" "${py[@]/#/$repo/scripts/claude-code/}" "$host:/tmp/"
 ssh "$host" "set -e
   sudo tar -xzf /tmp/store.tgz -C /opt/persistence/store

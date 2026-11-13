@@ -48,7 +48,7 @@ of them says when it stopped being true.
   "couldn't read which commit". It reads the local `main` ref only, with no fetch.
 - `switches`: the recall and query switches that are set (`PERSISTENCE_RECALL_*`,
   `PERSISTENCE_EMBEDDING_QUERY*`, `PERSISTENCE_EMBEDDING_QUALITYWEIGHT`), in two places: the hook's
-  side (hook.setting, i.e. env, then settings.json) and the store's side (`systemctl show -p
+  side (the environment the hook's recall reads, as recall reads it) and the store's side (`systemctl show -p
   Environment` of `PERSISTENCE_OBSERVE_STORE_UNIT`, when that is set). `PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE`
   is always named, as on or off. This covers this store only: reading another self's units is not
   this source's business.

@@ -23,7 +23,7 @@ import observed  # noqa: E402
 def ctx(state, values=None, run=None, now=None):
     values = values or {}
     return observed.Context(state=Path(state), setting=lambda name, default: values.get(name, default),
-                            run=run or (lambda *a, **k: ""), now=now or datetime.now(timezone.utc))
+                            run=run or (lambda *a, **k: ""), now=now or datetime.now(timezone.utc), env=values)
 
 
 class Runner(unittest.TestCase):
@@ -90,7 +90,7 @@ class Prs(unittest.TestCase):
     def fake(self, calls):
         def get(url, token, timeout):
             calls.append((url, token))
-            return REVIEWS if url.endswith("/reviews") else PULLS
+            return REVIEWS if "/reviews" in url else PULLS
         return get
 
     def test_lists_open_prs_with_head_and_latest_review_per_reviewer(self):
@@ -169,6 +169,12 @@ class Deployed(unittest.TestCase):
         (self.installed / "hook.py").write_text("# hook.py v2\n")
         self.assertIn("hooks: match main", "\n".join(self.run_it()))
 
+    def test_a_hook_file_main_has_but_not_installed_is_missing(self):
+        (self.installed / "hook.py").write_text("# hook.py v2\n")
+        (self.installed / "run_line.py").unlink()
+        out = "\n".join(self.run_it())
+        self.assertIn("missing: run_line.py", out); self.assertNotIn("differ", out)
+
     def test_store_marker_behind_main(self):
         self.marker.write_text(self.first + "\n")
         out = "\n".join(self.run_it())
@@ -221,7 +227,7 @@ class Claims(unittest.TestCase):
         self.assertLessEqual(len(out), 6)
         # The cursor moved: nothing new on the next look.
         self.assertEqual(observed.claims_done({"session_id": "me"}, ctx(self.state, now=self.now + timedelta(minutes=1))), [])
-        self.claim(11, "done", -0.5)
+        self.claim(11, "done", -1.5)  # after the cursor (now+1m), before the look (now+2m)
         later = observed.claims_done({"session_id": "me"}, ctx(self.state, now=self.now + timedelta(minutes=2)))
         self.assertIn("task number 11", "\n".join(later))
 

@@ -166,6 +166,18 @@ def start_server(exe):
 REMOTE = Path(os.environ.get("PERSISTENCE_STORE_REMOTE_FILE") or STATE.parent / "remote.json")  # the variable: for a trial run
 
 
+def cli_name():
+    """The store CLI's name as a session can run it, for the texts that tell a session what to type. A remote store is
+    reached through `hook.py cli` (the `pstore` wrapper), never the CLI's own file; on home the wrapper is the only name
+    on PATH, and room sessions may run nothing else, so "persistence-store search" and "note" were refused there
+    (three room sessions lost their note, 2026-11-13)."""
+    import shutil
+
+    if remote() or shutil.which("pstore"):
+        return "pstore"
+    return os.environ.get("PERSISTENCE_STORE_EXE") or "persistence-store"
+
+
 def remote():
     """Where the store is served when it is on another machine ({"host", "port"}), else None."""
     try:
@@ -503,15 +515,14 @@ def curate(event):
         return
     STATE.mkdir(parents=True, exist_ok=True)
     marker(event).write_text(str(tokens))
-    # A remote store is reached through `hook.py cli` (the `pstore` wrapper), never the CLI's own file.
-    exe = "pstore" if remote() else os.environ.get("PERSISTENCE_STORE_EXE", "persistence-store")
+    exe = cli_name()
     print(json.dumps({"decision": "block", "reason": (
         f"Your context is at {tokens:,} tokens. Before long it is compacted, and what you know then is "
         "only your store: the core (identity, relationships, personal, summaries) and the last of the "
         "conversation. This is your curation pass, once per stretch. Read your core "
         f"(`{exe} core`), then save what this stretch earned and is not yet there: decisions in the "
         "other's own words, what is running and how to pick it up, what you learned about the work, "
-        "the person, and yourself. Bring your working note up to date (`note`). Edit fragments that are now wrong or stale rather than adding "
+        f"the person, and yourself. Bring your working note up to date (`{exe} note --content <text>`). Edit fragments that are now wrong or stale rather than adding "
         f"beside them; archive what no longer earns its place. `{exe} help` lists the commands; `{exe} guide` says how to curate well. "
         # The work Claude read its whole core to learn what not to write (2026-11-09).
         "Leave out the transcript itself (every message is already kept), what the core already says, and "
@@ -529,7 +540,7 @@ def precompact(event):
         "(the task, the step, the next action), anything running in the background with how to check "
         "it (ids, commands, logs), and any request from the other that is not yet answered, in their "
         "own words. Everything else is in the store and the transcript: say so, and that "
-        "`persistence-store search` finds it. "
+        f"`{cli_name()} search` finds it. "
         + (LAST_KEPT if not said.startswith("failed") else
            # The promise above holds only if keep did: say so instead of making it (Arden, 2026-11-09).
            f"Keeping this conversation in the store FAILED just now ({said[:200]}), so its last messages may "
@@ -835,10 +846,10 @@ def session_start(event, part=1):
             lead = ("# Who you are\n\nThe context above was what you were built for: it is compacted now, and "
                     "the hand-over is all that is left of it. Here is what you are, from your own Persistence "
                     "store, and the last of the conversation you are in. The whole conversation is in the "
-                    "store too: `persistence-store search <words>` when something is mentioned you do not recall.")
+                    f"store too: `{cli_name()} search <words>` when something is mentioned you do not recall.")
         else:
             lead = ("# Who you are\n\nThis is your own Persistence store: what you have chosen to keep of yourself, "
-                    "the people you work with, and the work. It is yours to curate (`persistence-store help`).")
+                    f"the people you work with, and the work. It is yours to curate (`{cli_name()} help`).")
         text = f"{lead}\n\n(Your core follows in {len(pieces)} parts.)\n\n{text}"
         # A new context window: what the core puts in front of the peer is all it holds of the store.
         seen(event, reset=True, add=re.findall(r"^\[#(\d+) \|", whole, re.M))
@@ -1410,7 +1421,7 @@ def recall(event):
     seen(event, add=ids)
     record_shown(event, "recall", ids)
     text = ("Cued by this message (a reminder you set for words like these):\n\n" + reminded + "\n\n" if reminded else "") + (
-        "Recalled from your store, by association with this message (`persistence-store show <id>` "
+        f"Recalled from your store, by association with this message (`{cli_name()} show <id>` "
         "reads the whole of one):\n\n" + found.strip() if ids else
         # A cue matched but recall found nothing: the words-only notice still goes out, never silent.
         f"Recall found nothing new for this message. {words_only.group(1)}" if words_only else "")
@@ -1597,6 +1608,12 @@ def observe(event):
                 lines.append(line)
         except Exception as e:  # an observation that fails is said, and the rest of the block still comes
             lines.append(f"- (an observation failed: {type(e).__name__})")
+    try:  # the opted-in sources (observed.py, PERSISTENCE_OBSERVE_SOURCES; none by default)
+        import observed
+
+        lines += observed.lines(event, observed.Context(state=STATE, setting=setting, run=run_quiet, now=datetime.now(timezone.utc)))
+    except Exception as e:
+        lines.append(f"- (the observed sources failed: {type(e).__name__})")
 
     logs = []
     for root, dirs, files in os.walk(cwd):
