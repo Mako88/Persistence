@@ -12,7 +12,9 @@ checked against main at 01755e3.
 
 ## 1. Bootstrap: what extraction covers first, and what the block admits
 
-- **Each self names a focus set** of tags or concepts (for the reviewer: receipting, PDF). It is called the
+- **Each self names a focus set** of concepts (for the reviewer: receipting, PDF), each entry with the tags that
+  belong to it, if any (`receipting: project/receipting`). Those are **the concept's focus tags**; a concept
+  outside the focus set has none, and a tag never belongs to a concept by name or by guess. It is called the
   focus set so that "active" keeps its one meaning from the approved schema, an alias's or fact's status
   (concept-events.md §7.2, §8). Extraction covers newly curated fragments, as bench §7 item 4 already settles.
   **Backfill is conditional:** it waits for the decision bench §7 item 4 defers until the review load of live
@@ -24,7 +26,8 @@ checked against main at 01755e3.
   most 10 entries (a starting value).
 - **Eligible** for a concept means: curated fragments that carry one of its focus tags, or in which one of its
   aliases with status `active` matches by the same exact-span matcher as concept-store.md's projection (no
-  fuzzy or embedding match). Template successors (§3) are never eligible. **Covered** means: a **finished**
+  fuzzy or embedding match). Template successors (§3) are never eligible, and never in any run's input either.
+  **Covered** means: a **finished**
   `extraction-run` names the fragment, its output was valid (bench §4.2: a run whose output broke the schema or
   an invariant covers nothing), **and** that run used the current extractor version (model id, config and
   template sha256, events §3). A failed run, or a run under an older version, doesn't count, so an extractor
@@ -32,8 +35,16 @@ checked against main at 01755e3.
 - **Eligibility can grow, and that is shown.** Accepting an alias, or adding to the focus set, makes older
   fragments eligible that no run has read. C < E again, so `caught up` drops back to `partial`. That's correct:
   the self learns the concept has unread sources, rather than keeping a "caught up" that no longer holds.
+- **So can the version, and that is shown too.** C counts only runs under the current extractor version, and
+  backfill is off by default. After any change to the model, config or template, C falls to what has been
+  read since, and every concept with older eligible fragments reads `partial` until backfill is allowed (bench
+  §7 item 4) and reaches them. It is honest, and expected after the first template tweak, not a fault.
 - The state is a **pure function** of three counts over the concept's eligible fragments, all computed from
-  the log: E eligible, C covered, F accepted facts (any standing). The rules are tried in this order and the
+  the log: E eligible, C covered, and F, the concept's accepted facts (any standing) **that cite at least one
+  eligible fragment**. So F > 0 implies E > 0, and rule 3 always has a fragment to name. A fact can cite only
+  fragments that aren't eligible (extracted from a new fragment while the alias that matched it is still
+  proposed and the concept has no focus tags). It is still shown as a fact, with its source, but it isn't in F:
+  F counts what the coverage it sits beside accounts for. The rules are tried in this order and the
   first that holds wins, the way §7.2 computes standing, so every concept the block shows is in exactly one
   state. Every state shows the same counts line, `F facts from C of E fragments` (work-claude's ask, via John
   1570856993189789909), so coverage is inspectable rather than a badge:
@@ -50,32 +61,51 @@ checked against main at 01755e3.
 
 ## 2. Context: order, budget, and what is cut first
 
-The whole per-turn injection stays under the hook's CAP of 9,500 characters (scripts/claude-code/hook.py:64;
-Claude Code replaces anything over 10,000 with a file path). Inside it, in this order, with a character budget
-each:
+A turn gets **two hook outputs, and each is cut at CAP (9,500 characters, scripts/claude-code/hook.py:64)
+separately**: Claude Code replaces any one output over 10,000 with a file path. Nothing guarantees their sum,
+so this section budgets each output on its own.
 
-1. **Observed now**: read off the machine, at most 1,500 characters. It is not trimmed for the sections below;
-   past its own bound it ends `N omitted`, like any other section.
+**Output A, `observe_hook` (hook.py:1715-1718):** the inbox notices ("For work, from your other sessions"),
+then Observed now. No concept section goes here.
+
+1. **Inbox notices**, at most 8,000 (CAP less Observed now's bound). Today they have no bound short of CAP and
+   are cut mid-text when they reach it, after every notice has already been archived, so the cut part is never
+   shown. The build PR cuts them at a whole notice, ends with the omission line below, and leaves each omitted
+   notice unarchived so it comes at the next turn.
+2. **Observed now**: read off the machine, at most 1,500. It ends with the omission line past its own bound.
+
+**Output B, `recall` (hook.py:1381-1429):** in this order, each with a character budget.
+
+1. **Cues**, at most 1,000: whole fragments of the cues the message matched (hook.py:1390). Cut at a whole
+   cue; an omitted cue isn't recorded as shown, so it can come again.
 2. **Pending decisions**, at most 1,200: the first 3 (this session's newest first, then older, ties by event
    id, as in concept-store.md Q6), each one line of at most 300; then the total count and the oldest one's age.
    The count and age are always shown, however small the budget.
-3. **Current state of concepts touched** by the addressed message, at most 3,500 (alias matching as in
+3. **Current state of concepts touched** by the addressed message, at most 3,300 (alias matching as in
    concept-store.md "Projection in context": the addressed message and a chosen window of recent turns, never
    the wrapper). Concepts are ranked by matched spans, then by the recency of their last change, then by concept
    id, so the order is total. Up to 5 concepts at 3 current facts each, each fact one line of at most 200; the
    3 are the most recently known (`KnownAtUtc`, then fact id). Each concept shows its coverage state (§1).
-4. **Recalled fragments**, as recall gives them now: 3 at most, 300-character snippets (hook.py:1383, :1394),
-   about 1,200 with headers.
+4. **Recall**, at most 3,500: what recall gives now (hook.py:1394-1396), which is 3 fragments plus 1 wander
+   (`--wander 1`), each a 300-character snippet with its header (about 500 each, measured 2026-11-13), and up
+   to 3 past utterances (`--said 3`, about 420 each), with their two headings. Cut at a whole item,
+   lowest-ranked first.
 
-What is unused by one section isn't passed to another; the bounds stay fixed so the block is predictable.
+Unused budget in one section isn't passed to another. The bounds stay fixed so the block is predictable.
 
-**Trimming,** when the total would pass CAP: recalled fragments go first, lowest-ranked first; then concepts'
-facts beyond the first, from the lowest-ranked concept up; then whole concepts, lowest-ranked first. Pending
-decisions' count and age, and each shown concept's state line, are never cut. A section is never dropped whole
-without a word: every bounded section that cut anything ends with one line in one wording, `N omitted`, with
-ids where they fit (work-claude's ask). A concept's uncovered fragments are its state line's business (§1), not
-an omission. The core already does this ("Fragments that did not fit: …"). The numbers above are starting values. The
-recall bench's chars metric (scripts/recall-eval, `report`) is what tunes them, not taste.
+**What could reach CAP.** Every section above is bounded, and output B's bounds sum to 9,000, which leaves
+500 for its headings. So nothing should reach CAP: a test asserts that each output's bounds and headings
+sum to at most CAP. If an output still would, that is a bug, and the backstop cuts in this order: recall items,
+lowest-ranked first; then concepts' facts beyond the first, from the lowest-ranked concept up; then whole
+concepts, lowest-ranked first; then cues. Pending decisions' count and age, and each shown concept's state
+line, are never cut.
+
+**The omission line.** A section is never cut without a word. A bounded section **that cut something** ends
+with one line in one wording, `N omitted`, with ids where they fit (work-claude's ask). A section that cut
+nothing has no such line, so no line means nothing was cut; there is never a `0 omitted`. A concept's
+uncovered fragments are its state line's business (§1), not an omission. The core already does this
+("Fragments that did not fit: …"). The numbers above are starting values. The recall bench's chars metric
+(scripts/recall-eval, `report`) is what tunes them, not taste.
 
 ## 3. Old fragments: superseded through the path that works
 
@@ -113,7 +143,9 @@ recall bench's chars metric (scripts/recall-eval, `report`) is what tunes them, 
 - **A template successor is never extracted** (Claude's re-extraction loop). The successor keeps the old text
   and is itself a new curated fragment, so an extractor reading it would propose the replaced claims again. The
   exemption is by **provenance, not by parsing the header**: the approval event records the successor's
-  fragment id, and §1's eligibility excludes every fragment an approval names. A self that edits the draft to
+  fragment id, and every fragment an approval names is excluded twice: from **the extractor's input selection**
+  (the newly curated fragments §1 extracts don't go through any concept's eligibility, so excluding it there
+  alone would leave it in the next run's input), and from §1's eligibility. A self that edits the draft to
   add a new claim puts the claim in its own fragment if it wants it extracted; the successor is a record of what
   changed, not a new source. **Test U1:** approve a proposal for #M; the successor is not eligible, the next
   run neither reads it nor proposes any fact from it, and the concept's coverage state doesn't change.
@@ -192,14 +224,27 @@ environment variable can lift either.
    section. **Test U2** pins it: pointed at a store of record, the writer fails and writes nothing. Lifting it is
    a code change in its own PR, which must show the erasure tests above passing and link each self's bench
    report.
-2. **The applier refuses a store without erasure.** Outside the scratch root, the concept applier opens a store
-   only if that store's applied migrations include the §10 erasure migration, and refuses otherwise. This lock
-   stays after the guard is lifted, so a store of record that hasn't been migrated can never take a concept
-   event. **Test U3 is red on purpose:** against a store-of-record fixture it migrates, runs T3 and T16, then
-   writes one concept event and expects it to land. Until §10 exists it fails. It sits in its own test
-   category (`RolloutGate`), outside the default run so main stays green, and the build reports it as an
-   expected failure. It goes green with T3 and T16 when §10 lands, and the lifting PR moves it into the default
-   run.
+2. **The applier refuses a store without erasure, judged by what the migration did.** Outside the scratch root,
+   the concept applier opens a store only if the §10 erasure migration's effects are present, and refuses
+   otherwise, naming the §10 migration. The `Migrations` row alone is not enough:
+   `DatabaseManager.ApplyMigrationAsync` (src/Persistence.Core/Data/DatabaseManager.cs:112-125) records a
+   migration as applied **without running its body** when its DDL raises an "already applied" error. So the
+   lock checks, besides the row: T17's settings (`secure_delete`, `temp_store`) read back on the applier's own
+   connection; the cleanup outbox present; and a completion marker written only once the migration's body, its
+   VACUUM and its FTS cleanup have all run, which that recording path never writes. This lock is checked **before**
+   the guard (lock 1), so an unmigrated store is refused for the migration, not for its path. It stays after
+   the guard is lifted, so a store of record that hasn't been migrated can never take a concept event.
+
+   **Test U3 is red on purpose, for one stated reason at a time.** Against a store-of-record fixture it
+   migrates, writes one concept event and expects it to land, then runs all five erasure tests the gate names
+   (T3, T15, T16, T17, T19) against that store. It sits in its own test category (`RolloutGate`), outside the
+   default run so main stays green, and the build reports it as an expected failure. So that it can't be red for
+   an unrelated reason, a companion assertion in the default run pins the refusal it meets: until §10 lands,
+   the write is refused by lock 2 naming the §10 migration; once §10 lands, it is refused by the guard naming
+   this section. The PR that lands §10 moves the assertion from the first to the second. U3 goes green only
+   in the lifting PR, which removes the assertion and moves U3 into the default run. **Test U5:** a fixture
+   whose `Migrations` row for §10 was written by the "already applied" path, with none of its effects, is
+   refused by lock 2.
 
 **Scratch copies don't outlive their run.** Each run copies the store into a fresh temporary directory under the
 scratch root and removes it on exit, whether the run passes, fails or throws. **Test U4:** after a passing run
@@ -221,10 +266,14 @@ guarantees may not.
 5. Accepting all pending facts on one concept, after review, as one command (the review's point 3). Today
    `concept accept` takes one fact id. Q5 already allows one atomic command for several, with each transition
    still its own event.
-6. The scratch-root guard (U2), the applier's erasure-migration check (U3, red on purpose) and the scratch
-   cleanup (U4), §6. Lifting the guard is a later PR of its own.
-7. The approval event for a fragment supersede records the successor's fragment id, and eligibility excludes
-   it (§3, U1).
+6. The scratch-root guard (U2), the applier's erasure check by effects, not by the row (U3, red on purpose,
+   with its pinned refusal; U5), and the scratch cleanup (U4), §6. The §10 migration writes the completion
+   marker lock 2 reads. Lifting the guard is a later PR of its own.
+7. The approval event for a fragment supersede records the successor's fragment id, and both the extractor's
+   input selection and eligibility exclude it (§3, U1).
+8. The hook cuts the inbox notices, cues and recall at a whole item within the bounds of §2, with the omission
+   line, and leaves an omitted notice unarchived and an omitted cue unshown. A test sums each output's bounds
+   and headings against CAP.
 
 ## Out of scope here, noted
 
