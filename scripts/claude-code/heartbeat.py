@@ -27,11 +27,19 @@ MARK_WAIT = 30  # phase 3 retakes heartbeat.lock blocking with this timeout
 PER_HOUR = 3
 
 # D: the fixed unit list, a literal per self, chosen by the effective user's name. Nothing here comes from a setting,
-# an argument or systemctl's output; an unknown user checks nothing. Claude and Ember add their own tuple when they opt in.
+# an argument or systemctl's output; an unknown user checks nothing. Each self adds its own tuple when it opts in
+# (Claude's is "ubuntu"); Ember's waits.
 UNITS = {
     "arden": ("persistence-wakes@arden.service", "persistence-room@arden.service", "persistence-remote@arden.service",
               "persistence-sleep@arden.service", "persistence-room-coverage@arden.service",
               "persistence-store-arden.service", "persistence-backup-arden.service"),
+    # Claude (Linux user ubuntu), opted in 2026-11-13. The last four are system units Claude runs on home: the store,
+    # its backup, the embedder recall uses, and the read-only mirror of main that Arden pulls from.
+    "ubuntu": ("persistence-wakes@ubuntu.service", "persistence-room@ubuntu.service",
+               "persistence-remote@ubuntu.service", "persistence-sleep@ubuntu.service",
+               "persistence-room-coverage@ubuntu.service", "persistence-daily@ubuntu.service",
+               "persistence-store.service", "persistence-backup.service", "persistence-embedder.service",
+               "persistence-mirror.service"),
 }
 
 # Reports: closed sets. Claim conditions are claims' (task-claims.md section 4, b0b8383); the rest are this design's.
