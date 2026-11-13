@@ -80,6 +80,47 @@ class StrippedQueries(unittest.TestCase):
     def test_store_layer_asks_whole_when_off(self):
         self.assertEqual([self.wake], self.store_turn_asks({}))
 
+    def resolved(self, stored):
+        """A `query_from` turn whose utterance the store kept as `stored` (trimmed, as the store keeps it)."""
+        with mock.patch.object(bench, "fragment", return_value=(stored, "2026-11-13 01:00:00", "s1")):
+            return bench.resolve({"query_from": 7}, "snap")[0]
+
+    def test_a_stored_wake_is_stripped_when_on(self):
+        # Arden's CHANGES on PR #19 (review 5884624117): the store trims the closing line break, the parser declines a
+        # wake without it, and the stripped arm silently asked the whole prompt. Red if as_prompted is removed.
+        q = self.resolved(self.wake.strip())
+        with mock.patch.dict(bench.os.environ, {"PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE": "1"}):
+            stripped = bench.recall_query(q)
+        with mock.patch.dict(bench.os.environ):
+            bench.os.environ.pop("PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE", None)
+            whole = bench.recall_query(q)
+        self.assertNotEqual(whole, stripped)
+        self.assertEqual("[Addressed to you — #channel]\nJohn: what did the chunking bench show?", stripped)
+
+    def test_a_stored_non_wake_comes_back_as_stored(self):
+        self.assertEqual("what did the chunking bench show?", self.resolved("what did the chunking bench show?"))
+
+    def test_a_stored_cut_wake_still_fails_closed(self):
+        # The line break comes back, but a wake whose Addressed section is missing is still declined: only the
+        # trimming is undone, never the parser's other checks.
+        cut = self.wake.strip().rsplit("\n", 1)[0]
+        with mock.patch.dict(bench.os.environ, {"PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE": "1"}):
+            q = self.resolved(cut)
+            self.assertEqual(q, bench.recall_query(q))
+
+    def test_the_report_counts_stripped_turns(self):
+        rows = [{"case": c, "kind": "gold", "path": "semantic", "layer": "hook", "count": 3, "actual": "semantic",
+                 "prompt_chars": 900, "query_chars": qc, "shown": [], "gold": [1], "gold_in_core": [],
+                 "gold_absent": [], "relevant": [], "unjudged": [], "repeats": [], "heads": [], "hit": False,
+                 "chars": 0} for c, qc in (("a", 120), ("b", 900))]
+        import json
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
+            f.write("\n".join(json.dumps(r) for r in rows))
+        with mock.patch.object(bench, "heads_of", return_value=set(), create=True):
+            out = bench.report([f.name])
+        self.assertIn("| query stripped (query shorter than prompt) / turns | 1/2 |", out)
+
     def test_the_setting_is_in_the_report_settings(self):
         with mock.patch.object(bench, "sha256", return_value="0" * 64), \
                 mock.patch.dict(bench.os.environ, {"PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE": "1"}):

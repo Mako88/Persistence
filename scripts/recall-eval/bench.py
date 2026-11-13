@@ -118,9 +118,8 @@ def load_hook(state):
 _query_hook = []
 
 
-def recall_query(prompt):
-    """What the hook would ask recall about for this prompt (PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE): the store layer
-    asks the same, so both layers measure one switch. The hook's own function, from a private import."""
+def query_hook():
+    """hook.py, imported once with private state, for its recall_query and the roomcore it reads wakes with."""
     if not _query_hook:
         before = os.environ.get("PERSISTENCE_STATE_DIR")
         _query_hook.append(load_hook(tempfile.mkdtemp(prefix="recall-bench-qstate-")))
@@ -128,7 +127,13 @@ def recall_query(prompt):
             os.environ.pop("PERSISTENCE_STATE_DIR", None)
         else:
             os.environ["PERSISTENCE_STATE_DIR"] = before
-    query = _query_hook[0].recall_query(prompt)
+    return _query_hook[0]
+
+
+def recall_query(prompt):
+    """What the hook would ask recall about for this prompt (PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE): the store layer
+    asks the same, so both layers measure one switch. The hook's own function, from a private import."""
+    query = query_hook().recall_query(prompt)
     return prompt if query == prompt.strip() else query     # unstripped (the hook strips): the store layer asks as before
 
 
@@ -345,9 +350,22 @@ def resolve(turn, snap):
     if "query" in turn:
         return turn["query"], turn.get("as_of"), None
     content, created, session = fragment(snap, turn["query_from"])
+    content = as_prompted(content)
     from datetime import datetime, timedelta
     when = datetime.fromisoformat(created.replace("Z", "").replace(" ", "T")[:19]) - timedelta(seconds=1)
     return content, turn.get("as_of") or when.isoformat() + "Z", session
+
+
+def as_prompted(stored):
+    """A stored utterance as its turn's prompt arrived. The store keeps an utterance trimmed, so a room wake read back
+    lost the line break build_prompt ends it on, and roomcore's wake_sections (rightly, for a wake cut mid-message)
+    declines a wake without it: every stripped arm on `query_from` wakes was a silent no-op (Arden's CHANGES on PR
+    #19, review 5884624117). A stored utterance that opens with a current room preamble gets that line break back;
+    the live check stays as strict as it is. Anything else, or no roomcore found, comes back as stored."""
+    rc = query_hook().roomcore()
+    if rc is None or stored.endswith("\n") or not any(p.match(stored + "\n") for p in getattr(rc, "_PREAMBLES", ())):
+        return stored
+    return stored + "\n"
 
 
 def active(db, ids):
@@ -544,6 +562,9 @@ def report(paths, watch=(), labels=None):
             line("  of the fall-backs, prompts over 1,200 chars", lambda X: pct(
                 sum(actual(r) == "words-fallback" and r.get("prompt_chars", 0) > 1200 for r in ran(X)),
                 sum(actual(r) == "words-fallback" for r in ran(X))), everything)
+        # Whether the strip switch changed what recall was asked, so an arm that silently asked as before can't pass
+        # for a result (Arden, PR #19 review 5884624117: a no-op arm once gave numbers identical to the off arm).
+        line("query stripped (query shorter than prompt) / turns", lambda X: f"{sum(r.get('query_chars', 0) < r.get('prompt_chars', 0) for r in X)}/{len(X)}", everything)
         line("turns where the peer was told recall, or a part of it, ran on words alone", lambda X: str(sum(bool(r.get("words_notice")) for r in X)), everything)
         # Every number below is over the turns that took this arm's path (or made no recall); the rest are left
         # out, never counted as this arm's, so a floor is never tuned on another path's results.

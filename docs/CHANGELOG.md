@@ -29,6 +29,10 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
   transcripts, all 255 with the current preamble and no note strip; the other 89 go whole. The
   hook finds roomcore.py at `PERSISTENCE_ROOMCORE`, beside itself, or in the repo's scripts/room, and says on stderr
   when it is on and roomcore isn't there. bench.py runs either layer with the same switch and records `query_chars`.
+  **bench.py gives a stored wake back its closing line break** (`as_prompted`, Arden's CHANGES, review 5884624117):
+  the store keeps utterances trimmed, so every `query_from` wake failed the parser's closing-newline check and the
+  stripped arms silently asked as before. The live check is unchanged; the report now shows `query stripped / turns`
+  so a no-op arm can't pass for a result again.
 
 ## 2026-11-12 — Chunked query embedding, behind `QUERYCHUNKCHARS` (off by default)
 
