@@ -14,8 +14,9 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
 **Claude's tuple in `UNITS`.** The heartbeat's unit check (D) only checks a self that has a literal tuple of its
 own, so Claude's beat would have checked nothing. Claude's tuple (user `ubuntu`) has ten units: its own
 `persistence-*@ubuntu` wakes, room, remote, sleep, room-coverage and daily units, plus four system units Claude
-runs on home: the store, its backup, the embedder and the mirror of main. A test pins the list, and another checks
-that a failure there is reported under Claude's beat only. Turning it on (`PERSISTENCE_HEARTBEAT=true` in
+runs on home: the store, its backup, the embedder and the mirror of main. Tests pin the list, check that Claude's
+beat asks systemctl about exactly those ten with read verbs only, that a failure there is reported under Claude's
+beat only, and that no tuple names another self's unit (tuples disjoint; Ember has none until it opts in). Turning it on (`PERSISTENCE_HEARTBEAT=true` in
 Claude's own settings, plus installing `persistence-heartbeat@ubuntu.timer`) is a separate step after review.
 Why now: on 2026-11-13 a review request waited about 40 minutes and nothing flagged it (John, room
 1570833323406917693).

@@ -164,6 +164,20 @@ class Units(Base):
         self.beat(user="arden")
         self.assertEqual(len(self.sink.lines), 1)  # Arden's beat never checks Claude's units
 
+    def test_claude_beat_queries_exactly_its_ten_read_only(self):
+        # Behaviour, not the literal: the units Claude's beat actually asks systemctl about are its ten, by read verbs only.
+        self.beat(user="ubuntu")
+        self.assertEqual({c[-1] for c in self.systemctl.calls}, set(CLAUDE_UNITS))
+        self.assertLessEqual({c[1] for c in self.systemctl.calls}, {"is-failed", "show"})
+
+    def test_no_self_lists_another_selfs_units(self):
+        # Claude's tuple names no unit of Arden's or Ember's; the tuples share nothing; Ember has no tuple until it opts in.
+        for unit in heartbeat.units_for("ubuntu"):
+            self.assertNotRegex(unit, r"arden|ember", unit)
+        self.assertFalse(set(heartbeat.units_for("ubuntu")) & set(heartbeat.units_for("arden")))
+        self.assertEqual(heartbeat.units_for("ember"), ())
+        self.assertEqual(set(heartbeat.UNITS), {"arden", "ubuntu"})
+
     def test_every_name_is_fully_instantiated(self):
         for user, units in heartbeat.UNITS.items():
             for unit in units:
