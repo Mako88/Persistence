@@ -22,6 +22,14 @@ Why: run on home, it found that `heartbeat.py` was never deployed for Claude and
 because `persistence-heartbeat@.service` runs it from there. Inert with the switch off. The steps and their way
 back are in `docs/design/heartbeat-opt-in-claude.md`. Nothing is switched on.
 
+**Review follow-ups** (Arden's approval of 2dcc997, Ember's staging gaps). The preflight now compares all seven
+deployed modules (`run_line.py` and `cwd_exec.py` were missed) with a commit's blobs, not the working files (`--at
+<commit>`, default HEAD; the ready line names the hash). It refuses STALLED while that commit's `heartbeat.py` has no
+STALLED code, and treats `PERSISTENCE_TASKCLAIMS` unset as a note, anything but `1` as missing. `deploy-remote.sh`
+keeps each file it replaces that differs in `~/.claude/persistence/previous/<UTC stamp>/` and names it. The steps doc
+names only me in deploys, says step 1 restarts every store, and gives the full way back in reverse order (step 1:
+redeploy the previous commit). 14 more tests; the deploy test runs the script itself against fakes; 9 mutations caught.
+
 ## 2026-11-13 — Heartbeat: Claude's unit list (opt-in, step 1 of 2)
 
 **Claude's tuple in `UNITS`.** The heartbeat's unit check (D) only checks a self that has a literal tuple of its

@@ -2,7 +2,9 @@
 on, and refuses to say "ready" while a switch would fail silently. Fake home, fake systemctl, fake PATH: nothing real
 is read or changed, and no test calls a model."""
 import json
+import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -15,6 +17,13 @@ import heartbeat  # noqa: E402
 import heartbeat_optin  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
+# What the core will look like once Arden's STALLED code lands (heartbeat-core-interface.md: heartbeat.stalled_on(home)).
+STALLED_CORE = "\n\ndef stalled_on(home=None):\n    return False\n"
+
+
+def git(repo, *args):
+    return subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *args], check=True,
+                          capture_output=True, text=True).stdout.strip()
 
 
 class Systemctl:
@@ -42,8 +51,21 @@ class Base(unittest.TestCase):
         self.home = self.tmp / "home"
         self.deployed = self.home / ".claude" / "persistence"
         self.deployed.mkdir(parents=True)
+        # A throwaway git repo standing in for the reviewed checkout: the preflight compares against a commit's
+        # blobs, never the working files. Its heartbeat.py already has the STALLED core.
+        self.root = self.tmp / "repo"
+        self.repo = self.root / "scripts" / "claude-code"
+        self.repo.mkdir(parents=True)
         for name in heartbeat_optin.DEPLOYED:
-            shutil.copy(REPO / name, self.deployed / name)
+            shutil.copy(REPO / name, self.repo / name)
+        with open(self.repo / "heartbeat.py", "a", encoding="utf-8") as f:
+            f.write(STALLED_CORE)
+        git(self.root, "init", "-q")
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-qm", "reviewed")
+        self.reviewed = git(self.root, "rev-parse", "HEAD")
+        for name in heartbeat_optin.DEPLOYED:
+            shutil.copy(self.repo / name, self.deployed / name)
         self.bin = self.tmp / "bin"
         self.bin.mkdir()
         (self.bin / "pheartbeat").write_text('#!/bin/sh\nexec python3 "$HOME/.claude/persistence/heartbeat.py" "$@"\n')
@@ -54,10 +76,13 @@ class Base(unittest.TestCase):
     def settings(self):
         (self.home / ".claude" / "settings.json").write_text(json.dumps({"env": self.env}), encoding="utf-8")
 
-    def check(self, user="ubuntu", stalled=False):
+    def check(self, user="ubuntu", stalled=False, at=None):
         self.settings()
-        return heartbeat_optin.check(home=self.home, user=user, repo=REPO, systemctl=self.systemctl,
-                                     path=str(self.bin), stalled=stalled)
+        return heartbeat_optin.check(home=self.home, user=user, repo=self.repo, systemctl=self.systemctl,
+                                     path=str(self.bin), stalled=stalled, at=at)
+
+    def item(self, items, name):
+        return next(i for i in items if i.name == name)
 
     def failing(self, items):
         return {i.name for i in items if i.required and not i.ok}
@@ -81,8 +106,8 @@ class Ready(Base):
     def test_writes_nothing(self):
         self.settings()
         before = sorted((p, p.stat().st_mtime_ns) for p in self.tmp.rglob("*"))
-        heartbeat_optin.check(home=self.home, user="ubuntu", repo=REPO, systemctl=self.systemctl, path=str(self.bin),
-                              stalled=True)
+        heartbeat_optin.check(home=self.home, user="ubuntu", repo=self.repo, systemctl=self.systemctl,
+                              path=str(self.bin), stalled=True)
         self.assertEqual(sorted((p, p.stat().st_mtime_ns) for p in self.tmp.rglob("*")), before)
 
 
@@ -99,6 +124,44 @@ class NotReady(Base):
         # The beat imports these beside itself; an old copy of any of them runs the new heartbeat against old rules.
         self.assertLessEqual({"heartbeat.py", "coordination.py", "claims.py", "hook.py", "observed.py"},
                              set(heartbeat_optin.DEPLOYED))
+
+    def test_checks_exactly_what_deploy_remote_installs(self):
+        # Ember's point 2: run_line.py (heartbeat.wrapper_alive imports it) and cwd_exec.py (claims spawns through it)
+        # were deployed but never compared. One list, so the two can't drift again.
+        text = (REPO / "deploy-remote.sh").read_text()
+        py = re.search(r"^py=\(([^)]*)\)", text, re.M).group(1).split()
+        self.assertEqual(set(heartbeat_optin.DEPLOYED), set(py))
+
+    def test_stale_run_line_is_not_ready(self):
+        (self.deployed / "run_line.py").write_text("# an old run line\n")
+        self.assertIn("deployed run_line.py", self.failing(self.check()))
+
+    def test_missing_cwd_exec_is_not_ready(self):
+        (self.deployed / "cwd_exec.py").unlink()
+        self.assertIn("deployed cwd_exec.py", self.failing(self.check()))
+
+    def test_an_unreviewed_edit_deployed_identically_is_not_ready(self):
+        # Ember's point 2: "the tree" was the working files, so an uncommitted edit deployed the same way passed.
+        edited = (self.repo / "heartbeat.py").read_text() + "\n# unreviewed edit\n"
+        (self.repo / "heartbeat.py").write_text(edited)
+        (self.deployed / "heartbeat.py").write_text(edited)
+        self.assertIn("deployed heartbeat.py", self.failing(self.check()))
+
+    def test_compared_against_a_named_commit(self):
+        detail = self.item(self.check(), "deployed heartbeat.py").detail
+        self.assertIn(self.reviewed, detail)
+
+    def test_pinned_to_the_reviewed_commit(self):
+        # A later commit, deployed, is not the reviewed one: --at <reviewed> refuses it, HEAD accepts it.
+        (self.repo / "claims.py").write_text((self.repo / "claims.py").read_text() + "\n# later\n")
+        git(self.root, "commit", "-qam", "later, unreviewed")
+        shutil.copy(self.repo / "claims.py", self.deployed / "claims.py")
+        self.assertNotIn("deployed claims.py", self.failing(self.check()))
+        self.assertIn("deployed claims.py", self.failing(self.check(at=self.reviewed)))
+        self.assertIn("deployed claims.py", self.failing(self.check(at=self.reviewed[:12])))
+
+    def test_unknown_commit_is_not_ready(self):
+        self.assertIn("commit", self.failing(self.check(at="0" * 40)))
 
     def test_unknown_user_has_no_units(self):
         self.assertIn("units", self.failing(self.check(user="nobody")))
@@ -118,9 +181,15 @@ class NotReady(Base):
         self.systemctl.missing = {"persistence-heartbeat@ubuntu.timer"}
         self.assertIn("timer", self.failing(self.check()))
 
-    def test_claims_off_means_no_row_a(self):
+    def test_claims_unset_is_a_note_not_missing(self):
+        # Arden's point 3: the design lets a heartbeat run with claims off, so unset is a choice; say so, don't refuse.
         del self.env["PERSISTENCE_TASKCLAIMS"]
-        self.assertIn("PERSISTENCE_TASKCLAIMS", self.failing(self.check()))
+        items = self.check()
+        self.assertNotIn("PERSISTENCE_TASKCLAIMS", self.failing(items))
+        claims = self.item(items, "PERSISTENCE_TASKCLAIMS")
+        self.assertFalse(claims.ok)
+        self.assertFalse(claims.required)
+        self.assertIn("row A", claims.detail)
 
     def test_claims_true_is_not_on(self):
         # claims.py reads "1" only; "true" would leave row A off while looking on.
@@ -146,6 +215,19 @@ class TheSilentFailures(Base):
                         PERSISTENCE_OBSERVE_SOURCES="heartbeat")
         self.assertIn("PERSISTENCE_HEARTBEAT_STALLED", self.failing(self.check()))
 
+    def test_stalled_needs_a_core_that_has_it(self):
+        # Ember's point 7: main's heartbeat.py has no STALLED code, so "ready: STALLED" would turn on nothing.
+        (self.repo / "heartbeat.py").write_text((REPO / "heartbeat.py").read_text())
+        git(self.root, "commit", "-qam", "core without STALLED")
+        shutil.copy(self.repo / "heartbeat.py", self.deployed / "heartbeat.py")
+        self.env.update(PERSISTENCE_HEARTBEAT_STALLED="true", PERSISTENCE_OBSERVE_SOURCES="heartbeat")
+        self.assertIn("STALLED support", self.failing(self.check(stalled=True)))
+        # Already switched on in settings, it's the same silent failure at the base level.
+        self.assertIn("STALLED support", self.failing(self.check()))
+        # Off and not asked for: no business of the base check.
+        del self.env["PERSISTENCE_HEARTBEAT_STALLED"]
+        self.assertNotIn("STALLED support", self.failing(self.check()))
+
     def test_stalled_needs_pheartbeat_on_path(self):
         # The tick's fixed text tells the session to run `pheartbeat detect`/`continue`; without it a tick can't stop.
         (self.bin / "pheartbeat").unlink()
@@ -162,25 +244,102 @@ class TheSilentFailures(Base):
         import os
         from unittest import mock
         with mock.patch.dict(os.environ, {"PERSISTENCE_TASKCLAIMS": "1"}):
-            self.assertIn("PERSISTENCE_TASKCLAIMS", self.failing(self.check()))
+            self.assertFalse(self.item(self.check(), "PERSISTENCE_TASKCLAIMS").ok)
 
 
 class Cli(Base):
-    def test_exit_status_and_lines(self):
+    def main(self, argv, out):
         self.settings()
-        out = []
-        code = heartbeat_optin.main(["check"], home=self.home, user="ubuntu", repo=REPO, systemctl=self.systemctl,
+        return heartbeat_optin.main(argv, home=self.home, user="ubuntu", repo=self.repo, systemctl=self.systemctl,
                                     path=str(self.bin), out=out.append)
-        self.assertEqual(code, 0)
-        self.assertEqual(out[-1], "ready: PERSISTENCE_HEARTBEAT")
-        del self.env["PERSISTENCE_TASKCLAIMS"]
-        self.settings()
+
+    def test_exit_status_and_lines(self):
+        out = []
+        self.assertEqual(self.main(["check"], out), 0)
+        self.assertEqual(out[-1], f"ready: PERSISTENCE_HEARTBEAT, as deployed from {self.reviewed}")
+        self.env["PERSISTENCE_TASKCLAIMS"] = "true"
         out.clear()
-        code = heartbeat_optin.main(["check", "--stalled"], home=self.home, user="ubuntu", repo=REPO,
-                                    systemctl=self.systemctl, path=str(self.bin), out=out.append)
-        self.assertEqual(code, 1)
+        self.assertEqual(self.main(["check", "--stalled"], out), 1)
         self.assertTrue(out[-1].startswith("NOT READY for PERSISTENCE_HEARTBEAT_STALLED:"), out[-1])
         self.assertTrue(any(line.startswith("MISSING PERSISTENCE_TASKCLAIMS") for line in out), out)
+
+    def test_at_flag(self):
+        out = []
+        self.assertEqual(self.main(["check", "--at", self.reviewed], out), 0)
+        self.assertEqual(self.main(["check", "--stalled", "--at", "0" * 40], out), 1)
+        for bad in (["check", "--at"], ["check", "--bogus"], ["check", "--at", "a", "--at", "b"]):
+            self.assertEqual(self.main(bad, out), 2, bad)
+
+
+class Docs(unittest.TestCase):
+    STEPS = (REPO.parents[1] / "docs" / "design" / "heartbeat-opt-in-claude.md").read_text()
+
+    def test_no_deploy_names_another_self(self):
+        # Arden's (d): their beat is live, so a deploy naming them replaces its running code. My steps deploy me only.
+        for line in self.STEPS.splitlines():
+            if "deploy-remote" in line:
+                self.assertNotRegex(line.lower(), r"\b(arden|ember)\b", line)
+
+    def test_way_back_is_concrete_and_reversed(self):
+        # Arden's (e) and Ember's point 5: no "previous copies" nobody saved; a full undo in reverse order.
+        self.assertNotIn("the previous copies", self.STEPS)
+        self.assertIn("## The way back", self.STEPS)
+        self.assertIn("redeploy", self.STEPS.lower())
+        self.assertIn("persistence-store", self.STEPS)  # step 1 restarts the stores: not inert
+
+
+class DeployRemote(unittest.TestCase):
+    TEXT = (REPO / "deploy-remote.sh").read_text()
+
+    def test_parses(self):
+        subprocess.run(["bash", "-n", str(REPO / "deploy-remote.sh")], check=True)
+
+    def test_keeps_what_it_replaces(self):
+        # Ember's point 6: it overwrote every file with no compare and no copy. Now a differing file is kept first.
+        keep, install = self.TEXT.find("cmp -s"), self.TEXT.find("sudo install -o")
+        self.assertGreater(keep, 0)
+        self.assertLess(keep, install)
+        self.assertIn("previous/", self.TEXT)
+
+    def test_run_keeps_differing_copies(self):
+        # The script itself, run against fakes: ssh runs its remote command locally with /tmp, /home and the store dir
+        # moved into a scratch dir; sudo drops the root-only chown/chmod/systemctl; dotnet, scp and sleep are stand-ins.
+        # The user is whoever runs the test, so `install -o` needs no root. Nothing outside the scratch dir is touched.
+        import pwd, os
+        user = pwd.getpwuid(os.geteuid()).pw_name
+        w = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, w)
+        bins, tmp, dest = w / "bin", w / "tmp", w / "home" / user / ".claude" / "persistence"
+        for d in (bins, tmp, dest, w / "opt"):
+            d.mkdir(parents=True)
+        fakes = {
+            "dotnet": 'while [ "$1" != "-o" ]; do shift; done; mkdir -p "$2"; echo x > "$2/persistence-store"',
+            "scp": f'shift; a=("$@"); unset "a[-1]"; cp "${{a[@]}}" {tmp}/',
+            "ssh": (f'c="$2"; c=${{c//\\/tmp\\//{tmp}/}}; c=${{c//\\/home\\//{w}/home/}}; '
+                    f'c=${{c//\\/opt\\/persistence\\/store/{w}/opt}}; exec bash -c "$c"'),
+            "sudo": 'case "$1" in chown|chmod|systemctl) exit 0;; esac; exec "$@"',
+            "systemctl": "exit 0", "sleep": "exit 0"}
+        for name, body in fakes.items():
+            (bins / name).write_text(f"#!/bin/bash\n{body}\n")
+            (bins / name).chmod(0o755)
+        py = re.search(r"^py=\(([^)]*)\)", self.TEXT, re.M).group(1).split()
+        for f in py:
+            shutil.copy(REPO / f, dest / f)
+        (dest / "heartbeat.py").write_text("# a local edit\n")
+        env = dict(os.environ, PATH=f"{bins}:{os.environ['PATH']}")
+
+        def deploy():
+            return subprocess.run(["bash", str(REPO / "deploy-remote.sh"), "fakehost", user], env=env, check=True,
+                                  capture_output=True, text=True).stdout
+        out = deploy()
+        kept = list((dest / "previous").glob("*/heartbeat.py"))
+        self.assertEqual(len(kept), 1, out)
+        self.assertEqual(kept[0].read_text(), "# a local edit\n")
+        self.assertEqual([p.name for p in kept[0].parent.iterdir()], ["heartbeat.py"])  # identical files aren't kept
+        self.assertIn("replaced heartbeat.py", out)
+        self.assertEqual((dest / "heartbeat.py").read_bytes(), (REPO / "heartbeat.py").read_bytes())
+        self.assertIn("no hook file changed", deploy())
+        self.assertEqual(len(list((dest / "previous").iterdir())), 1)
 
 
 if __name__ == "__main__":
