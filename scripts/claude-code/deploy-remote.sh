@@ -18,8 +18,9 @@ echo "$(git -C "$repo" rev-parse HEAD)$(git -C "$repo" diff --quiet HEAD -- src 
 tar -czf "$work/store.tgz" -C "$work/pub" .
 # hook.py imports coordination.py (the locks and the fired-wake ledger) and, for ptask and run-due, claims.py and
 # cwd_exec.py; run-due launches every firing through run_line.py and refuses to fire without it; observe reads its opted-in
-# sources from observed.py: all six go beside it.
-py=(hook.py coordination.py claims.py cwd_exec.py run_line.py observed.py)
+# sources from observed.py; persistence-heartbeat@.service runs heartbeat.py from the same place (a beat with the switch
+# off exits at its first line, so deploying it turns nothing on): all seven go beside it.
+py=(hook.py coordination.py claims.py cwd_exec.py run_line.py observed.py heartbeat.py)
 scp -q "$work/store.tgz" "${py[@]/#/$repo/scripts/claude-code/}" "$host:/tmp/"
 ssh "$host" "set -e
   sudo tar -xzf /tmp/store.tgz -C /opt/persistence/store

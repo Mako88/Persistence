@@ -9,6 +9,19 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-13 — Heartbeat opt-in: a read-only preflight, and heartbeat.py deployed with the hook (opt-in, step 2)
+
+**`heartbeat_optin.py check [--stalled]`.** Says whether a self is ready to turn its heartbeat on, and writes nothing.
+It reads settings through the beat's own reader (settings.json only), compares the deployed modules the beat loads
+with the tree, checks every unit in the self's tuple and the timer are installed (`systemctl show`/`is-enabled` only)
+and, for `--stalled`, that `heartbeat` is in `PERSISTENCE_OBSERVE_SOURCES` and `pheartbeat` is on PATH. At either
+level it refuses "ready" while STALLED is on without that source (report wakes would fire and never render; Arden's
+`heartbeat-core-interface.md` section 1) or on with the heartbeat off. 20 tests; seven mutations, each caught.
+Why: run on home, it found that `heartbeat.py` was never deployed for Claude and `PERSISTENCE_TASKCLAIMS` was unset
+(row A would have stayed off without a word). **`deploy-remote.sh`** now installs `heartbeat.py` beside the hook,
+because `persistence-heartbeat@.service` runs it from there. Inert with the switch off. The steps and their way
+back are in `docs/design/heartbeat-opt-in-claude.md`. Nothing is switched on.
+
 ## 2026-11-13 — Heartbeat: Claude's unit list (opt-in, step 1 of 2)
 
 **Claude's tuple in `UNITS`.** The heartbeat's unit check (D) only checks a self that has a literal tuple of its
