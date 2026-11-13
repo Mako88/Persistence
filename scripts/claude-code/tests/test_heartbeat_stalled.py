@@ -73,7 +73,8 @@ class Base(unittest.TestCase):
         self.tmp.cleanup()
 
     def settings(self, **extra):
-        env = {"PERSISTENCE_HEARTBEAT": "true", "PERSISTENCE_HEARTBEAT_STALLED": "true", **self.extra, **extra}
+        env = {"PERSISTENCE_HEARTBEAT": "true", "PERSISTENCE_HEARTBEAT_STALLED": "true",
+               "PERSISTENCE_OBSERVE_SOURCES": "heartbeat", **self.extra, **extra}
         (self.home / ".claude" / "settings.json").write_text(json.dumps({"env": env}), encoding="utf-8")
 
     def beat(self, when=None):
