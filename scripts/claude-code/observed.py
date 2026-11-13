@@ -285,18 +285,20 @@ def claims_done(event, ctx):
     """Claims done or abandoned in (cursor, now], not this session's own and not already shown. Reads the cursor, never
     moves it. The ack moves it to CLAIMS_SETTLE before this read's now, not to now: claims.py stamps `updated` before it
     writes the file, so a claim stamped just before the read may not be on disk yet (Arden on 5d07630). The ids shown
-    inside that margin ride along as `seen`, so the next read skips them: at-least-once, without repeats."""
+    inside that margin ride along as `seen` with the finish they were shown for, so the next read skips that finish but
+    not a later one (a claim reopened and finished again inside the margin; Arden on 2b6e140): at-least-once, without
+    repeats."""
     session = event.get("session_id") or "unknown"
     since, seen = read_claims_cursor(event, ctx)
     found = []
     for path in sorted((ctx.state / "tasks").glob("*.json")):
         try:
             record = json.loads(path.read_text(encoding="utf-8"))
-            when = parse_time(record["updated"])
-        except (OSError, ValueError, KeyError, TypeError):
+            when = parse_time(record["updated"]).replace(microsecond=0)  # as `seen` stores it
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
             continue
         if record.get("status") in ("done", "abandoned") and record.get("owner") != session and since < when <= ctx.now \
-                and str(record.get("id")) not in seen:
+                and seen.get(str(record.get("id"))) != when:
             found.append((when, record))
     found.sort(key=lambda item: (item[0], str(item[1].get("id"))), reverse=True)
     out = tuple(f"work {r['status']} {hhmm(w)}: claim {str(r.get('id', ''))[:8]} {short(r.get('task'), 70)}"
