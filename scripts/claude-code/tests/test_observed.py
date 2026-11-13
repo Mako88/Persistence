@@ -591,7 +591,14 @@ class Pure(unittest.TestCase):
         values = {"PERSISTENCE_OBSERVE_GITHUB_TOKEN_FILE": str(secrets), "PERSISTENCE_OBSERVE_REPO": str(state),
                   "PERSISTENCE_OBSERVE_STORE_MARKER": str(state / "none")}
         get = lambda url, t, to: REVIEWS if "/reviews" in url else PULLS
-        self.assertEqual(set(observed.SOURCES), {"prs", "deployed", "switches", "claims"}, "a new source joins this test")
+        wake = "11111111-1111-4111-8111-111111111111"
+        (state / "heartbeat.json").write_text(json.dumps({  # a fault, and a queued R entry this session is the wake of
+            "delivery_fault": {"rev": 2, "since": NOW.isoformat(), "counts": {"cap": 1, "hb_failed": 1, "undeliverable": 0}},
+            "reports_q": {"unit:a.service:1:failed": {"state": "queued", "wake": wake}}}))
+        (state / "fired.jsonl").write_text(json.dumps({"firing": wake, "fact": "enqueued", "at": NOW.isoformat(),
+                                                       "session": "me", "hb": "reports"}) + "\n")
+        self.assertEqual(set(observed.SOURCES), {"prs", "deployed", "switches", "claims", "heartbeat"},
+                         "a new source joins this test")
         with mock.patch.object(observed, "github_get", get):
             for name, source in observed.SOURCES.items():
                 before = snapshot(state)
@@ -599,6 +606,8 @@ class Pure(unittest.TestCase):
                 first, second = source.read({"session_id": "me"}, c), source.read({"session_id": "me"}, c)
                 self.assertEqual(first, second, name)
                 self.assertEqual(snapshot(state), before, f"{name}'s read wrote to the state dir")
+                if name == "heartbeat":
+                    self.assertTrue(first.lines and first.ack, "the fixture should make the heartbeat source render")
 
 
 class CliName(unittest.TestCase):

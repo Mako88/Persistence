@@ -89,7 +89,10 @@ def own_file(path):
 def write_atomic(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + f".{os.getpid()}.{threading.get_ident()}.tmp")
-    tmp.write_text(text, encoding="utf-8")
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
     os.chmod(tmp, 0o600)
     tmp.replace(path)
 
@@ -316,8 +319,122 @@ def claims_ack(obs, event, ctx):
     write_atomic(claims_cursor(event, ctx), obs.ack)
 
 
+# --- heartbeat: the stalled-work reports block, the standing delivery fault, a suspended working mode ---
+# (docs/design/heartbeat-stalled-work.md 3.1, 3.3 and 5.) The read writes nothing; the ack moves exactly the entries
+# still `queued` under the delivering wake to `delivered`, under heartbeat.lock (compare and set).
+
+HB_ACK_WAIT = 5
+
+
+def fault_showing(fault):
+    return isinstance(fault, dict) and isinstance(fault.get("rev"), int) and fault["rev"] > (fault.get("acked_rev") or 0)
+
+
+def fault_line(fault):
+    c = fault.get("counts") or {}
+    return (f"heartbeat delivery fault (rev {fault['rev']}) since {hhmm(parse_time(fault['since']))}: {c.get('cap', 0)} "
+            f"cap, {c.get('hb_failed', 0)} failed heartbeat wakes, {c.get('undeliverable', 0)} undeliverable. "
+            f"pheartbeat ack-fault {fault['rev']} acknowledges it")
+
+
+def suspended_line(mode):
+    since = parse_time(mode.get("since")) if mode.get("since") else None
+    ids = " ".join(str(t)[:8] for t in mode.get("ticks") or [])
+    return (f"working mode SUSPENDED since {hhmm(since) if since else '?'}: 3 failed ticks {ids}. pheartbeat detect or "
+            f"pheartbeat working acknowledges it")
+
+
+def _read_json(path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+
+
+def _enqueued_session(state, session):
+    """Firing ids whose `enqueued` fact names this session: the ledger read plainly, a bad line skipped (read only)."""
+    out = set()
+    try:
+        data = (state / "fired.jsonl").read_bytes()
+    except OSError:
+        return out
+    for raw in data.split(b"\n"):
+        try:
+            f = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(f, dict) and f.get("fact") == "enqueued" and f.get("session") == session and f.get("hb"):
+            out.add(f.get("firing"))
+    return out
+
+
+def heartbeat_read(event, ctx):
+    import pwd
+
+    try:
+        data = _read_json(ctx.state / "heartbeat.json") or {}
+        mode = _read_json(ctx.state / "heartbeat-mode.json") or {}
+    except (OSError, ValueError) as e:
+        raise Unreadable(f"heartbeat state can't be read ({type(e).__name__})")
+    if not isinstance(data, dict) or not isinstance(mode, dict):
+        raise Unreadable("heartbeat state isn't the heartbeat's")
+    lines, ack = [], None
+    session = event.get("session_id")
+    quiet = data.get("quiet") if isinstance(data.get("quiet"), dict) else {}
+    reports = {k: e for k, e in (data.get("reports_q") or {}).items() if isinstance(e, dict) and e.get("state") == "queued"}
+    mine = _enqueued_session(ctx.state, session) if session else set()
+    wake = next((w for w in mine if (quiet.get("state") == "queued" and quiet.get("wake") == w)
+                 or any(e.get("wake") == w for e in reports.values())), None)
+    if wake:
+        keys = sorted(k for k, e in reports.items() if e.get("wake") == wake)
+        is_quiet = quiet.get("state") == "queued" and quiet.get("wake") == wake
+        user = pwd.getpwuid(os.geteuid()).pw_name
+        if is_quiet:
+            spell = parse_time(quiet.get("spell"))
+            lines.append(f"heartbeat: this is quiet wake {wake[:8]}; the last work activity was at "
+                         f"{hhmm(spell) if spell and spell.year > 1970 else 'never'}")
+        if keys:
+            kinds = {}
+            for k in keys:
+                kinds[k.split(':')[0]] = kinds.get(k.split(':')[0], 0) + 1
+            lines.append(f"heartbeat: {len(keys)} reports for you (wake {wake[:8]}): "
+                         + ", ".join(f"{n} {kind}" for kind, n in sorted(kinds.items()))
+                         + f". journalctl -u persistence-heartbeat@{user} has the lines")
+            claims = [k.split(':')[1] for k in keys if k.split(':')[0] in ("claim", "paused")]
+            lines += [f"claim {c} (ptask show {c})" for c in dict.fromkeys(claims)]
+            lines += [k for k in keys if k.split(':')[0] not in ("claim", "paused")]
+        ack = json.dumps({"wake": wake, "keys": keys, "quiet": is_quiet}, sort_keys=True)
+    if mode.get("mode") == "suspended":
+        lines.insert(0, suspended_line(mode))
+    if fault_showing(data.get("delivery_fault")):
+        lines.insert(0, fault_line(data["delivery_fault"]))
+    return Observation("heartbeat", ctx.now, lines=tuple(lines), ack=ack)
+
+
+def heartbeat_ack(obs, event, ctx):
+    import coordination
+
+    got = json.loads(obs.ack)
+    wake, at = got["wake"], ctx.now.isoformat(timespec="seconds")
+    with coordination.lock(ctx.state, "heartbeat", wait=HB_ACK_WAIT):
+        path = ctx.state / "heartbeat.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        changed = False
+        quiet = data.get("quiet")
+        if got.get("quiet") and isinstance(quiet, dict) and quiet.get("state") == "queued" and quiet.get("wake") == wake:
+            quiet.update(state="delivered", at=at)
+            changed = True
+        for key in got.get("keys", []):
+            e = (data.get("reports_q") or {}).get(key)
+            if isinstance(e, dict) and e.get("state") == "queued" and e.get("wake") == wake:
+                e.update(state="delivered", at=at)
+                changed = True
+        if changed:
+            write_atomic(path, json.dumps(data, indent=1, sort_keys=True))
+
+
 SOURCES = {"prs": Source(prs, prs_ack), "deployed": Source(deployed), "switches": Source(switches),
-           "claims": Source(claims_done, claims_ack)}
+           "claims": Source(claims_done, claims_ack), "heartbeat": Source(heartbeat_read, heartbeat_ack)}
 
 
 # --- the runner, the one renderer, and the ack ---

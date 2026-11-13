@@ -96,7 +96,7 @@ LEDGER = "fired.jsonl"
 # `at` is carried as `item_at`, since every fact's `at` is the time it was written (heartbeat.md names it `item_at`
 # too, since 1e4f42e).
 ENQUEUED_FIELDS = ("session", "cwd", "item_at", "work", "by", "claim", "launch", "retry_of", "follows", "attempt",
-                   "deferral", "reason_sha256")
+                   "deferral", "reason_sha256", "hb", "set")
 
 
 class LedgerError(RuntimeError):
