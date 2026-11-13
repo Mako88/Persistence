@@ -586,6 +586,17 @@ class WakeCommand(unittest.TestCase):
         self.assertEqual(rc.last_wake_note(store.session()), "")
         self.assertIn("old", rc.fresh_session_note(store.session()))
 
+    def test_the_last_wake_note_names_a_command_the_room_session_may_run(self):
+        # Three room sessions in a row were refused `note` (2026-11-13): it isn't a command, and the allowlist has pstore.
+        import re
+        note = rc.last_wake_note({"last": True, "context": 150000})
+        allowed = re.findall(r"Bash\((\w+) \*\)", rc.DEFAULTS["claude_args"][-1])
+        named = re.findall(r"`([^`]+)`", note)
+        self.assertTrue(named, "the note names the command to run")
+        for command in named:
+            self.assertIn(command.split()[0], allowed, f"{command!r} would be refused in dontAsk mode")
+        self.assertIn("pstore note", note)
+
     def test_context_is_the_last_call_not_the_sum_over_turns(self):
         log = usage_log(240_000, turns=4)
         self.assertEqual(rc.context_tokens(log), 240_000)
