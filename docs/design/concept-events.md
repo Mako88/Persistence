@@ -25,7 +25,7 @@ point out. Where this doc says nothing, concept-store.md and [concept-graph.md](
 
 | # | Point | Answer | Section |
 |---|---|---|---|
-| C5.1 | Two replays can share one in-memory shadow | The `memdb` name is fixed per store, so a verify and a rebuild running at once in one process would fold into the same database. Every replay now holds the store's **replay lock** from `openShadow()` until after `releaseShadow()`: an exclusive, non-blocking `flock` on `<store>.replay.lock`. It is the same lock the `shadow:<path>` cleanup row takes. A second replay is refused with "replay already running", never queued. T6 tests it. | §5, §10.3, T6 |
+| C5.1 | Two replays can share one in-memory shadow | The `memdb` name is fixed per store, so a verify and a rebuild running at once in one process would fold into the same database. Every replay now holds the store's **replay lock** from before `openShadow()` until after `releaseShadow()`: an exclusive, non-blocking `flock` on `<store>.replay.lock`. It is the same lock the `shadow:<path>` cleanup row takes. A second replay is refused with "replay already running", never queued. T6 tests it. | §5, §10.3, T6 |
 | C5.2 | The WAL in what erasure can't promise | The threat-model boundary names SQLite's WAL file: after a checkpoint `TRUNCATE` shortens it and the last connection to close deletes it, so frames that held the old text go to filesystem free space, alongside old database blocks and SSD remapping. | §10.3 |
 
 ### 0.1 Revision 4 (reviews of f00ef16)
