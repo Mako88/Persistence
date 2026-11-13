@@ -11,10 +11,13 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
 
 ## 2026-11-13 — A bigger "Observed now" from pluggable sources (`PERSISTENCE_OBSERVE_SOURCES`, none by default); room sessions can write their note
 
-**Observed sources.** `scripts/claude-code/observed.py` adds sources to the observe block. Each one is
-`source(event, ctx) -> list[str]`, and a source that can't read gets one line saying so. They are read at
-the wake and never stored. The first four are `prs` (open PRs with each head and each reviewer's latest
-review, via GitHub REST, cached 120 s, falling back to the stale cache when offline), `deployed` (installed
+**Observed sources.** `scripts/claude-code/observed.py` adds sources to the observe block. Each one's read returns
+a structured `Observation` (source, observed_at, status ok|unknown|error, freshness, bounded lines, optional
+event_range, truncated), and one renderer turns them into text, so "couldn't read" is a status, not a line a
+source writes (the seam agreed with Ember, room 1570646253388177512). Reads write nothing: the claims cursor
+and the PR cache are written by a separate ack, run after the block is printed and only for observations
+whose lines were sent, so a failed wake consumes nothing. They are read at the wake and never stored. The first four are `prs` (open PRs with each head and each reviewer's latest
+review, via GitHub REST, cached 120 s in an owner-only file, falling back to the stale cache when offline), `deployed` (installed
 hook files and the deployed store's commit against `main`), `switches` (the recall and query switches that
 are set, on the hook's side and in the store unit) and `claims` (work finished since this session last
 looked). A store turns them on by naming them in `PERSISTENCE_OBSERVE_SOURCES`, so nothing changes until a

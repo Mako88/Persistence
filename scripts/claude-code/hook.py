@@ -1433,11 +1433,14 @@ def subagent_start(event):
             "core, and so yours, with its working note first and what is so on the machine now last. Read it. "
             "You are the same self: when you learn something the main session cannot see from your report "
             "(a gotcha, a fact about the code), add it with `pstore add`; leave the working note to the main session.")
-    seen_now = observe(event)  # the working context: what is running, what changed, git
+    pending = []
+    seen_now = observe(event, pending)  # the working context: what is running, what changed, git
     body = core(event, "--max-chars", str(CAP - len(lead) - len(seen_now) - 100), "--recent", "0")
     text = f"{lead}\n\n{body}\n\n{seen_now}" if body.strip() else ""
     if text:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "SubagentStart", "additionalContext": text}}))
+        sys.stdout.flush()
+        acknowledge_observed(event, pending, text)
 
 
 WATCHED = STATE.parent / "watched.json"
@@ -1559,10 +1562,12 @@ def own_services():
     return [line.split()[0].removesuffix(".service") for line in out.splitlines() if line.strip()]
 
 
-def observe(event):
+def observe(event, pending=None):
     """What is so now, read off the machine every message rather than written down: the processes
     running from this project, its sessions' unfinished subagents, logs written in the last hour with their last line, git's state, and
-    whatever is watched (`hook.py watch`). Written down, it went stale; read, it cannot."""
+    whatever is watched (`hook.py watch`). Written down, it went stale; read, it cannot. Reading writes nothing: the
+    opted-in sources' pending acks go into `pending` for the caller to commit once the block is handed over
+    (acknowledge_observed)."""
     from concurrent.futures import ThreadPoolExecutor
 
     cwd = Path(event.get("cwd") or os.getcwd())
@@ -1611,7 +1616,11 @@ def observe(event):
     try:  # the opted-in sources (observed.py, PERSISTENCE_OBSERVE_SOURCES; none by default)
         import observed
 
-        lines += observed.lines(event, observed.Context(state=STATE, setting=setting, run=run_quiet, now=datetime.now(timezone.utc)))
+        ctx = observed.Context(state=STATE, setting=setting, run=run_quiet, now=datetime.now(timezone.utc))
+        for obs, said in observed.render(observed.observe(event, ctx), ctx.now):
+            lines += said
+            if pending is not None:
+                pending.append((obs, said, ctx))
     except Exception as e:
         lines.append(f"- (the observed sources failed: {type(e).__name__})")
 
@@ -1650,10 +1659,27 @@ def observe(event):
     return "\n".join(lines)
 
 
+def acknowledge_observed(event, pending, sent):
+    """Commit the observed sources' acks (a claims cursor, a PR cache) for the observations whose every line is in the
+    text actually sent, after it was written out: a wake that failed, or a block cut short by CAP, consumes nothing.
+    Under `serve` "written out" is the request's reply buffer, the nearest point this process can see."""
+    try:
+        import observed
+
+        handed = [obs for obs, said, _ in pending if all(line in sent for line in said)]
+        if handed:
+            observed.acknowledge(handed, event, pending[0][2])
+    except Exception:
+        pass  # at-least-once: an ack that fails shows the same observation again next wake
+
+
 def observe_hook(event):
-    text = inbox(event) + observe(event)
+    pending = []
+    text = (inbox(event) + observe(event, pending))[:CAP]
     print(json.dumps({"hookSpecificOutput": {"hookEventName": event.get("hook_event_name", "UserPromptSubmit"),
-                                             "additionalContext": text[:CAP]}}))
+                                             "additionalContext": text}}))
+    sys.stdout.flush()
+    acknowledge_observed(event, pending, text)
 
 
 TIMES = STATE.parent / "hook-times.log"  # one line per per-message hook answered by `serve`: path, seconds, bytes
