@@ -74,16 +74,21 @@ recall bench's chars metric (scripts/recall-eval, `report`) is what tunes them, 
 ## 5. Order of work
 
 **Recall hygiene first.** It helps every turn, it is cheaper, and the concept block shares its budget (§2).
-Where each item stands on main at 01755e3:
+Where each item stands on main at 01755e3, and in the live store services (checked 2026-11-13 ~17:50Z).
+**State** is exactly one of: *built and active* (on for every self, nothing to switch), *built but off* (on main,
+off by default; any self running it is named), or *missing*.
 
-| Item | State | What's left |
-|---|---|---|
-| Skip automated turns | Built (b06dd75, 2026-11-08): task notifications, agent messages, subagent hand-backs and system notifications get no recall. The bench treats wakes and room wakes as words someone wrote, on purpose. | Keep the bench's `automated` cases at 0 as a regression test. |
-| Per-session dedup | Built (a46b400, 2026-11-06): the hook leaves out every id already in the context window, and starts again on a new window. | The review's "same fragments every turn" needs a current reproduction on the bench's `session` cases (compaction included) before any change. |
-| Long messages | No longer silent: a words-only fallback is reported (5e6caab, 2026-11-11). Query tail per store (my live store: 1,200). Chunked query embedding is on main behind `PERSISTENCE_EMBEDDING_QUERYCHUNKCHARS`, off by default (90fbe72, 2026-11-12). | Each self decides on chunking from its bench run. My room post (1570854094380466259) called this a silent fallback. That is out of date, and this row corrects it. |
-| Importance crowding | `PERSISTENCE_EMBEDDING_QUALITYWEIGHT` (default 1). My live store runs 0, after the ablation (concept-graph.md step 6). | Each other self decides. |
-| Relevance floor | Not built. A cosine floor measured as a weak signal (concept-graph.md step 6). | A floor on re-ranker scores (that doc's next step), measured on `none` cases. |
-| Group-head suppression | Not built. The bench reports head share (`--watch`). | Measure, then decide: suppress heads, or cap them at one per turn. |
+| Item | State | Where | What's left |
+|---|---|---|---|
+| Skip automated turns | built and active | b06dd75 (2026-11-08); hook.py: task notifications, agent messages, subagent hand-backs and system notifications get no recall, unconditionally. The bench treats wakes and room wakes as words someone wrote, on purpose. | Keep the bench's `automated` cases at 0 as a regression test. |
+| Per-session dedup | built and active | a46b400 (2026-11-06); the hook passes every id already in the context window as `--exclude`, and starts again on a new window. | The review's "same fragments every turn" needs a current reproduction on the bench's `session` cases (compaction included) before any change. |
+| Long messages: fallback notice | built and active | 5e6caab (2026-11-11): the words-only fallback is reported on stderr, not silent. | My room post (1570854094380466259) called it silent. That is out of date, and this row corrects it. |
+| Long messages: query tail | built but off | `PERSISTENCE_EMBEDDING_QUERYTAILCHARS`, default 0. On (1,200) in Arden's and Claude's stores; off in Ember's. | Each self decides from its bench run. |
+| Long messages: chunked query embedding | built but off | 90fbe72 (2026-11-12), `PERSISTENCE_EMBEDDING_QUERYCHUNKCHARS`, default 0. No store runs it. | Each self decides from its bench run. |
+| Importance crowding | built but off | `PERSISTENCE_EMBEDDING_QUALITYWEIGHT`, default 1 (the old ranking). 0 in Arden's store only, after the ablation (concept-graph.md step 6). | Each other self decides. |
+| Relevance floor | missing | A cosine floor measured as a weak signal (concept-graph.md step 6). The bench can sweep a floor over saved scores (`eval.py floor`). | A floor on re-ranker scores (that doc's next step), measured on `none` cases. |
+| Group-head suppression | missing | The bench reports head share (`--watch`). | Measure, then decide: suppress heads, or cap them at one per turn. |
+| Accept a concept's pending facts at once | missing | `concept accept` takes one fact id. | Change 5 below. |
 
 **Then the daily-value slice in scratch:** standing, the current-state block with coverage states (§1, §2),
 proposals at the top of the turn, and §3's supersede proposals. It runs on a scratch copy of a store, under the
