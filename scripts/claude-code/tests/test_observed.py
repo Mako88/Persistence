@@ -137,16 +137,16 @@ class Acknowledge(unittest.TestCase):
 class Hook(unittest.TestCase):
     """hook.observe carries the rendered sources; observe_hook acks only after printing, and only what was sent."""
 
-    def patches(self, tmp):
+    def patches(self, tmp, inbox=""):
         return [mock.patch.object(hook, "note_line", return_value=None), mock.patch.object(hook, "room_freshness", return_value=None),
                 mock.patch.object(hook, "linux_processes", return_value="[]"), mock.patch.object(hook, "own_services", return_value=[]),
                 mock.patch.object(hook, "run_quiet", return_value=""), mock.patch.object(hook, "project", return_value="work"),
-                mock.patch.object(hook, "inbox", return_value=""), mock.patch.object(hook, "STATE", Path(tmp))]
+                mock.patch.object(hook, "inbox", return_value=inbox), mock.patch.object(hook, "STATE", Path(tmp))]
 
-    def run_hook(self, observations, ack, out=None):
+    def run_hook(self, observations, ack, out=None, inbox=""):
         events = []
         with tempfile.TemporaryDirectory() as tmp:
-            ps = self.patches(tmp)
+            ps = self.patches(tmp, inbox)
             for p in ps:
                 p.start()
             try:
@@ -174,6 +174,107 @@ class Hook(unittest.TestCase):
         text, events = self.run_hook(many, lambda events: lambda obs, e, c: events.append(obs.source))
         self.assertTrue(0 < len(events) < 12, events)
         self.assertNotIn("s11", events, "its lines were cut by CAP, so it wasn't handed over")
+
+    def test_duplicate_text_elsewhere_cannot_make_a_cut_observation_count_as_delivered(self):
+        """Ember on 5d07630: delivery was decided by `line in sent`, so a block cut by CAP whose lines also occur earlier
+        in Observed now counted as handed over. Delivery is now which complete rendered blocks survived the cap."""
+        shared = tuple("d" * 190 + str(i) for i in range(observed.MAX_LINES - 1))
+        many = [OBS(f"s{i}", NOW, lines=(f"HEAD-{i:02d}",) + shared, ack="x") for i in range(12)]
+        text, events = self.run_hook(many, lambda events: lambda obs, e, c: events.append(obs.source))
+        sent = json.loads(text)["hookSpecificOutput"]["additionalContext"]
+        blocks = {o.source: "\n".join(said) for o, said in observed.render(many, NOW)}
+        whole = [s for s, block in blocks.items() if block in sent]
+        cut = [s for s, block in blocks.items() if f"HEAD-{s[1:]:0>2}" in sent and block not in sent]
+        self.assertEqual(len(cut), 1, "the cap falls inside one block, whose lines all appear earlier")
+        self.assertEqual(events, whole)
+
+    def test_what_comes_before_the_observed_block_moves_where_the_cap_falls(self):
+        many = [OBS(f"s{i}", NOW, lines=(f"HEAD-{i:02d}",) + tuple("e" * 190 + str(j) for j in range(5)), ack="x") for i in range(12)]
+        text, events = self.run_hook(many, lambda events: lambda obs, e, c: events.append(obs.source), inbox="I" * 3000 + "\n\n")
+        sent = json.loads(text)["hookSpecificOutput"]["additionalContext"]
+        blocks = {o.source: "\n".join(said) for o, said in observed.render(many, NOW)}
+        self.assertEqual(events, [s for s, block in blocks.items() if block in sent])
+        self.assertLess(len(events), 8, "the inbox took room the blocks would otherwise have had")
+
+    def test_each_placement_is_exactly_its_rendered_block(self):
+        many = [OBS("a", NOW, lines=("one", "two")), OBS("b", NOW), OBS("c", NOW, status="unknown", reason="r", lines=("three",))]
+        with tempfile.TemporaryDirectory() as tmp:
+            ps = self.patches(tmp)
+            for p in ps:
+                p.start()
+            try:
+                with mock.patch.object(observed, "observe", return_value=many):
+                    pending = []
+                    text = hook.observe({"session_id": "s-1", "cwd": tmp}, pending)
+            finally:
+                for p in ps:
+                    p.stop()
+        self.assertEqual([(r.obs.source, text[r.start:r.end]) for r in pending],
+                         [(o.source, "\n".join(said)) for o, said in observed.render(many, pending[0].ctx.now)])
+
+
+class ServeAck(unittest.TestCase):
+    """Ember on 5d07630: under `serve` the ack ran inside answer(), before do_POST wrote the reply; a disconnect in between
+    consumed events the session never received. reply() acks only after the write it's given has returned."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.ps = Hook.patches(None, self.tmp)
+        for p in self.ps:
+            p.start()
+        self.acked = []
+        sources = {"prs": src(None, lambda obs, e, c: self.acked.append(obs.source))}
+        for p in (mock.patch.object(observed, "observe", return_value=[OBS("prs", NOW, lines=("SOURCELINE",), ack="x")]),
+                  mock.patch.dict(observed.SOURCES, sources, clear=True),
+                  mock.patch.object(sys, "stdout", hook.PerRequest(sys.stdout))):
+            p.start()
+            self.ps.append(p)
+
+    def tearDown(self):
+        for p in reversed(self.ps):
+            p.stop()
+
+    def post(self, write):
+        event = json.dumps({"session_id": "s-1", "cwd": self.tmp, "hook_event_name": "UserPromptSubmit"}).encode()
+        return hook.reply("/observe", event, write)
+
+    def test_a_failed_write_acks_nothing(self):
+        def broken(body):
+            self.assertEqual(self.acked, [], "nothing acked before the write")
+            raise BrokenPipeError("client went away")
+
+        with self.assertRaises(BrokenPipeError):
+            self.post(broken)
+        self.assertEqual(self.acked, [])
+
+    def test_a_successful_write_acks_after_it(self):
+        written = []
+
+        def ok(body):
+            self.assertEqual(self.acked, [], "nothing acked before the write")
+            written.append(body)
+
+        self.post(ok)
+        self.assertIn(b"SOURCELINE", written[0])
+        self.assertEqual(self.acked, ["prs"])
+
+    def test_a_hook_that_fails_after_deferring_acks_nothing(self):
+        real = hook.observe_hook
+
+        def then_fail(event):
+            real(event)
+            raise RuntimeError("after the block was built")
+
+        written = []
+        with mock.patch.object(hook, "observe_hook", then_fail), mock.patch("sys.stderr", __import__("io").StringIO()):
+            self.post(written.append)
+        self.assertEqual(written, [b""], "the session got nothing")
+        self.assertEqual(self.acked, [])
+
+    def test_direct_mode_still_acks_after_its_flush(self):
+        with mock.patch.object(sys, "stdout", __import__("io").StringIO()):
+            hook.observe_hook({"session_id": "s-1", "cwd": self.tmp})
+        self.assertEqual(self.acked, ["prs"])
 
 
 PULLS = [{"number": 20, "title": "CHANGELOG: bench-only caveat", "head": {"sha": "bec95e7aaaa", "ref": "claude/changelog"},

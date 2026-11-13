@@ -39,10 +39,15 @@ of them says when it stopped being true.
 4. **Reads write nothing; acks come after injection.** A read never writes: not the claims cursor, not
    the PR cache. What a source would persist rides in `Observation.ack`. `hook.observe_hook` (and
    `subagent_start`) prints the block, flushes, and only then calls `observed.acknowledge()` for the ok
-   observations whose every rendered line is in the text actually sent (a block cut by `CAP` acks
-   nothing it cut). A failed wake, or an ack that fails, shows the same observation again next time:
-   at-least-once. Under `hook.py serve`, "sent" means written to the request's reply buffer, the nearest
-   point this process can see. A read past the deadline is reported `unknown (timed out)`; its thread
+   observations delivered. Delivery is structural, not by content: `hook.observe` records where each
+   observation's complete rendered block sits in its text (`Rendered` start/end), the caller adds where
+   that text began in what it sent, and an observation is delivered only if its block ends inside the
+   text after `CAP` (Ember on 5d07630: matching lines let a cut block count when the same lines occurred
+   earlier). Under `hook.py serve` the ack is deferred (`after_written`) and `reply()` runs it only after
+   do_POST's socket write and flush have returned; a write that raises, or a hook that fails after
+   building its block, acks nothing. A failed wake, or an ack that fails, shows the same observation
+   again next time: at-least-once. "Written" is still not "read by the harness": a client that drops
+   after the kernel took the bytes is not seen. A read past the deadline is reported `unknown (timed out)`; its thread
    can't be cancelled, but since reads write nothing and its result is not in the returned list, a late
    finish changes nothing and is never acked. Nothing a source reads or writes reaches the store.
 
