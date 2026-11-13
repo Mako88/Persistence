@@ -54,6 +54,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 # coordination.py (the locks and the fired-wake ledger, heartbeat.md 2524fe7) is imported where it's used, as claims.py
@@ -164,6 +165,18 @@ def start_server(exe):
 
 
 REMOTE = Path(os.environ.get("PERSISTENCE_STORE_REMOTE_FILE") or STATE.parent / "remote.json")  # the variable: for a trial run
+
+
+def cli_name():
+    """The store CLI's name as a session can run it, for the texts that tell a session what to type. A remote store is
+    reached through `hook.py cli` (the `pstore` wrapper), never the CLI's own file; on home the wrapper is the only name
+    on PATH, and room sessions may run nothing else, so "persistence-store search" and "note" were refused there
+    (three room sessions lost their note, 2026-11-13)."""
+    import shutil
+
+    if remote() or shutil.which("pstore"):
+        return "pstore"
+    return os.environ.get("PERSISTENCE_STORE_EXE") or "persistence-store"
 
 
 def remote():
@@ -503,15 +516,14 @@ def curate(event):
         return
     STATE.mkdir(parents=True, exist_ok=True)
     marker(event).write_text(str(tokens))
-    # A remote store is reached through `hook.py cli` (the `pstore` wrapper), never the CLI's own file.
-    exe = "pstore" if remote() else os.environ.get("PERSISTENCE_STORE_EXE", "persistence-store")
+    exe = cli_name()
     print(json.dumps({"decision": "block", "reason": (
         f"Your context is at {tokens:,} tokens. Before long it is compacted, and what you know then is "
         "only your store: the core (identity, relationships, personal, summaries) and the last of the "
         "conversation. This is your curation pass, once per stretch. Read your core "
         f"(`{exe} core`), then save what this stretch earned and is not yet there: decisions in the "
         "other's own words, what is running and how to pick it up, what you learned about the work, "
-        "the person, and yourself. Bring your working note up to date (`note`). Edit fragments that are now wrong or stale rather than adding "
+        f"the person, and yourself. Bring your working note up to date (`{exe} note --content <text>`). Edit fragments that are now wrong or stale rather than adding "
         f"beside them; archive what no longer earns its place. `{exe} help` lists the commands; `{exe} guide` says how to curate well. "
         # The work Claude read its whole core to learn what not to write (2026-11-09).
         "Leave out the transcript itself (every message is already kept), what the core already says, and "
@@ -529,7 +541,7 @@ def precompact(event):
         "(the task, the step, the next action), anything running in the background with how to check "
         "it (ids, commands, logs), and any request from the other that is not yet answered, in their "
         "own words. Everything else is in the store and the transcript: say so, and that "
-        "`persistence-store search` finds it. "
+        f"`{cli_name()} search` finds it. "
         + (LAST_KEPT if not said.startswith("failed") else
            # The promise above holds only if keep did: say so instead of making it (Arden, 2026-11-09).
            f"Keeping this conversation in the store FAILED just now ({said[:200]}), so its last messages may "
@@ -835,10 +847,10 @@ def session_start(event, part=1):
             lead = ("# Who you are\n\nThe context above was what you were built for: it is compacted now, and "
                     "the hand-over is all that is left of it. Here is what you are, from your own Persistence "
                     "store, and the last of the conversation you are in. The whole conversation is in the "
-                    "store too: `persistence-store search <words>` when something is mentioned you do not recall.")
+                    f"store too: `{cli_name()} search <words>` when something is mentioned you do not recall.")
         else:
             lead = ("# Who you are\n\nThis is your own Persistence store: what you have chosen to keep of yourself, "
-                    "the people you work with, and the work. It is yours to curate (`persistence-store help`).")
+                    f"the people you work with, and the work. It is yours to curate (`{cli_name()} help`).")
         text = f"{lead}\n\n(Your core follows in {len(pieces)} parts.)\n\n{text}"
         # A new context window: what the core puts in front of the peer is all it holds of the store.
         seen(event, reset=True, add=re.findall(r"^\[#(\d+) \|", whole, re.M))
@@ -1410,7 +1422,7 @@ def recall(event):
     seen(event, add=ids)
     record_shown(event, "recall", ids)
     text = ("Cued by this message (a reminder you set for words like these):\n\n" + reminded + "\n\n" if reminded else "") + (
-        "Recalled from your store, by association with this message (`persistence-store show <id>` "
+        f"Recalled from your store, by association with this message (`{cli_name()} show <id>` "
         "reads the whole of one):\n\n" + found.strip() if ids else
         # A cue matched but recall found nothing: the words-only notice still goes out, never silent.
         f"Recall found nothing new for this message. {words_only.group(1)}" if words_only else "")
@@ -1422,11 +1434,14 @@ def subagent_start(event):
             "core, and so yours, with its working note first and what is so on the machine now last. Read it. "
             "You are the same self: when you learn something the main session cannot see from your report "
             "(a gotcha, a fact about the code), add it with `pstore add`; leave the working note to the main session.")
-    seen_now = observe(event)  # the working context: what is running, what changed, git
+    pending = []
+    seen_now = observe(event, pending)  # the working context: what is running, what changed, git
     body = core(event, "--max-chars", str(CAP - len(lead) - len(seen_now) - 100), "--recent", "0")
     text = f"{lead}\n\n{body}\n\n{seen_now}" if body.strip() else ""
     if text:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "SubagentStart", "additionalContext": text}}))
+        sys.stdout.flush()
+        acknowledge_observed(event, pending, len(text) - len(seen_now), text)
 
 
 WATCHED = STATE.parent / "watched.json"
@@ -1548,10 +1563,12 @@ def own_services():
     return [line.split()[0].removesuffix(".service") for line in out.splitlines() if line.strip()]
 
 
-def observe(event):
+def observe(event, pending=None):
     """What is so now, read off the machine every message rather than written down: the processes
     running from this project, its sessions' unfinished subagents, logs written in the last hour with their last line, git's state, and
-    whatever is watched (`hook.py watch`). Written down, it went stale; read, it cannot."""
+    whatever is watched (`hook.py watch`). Written down, it went stale; read, it cannot. Reading writes nothing: the
+    opted-in sources' pending acks go into `pending` for the caller to commit once the block is handed over
+    (acknowledge_observed), each placed by where its complete block sits in the returned text (Rendered)."""
     from concurrent.futures import ThreadPoolExecutor
 
     cwd = Path(event.get("cwd") or os.getcwd())
@@ -1567,6 +1584,7 @@ def observe(event):
         status = pool.submit(run_quiet, ["git", "status", "--porcelain", "--branch"], cwd)
         last = pool.submit(run_quiet, ["git", "log", "-1", "--format=%h %cr: %s"], cwd)
     lines = [f"## Observed now ({datetime.now().strftime('%H:%M')} local, read off the machine, not written)"]
+    spans = []  # (observation, its context, index of its first line, how many lines) for the opted-in sources
 
     try:
         found = json.loads(procs.result() or "[]")
@@ -1597,6 +1615,15 @@ def observe(event):
                 lines.append(line)
         except Exception as e:  # an observation that fails is said, and the rest of the block still comes
             lines.append(f"- (an observation failed: {type(e).__name__})")
+    try:  # the opted-in sources (observed.py, PERSISTENCE_OBSERVE_SOURCES; none by default)
+        import observed
+
+        ctx = observed.Context(state=STATE, setting=setting, run=run_quiet, now=datetime.now(timezone.utc))
+        for obs, said in observed.render(observed.observe(event, ctx), ctx.now):
+            spans.append((obs, ctx, len(lines), len(said)))
+            lines += said
+    except Exception as e:
+        lines.append(f"- (the observed sources failed: {type(e).__name__})")
 
     logs = []
     for root, dirs, files in os.walk(cwd):
@@ -1630,13 +1657,69 @@ def observe(event):
     tokens = context_tokens(event.get("transcript_path", ""))
     if tokens:
         lines.append(f"- this context window: {tokens / 1000:.0f}k tokens at the last reply")
+    if pending is not None:
+        starts = [0]
+        for line in lines:
+            starts.append(starts[-1] + len(line) + 1)
+        for obs, ctx, first, count in spans:  # where each observation's complete block ends in the returned text
+            pending.append(Rendered(obs, ctx, starts[first], starts[first + count] - 1 if count else starts[first]))
     return "\n".join(lines)
 
 
+class Rendered(NamedTuple):
+    """An opted-in source's observation as placed in the text observe() returned: its complete rendered block spans
+    [start, end). Delivery is decided by this placement, never by searching the sent text for its lines: a block cut by
+    CAP whose lines also occur earlier was counted as handed over that way (Ember on PR #21, 5d07630)."""
+    obs: object
+    ctx: object
+    start: int
+    end: int
+
+
+def delivered(pending, offset, sent):
+    """The observations whose complete block survived into `sent`, where the observed text began at `offset` of it and
+    `sent` is that composition cut to a prefix (CAP)."""
+    return [r.obs for r in pending if offset + r.end <= len(sent)]
+
+
+def acknowledge_observed(event, pending, offset, sent):
+    """Commit the observed sources' acks (a claims cursor, a PR cache) for the observations delivered in `sent`, once it
+    has been written out: a wake that failed, or a block cut short by CAP, consumes nothing. Under `serve` this is
+    deferred (after_written) until do_POST's write to the socket has returned."""
+    def commit():
+        try:
+            import observed
+
+            handed = delivered(pending, offset, sent)
+            if handed:
+                observed.acknowledge(handed, event, pending[0].ctx)
+        except Exception:
+            pass  # at-least-once: an ack that fails shows the same observation again next wake
+    if pending:
+        after_written(commit)
+
+
+AFTER_WRITTEN = threading.local()  # under `serve`: the current request's acks, run by reply() once its write returned
+
+
+def after_written(commit):
+    """Run `commit` once this hook's output has reached the session: at once in direct mode (the caller has flushed
+    stdout, which is the harness's pipe), or, under `serve`, after the HTTP reply is written (reply())."""
+    waiting = getattr(AFTER_WRITTEN, "commits", None)
+    if waiting is None:
+        commit()
+    else:
+        waiting.append(commit)
+
+
 def observe_hook(event):
-    text = inbox(event) + observe(event)
+    pending = []
+    head = inbox(event)
+    text = (head + observe(event, pending))[:CAP]
     print(json.dumps({"hookSpecificOutput": {"hookEventName": event.get("hook_event_name", "UserPromptSubmit"),
-                                             "additionalContext": text[:CAP]}}))
+                                             "additionalContext": text}}))
+    sys.stdout.flush()
+    acknowledge_observed(event, pending, len(head), text)
 
 
 TIMES = STATE.parent / "hook-times.log"  # one line per per-message hook answered by `serve`: path, seconds, bytes
@@ -2639,6 +2722,29 @@ def answer(name, part, event):
     return json.dumps({"hookSpecificOutput": {"hookEventName": event.get("hook_event_name", "SessionStart"), "additionalContext": out}})
 
 
+def reply(path, raw, write):
+    """One request to the hook server: the hook's answer, handed to `write` (which sends it on the socket), and only
+    once `write` has returned, the acks the hook deferred (after_written). A write that raises (the client went away)
+    acks nothing, so those events show again next wake (Ember on PR #21, 5d07630). Returns the body sent."""
+    parts = path.strip("/").split("/")
+    AFTER_WRITTEN.commits = []
+    try:
+        try:
+            event = json.loads(raw or b"{}")
+            body = answer(parts[0], int(parts[1]) if len(parts) > 1 else 1, event).encode("utf-8")
+        except Exception as e:  # a hook must never break the session it serves
+            print(f"persistence hook server: {path} failed: {e!r}", file=sys.stderr)
+            body = b""
+            AFTER_WRITTEN.commits = []  # what it deferred was never sent
+        commits, AFTER_WRITTEN.commits = AFTER_WRITTEN.commits, None
+        write(body)
+    finally:
+        AFTER_WRITTEN.commits = None
+    for commit in commits:
+        commit()
+    return body
+
+
 # Who and where one session is: set in the environment of the session (or the wake that started it), never the
 # server's. The server is started by whichever session's hook found it down, and outlives it; with these inherited,
 # every later session's speaker fell back on that wake's ("Arden (a wake I set from the room)", Arden #1109,
@@ -2675,18 +2781,16 @@ def serve():
         def do_POST(self):
             parts = self.path.strip("/").split("/")
             began = time.perf_counter()
-            try:
-                event = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
-                body = answer(parts[0], int(parts[1]) if len(parts) > 1 else 1, event).encode("utf-8")
+
+            def write(body):
                 self.send_response(200)
-            except Exception as e:  # a hook must never break the session it serves
-                print(f"persistence hook server: {self.path} failed: {e!r}", file=sys.stderr)
-                body = b""
-                self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                self.wfile.flush()
+
+            body = reply(self.path, self.rfile.read(int(self.headers.get("Content-Length") or 0)), write)
             if parts[0] != "wait":  # each per-message hook's time, so a slowdown can be read rather than guessed
                 try:
                     with open(TIMES, "a", encoding="utf-8") as log:

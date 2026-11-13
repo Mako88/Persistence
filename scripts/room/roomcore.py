@@ -1093,7 +1093,7 @@ def last_wake_note(saved):
     """A line for the prompt of the room session's last wake, before a fresh session replaces it; empty otherwise."""
     if saved.get("last") and not saved.get("rotate"):
         return (f"This is the last wake in this session: it has grown to {saved.get('context')} tokens, and a fresh room "
-                "session takes over after this wake ends. Before anything else, update your working note (`note`) so the "
+                "session takes over after this wake ends. Before anything else, update your working note (`pstore note --content \"<text>\"`) so the "
                 "fresh session starts from where things stand; then answer the room as usual.\n\n")
     return ""
 
