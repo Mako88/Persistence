@@ -326,6 +326,20 @@ class FromTheCommit(Base):
             self.assertEqual(sys.path, path)
             self.assertEqual({n: sys.modules.get(n) for n in held}, held)
 
+    def test_a_clean_process_is_left_clean(self):
+        # Ember's M3 on 9c2b7f8: with none of the commit-served modules imported beforehand, none may be left behind,
+        # or a later check (or `import heartbeat`) in the same process would get this commit's copy.
+        from unittest import mock
+        served = [n[:-3] for n in heartbeat_optin.DEPLOYED]
+        with mock.patch.dict(sys.modules):
+            for n in served:
+                sys.modules.pop(n, None)
+            path = list(sys.path)
+            items = self.check(stalled=True)
+            self.assertNotIn("core", self.failing(items))  # the commit's heartbeat really was loaded
+            self.assertEqual([n for n in served if n in sys.modules], [])
+            self.assertEqual(sys.path, path)
+
     def test_a_core_that_does_not_load_is_not_ready(self):
         self.commit_core("\ndef broken(:\n")
         items = self.check()
