@@ -544,6 +544,35 @@ class Claims(unittest.TestCase):
         self.assertEqual(["task number 2" in line for line in self.look(0.5).lines], [True])
         self.assertEqual(self.look(5).lines, ())
 
+    def cursor(self):
+        return json.loads(observed.claims_cursor({"session_id": "me"}, ctx(self.state)).read_text(encoding="utf-8"))
+
+    def test_a_claim_reopened_and_finished_again_inside_the_margin_is_shown_again(self):
+        """Arden on 2b6e140: `seen` keyed by id alone hid the second finish of a claim reopened inside CLAIMS_SETTLE."""
+        self.claim(1, "done", 0.1)
+        self.assertIn("task number 1", "\n".join(self.look().lines))
+        self.claim(1, "done", -0.2)  # reopened, finished again 12 s after the first look
+        self.assertEqual(["task number 1" in line for line in self.look(0.3).lines], [True], "the second finish shows")
+        self.assertEqual(self.look(0.4).lines, (), "and only once")
+
+    def test_the_cursor_never_moves_behind_the_previous_one(self):
+        """Arden's green mutant on 2b6e140 (`at` without max(since, ...)): a cursor 5d07630 wrote at its read's now is
+        ahead of the next read's now - CLAIMS_SETTLE. Moving it back would show again what that read already showed."""
+        written = self.now - timedelta(seconds=5)
+        observed.write_atomic(observed.claims_cursor({"session_id": "me"}, ctx(self.state)), written.isoformat())
+        self.claim(1, "done", 10 / 60)  # finished before that read, so it showed then
+        self.assertEqual(self.look().lines, ())
+        self.assertEqual(self.cursor()["at"], written.isoformat())
+        self.assertEqual(self.look(0.1).lines, (), "not shown a second time")
+
+    def test_seen_forgets_ids_once_the_cursor_passes_them(self):
+        """Arden's green mutant on 2b6e140 (`seen` not pruned at `at`): it would grow with every claim ever shown."""
+        self.claim(1, "done", 0.1)
+        self.look()
+        self.assertEqual(list(self.cursor()["seen"]), [f"{1:08d}-0000-4000-8000-000000000000"], "inside the margin")
+        self.look(1)
+        self.assertEqual(self.cursor()["seen"], {}, "the cursor is past it now")
+
     def test_a_cursor_written_before_the_margin_is_still_read(self):
         observed.write_atomic(observed.claims_cursor({"session_id": "me"}, ctx(self.state)), (self.now - timedelta(minutes=10)).isoformat())
         self.claim(1, "done", 20); self.claim(2, "done", 5)

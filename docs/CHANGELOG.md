@@ -9,6 +9,14 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-13 — Observed now: a claim reopened inside the claims margin shows its second finish
+
+**Claims `seen` keyed by finish, not id alone.** The claims cursor remembers the ids it showed inside its 30 s
+margin so the next read skips them. Keyed by id alone, a claim that finished, was reopened and finished again
+inside that margin never showed its second finish (Arden on 2b6e140). A read now skips a claim only if `seen`
+holds that id *with that finish time*. The cursor file's shape is unchanged. Two of Arden's surviving mutants are
+now pinned by tests: the cursor never moves behind the previous one, and `seen` forgets ids once the cursor is past them.
+
 ## 2026-11-13 — A bigger "Observed now" from pluggable sources (`PERSISTENCE_OBSERVE_SOURCES`, none by default); room sessions can write their note
 
 **Observed sources.** `scripts/claude-code/observed.py` adds sources to the observe block. Each one's read returns
