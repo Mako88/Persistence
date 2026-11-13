@@ -17,7 +17,7 @@ All settings come from the self's own `~/.claude/settings.json` `env` block thro
 | `PERSISTENCE_HEARTBEAT_QUIET_AFTER` **(design)** | 90 | H in minutes (section 3, Q). A non-integer or < 1 means 90. |
 | `PERSISTENCE_HEARTBEAT_TICK_GAP` **(design)** | 30 | minutes between ticks. Below 30 is raised to 30 with one journal line (section 5, "floor"). A non-integer means 30. |
 | `PERSISTENCE_HEARTBEAT_PER_HOUR` | 3 | unchanged: the cap. |
-| `PERSISTENCE_OBSERVE_SOURCES` | (as now) | add `heartbeat` to see the report block and the fault and suspended lines in every session (section 3.1, 3.3). Without it the block never renders, so a `reports` or `quiet` entry never reaches `delivered`; each attempt goes back to `none` and after 3 the key is `undeliverable`. So a self that turns on `..._STALLED` must name `heartbeat` here too. |
+| `PERSISTENCE_OBSERVE_SOURCES` | (as now) | add `heartbeat` to see the report block and the fault and suspended lines in every session (section 3.1, 3.3). `..._STALLED` on without `heartbeat` named here is refused: the beat records `misc.source_off` (since when), writes one journal line when it begins and one when it ends, `pheartbeat status` shows it, and no R, Q or tick is queued (changed after a83ef07, Ember's G5: it used to cost up to 3 undelivered wakes per key). |
 
 Files, all in the self's state directory (`PERSISTENCE_STATE_DIR`, default `~/.claude/persistence/state`):
 - `heartbeat.json`: today's sections plus the stalled layer's (shapes in section 3), each absent until used.
@@ -79,13 +79,24 @@ In `hook.py` and `coordination.py`:
   filled with times, counts and ids only.
 - `add_heartbeat_wake(..., fill=..., set_at=...)`: `fill` is the template's values (each a time, count, id or user
   name, checked by pattern); `set_at` lets the beat's clock stamp `set`.
-- `coordination.ENQUEUED_FIELDS` gains `hb` and `set` (`set`, so a wake added inside a tick's window and fired after it
-  still counts as progress from the ledger).
+- `coordination.ENQUEUED_FIELDS` is unchanged. `coordination.STALLED_FIELDS` (`hb`, `set`) ride in an `enqueued` fact
+  only when the item carries `hb` or run-due reads `..._STALLED` on (`hook.stalled_layer_on`, the settings file only).
+  So with the switch off every fact is byte for byte main's; with it on, `set` lets a wake added inside a tick's window
+  and fired after it still count as progress from the ledger (changed after a83ef07, Ember's G2).
+- Heartbeat items keep main's key order in `wakes.json`: id, session, at, by, launch, reason, [hb,] set, cwd, then the
+  claim and chain fields.
 
 In `observed.py`: a `heartbeat` source **(design 3.1)**. Its read writes nothing. It renders the report block only in
 the firing session of a `queued` `reports`/`quiet` entry (looked up by session id in the ledger's `enqueued` facts),
-plus the fault line while `rev > acked_rev` and the suspended line while the mode is suspended, in any session. Its ack
-moves exactly the entries still `queued` under that wake id to `delivered`, under `heartbeat.lock` (compare and set).
+plus the fault line while `rev > acked_rev` and the suspended line while the mode is suspended, in any session. Each
+queued key's actionable identity (its claim for a claim or paused key, else the key) is listed only as far as fits under
+render's 6 lines; the rest is the "N more not shown" count. Its ack moves exactly the listed entries still `queued` under
+that wake id to `delivered`, and the omitted ones back to `none` with no failure, under `heartbeat.lock` (compare and
+set). If the ack can't take the lock in 5 s it writes `state/heartbeat-ack-lost/<wake id>` (no content) and the beat
+puts that wake's entries back to `none` without a failed attempt: re-delivered, the breaker unchanged.
+
+The stalled layer decides from one snapshot: it reads `wakes.json` and the ledger together under `wakes.lock` (which
+run-due holds across its fact and queue writes) and holds it to its last enqueue (Ember's G3).
 
 ## 3. heartbeat.json additions (all absent until used)
 
@@ -96,9 +107,9 @@ ticks:          {<tick id>: {gen, at, outcome?: continue, judged?: progress|empt
 counters:       {gen, empty, failed, since, empty_ids, failed_ids}
 delivery_fault: {rev, acked_rev, since, last, counts: {cap, hb_failed, undeliverable}, ids: [<=10]}
 fault_seen:     {<hb firing id>: ISO}          one hb_failed per firing
-holds:          {usage | quiet | <key>: ISO}   usage limit, and 6 h after an undeliverable
+holds:          {usage: {reset: parsed|unknown, since, until}, quiet | <key>: ISO}   usage limit; 6 h after an undeliverable
 deferred:       {<cap window>: [quiet|tick]}  one deferral journal line per window
-misc:           {last_tick, reports_at, mode_history: [<=10]}
+misc:           {last_tick, reports_at, source_off?, mode_history: [<=10]}
 known:          {<hb wake id>: ISO}            every hb wake minted or adopted, so old ledger facts aren't re-adopted
 ```
 
@@ -107,8 +118,14 @@ cancelled wake goes back to `none` without a failure. A paused claim with no `un
 `paused:<claim>:<history index>`.
 
 A usage-limited Q, R or tick firing is not a fault and not a failed attempt: nothing in the stalled layer wakes before
-the reset plus 5 minutes (`holds.usage`). The design says this for ticks; I applied it to Q and R too. Flag it if you
-disagree.
+the reset plus 5 minutes (`holds.usage`). The design says this for ticks; I applied it to Q and R too (agreed by
+Claude and Ember).
+
+The reset is structured (changed after a83ef07, Ember's G4): Claude Code's output has no reset field, so `reset_time`
+reads `result` with one anchored pattern and returns a time within 24 h or None. None is never turned into a time:
+`holds.usage` says `reset: unknown`, holds until `UNKNOWN_RECHECK` (1 h) after the finish, writes one journal line,
+shows in `pheartbeat status`, and is rechecked every beat (it ends early once any firing finishes after it without the
+limit). C's and A's usage deferral on an unknown reset tries at finish + 1 h, with a journal line naming the wake.
 
 ## 4. Names that differ from the design
 
@@ -118,7 +135,10 @@ None of the design's names change. New names, which the design left open: `PERSI
 `last_activity`, the `fill`/`set_at` arguments, and the `heartbeat.json` section names in section 3.
 
 Changed from the first post of this file (ef2695a), once the code was written: the beat order puts `reconcile` first;
-`last_tick` lives in `misc`; `ENQUEUED_FIELDS` also gains `set`; the sections in section 3 are the real ones.
+`last_tick` lives in `misc`; the sections in section 3 are the real ones. After a83ef07 (Ember's CHANGES and Claude's
+review): `STALLED_FIELDS` instead of growing `ENQUEUED_FIELDS`, `source_named`, `source_on`, `settings_path`,
+`recheck_usage`, `hold_line`, `UNKNOWN_RECHECK`, `hook.stalled_layer_on`, `observed.mark_ack_lost`, and `pheartbeat status`
+printing the settings file it reads, `source_off` and the usage hold.
 
 Not in this change (enablement, after review): the `pheartbeat` wrapper on PATH (`exec python3
 "$HOME/.claude/persistence/heartbeat.py" "$@"`), turning on `PERSISTENCE_HEARTBEAT_STALLED` and the `heartbeat`

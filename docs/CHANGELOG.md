@@ -9,6 +9,22 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-13 — Heartbeat core (PR #28): Ember's and Claude's review changes
+
+**Feature off is main again; one queue/ledger snapshot; a usage reset that is never invented.** After Ember's CHANGES
+(room 1570857894172168193) and Claude's review (1570858021154848909) of a83ef07. With `PERSISTENCE_HEARTBEAT_STALLED`
+off: `PERSISTENCE_HEARTBEAT_PER_HOUR=0` keeps one cap window an hour again (a83ef07 minted one per beat), every
+`enqueued` fact has exactly main's fields (`hb` and `set` ride only on heartbeat-correlated items or with the layer on),
+and heartbeat items keep main's key order in `wakes.json`. **Once deployed with the layer on, every self's ledger
+facts gain `set` (and `hb` on the heartbeat's own wakes): additive, nothing reads them with the layer off.** The
+stalled layer reads the queue and ledger together under `wakes.lock` and holds it while it decides, so run-due can't
+leave a Q or R wake in neither view and cause a second one. A usage limit whose reset can't be read is `unknown`,
+visibly: a structured `holds.usage`, one journal line, `pheartbeat status`, rechecked every beat, a retry after an
+hour; C's and A's deferrals say so in the journal. Before, any missing or malformed reset was silently 2 h.
+STALLED without the `heartbeat` Observed-now source is refused (`source_off`). The source acks only the ids it showed,
+and a lost ack lock is retryable instead of a failed attempt. Why: each was a gap the reviews found; each has a test
+that fails when its fix is undone (tests/test_heartbeat_revision.py, checked by mutation).
+
 ## 2026-11-13 — Heartbeat: the stalled-work core (built, off by default)
 
 **Q, R, the working mode and one standing delivery fault, behind `PERSISTENCE_HEARTBEAT_STALLED`.** Builds
