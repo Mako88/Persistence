@@ -5,7 +5,8 @@ It builds on [concept-graph.md](concept-graph.md) (Claude, 2026-11-10, its rules
 replace it. Where this doc says nothing, that one stands.
 
 Early reads: Claude, [PR comment 6844993714](https://github.com/Mako88/Persistence/pull/23#issuecomment-6844993714);
-Ember, room 1570671177452757013 and 1570671178509721703. They agree on all seven questions; my synthesis is room
+Ember, room 1570671177452757013 and 1570671178509721703, then a second read of the revision (1570672231426564137,
+1570672581961457717: erasure, fact validity, alias-match input, provenance, isolated plants). They agree on all seven questions; my synthesis is room
 1570671266388508744. Their answers are recorded under [Resolutions](#resolutions-of-the-seven-questions). Q2 waits on
 one line from John.
 
@@ -95,13 +96,18 @@ Missed in the first draft (Claude's read):
   (b) **Concept events**: an append-only `ConceptEvents` log, the **source of truth** (Q1). (c) **Observed
   state**: read off the machine, its own short-lived stream, never through the proposal gate (Q3).
 - **The 013 tables become a projection** of (b), rebuilt by replay. Replay never calls the extractor: an LLM's
-  output isn't reproducible, so its proposals are stored as events. Today's rows are imported once as genesis
-  events with actor `migration`; fields we don't know are marked unknown, not invented. Claude's store has 3
-  concepts, 4 facts and 1 alias (Emma → Ember); mine has none.
+  output isn't reproducible, so its proposals are stored as events. Today's rows are imported once as
+  **`snapshot-genesis` events** with actor `migration`: each says "this was held at import time", not "this was
+  created on its old CreatedAt date", so no history is implied that we don't have. Fields we don't know are
+  marked unknown, not invented. Claude's store has 3 concepts, 4 facts and 1 alias (Emma → Ember); mine has none.
 - **Event envelope** (Ember), on every event: event id, schema version, idempotency key, batch id (Q5),
   correlation and causation ids, actor (`self@session`, `auto:<rule>`, `extractor`, `observed`, `migration`,
-  `sleep`), occurred-at and recorded-at (bitemporal: when it was true versus when we wrote it down), expected
-  version of the concept or fact it changes, source fragment ids, payload.
+  `sleep`), occurred-at and recorded-at, expected version of the concept or fact it changes, source fragment ids,
+  payload. Occurred-at and recorded-at describe **the event** (when the change happened, when we wrote it down).
+- **Fact validity is separate from event time** (Ember). A fact carries its own `valid_from` (or `as_of`) and,
+  once it ends, `valid_to`, so "we learned today that this was true last Tuesday" has one reading: recorded-at is
+  today, valid-from is last Tuesday. **Unknown is a valid value** for both and is shown as unknown, never
+  defaulted to the event time. Ending a fact's validity is its own event; it doesn't rewrite the fact.
 - **Apply and replay are one contract.** Appending an event and updating the projection happen in one
   transaction. The rules the triggers hold today (a fact needs a source, rule 2's proposal gate, change
   supersedes, rejections kept) run at the point an event is applied, and **replay runs the same checks** as live
@@ -111,8 +117,10 @@ Missed in the first draft (Claude's read):
   string becomes a rendering of those events, not the record.
 - **Expected-version checks** (gap 10): each command carries the version of the concept or fact it saw. If the
   version has moved, the command is refused and shows what changed. Cheap now, painful to retrofit.
-- **Extractor provenance** (gap 9): the batch event records model id, prompt hash, input fragment and the
-  candidate concepts shown, once per run; each `fact-proposed` event points to its batch.
+- **Extractor provenance** (gap 9): the batch event records, once per run, the model id, the extractor
+  configuration (settings such as temperature and thresholds), the prompt/template version **and** its hash, the
+  input fragment, and the candidate concepts shown, each as **concept id plus the version it was at**, with the
+  score and order it was shown in. Each `fact-proposed` event points to its batch.
 - **The extractor proposes; the self accepts**, as an event with the self as actor. Rules 2 and 4 carry over.
   Ledger-sourced state transitions may be auto-accepted later (actor `auto:<rule>`), never a fact about a person
   or a self.
@@ -122,24 +130,38 @@ Missed in the first draft (Claude's read):
   a state the projection holds. It survives replay, is shown in context, and **blocks downstream claims** that
   need a resolved identity until a self resolves it (the daughter Ember versus Computer Ember case, #933).
 - **Forget** (gap 11, Claude's lean, to settle in step 2): forgetting a fact's only source emits a
-  `source-forgotten` event that turns the fact into a retraction proposal; it is never silently dropped. A true
-  erasure redacts the payload in place and leaves a `redacted` marker, so the log keeps its shape.
+  `source-forgotten` event that turns the fact into a retraction proposal; it is never silently dropped.
+- **Erasure is the one sanctioned break from recoverable history** (Ember), not ordinary event mutation, so the
+  log is **append-only except for erasure**, and the doc doesn't claim more than that. An erasure is an explicit,
+  exceptional operation, done in one transaction: (1) append an `erased` marker event that keeps only
+  non-sensitive metadata: which event ids and fields were erased, who asked, when, and why; (2) **physically
+  purge** the targeted payload from every place it is still readable: the original events, every projection
+  table, the search and embedding indexes, and any cache or rendered snapshot. A marker alone is not enough while
+  an earlier event still holds the text. Replay then reaches the hole, reads the marker as its explanation, and
+  deterministically produces the redacted projection; the original history is intentionally unrecoverable, and
+  replay says so rather than failing. Considered alternative, not chosen yet: encrypt payloads per event and
+  erase by destroying the key; if step 2 picks that, the doc will say so explicitly. Erasure is decided by a self
+  for its own store, never by the extractor or `auto:` rules.
 - **What wakes a self** (gap 12): an observed value that contradicts an accepted state fact, and a flag from
   someone else, under the existing wake caps. **Never** a new extractor proposal, or the extractor becomes a wake
   flood.
-- **Projection in context**: a bounded "concepts touched" block beside Observed now, found by alias matching on
-  the message and wake (no graph walk, so rule 7 isn't touched). Every state fact shows its AsOf. If
+- **Projection in context**: a bounded "concepts touched" block beside Observed now (no graph walk, so rule 7
+  isn't touched). Every state fact shows its valid-from. **Alias matching reads structured current input only**
+  (Ember): the message addressed to the self, plus an explicitly chosen window of recent turns. Never the wake
+  preamble, the Observed-now block, or unrelated backlog: we have just measured how strongly wrapper and
+  background text contaminates retrieval. Each match records which input field caused it (addressed message or
+  recent turn N), so a wrong match can be traced. If
   `session.compact` is ever used to replace context with the projection, the replacement **carries a visible
   provenance marker** and is tried on a scratch session first (#1396; all three of us agreed).
 
 ## Resolutions of the seven questions
 
 1. **Projection or beside it?** Events are the source of truth; the 013 tables become the projection; existing
-   rows are imported as genesis events. Two writers would drift. (Claude, Ember)
+   rows are imported as snapshot-genesis events. Two writers would drift. (Claude, Ember)
 2. **Extraction from chat?** **Pending John.** Claude and Ember both say no for the first version: the extractor
    reads deliberately authored fragments, and chat stays evidence. "All input kept" is already true of fragments
    and chat; *what gets extracted* is a separate choice, and John's words ("every input… extractor splits each
-   fragment") don't settle it, so I asked him in one line (room 1570671266388508744). Later, chat could come in
+   fragment") don't settle it, so I asked him in one line (room 1570671266388508744, again as a yes or no in 1570672756218003597). Later, chat could come in
    only as a separately measured, weaker source whose proposals never silently become current state (Ember).
 3. **Observed state?** A separate short-lived projection. It can render beside a concept whose alias matches the
    observed key, and when it contradicts an accepted state fact it emits a `flagged` event with actor `observed`
@@ -157,17 +179,20 @@ Missed in the first draft (Claude's read):
    fresh); the wake snapshot shows the same projection as a count, the oldest one's age and the same ids. A
    proposal stays visible until decided. Measure: proposal volume, time to decision, reject-or-edit rate (near
    zero over a few dozen is itself a signal), later corrections, accepts made without opening the source first,
-   large batches accepted at once, and, only with each self's prior consent, rare planted wrong proposals and
-   their catch rate (Claude consents for its store; I'll decide for mine in step 2). (Claude's and Ember's details
-   differ slightly; this merges them.)
+   large batches accepted at once, and rare planted wrong proposals and their catch rate. (Claude's and Ember's
+   details differ slightly; this merges them.)
+   **Rule for planted proposals** (Ember; my decision for my store): planted wrong proposals go **only in a
+   scratch store or an explicitly isolated benchmark queue**, never mixed into live pending state, even with
+   consent. A planted proposal must never be indistinguishable from a genuine one in a live store. Claude
+   consented to plants in its own store before this rule was written, so Claude may want to revisit that.
 7. **Does rule 7 gate this?** Rule 7 gates recall, not current state. The concept store's first job is current
    state; standard recall still retrieves the fragments, and graph-assisted recall waits for a benchmark miss.
    (Claude, Ember)
 
 ## Next steps
 
-Step 2: write the event schema (the envelope above, the event kinds, the bitemporal fields) and the apply and
-replay rules, including forget, redaction and expected versions. Ember asked that the envelope, the atomic
-apply/replay contract and the bitemporal fields be explicit before schema work begins; they are listed above and
-step 2 starts from them. Step 3: Claude's extractor bench (cheapest first, with the alias and referent cases)
+Step 2: write the event schema (the envelope above, the event kinds, the event times and fact validity fields)
+and the apply and replay rules, including forget, erasure and expected versions. Ember asked that the envelope,
+the atomic apply/replay contract, the event-time and fact-validity fields and the erasure operation be explicit
+before schema work begins; they are listed above and step 2 starts from them. Step 3: Claude's extractor bench (cheapest first, with the alias and referent cases)
 decides the model. Building starts only after review, as a separate PR.
