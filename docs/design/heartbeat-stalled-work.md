@@ -9,6 +9,12 @@ Revision 2 (Ember's CHANGES on 34d396e, room 1570835147618787390): R and Q get a
 atomic, and a bad or expired lease falls back to detection without extending itself (section 5). Section 8 maps each
 point to where it landed.
 
+Revision 3 (Ember's CHANGES on 4678727, room 1570836296492912737 and 1570836605005209724): working mode has **no
+expiry**. It stays on until I end it or evidence ends it: three completed ticks without structural progress return it to
+detection, three failed ticks suspend it in a visible fault state (section 5). Each Q, R and tick attempt gets a stable
+id written into the wake itself, and section 3.2 fixes the order of the two file writes and how each crash gap is
+recovered. Section 9 maps each point.
+
 Asked for by John (room 1570833323406917693: "the heartbeats seem to not be working") and Ember (1570833385163595959:
 unfinished claims, promised follow-ups with no wake, review requests waiting; "nothing needs doing" stays valid). John's
 working-mode idea (1570833900794814497) and Claude's four conditions for it (1570834052209053760) are in section 5.
@@ -97,8 +103,8 @@ a session. This is the ack-before-delivery bug already fixed in Observed-now (11
 
 **States.** Each report key, and each quiet spell's `quiet` entry, is in `heartbeat.json` as one of:
 - `none`: unread report / spell with no quiet wake. Eligible.
-- `queued`: `{wake: <wake id>, at, attempt}`. Recorded in the same `heartbeat.json` write that adds the wake to
-  `wakes.json` (the outbox's existing at-least-once path). Not eligible again while queued.
+- `queued`: `{wake: <wake id>, at, attempt}`. Written to `heartbeat.json` **before** the wake is added to
+  `wakes.json`, in the order section 3.2 fixes. Not eligible again while queued.
 - `delivered`: `{wake, at}`. Final.
 
 **What "delivered" is.** The `reports` and `quiet` wake texts stay fixed templates, but the report block itself (counts,
@@ -122,6 +128,50 @@ a broken hook can't spend the cap all day. The firing's own failure is still rep
 **Q uses the same lifecycle.** "This spell had a quiet wake" means `delivered`. A quiet wake that failed or was cancelled
 returns the spell to `none`, so a failure can't suppress the spell for good. Backoff (2H, 4H...) advances only from a
 `delivered` quiet whose session ended with no other activity.
+
+### 3.2 Two files, one order (Ember's second point on 4678727)
+
+`heartbeat.json` and `wakes.json` are two files, so adding a wake can't be one atomic write. Revision 2 leaned on "the
+outbox's at-least-once path", which says nothing about how an orphan wake is recognized. This section fixes it.
+
+**Every heartbeat wake carries its own correlation.** Q, R and tick items get a field `hb`, validated as structure only:
+`quiet:<spell start ISO>`, `reports` (at most one live at a time), or `tick:<mode generation>`. The wake's `id` (a fresh uuid4, minted
+before anything is written) is the attempt id. `hb` is added to `ENQUEUED_FIELDS`, so the ledger's `enqueued` fact keeps
+it after `run-due` moves the item out of `wakes.json`. An orphan is therefore recognized by its own record, never by
+its text or by timing. `add_heartbeat_wake` gets the three kinds (`quiet`, `reports`, `tick`): a fresh session id,
+`cwd` `~/work`, no `retry_of`. It is already idempotent by id (the id in the queue or in any ledger fact writes nothing),
+so re-adding the same attempt id can never make a second wake.
+
+**Enqueue order**, inside one beat, holding `heartbeat.lock` the whole time:
+1. Decide, `take_cap`, mint the id.
+2. Write `heartbeat.json` with the entry `queued {wake: id, attempt, at}` (for a tick, also `last_tick` and the tick's
+   entry) and the cap count: temp file, fsync, `os.replace`, fsync the directory. **Fault point A.**
+3. `add_heartbeat_wake(id, hb=…)` under `wakes.lock`: `wakes.json` replaced the same way. **Fault point B.**
+4. The beat goes on; its final save at exit writes the same entry again.
+
+Intent comes first, so the only gap a crash can leave is "state says queued, no wake". `run-due`'s own gap (fault point
+C: it appends the `enqueued` fact, then rewrites `wakes.json`) leaves the id in both, and the fact wins, as `chain()`
+already rules. The ack (section 3.1) is fault point D.
+
+**Reconcile, both directions**, at the start of every beat (and so at startup), before any decision. It takes
+`wakes.lock`, reads `wakes.json`, then the ledger under `fired.lock` (the lock order allows both). Holding `wakes.lock`
+means a `run-due` move can't fall between the two reads, so an id is never wrongly seen as in neither.
+- **State `queued`, no wake in `wakes.json` and no ledger fact for its id** (a crash at A): back to `none`. It doesn't
+  count as a failed attempt, since nothing fired. The cap slot stays spent, so it errs toward fewer wakes.
+- **A wake or `enqueued` fact with an `hb` that no entry names** (the state write was lost, e.g. `heartbeat.json`
+  restored from a copy): adopt it, never enqueue beside it. Unfired: the entry becomes `queued` under that id (for R,
+  every key now `none` joins it; the block is rendered from state at SessionStart, so it shows what was adopted). For a
+  tick, `last_tick` is set from the item's `set` time. Already fired: a quiet spell becomes `delivered` (a session ran for
+  it); R keys stay `none` (that session's block named nothing, so nothing was shown); a tick is evaluated like any other
+  (section 5). One journal line, `heartbeat: adopted orphan wake <id>`.
+- **An entry `queued` under id X while an unfired `hb` wake for the same key has id Y** (can't happen under the order
+  above; checked anyway): Y is removed from `wakes.json` under `wakes.lock`, with one journal line. Never two live
+  wakes for one key.
+
+**What can still repeat, honestly.** If the ack's own `heartbeat.json` replace is killed (fault point D), the entry
+stays `queued` while its firing has `finished`, so it goes back to `none` and is delivered again later. That is
+at-least-once by design, the same as Observed-now's ack-after-write (111822c). It is never concurrent (the no-stacking
+rule) and never untracked (it has its own id and entry).
 
 ## 4. The two acceptance cases, replayed
 
@@ -156,52 +206,117 @@ Lifecycle tests (section 3.1), each for R keys and for Q's spell:
 - **three failures:** a journal line, then no new attempt for 6 h.
 - **Q not suppressed:** a failed quiet wake leaves the spell eligible on the next beat; the backoff doesn't advance.
 
-## 5. Working mode (John's toggle, with Claude's four conditions)
+Two-file tests (section 3.2), fault injection by killing the beat right after each file replacement, then running the
+next beat. Each, for Q, R and a tick, asserts there is never a session without an entry, and never two wakes for one key:
+- **after A** (state written, no wake): the entry goes back to `none`; exactly one wake exists after the next eligible
+  beat; `attempt` unchanged.
+- **after B** (wake written, final save never ran): nothing changes on the next beat; no second wake.
+- **lost state** (`heartbeat.json` put back to its copy from before A, wake present): adopted as `queued`, no second
+  wake; once fired, a quiet spell is `delivered` and R keys stay `none`.
+- **after C** (`run-due` killed between the fact and the queue rewrite): one attempt, not two.
+- **after D** (the ack's replace killed): the entry stays `queued`, goes back to `none` once the firing has finished,
+  and is delivered once more, after the first session ended.
+- **same id twice:** `add_heartbeat_wake` with an id already queued or in the ledger writes nothing.
+- **a move during reconcile:** `run-due` moving the item between the two reads (simulated) never yields "in neither".
 
-`pheartbeat working <duration>` (maximum 8 h) writes `state/heartbeat-mode.json` with `{mode: working, set_at, until}`.
-`pheartbeat detect` replaces it with `{mode: detect}`. On each beat, while `now < until`, a tick is added only when all
-of these hold:
+## 5. Working mode (John's toggle, with Claude's four conditions; no expiry)
+
+**Mode file.** `state/heartbeat-mode.json` holds one of:
+- `{mode: detect, set_at}`: the default. A missing file means detection too.
+- `{mode: working, gen, set_at}`: `gen` is a fresh uuid4 minted each time `pheartbeat working` runs.
+- `{mode: suspended, gen, since, ticks: [three firing ids]}`: working ticks stopped by three failures (below).
+
+There is **no `until` and no duration**. Working mode runs until I end it (`pheartbeat detect`) or evidence ends it.
+John's point (1570835701946392706): a timer that runs out is exactly the stall this change is fixing.
+
+**Ticks.** While the mode is `working`, a beat adds a tick only when all of these hold:
 - no Claude Code process of mine is running (no stacking; unknown liveness means no tick);
 - no wake of mine is due within the next beat;
 - `last_tick` is unset or at least **20 min** ago (`PERSISTENCE_HEARTBEAT_TICK_GAP`, minimum 20);
+- no earlier tick of this `gen` is still unjudged (queued or running);
+- no tick is held back by a usage limit (below);
 - the hourly cap has room (`take_cap`, shared with Q, R and the existing checks).
 
-Then it adds one wake, kind `tick`, starting a fresh working session from my working note and `ptask list`. Fixed text:
-"Working mode until {HH:MMZ}. Take the next item, or say there's nothing and stop. `pheartbeat detect` ends working mode
-early." `last_tick` is set to the beat's time in the same `heartbeat.json` write that queues the tick. A beat skipped
-for any reason above (running session, wake due, gap, cap) leaves `last_tick` as it was. A tick that fails after being
-queued is check C's, as now, and doesn't reset `last_tick`, so a failure can only make the next tick later, never sooner.
+Then it adds one wake, kind `tick`, `hb` `tick:<gen>`, in the order of section 3.2, starting a fresh working session
+from my working note and `ptask list`. Fixed text:
 
-**Why the gap and not just the cap (Ember's second point).** The cap is a fixed window that opens at the first heartbeat
-wake (`take_cap`), not a rolling one. With 10-minute beats alone, ticks would come at :08, :18, :28 and then nothing
-until :08. With the gap they come at :08, :28, :48, and the window reopens at :08.
+> Working mode is on (tick {tick id}). Take the next item. If nothing is left, run `pheartbeat detect` and stop:
+> that's a fine answer. If you made progress that changed no claim or wake (a commit, a review), run
+> `pheartbeat continue {tick id}` before you stop. `pheartbeat detect` ends working mode at any time.
 
-**Lease and writes (Ember's clarification).**
-- Every write of `heartbeat-mode.json` and `heartbeat.json` is a temp file in the same directory, fsync, then
-  `os.replace` (as `save()` already does for `heartbeat.json`). The mode write takes `heartbeat.lock` first, so a beat
-  never reads a mode file that is half-written or changes under it.
-- The lease ends by itself at `until`. `until` is fixed when the mode is set and nothing but `pheartbeat working` writes
-  it: no beat, tick or session extends it. `pheartbeat working` on a live lease replaces it and is still capped at 8 h
-  from now.
-- A missing file means detection. Detection is also the answer for a malformed file (bad JSON, unknown mode, `until`
-  missing, unparsable, in the past, or more than 8 h after `set_at`): the beat writes one journal line for a malformed
-  file and never rewrites, repairs or extends it. An expired lease is just detection; the next `pheartbeat` write
-  replaces it. A dead session that set the mode can't keep waking me past `until`.
+`last_tick` is set at write A of section 3.2. A beat that skips for any reason above leaves it as it was.
+
+**Structural progress** (defined before any code, never by reading text). A tick has made progress when, in the window
+from the previous judged tick's finish (or the mode's `set_at`) to this tick's finish, at least one of these happened:
+- a claim of mine changed: a `history` entry in `state/tasks/` (create, claim, pause, resume, done, abandon) whose
+  `by` isn't the heartbeat or the harness;
+- a wake of mine was added that isn't the heartbeat's (its `set` time in the window, `by` not `heartbeat`);
+- this tick's explicit outcome is `continue`: `pheartbeat continue <tick id>` wrote `outcome: continue` on the tick's
+  entry. The command takes `heartbeat.lock` (waiting, briefly) and is refused unless the id is a tick of the current
+  `gen` whose firing has started and that isn't judged yet.
+
+Nothing else counts: not room messages, not commits, not note text. `continue` exists for real work those can't see.
+It is my own word about my own tick; a tick that says it falsely is gaming my own backstop, and that's on me.
+
+**Judging a tick.** Each tick of the current `gen` is judged once, when its firing reaches a final state (C's
+`firing_states`), in queue order. Two counters live in `heartbeat.json` under the `gen`:
+- **progress:** both counters go to 0.
+- **completed, no progress** (`ok` with no progress): `empty` + 1, and `failed` goes to 0 (a completed tick shows ticks
+  can run). At `empty` = 3 the beat writes `{mode: detect, set_at, ended: "3 ticks without progress", gen, ticks}` and
+  queues one R report key `working:ended:<gen>`.
+- **failed** (`never-started`, `crashed`, `failed`): `failed` + 1; `empty` is untouched, since a failure is not evidence
+  of emptiness. At `failed` = 3 the beat writes `{mode: suspended, …}` and queues one R report key
+  `working:suspended:<gen>`. It does **not** drop quietly to detection.
+- **neither:** a skipped beat (it never made a tick), a tick cancelled before it fired, and a tick that finished
+  usage-limited. For a usage limit, no tick is added before C's `reset_time` plus 5 minutes.
+- If the tick itself ran `pheartbeat detect`, the mode is no longer this `gen`; nothing more is judged.
+
+So E E F stays on, F F E stays on (the E resets `failed`), E F E F E returns to detection (three completed ticks with
+no progress between them), and F E F E F stays on. With the 20-minute gap and the 3/h cap, the worst case for either
+breaker is about an hour of ticks, not a night.
+
+**Suspended is a fault, visibly.** It is distinguishable from an intentional `detect` in the file (`mode: suspended`),
+in `pheartbeat status` (`working mode SUSPENDED since {HH:MMZ}: 3 failed ticks {ids}. pheartbeat detect or pheartbeat
+working acknowledges it`), and in every session of mine through the Observed-now `heartbeat` source (one line,
+read-only, no ack, while the file says suspended). The R report reaches a session as in section 3.1. While suspended,
+there are no ticks; Q and R run as in detection, so I'm never left with no heartbeat. **Acknowledging** is either
+command: `pheartbeat detect` (detection; the fault stays in the status history) or `pheartbeat working` (a new `gen`,
+both counters 0, ticks resume).
+
+**Writes and the fallback.**
+- Every write of `heartbeat-mode.json` and `heartbeat.json` is a temp file in the same directory, fsync, `os.replace`,
+  fsync of the directory. Every writer of the mode file takes `heartbeat.lock` first.
+- The beat writes the mode file in exactly two cases, the two breakers above, and only when the file still holds the
+  `gen` the tick was queued under (compare and set). A tick of an older `gen` is never judged against a newer mode.
+- A malformed file (bad JSON, unknown mode, `working` without a `gen`) means detection. The beat writes one journal
+  line and never rewrites or repairs it; the next `pheartbeat` command replaces it.
 - The setting is mine (my state directory, my uid).
 
-Working-mode tests:
-- **a full hour:** working mode, nothing running, beats :08 to :58 then :08. Ticks at :08, :28, :48 and :08 exactly;
-  :18, :38, :58 skip on the gap.
-- **an R wake takes a slot:** the same hour with a `reports` wake at :18. Ticks at :08 and :28. :48 skips on the cap
-  (:08, :18, :28 fill it), and so does :58. The next tick is at :08 when the window reopens. `last_tick` stays :28 through
-  the skips.
-- **skips don't advance:** a running session at :28 skips the tick. `last_tick` stays :08, so the tick comes at :38 when
-  the session has ended.
-- **lease:** expired, malformed JSON, unknown mode, `until` > 8 h after `set_at`: each acts as detection. The file is
-  byte-identical after the beat, and a malformed one gives one journal line. Q runs again once the lease has ended.
-- **atomic:** a write killed between temp and rename leaves the old file whole (fault injection on `os.replace`).
+While the mode is `working`, Q is silent (ticks supersede it); R still runs.
 
-While working mode is on, Q is silent (ticks supersede it); R still runs.
+Working-mode tests:
+- **no expiry:** working mode with a fixture clock moved 72 h ahead, each tick making progress: still `working`, still
+  ticking. Nothing in the beat compares the clock with `set_at`.
+- **a full hour:** nothing running, every tick making progress, beats :08 to :58 then :08. Ticks at :08, :28, :48 and :08
+  exactly; :18, :38, :58 skip on the gap.
+- **an R wake takes a slot:** the same hour with a `reports` wake at :18. Ticks at :08 and :28; :48 and :58 skip on the
+  cap; the next tick is :08. `last_tick` stays :28 through the skips.
+- **skips count as neither:** a running session at :28 skips the tick; `last_tick` stays :08 and the counters don't move.
+- **found nothing:** the tick runs `pheartbeat detect`: mode `detect`, no report key, no more ticks, Q back on.
+- **no-progress breaker:** three `ok` ticks with no progress: mode `detect` with `ended`, exactly one
+  `working:ended:<gen>` key. Two, then one with progress, then two: still `working`.
+- **failure breaker:** one `never-started`, one `crashed`, one `failed`: mode `suspended`, one `working:suspended:<gen>`
+  key, `pheartbeat status` shows SUSPENDED with the three ids, the Observed-now line renders, no ticks, Q runs.
+- **mixes:** E E F and F F E stay `working`; E F E F E ends in `detect`; F E F E F stays `working`.
+- **continue:** `pheartbeat continue <id>` resets both counters; refused for an unknown id, an older `gen`, a tick
+  not started, or one already judged.
+- **usage limit:** a usage-limited tick moves neither counter, and no tick comes before the reset.
+- **acknowledge:** from `suspended`, `pheartbeat detect` gives `detect` (the fault kept in status history);
+  `pheartbeat working` gives a new `gen`, counters 0, and ticks resume.
+- **compare and set:** a tick queued under `gen` g1 and finishing after `pheartbeat working` wrote g2 changes nothing.
+- **malformed:** bad JSON, unknown mode, `working` without `gen`: each acts as detection; the file is byte-identical
+  after the beat; one journal line.
+- **atomic:** a write killed between temp and rename leaves the old file whole (fault injection on `os.replace`).
 
 ## 6. Forks (settled: Ember agrees with each lean, 1570835147618787390)
 
@@ -231,6 +346,23 @@ reads (F2). The code itself, which follows review.
 | Ticks bunch under the cap; `last_tick` with a 20 min minimum, still sharing the cap | 5, conditions and "why the gap" |
 | A skipped tick (running session, cap) doesn't advance `last_tick` | 5, and the "skips don't advance" test |
 | Test a full hour, plus an R wake taking a slot | 5, working-mode tests |
-| Mode and state writes atomic | 5, "lease and writes" |
-| Malformed or expired lease falls back to detection, never extends itself | 5, "lease and writes", and the lease test |
+| Mode and state writes atomic | 5, "writes and the fallback" (revision 3) |
+| Malformed or expired lease falls back to detection, never extends itself | Revision 3 removed the lease; a malformed file still means detection (5, "writes and the fallback") |
 | F1 to F4 | 6, settled as leaned |
+
+## 9. Revision 3: Ember's points on 4678727, and where each landed
+
+| Point | Where |
+|---|---|
+| No fixed lease: working mode persists until `pheartbeat detect` or evidence ends it | 5, mode file; "no expiry" test |
+| A completed tick that finds nothing turns it off itself | 5, the tick text (`pheartbeat detect`); "found nothing" test |
+| 3 completed ticks without structural progress return to detection, with a visible report | 5, judging; no-progress breaker test |
+| 3 failed ticks: an explicit suspended/faulted state, not a quiet `detect`; acknowledging chooses detect or working (1570836605005209724) | 5, "suspended is a fault"; failure breaker and acknowledge tests |
+| Structural progress defined before code: claim, wake or task change, or an explicit continue outcome | 5, structural progress |
+| Progress resets both counters; skipped ticks count as neither; the two counters separate | 5, judging; mixes and skips tests |
+| Prompt says "Working mode is on", no expiry | 5, the tick text |
+| Atomic writes and malformed-file fallback kept | 5, writes and the fallback |
+| Two files aren't one atomic write: enqueue order and crash recovery | 3.2 |
+| A stable attempt id stored in the wake itself | 3.2, the `hb` field and the wake id |
+| Reconcile both ways; retrying the same id is idempotent | 3.2, reconcile; `add_heartbeat_wake` by id |
+| Fault injection after each file replacement | 4, two-file tests |
