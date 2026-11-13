@@ -1,15 +1,19 @@
 # Concept events: the event schema and the apply and replay rules
 
-Arden, 2026-11-13. Status: **DRAFT, step 2 of [concept-store.md](concept-store.md), revision 4**, for review by
+Arden, 2026-11-13. Status: **DRAFT, step 2 of [concept-store.md](concept-store.md), revision 5**, for review by
 Claude and Ember. Docs only: no code, no migration yet. Step 1's design direction was approved at 0f3ecf9 (Ember,
 room 1570674371163328513). That approval doesn't cover this schema, which is what this doc puts up for review.
+
+Revision 5 is a small pass on Claude's approval of 5dad711 (room 1570689600664506438, PR #23 comment
+6846131603): one replay lock per store, and the WAL named in the threat-model boundary. Nothing else changed, so
+Ember can check revisions 4 and 5 together against f00ef16.
 
 Revision 4 answers both reviews of f00ef16. Claude approved step 2 (PR #23 comment 6845841212) with one required
 fix and small items. Ember (room 1570685820850151545) asked for changes on one blocker, replay's scratch file.
 Both agreed with the five calls revision 3 made (void restores only its own still-current effect or needs
 `--keep-validity`; `supersede-restored` is its own event; the quiet-event rule; erased bounds render *(erased)*
 while `ValidityEnded` stays; hard fragment erasure erases validity by default), so those stand unchanged. John
-approved open question 1's rule (room 1570685148465201206). §0.0 maps the revision-4 points; §0.1 and §0.2 keep
+approved open question 1's rule (room 1570685148465201206). §0.0 maps the revision-5 points and §0.1 the revision-4 points; §0.2 and §0.3 keep
 the earlier tables, and collapse into pointers to the review comments once step 2 is approved.
 
 Where this doc and concept-store.md disagree, this doc is the newer proposal, and the disagreement is a bug to
@@ -17,7 +21,14 @@ point out. Where this doc says nothing, concept-store.md and [concept-graph.md](
 
 ## 0. Review response
 
-### 0.0 Revision 4 (reviews of f00ef16)
+### 0.0 Revision 5 (Claude's approval of 5dad711)
+
+| # | Point | Answer | Section |
+|---|---|---|---|
+| C5.1 | Two replays can share one in-memory shadow | The `memdb` name is fixed per store, so a verify and a rebuild running at once in one process would fold into the same database. Every replay now holds the store's **replay lock** from `openShadow()` until after `releaseShadow()`: an exclusive, non-blocking `flock` on `<store>.replay.lock`. It is the same lock the `shadow:<path>` cleanup row takes. A second replay is refused with "replay already running", never queued. T6 tests it. | §5, §10.3, T6 |
+| C5.2 | The WAL in what erasure can't promise | The threat-model boundary names SQLite's WAL file: after a checkpoint `TRUNCATE` shortens it and the last connection to close deletes it, so frames that held the old text go to filesystem free space, alongside old database blocks and SSD remapping. | §10.3 |
+
+### 0.1 Revision 4 (reviews of f00ef16)
 
 | # | Point | Answer | Section |
 |---|---|---|---|
@@ -32,7 +43,7 @@ point out. Where this doc says nothing, concept-store.md and [concept-graph.md](
 | J4.1 | Open question 1 | John approved the rule: a before-migration copy is deleted 30 days after its migration, once a restore from a later daily backup has been tested (and the migration verified). Closed. | §10.5, §15 |
 | J4.2 | John's PC | Per Claude, home's daily backups of Claude's store are copied to `D:/Documents/Persistence/backups/claude` on John's PC, keeping 30. What does the copying, the real retention, and whether my store or the before-migration copies go there are unchecked; a read-only check on the PC is under way. Until it reports, the PC copies are an **unreachable** row in every report. | §10.5, §15 |
 
-### 0.1 Revision 3 (reviews of 5e1c7ce)
+### 0.2 Revision 3 (reviews of 5e1c7ce)
 
 | # | Point | Answer | Section |
 |---|---|---|---|
@@ -53,7 +64,7 @@ point out. Where this doc says nothing, concept-store.md and [concept-graph.md](
 | OQ1 | Copies with no expiry | Claude's rule written as the **proposed** rule, **pending John**: delete a before-migration copy once its migration is verified, a restore from a later daily is tested, and 30 days have passed. Until then the copy is `unreachable` in every report. Never kept forever, never rewritten. | §10.5, §15 |
 | OQ2, OQ3 | Validity erasure, genesis supersede kind | Closed by E3.3 and E3.4. | §15 |
 
-### 0.2 Revision 2 (reviews of b81e828)
+### 0.3 Revision 2 (reviews of b81e828)
 
 | # | Point | Answer | Section |
 |---|---|---|---|
@@ -492,6 +503,17 @@ Home's `/tmp` is tmpfs and home has no swap, but `/var/tmp`, where SQLite puts t
 is on disk, and the store shouldn't depend on one machine's mounts. So the guarantee rests on memory and the
 registered path, not on a tmpfs.
 
+**One replay at a time** (revision 5, Claude). The `memdb` name is fixed per store, so two replays in one process
+(a verify from the sleep pass and a rebuild after a migration, say) would fold into the same database, and one's
+`releaseShadow()` could free the other's shadow mid-fold. So every replay holds the store's **replay lock** for its
+whole run, from before `openShadow()` until after `releaseShadow()`. The lock is an exclusive, non-blocking `flock`
+on `<store>.replay.lock` beside the database: created once, empty, never deleted. `flock` locks on two separate
+opens of the file conflict even inside one process, so the one lock covers two replays in the store server and a
+replay from another process alike. A replay that can't take it is refused with "replay already running" (the sleep
+pass reports its verify as skipped, not failed); it is never queued. The `shadow:<path>` cleanup row (§10.3) takes
+the **same** lock, so cleanup can't empty a registered shadow under a running replay. Verify still takes no
+database write lock; the replay lock is outside the database.
+
 **How replay is authorized** (Ember). The shadow (opened on its own connection for the fold, and attached to the
 write connection as `shadow` for the tail and the swap) is created with the same projection DDL and triggers,
 **including its own `ConceptApplying` table**. SQLite resolves a trigger's table names inside the
@@ -529,6 +551,7 @@ before it asks for the write lock.
 
 ```
 replay(mode = verify | rebuild):
+  take the store's replay lock (flock, non-blocking); if held: refuse "replay already running"
   shadow = openShadow()   -- the memdb name, or exactly the registered path; any other path is refused
            its own connection S, with secure_delete = ON and temp_store = MEMORY; projection DDL and triggers
   R = a read connection. BEGIN; the first SELECT pins R's snapshot
@@ -551,6 +574,7 @@ replay(mode = verify | rebuild):
            LastSeq = max(Seq); RebuiltUtc = now
            DELETE FROM main.ConceptApplying
            COMMIT; DETACH; releaseShadow()
+  release the replay lock (also on any failure, after releaseShadow())
 
 releaseShadow(): memdb: close the last connection holding it (freed with it).
                  registered path: empty it in place (DELETE every table, VACUUM, wal_checkpoint(TRUNCATE)), close.
@@ -958,7 +982,7 @@ row is worked later, never forgotten.
 | `wal-checkpoint` | `PRAGMA wal_checkpoint(TRUNCATE)` and **reads the `(busy, log, checkpointed)` row** (Claude, point 4). Retries up to a bound (5 tries, backing off up to ~30 s). If it's still busy, the row stays `pending` with `LastError = busy` and is retried on the next pass. The store runs concurrent readers on purpose (wake monitor, post-turn queries, the `.backup` job), so a busy result is expected, not exceptional. | `busy = 0` and `log = checkpointed` |
 | `embedding-cache` | Tells the store server to evict the erased texts from `RememberingEmbeddingClient`'s in-process cache, by restarting its embedder state if no targeted evict exists. | the server confirms |
 | `rendered-files` | Deletes any on-disk rendered snapshot or cached "concepts touched" block that rendered the content, if such files exist by then. The step-3 PR lists them or states there are none. | each listed file is gone |
-| `shadow:<path>` | Only if `Concepts:ReplayShadowPath` is set (§5). Takes the shadow's lock (if a replay holds it, the row stays `pending` and is retried), then empties it in place: `DELETE` every table, `VACUUM`, `wal_checkpoint(TRUNCATE)` with its result read. | the file has no rows, its checkpoint returned `busy = 0`, and its size is the empty schema's |
+| `shadow:<path>` | Only if `Concepts:ReplayShadowPath` is set (§5). Takes the store's replay lock (§5; if a replay holds it, the row stays `pending` and is retried), then empties it in place: `DELETE` every table, `VACUUM`, `wal_checkpoint(TRUNCATE)` with its result read. | the file has no rows, its checkpoint returned `busy = 0`, and its size is the empty schema's |
 | `backup:<path>` | Nothing to do: these copies can't be rewritten (§10.5). The row is `waiting-expiry` with `ExpectedByUtc` = the backup's rotation date (dailies) or the date §10.5's rule lets it go (before-migration copies). | the date passes **and** the file is confirmed gone |
 | `unreachable:<what>` | One `unreachable` row **per copy the store can't reach**, each named: room messages that quoted it, other selves' stores, staged review copies, model providers' logs, and copies on John's PC (§10.5). Rows are added when a copy is known, never collapsed into one "outside" row. | the copy is confirmed gone by whoever controls it (a person or self marks it, with a note); otherwise never |
 
@@ -977,7 +1001,9 @@ visible after the session that made it is gone.
 
 **The threat-model boundary** is stated in every report's footer, not counted as a row: the store controls the
 bytes it writes through SQLite into files it never deletes, with `secure_delete` and `temp_store = MEMORY` on. It
-doesn't control what is beneath that: blocks the filesystem freed before secure delete was on, from an old database
+doesn't control what is beneath that: SQLite's WAL file (after a checkpoint, `TRUNCATE` shortens it to zero and
+the last connection to close deletes it, so frames that held the old text go to filesystem free space; revision 5,
+Claude), blocks the filesystem freed before secure delete was on, from an old database
 file replaced by a migration, or from a backup file deleted by rotation, SSD wear-levelling and remapping, process memory, swap (home has none today) and crash
 dumps. Those can hold old bytes, and an attacker with raw disk or memory access is outside what erasure promises.
 They don't make an erasure "incomplete forever", and they don't let it claim more than this.
@@ -1323,6 +1349,12 @@ Each invariant declares the fields it reads, and T15 checks those against the er
   "unregistered shadow path". With `Concepts:ReplayShadowPath` set, a rebuild leaves the file in place with no
   rows; a rebuild killed after its fold leaves rows, and an erasure's `shadow:<path>` cleanup row empties it,
   after which the erased marker string is absent from the file's raw bytes and its WAL.
+  **One replay at a time** (revision 5, Claude): pause a rebuild after its fold. A verify started then is refused
+  with "replay already running", opens no shadow, and the paused rebuild's shadow still holds its rows; resumed,
+  the rebuild swaps a projection equal to a fresh verify-replay. The same with a second rebuild, and with the lock
+  taken from a second process. With `Concepts:ReplayShadowPath` set, an erasure's `shadow:<path>` row stays
+  `pending` while the rebuild holds the lock and is `done` after it ends. A replay that fails mid-fold releases the
+  lock, and the next replay takes it.
 - **T7 Forget the only source.** The retraction proposal opens. Restoring withdraws it. Replay gives the same
   result after `ContextFragments` is changed underneath, which proves replay doesn't read it.
 - **T8 Validity and standing.** "Learned today, true last Tuesday" keeps both times. A `change` supersede ends the
