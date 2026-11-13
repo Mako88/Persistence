@@ -1347,12 +1347,14 @@ def roomcore():
     return _ROOMCORE[0]
 
 
-def recall_query(prompt):
-    """What recall is asked about. A room wake opens with the same fixed preamble every time, and recall matched that
+def recall_query(raw):
+    """What recall is asked about, given the prompt as it arrived (unstripped: a whole wake ends on the line break
+    build_prompt writes, and a wake cut mid-message doesn't, so roomcore needs it to fail closed). A room wake opens with the same fixed preamble every time, and recall matched that
     wrapper instead of the messages (my bench, 1570582522335731937). With PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE on
     (off by default: Ember 1570582618414649497, Arden 1570582608512024647), a wake prompt goes to recall as its
     messages alone, read back by the room's own templates so the two can't drift. The prompt the peer reads is
     unchanged; anything not a wake goes as it is."""
+    prompt = raw.strip()
     if os.environ.get("PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE", "").strip().lower() not in ("1", "true", "yes", "on"):
         return prompt
     rc = roomcore()
@@ -1360,7 +1362,8 @@ def recall_query(prompt):
         print("persistence hook: PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE is on, but no roomcore.py with recall_query was "
               "found (set PERSISTENCE_ROOMCORE); recall was asked with the whole prompt", file=sys.stderr)
         return prompt
-    return rc.recall_query(prompt) or prompt
+    query = rc.recall_query(raw)
+    return prompt if query == raw or not query.strip() else query
 
 
 def recall(event):
@@ -1374,7 +1377,7 @@ def recall(event):
     # A short message ("sounds good") matches past acknowledgements, not what it is about: no past utterances for it.
     reminded = cued(event, "prompt", prompt)
     already = seen(event)
-    query = recall_query(prompt)
+    query = recall_query(event.get("prompt") or "")
     since = STATE / f"{event.get('session_id', 'unknown')}.since"
     found = store("recall", "--text", "-", *session_args(event), "--limit", str(count), "--snippet", "300", "--project", project(event),
                   "--wander", os.environ.get("PERSISTENCE_RECALL_WANDER", "1"),

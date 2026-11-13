@@ -74,7 +74,7 @@ class StrippedQueries(unittest.TestCase):
         return seen
 
     def test_store_layer_strips_when_on(self):
-        self.assertEqual(["John: what did the chunking bench show?"],
+        self.assertEqual(["[Addressed to you — #channel]\nJohn: what did the chunking bench show?"],
                          self.store_turn_asks({"PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE": "1"}))
 
     def test_store_layer_asks_whole_when_off(self):

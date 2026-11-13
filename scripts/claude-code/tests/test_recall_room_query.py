@@ -63,9 +63,17 @@ class RoomRecallQuery(unittest.TestCase):
         os.environ[ON] = "1"
         shown = self.run_recall(WAKE)
         self.assertIn("#7", shown)
-        self.assertEqual(["John: Claude, what did the chunking bench show?\nand the mean arm?"], self.asked)
+        self.assertEqual(["[Addressed to you — #general]\nJohn: Claude, what did the chunking bench show?\nand the mean arm?"], self.asked)
         for line in rc.preamble("Claude", "1569591751579013200", False):
             self.assertNotIn(line, self.asked[0])
+
+    def test_on_a_wake_cut_mid_message_is_asked_whole(self):
+        # Ember 1570588807198277642: a wake that isn't whole goes to recall unchanged. The hook hands roomcore the
+        # prompt unstripped, so a wake cut mid-message (no closing line break) is told from a whole one.
+        os.environ[ON] = "1"
+        cut = WAKE[:-6]
+        self.run_recall(cut)
+        self.assertEqual([cut.strip()], self.asked)
 
     def test_on_a_prompt_that_is_not_a_wake_is_asked_as_it_is(self):
         os.environ[ON] = "1"

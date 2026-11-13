@@ -128,7 +128,8 @@ def recall_query(prompt):
             os.environ.pop("PERSISTENCE_STATE_DIR", None)
         else:
             os.environ["PERSISTENCE_STATE_DIR"] = before
-    return _query_hook[0].recall_query(prompt)
+    query = _query_hook[0].recall_query(prompt)
+    return prompt if query == prompt.strip() else query     # unstripped (the hook strips): the store layer asks as before
 
 
 class HookTurns:
@@ -443,7 +444,7 @@ def run_case(ev, bases, work, hook, env, exe, diagnostics, config, case, n, kind
             row = {"case": case["id"] + (f"#{t + 1}" if kind == "session" else ""), "kind": kind, "path": path,
                    "layer": layer, "count": count, "session_store": mode, "as_of": as_of,
                    "actual": actual[0], "actual_why": actual[1], "prompt_chars": len(q),
-                   "query_chars": len(recall_query(q.strip())),
+                   "query_chars": len(recall_query(q)),
                    "synthetic": case.get("synthetic", "query" in turn),
                    "shown": ids, "chars": chars, "notice": notice, "words_notice": said_words,
                    "held": sorted(map(int, held)),

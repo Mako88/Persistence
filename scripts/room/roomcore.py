@@ -576,31 +576,67 @@ _NAME, _ID = "\x01name\x01", "\x01id\x01"
 _PREAMBLES = [re.compile(r"\A" + re.escape("\n".join(preamble(_NAME, _ID, by_reply)) + "\n")
                          .replace(re.escape(_NAME), r"[^\n]+?").replace(re.escape(_ID), r"\d+"))
               for by_reply in (False, True)]
-_SCAFFOLD = re.compile("|".join(r"\A" + _template_re(t, **f) + r"\Z" for t, f in (
-    (SECTION, {"title": "|".join(map(re.escape, (SINCE, ADDRESSED))), "n": r"\d+"}),
-    (CHANNEL, {"name": r".*", "id": r"\S+"}),
-    (LEFT_OUT, {"n": r"\d+"}))))
+_SECTION = re.compile(r"\A" + _template_re(SECTION, title="(?P<title>" + "|".join(map(re.escape, (SINCE, ADDRESSED))) + ")",
+                                            n=r"(?P<n>\d+)") + r"\Z")
+_CHANNEL = re.compile(r"\A" + _template_re(CHANNEL, name=r"(?P<name>.*)", id=r"\S+") + r"\Z")
+_LEFT_OUT = re.compile(r"\A" + _template_re(LEFT_OUT, n=r"\d+") + r"\Z")
 _FRAME = re.compile(r"\A" + _template_re(FRAME, id=r"[^\]\s]+", author=r"(?P<who>[^\n]*?)", shown=r"(?P<text>.*)") + r"\Z")
 _CUT = re.compile(_template_re(CUT, n=r"\d+", id=r"[^`\s]+") + r"\Z")
+QUERY_HEADER = "[{title} — #{channel}]"     # what recall is told of a section and channel (Ember 1570588807198277642)
+
+
+def wake_sections(prompt):
+    """A wake prompt read back as build_prompt wrote it, or None when it isn't one, whole: [(title, [(channel name,
+    [(author, text)])])]. Fails closed (Ember 1570588807198277642): the prompt must open with a current preamble, end
+    with the line break build_prompt ends on (a wake cut mid-message doesn't), hold only the shapes build_prompt
+    writes in the order it writes them, end with an 'Addressed to you' section, and every section must hold exactly
+    as many messages as its heading declares. Anything short of that is a wake recall shouldn't be asked about in part."""
+    head = next((m for m in (p.match(prompt) for p in _PREAMBLES) if m), None)
+    if not head or not prompt.endswith("\n"):
+        return None
+    lines, i, sections = prompt[head.end():-1].split("\n"), 0, []
+    if len(lines) >= 2 and lines[0] == "" and _LEFT_OUT.match(lines[1]):
+        i = 2
+    while i < len(lines):
+        if lines[i] != "" or i + 1 >= len(lines):
+            return None
+        sec = _SECTION.match(lines[i + 1])
+        if not sec or any(t == sec["title"] or t == ADDRESSED for t, _ in sections):
+            return None                       # an unknown line, a repeated section, or one after 'Addressed to you'
+        i, runs, count = i + 2, [], 0
+        while i < len(lines) and lines[i] != "":
+            ch, f = _CHANNEL.match(lines[i]), _FRAME.match(lines[i])
+            if ch:
+                runs.append((ch["name"], []))
+            elif f and runs:
+                text = _CUT.sub("", f["text"]).replace(f" {LINE_MARK} ", "\n")
+                runs[-1][1].append((f["who"], text))
+                count += 1
+            else:
+                return None
+            i += 1
+        if count == 0 or count != int(sec["n"]) or any(not msgs for _, msgs in runs):
+            return None                       # a message missing (or extra): the wake isn't whole
+        sections.append((sec["title"], runs))
+    if not sections or sections[-1][0] != ADDRESSED:
+        return None                           # cut before its ask: background alone is the worst thing to recall on
+    return sections
 
 
 def recall_query(prompt):
-    """What recall should be asked about for a wake prompt: each message as 'author: text', with its real line breaks,
-    and none of the wrapper (the preamble, section and channel headers, message ids, the cut-off notice). Ember's
-    proposal (1570582618414649497): the preamble is the same in every wake, so recall matched it rather than the
-    messages. Anything that isn't a wake prompt from build_prompt, whole, comes back unchanged."""
-    head = next((m for m in (p.match(prompt) for p in _PREAMBLES) if m), None)
-    if not head:
+    """What recall should be asked about for a wake prompt: its sections as compact headers naming the section and
+    channel ('[Addressed to you — #general]'), each message under them as 'author: text' with its real line breaks.
+    Gone: the preamble, message ids, counts, the earlier-messages notice and the cut-off notice: the transport, not
+    the conversation (Ember 1570582618414649497, 1570588807198277642). Anything that isn't a whole wake prompt from
+    build_prompt (wake_sections) comes back unchanged."""
+    sections = wake_sections(prompt)
+    if sections is None:
         return prompt
     kept = []
-    for line in prompt[head.end():].split("\n"):
-        if not line or _SCAFFOLD.match(line):
-            continue
-        f = _FRAME.match(line)
-        if not f:
-            return prompt                     # not a shape build_prompt writes: leave the whole prompt to recall
-        text = _CUT.sub("", f.group("text")).replace(f" {LINE_MARK} ", "\n")
-        kept.append(f"{f.group('who')}: {text}")
+    for title, runs in sections:
+        for channel, msgs in runs:
+            kept.append(QUERY_HEADER.format(title=title, channel=channel))
+            kept += [f"{who}: {text}" for who, text in msgs]
     return "\n".join(kept)
 
 
