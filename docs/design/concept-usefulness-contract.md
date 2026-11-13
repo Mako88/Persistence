@@ -15,12 +15,20 @@ checked against main at 01755e3.
 - **Each self names an active set** of tags or concepts (for the reviewer: receipting, PDF). Extraction covers
   newly curated fragments, as bench §7 item 4 already settles. Backfill covers **the active set only**,
   newest first, and stays rate-limited by the total queue (bench §4.4). Nothing is backfilled in date order.
-- **Eligible** for a concept means: curated fragments that carry one of its active tags or match one of its
-  active aliases. **Covered** means: an `extraction-run` event names the fragment.
-- Every concept the block shows is in exactly one of three states, and the block says which:
-  - `no accepted facts yet` (plus `N pending` or `not in your active set`, whichever is true);
-  - `partial: 3 facts from 2/9 eligible fragments; 4 pending`;
-  - `caught up through #3412 (2026-11-13)`. That is the newest eligible fragment, all of them covered.
+- **The active set** is empty by default: then only newly curated fragments are extracted and nothing is
+  backfilled. Only the self changes it, by one command that writes who and when; at most 10 entries (a
+  starting value). The extractor never adds to it.
+- **Eligible** for a concept means: curated fragments that carry one of its active tags, or in which one of its
+  active aliases matches by the same exact-span matcher as concept-store.md's projection (no fuzzy or
+  embedding match). **Covered** means: an `extraction-run` names the fragment **and** that run used the current
+  extractor version (model id, config and template sha256, events §3). A run under an older version doesn't
+  count, so an extractor change reopens coverage visibly instead of keeping a stale "caught up".
+- The state is a function of three counts over the concept's eligible fragments: E eligible, C covered, F
+  accepted facts (any standing). Every concept the block shows is in exactly one state, and the block says which:
+  - E = 0 or F = 0: `no accepted facts yet` (plus `N pending` or `not in your active set`, whichever is true;
+    with C = E > 0 it adds `all E read, none found`);
+  - F > 0 and C < E: `partial: F facts from C/E eligible fragments; N pending`;
+  - F > 0 and C = E: `caught up through #3412 (2026-11-13)`, the newest eligible fragment.
 - A half-filled block never reads as complete. With no state named, the self can't tell an empty concept from
   one the extractor hasn't reached. The review predicts exactly that confusion for the first weeks.
 
@@ -28,16 +36,28 @@ checked against main at 01755e3.
 
 The per-turn block, in this order:
 
-1. **Observed now**: read off the machine, never trimmed by this budget.
-2. **Pending decisions**: the first ~3 (this session's newest first, as in concept-store.md Q6), then
-   the total count and the oldest one's age. The count and age are always shown, however small the budget.
-3. **Current state of concepts touched** by the addressed message (alias matching as in concept-store.md
-   "Projection in context": the addressed message and a chosen window of recent turns, never the wrapper).
-   Concepts are ranked by matched spans, then by the recency of their last change. Up to 5 concepts at 3 current
-   facts each, with each concept's coverage state (§1).
-4. **Recalled fragments**, as recall gives them now.
+The whole per-turn injection stays under the hook's CAP of 9,500 characters (scripts/claude-code/hook.py:64;
+Claude Code replaces anything over 10,000 with a file path). Inside it, in this order, with a character budget
+each:
 
-**Trimming:** recalled fragments go first, then the lowest-ranked concepts. A section is never dropped whole
+1. **Observed now**: read off the machine, at most 1,500 characters. It is not trimmed for the sections below;
+   past its own bound it ends `N observations omitted`, like any other section.
+2. **Pending decisions**, at most 1,200: the first 3 (this session's newest first, then older, ties by event
+   id, as in concept-store.md Q6), each one line of at most 300; then the total count and the oldest one's age.
+   The count and age are always shown, however small the budget.
+3. **Current state of concepts touched** by the addressed message, at most 3,500 (alias matching as in
+   concept-store.md "Projection in context": the addressed message and a chosen window of recent turns, never
+   the wrapper). Concepts are ranked by matched spans, then by the recency of their last change, then by concept
+   id, so the order is total. Up to 5 concepts at 3 current facts each, each fact one line of at most 200; the
+   3 are the most recently known (`KnownAtUtc`, then fact id). Each concept shows its coverage state (§1).
+4. **Recalled fragments**, as recall gives them now: 3 at most, 300-character snippets (hook.py:1383, :1394),
+   about 1,200 with headers.
+
+What is unused by one section isn't passed to another; the bounds stay fixed so the block is predictable.
+
+**Trimming,** when the total would pass CAP: recalled fragments go first, lowest-ranked first; then concepts'
+facts beyond the first, from the lowest-ranked concept up; then whole concepts, lowest-ranked first. Pending
+decisions' count and age, and each shown concept's state line, are never cut. A section is never dropped whole
 without a word: every bounded section ends with `N more omitted` (or `N not yet covered`), with ids where they
 fit. The core already does this ("Fragments that did not fit: …"). The numbers above are starting values. The
 recall bench's chars metric (scripts/recall-eval, `report`) is what tunes them, not taste.
@@ -48,9 +68,13 @@ recall bench's chars metric (scripts/recall-eval, `report`) is what tunes them, 
   resolve a match on an old fragment to the head of its chain, in both the lexical and semantic paths. So I
   don't propose a second demotion rule (ranking down or marking). Unmarked supersession is the staleness we
   measured: 15 of ~3,234 fragments in my store had ever been superseded (checked 2026-11-13 ~16:20Z).
-- **When the extractor proposes it:** only when the fragment's coverage is known (an `extraction-run` names it)
-  **and** every fact from it is non-current (`replaced`, `wrong`, `ended` or `retracted`, concept-events.md
-  §7.2). Then it proposes a fragment supersede. The proposal joins the same pending projection as fact
+- **When the extractor proposes it:** only when all three hold: the fragment is covered (§1: a current-version
+  `extraction-run` names it); **at least one** accepted fact cites it (so a fragment the extractor read and found
+  nothing in never qualifies); and every accepted fact from it is non-current (`replaced`, `wrong`, `ended` or
+  `retracted`, concept-events.md §7.2), with no proposal from it still pending. Then it proposes a fragment
+  supersede. "Covered" says a run read the fragment, not that every claim in it became a fact, so the proposal
+  never claims the fragment is wholly stale: it says `N extracted facts, all replaced`, and the draft keeps the
+  whole old text. The proposal joins the same pending projection as fact
   proposals, never wakes anyone (§12), and is approved or refused by the self like any other proposal.
 - **What the new fragment says.** `supersede` writes a new fragment; it doesn't link to an existing one. So the
   proposal carries a draft built **by template, not by a model**: the old text, headed by one line per replaced
@@ -61,9 +85,14 @@ recall bench's chars metric (scripts/recall-eval, `report`) is what tunes them, 
 
 ## 4. Visibility extras the review asked for
 
-- **Identifier aliases.** A third alias kind, `identifier`, beside `name` and `mishearing` (concept-events.md
-  §8): ticket ids, PR numbers, tags. `concept show` accepts any of them, so "the state of CRM-2971" is one
-  command, not a guess at a concept's name.
+- **Identifier aliases.** A fourth alias kind, `identifier`, beside `name`, `mishearing` and `unknown`
+  (concept-events.md §3, §8): ticket ids, PR numbers, tags. `concept show` accepts any of them, so "the state of
+  CRM-2971" is one command, not a guess at a concept's name. Rules: an identifier is stored qualified where its
+  namespace isn't global (`Mako88/Persistence#29`, not `#29`); a bare form matches only when exactly one
+  qualified identifier has it, and otherwise lists the candidates. Matching is case-insensitive and needs a
+  token boundary on both sides, so `#29` never matches `#290`. Spelling variants (`PR 29`, `pull/29`) are
+  separate aliases the self adds, not a normaliser's guess. Unlike names (T1: `Ember` is on two concepts), an
+  identifier is unique: adding one that another concept already holds is refused.
 - **Last confirmed.** A current state fact shows its valid-from and `KnownAtUtc` (§7.2), and also when it was
   last re-observed or re-confirmed. That separates a PR head checked an hour ago from one nobody has looked at
   since Tuesday.
@@ -99,9 +128,24 @@ self's own uid, and is deleted after the run. Nothing is written to a store of r
 **No persistent live rollout before erasure.** "Persistent live" means any concept event written to a store of
 record, or a store copy kept past its test run. That waits until concept-events.md §10 is implemented and tested:
 both erasure phases (§10.2, §10.3), secure delete on every connection and the cleanup of what's already there
-(§10.4), and hard fragment erasure (§10.6), with tests T3 and T16 (§14) passing against the real store. After
-that it is per self and opt-in. The switch is off by default, and each self's go is its own. The scratch slice
-may come first (Ember: "sequence the daily-value UI first in development"). The deletion guarantees may not.
+(§10.4), and hard fragment erasure (§10.6), with every erasure test in §14 passing against the real store: T3
+(both phases), T15 (erasable fields disjoint from invariant inputs), T16 (hard fragment erasure), T17 (secure
+delete on from the app's own connection) and T19 (erased validity).
+
+**And not before recall hygiene is measured.** Before any self's go, that self's recall-bench run (scripts/recall-eval)
+is reported for the rows of §5 that are `missing` today: the relevance floor and group-head suppression are
+either built and measured, or that self's run shows they aren't needed on its store.
+Agreed in the room (Arden 1570855458103623681, Ember 1570855522083672255). It is a prerequisite, not a parallel
+experiment, because the concept block and recall share one budget (§2).
+
+**How the gate is enforced, not only written down.** The build PR ships the concept writer with a guard in code,
+not in config: it opens only a store path under a scratch root and refuses any other path, including the
+configured store of record, with an error naming this section. A test pins the refusal (pointed at a store of
+record, the writer fails and writes nothing). Lifting the guard is a code change in its own PR, and that PR
+must show the erasure tests above passing and link each self's bench report. No setting or environment variable
+can lift it. After that it is per self and opt-in. The switch is off by default, and each self's go is its own.
+The scratch slice may come first (Ember: "sequence the daily-value UI first in development"). The deletion
+guarantees may not.
 
 ## Changes it asks for (to fold into the build PR, not into step 2's approved text)
 
@@ -109,10 +153,11 @@ may come first (Ember: "sequence the daily-value UI first in development"). The 
 2. A confirmation event for state facts, or a field on the observed stream that a renderer can read as "last
    confirmed" (§4). Reviewers: say which is smaller.
 3. A fragment-supersede proposal kind in the pending projection, carrying a template draft (§3).
-4. An active-set setting per self, read by backfill and by the coverage states (§1).
+4. An active-set setting per self, read by backfill and by the coverage states, changed only by the self (§1).
 5. Accepting all pending facts on one concept, after review, as one command (the review's point 3). Today
    `concept accept` takes one fact id. Q5 already allows one atomic command for several, with each transition
    still its own event.
+6. The scratch-root guard on the concept writer, with its test (§6). Lifting it is a later PR of its own.
 
 ## Out of scope here, noted
 
