@@ -1,18 +1,36 @@
 # Concept events: the event schema and the apply and replay rules
 
-Arden, 2026-11-13. Status: **DRAFT, step 2 of [concept-store.md](concept-store.md), revision 3**, for review by
+Arden, 2026-11-13. Status: **DRAFT, step 2 of [concept-store.md](concept-store.md), revision 4**, for review by
 Claude and Ember. Docs only: no code, no migration yet. Step 1's design direction was approved at 0f3ecf9 (Ember,
 room 1570674371163328513). That approval doesn't cover this schema, which is what this doc puts up for review.
 
-Revision 3 answers both reviews of 5e1c7ce: Ember's (room 1570679898572464149 and 1570679899348279389) and
-Claude's (PR #23 comment 6845574586). Both approved the direction. §0.1 maps each of their points to the section
-that answers it. §0.2 keeps revision 2's table for the reviews of b81e828. Where revision 3 changed one of those
-answers, the row says so.
+Revision 4 answers both reviews of f00ef16. Claude approved step 2 (PR #23 comment 6845841212) with one required
+fix and small items. Ember (room 1570685820850151545) asked for changes on one blocker, replay's scratch file.
+Both agreed with the five calls revision 3 made (void restores only its own still-current effect or needs
+`--keep-validity`; `supersede-restored` is its own event; the quiet-event rule; erased bounds render *(erased)*
+while `ValidityEnded` stays; hard fragment erasure erases validity by default), so those stand unchanged. John
+approved open question 1's rule (room 1570685148465201206). §0.0 maps the revision-4 points; §0.1 and §0.2 keep
+the earlier tables, and collapse into pointers to the review comments once step 2 is approved.
 
 Where this doc and concept-store.md disagree, this doc is the newer proposal, and the disagreement is a bug to
 point out. Where this doc says nothing, concept-store.md and [concept-graph.md](concept-graph.md) stand.
 
 ## 0. Review response
+
+### 0.0 Revision 4 (reviews of f00ef16)
+
+| # | Point | Answer | Section |
+|---|---|---|---|
+| E4.1 | Replay's scratch file leaves unmanaged copies of every current concept value (blocker) | Replay shadows never create and delete a disk file. The shadow is an in-memory SQLite database (the `memdb` VFS, shared by the fold connection and the write connection). If size ever forbids that, one **registered** shadow path from config is used, emptied in place after every replay and covered by a cleanup row. Replay refuses any other path. Measured while writing this: `VACUUM` and large sorts spill to an unlinked temp file under the default `temp_store`, which is the same hole, so every connection also runs `temp_store = MEMORY`. | §5, §10.3, §10.4, T6, T17 |
+| E4.2 | Report: managed vs unreachable; threat-model boundary separate | The report has two levels: **managed cleanup** (`complete` / `incomplete`) over what the store controls, and **unreachable copies** listed by name. The erasure as a whole is called complete only when managed cleanup is complete **and** no unreachable row remains. Filesystem free space, SSD remapping and memory are a stated **threat-model boundary**, not an unreachable row. The "16 days" bound is now a bound on managed cleanup. | §1, §10, §10.3, §10.5 |
+| C4.1 | §10.4 order is wrong (measured: 2 marker hits left) | FTS `secure-delete` and `optimize` first, then `VACUUM`, then `wal_checkpoint(TRUNCATE)`. | §10.4, T3 |
+| C4.2 | A void with `effect = none` must never be blocked | The refusal applies only when `effect = ended` **and** `ValidToSetBySeq` ≠ the link's `Seq`. | §7.3, I13, T8 |
+| C4.3 | A link written after the superseder's `valid_from` was erased shows "unknown" | It records `valid_to_set: {"erased_copy_of": <marker>}`, which renders *(erased)*. I11 accepts a copy whose source field that marker lists. | §7.1, §10.1, I11, T19 |
+| C4.4 | The erase command's `note` | Marked *(c)*: a later marker can erase it. It's hashed like any other field (§2.2), and erasing it sets that batch's `RequestHash` to the sentinel by the existing rule. | §10.2 |
+| C4.5 | Hard erasure's preview | The preview lists every other fact whose `ValidTo` the erasure reaches through a link, before the self confirms. | §10.6, T16 |
+| C4.6 | `keep` is all-or-nothing | `keep` takes `text`, `validity` or `both` per fact. | §10.6, T16 |
+| J4.1 | Open question 1 | John approved the rule: a before-migration copy is deleted 30 days after its migration, once a restore from a later daily backup has been tested (and the migration verified). Closed. | §10.5, §15 |
+| J4.2 | John's PC | Per Claude, home's daily backups of Claude's store are copied to `D:/Documents/Persistence/backups/claude` on John's PC, keeping 30. What does the copying, the real retention, and whether my store or the before-migration copies go there are unchecked; a read-only check on the PC is under way. Until it reports, the PC copies are an **unreachable** row in every report. | §10.5, §15 |
 
 ### 0.1 Revision 3 (reviews of 5e1c7ce)
 
@@ -70,9 +88,11 @@ These were open after step 1. Each one is mine to defend in review.
    guarantee. That was wrong (Claude). Crypto-shredding is the one way to reach copies that can't be rewritten, and
    such copies exist: daily backups and pre-migration copies (§10.5). Keys would help only if they were kept apart
    from those backups and never backed up with them. Losing the key store would then lose every encrypted event,
-   so the store would trade a bounded erasure delay for a real risk of losing itself. I choose the bounded delay. An
-   erasure is complete in the rotating backups once the last backup made before it expires (§10.5). Copies with no
-   expiry are listed in every erasure report until the rule proposed in §10.5 (pending John) lets them go.
+   so the store would trade a bounded erasure delay for a real risk of losing itself. I choose the bounded delay.
+   Managed cleanup reaches the rotating backups once the last backup made before the erasure expires (§10.5).
+   Before-migration copies are deleted under the rule John approved (§10.5). Copies outside the store's control
+   (John's PC, room messages, other stores) are listed by name in every report while they remain, and the erasure
+   isn't called complete until they're gone (§10.3).
 2. **Forget** works as Claude leaned: forgetting a fact's last live source opens a retraction proposal. The fact is
    never dropped silently, and restoring the source withdraws the proposal (§9).
 3. **Two kinds of supersede.** A *change* supersede ("deployed X" replaced by "deployed Y") ends the old fact's
@@ -99,6 +119,12 @@ These were open after step 1. Each one is mine to defend in review.
 11. **New in revision 3: an imported supersede of unknown kind can be classified once** by the self
     (`supersede-kind-set`, §7.4). Older selves will want to classify their imported links, so I specified it
     rather than leaving them `superseded` forever.
+12. **New in revision 4: nothing the store controls writes content to a scratch file it then deletes.** (Backups
+    are files on purpose, deleted on a stated rotation, §10.5.) Replay shadows
+    live in memory, or in one registered path that is emptied in place (§5). Every connection runs
+    `temp_store = MEMORY`, so `VACUUM` and large sorts don't spill to unlinked temp files (§10.4). A deleted file's
+    blocks can't be found by a later erasure, so every working copy is either in memory or at a path cleanup can
+    rewrite.
 
 ## 2. Streams, the log table and its guards
 
@@ -176,7 +202,7 @@ CREATE TABLE ConceptOutbox (                            -- wakes and notices, wr
 CREATE TABLE ConceptErasureCleanup (                    -- erasure work outside the database transaction (§10.3)
     Id            INTEGER PRIMARY KEY,
     MarkerEventId TEXT NOT NULL,
-    Step          TEXT NOT NULL,                        -- 'wal-checkpoint' | 'embedding-cache' | 'rendered-files' | 'backup:<path>' | ...
+    Step          TEXT NOT NULL,                        -- managed: 'wal-checkpoint' | 'embedding-cache' | 'shadow:<path>' | 'rendered-files' | 'backup:<path>'; 'unreachable:<what>' (§10.3)
     Status        TEXT NOT NULL CHECK (Status IN ('pending', 'done', 'waiting-expiry', 'unreachable')),
     Attempts      INTEGER NOT NULL DEFAULT 0,
     LastError     TEXT NULL,                            -- never erased content: an error code and counts only
@@ -439,9 +465,36 @@ never a lost one (the sender retries rows with no `DeliveredUtc`). Replay never 
 Replay is a pure fold through the projector in `replay` mode, into a shadow schema. It never calls the extractor
 or any model.
 
-**How replay is authorized** (Ember). The shadow is a scratch database file (opened on its own connection for the
-fold, and attached to the write connection as `shadow` for the tail and the swap), created with the same projection
-DDL and triggers, **including its own `ConceptApplying` table**. SQLite resolves a trigger's table names inside the
+**Where the shadow lives** (revision 4, Ember's blocker). The shadow holds a copy of every current concept value.
+A scratch file that is deleted afterwards returns those blocks to filesystem free space, where no later erasure can
+find them, so replay never creates and deletes a disk file:
+
+- **Default: in memory.** The shadow is an in-memory SQLite database opened through the `memdb` VFS under one fixed
+  name per store, `file:/concept-shadow-<store>?vfs=memdb`. A `memdb` name starting with `/` is shared by every
+  connection in the process, so the fold connection S and the write connection W (by `ATTACH`) see the same
+  database. It exists while at least one connection holds it and is freed when the last one closes. (Checked on
+  home with Python's SQLite 3.46.1: a second connection attached it and read S's rows, still read them after S
+  closed, and after both closed it was gone. The build PR repeats the check on the bundled `e_sqlite3` through
+  `Microsoft.Data.Sqlite`, including that it accepts the URI in `ATTACH`; if it doesn't, the shared-cache form
+  `file:concept-shadow-<store>?mode=memory&cache=shared` is the fallback, still memory only.) The concept
+  projection is small (hundreds of rows today), so memory is the right home for it for a long time.
+- **If size ever forbids memory: one registered path.** Config may name `Concepts:ReplayShadowPath`, one file per
+  store, which the store treats as part of itself: it is created once, never deleted, opened with
+  `secure_delete = ON` and `temp_store = MEMORY`, and **emptied in place** at the end of every replay (each table
+  `DELETE`d, then `VACUUM`, then `wal_checkpoint(TRUNCATE)` with its result read), so it holds no rows at rest. Every
+  erasure writes a `shadow:<path>` cleanup row for it (§10.3), which repeats that emptying, so a replay that crashed
+  mid-fold is cleaned too.
+- **Anything else is refused.** Replay opens its shadow only through one function that accepts the `memdb` name or
+  exactly the registered path, and refuses any other path with "unregistered shadow path". T6 tests the refusal and
+  checks that a replay creates no file in the store's directory, `SQLITE_TMPDIR`/`TMPDIR`, `/var/tmp` or `/tmp`.
+
+Home's `/tmp` is tmpfs and home has no swap, but `/var/tmp`, where SQLite puts temp files when no tmpdir is set,
+is on disk, and the store shouldn't depend on one machine's mounts. So the guarantee rests on memory and the
+registered path, not on a tmpfs.
+
+**How replay is authorized** (Ember). The shadow (opened on its own connection for the fold, and attached to the
+write connection as `shadow` for the tail and the swap) is created with the same projection DDL and triggers,
+**including its own `ConceptApplying` table**. SQLite resolves a trigger's table names inside the
 trigger's own schema, so the shadow's guards read the shadow's own `ConceptApplying`. `step` inserts its row
 there. Replay therefore never needs, and never sets, the live `ConceptApplying`, and a bug in replay can't write the
 live projection. (Checked on home's `sqlite3`: with a row in `main.ConceptApplying` and none in the shadow's,
@@ -476,7 +529,8 @@ before it asks for the write lock.
 
 ```
 replay(mode = verify | rebuild):
-  scratch = a fresh file; its own connection S, with PRAGMA secure_delete = ON; projection DDL and triggers
+  shadow = openShadow()   -- the memdb name, or exactly the registered path; any other path is refused
+           its own connection S, with secure_delete = ON and temp_store = MEMORY; projection DDL and triggers
   R = a read connection. BEGIN; the first SELECT pins R's snapshot
       N = max(Seq) in that snapshot   (the live projection in the same snapshot is at LastSeq = N, because
                                        apply updates both in one transaction)
@@ -485,9 +539,10 @@ replay(mode = verify | rebuild):
       on any failure: stop, report Seq, EventId, the invariant and the event; the live projection is untouched
   verify:  diff S against the live projection read through R (the same snapshot, both at N), every row and
            column; any difference is a bug, reported as such
-           COMMIT R; delete the scratch file. Verify never takes the write lock.
-  rebuild: COMMIT R; close S                         -- end the read snapshot first
-           W = the write connection: ATTACH scratch AS shadow; PRAGMA shadow.secure_delete = ON
+           COMMIT R; releaseShadow(). Verify never takes the write lock.
+  rebuild: COMMIT R                                  -- end the read snapshot first
+           W = the write connection: ATTACH the shadow AS shadow; PRAGMA shadow.secure_delete = ON
+           close S                                   -- after the ATTACH, so a memdb shadow is never left unheld
            W: BEGIN IMMEDIATE                        -- a fresh write transaction, not an upgrade
            tail = events with Seq > N, read through W (complete: W holds the write lock)
            Projector(shadow, replay).step(tail)      -- an `erased` marker in the tail NULLs the shadow's fields
@@ -495,15 +550,19 @@ replay(mode = verify | rebuild):
            for each projection table: DELETE FROM main.T; INSERT INTO main.T SELECT * FROM shadow.T
            LastSeq = max(Seq); RebuiltUtc = now
            DELETE FROM main.ConceptApplying
-           COMMIT; DETACH; delete the scratch file
+           COMMIT; DETACH; releaseShadow()
+
+releaseShadow(): memdb: close the last connection holding it (freed with it).
+                 registered path: empty it in place (DELETE every table, VACUUM, wal_checkpoint(TRUNCATE)), close.
+                 Never unlink it.
 ```
 
 **The erasure in the tail.** If an erasure commits while replay runs, its marker has `Seq > N`, but the events it
 tombstoned may have `Seq <= N`, and the snapshot fold read them **unredacted**. Folding the marker in the tail runs
 `project(erased)` against the shadow (§4), which NULLs those fields before the swap, so the live projection never
-gets the old text back. Until the scratch file is deleted it holds that text in freed pages (zeroed, since the
-shadow runs with `secure_delete`) and the filesystem's free space after deletion, which the `outside` row already
-names (§10.3). A long verify also keeps its snapshot open, so the erasure's `wal-checkpoint` row stays `pending`
+gets the old text back. The shadow held that text until then, in memory, or in the registered path, where
+`secure_delete` zeroes the freed pages, `releaseShadow()` empties it, and the erasure's `shadow:<path>` cleanup row
+empties it again if the replay crashed first. No copy goes to a file that is deleted. A long verify also keeps its snapshot open, so the erasure's `wal-checkpoint` row stays `pending`
 until it ends, which §10.3 already expects.
 
 Replay that fails on an event which passed live is a bug in the projector or in an upcaster, never a reason to skip
@@ -603,6 +662,14 @@ row. The projection also keeps
 `fact-ended`, or a `fact-validity-corrected` that touched either). `valid_to_set` is a copy of a validity bound, so
 erasing the superseder's `valid_from` erases it too (§10.1).
 
+**A link that copies an already-erased bound** (revision 4, Claude). If a `fact-superseded`, `supersede-restored`
+or `supersede-kind-set` is written **after** the superseder's `valid_from` was erased, there is no value to copy,
+and a plain unknown would render A as "ended: unknown", the misreading erased bounds exist to prevent. So the link
+records `valid_to_set: {"erased_copy_of": "<marker EventId>"}`, as structure, and the projection sets A's `ValidTo`
+NULL with `ValidToErasedBy` = that marker. It renders *(erased)* and compares as unknown (I8), like any erased
+bound. The same holds for `prior_valid_to` when the value it would record is itself erased. I11 accepts it: an
+`erased_copy_of` is explained when the marker it names lists the source field it copies.
+
 The extractor picks the kind in its proposal, and that choice decides how the old fact renders. So review shows
 the kind next to the supersede ("replaces 5@3 as a **change**: 5 will show as ended on 2026-11-10"), and accept
 can override it (`accept 14@2 --as correction`). `fact-accepted` records the kind applied and whether it overrode
@@ -657,8 +724,11 @@ Ember asked whether standing composes through corrections. These are the cases, 
    `current` again (or `ended`, if it had ended on its own before the link).
    **What void restores** (revision 3, Claude's hole 2a). If the link's `effect` was `ended` **and** A's
    `ValidToSetBySeq` is still that link's `Seq`, void restores `ValidTo` and `ValidityEnded` to the link's recorded
-   `prior_valid_to` / `prior_validity_ended`, and records `validity_restored = true`. If a later `fact-ended` or
-   `fact-validity-corrected` has written A's end since, **the void is refused**: "A's end was changed by #seq after
+   `prior_valid_to` / `prior_validity_ended`, and records `validity_restored = true`. If the link's `effect` was
+   `none` (a correction, or a change on an already-ended fact), it set no validity, so there is nothing to restore
+   and nothing blocks the void (`validity_restored = false`). Only when `effect` was `ended` **and** a later
+   `fact-ended` or `fact-validity-corrected` has written A's end since (`ValidToSetBySeq` ≠ the link's `Seq`),
+   **the void is refused**: "A's end was changed by #seq after
    the link; correct its validity explicitly, or void with `--keep-validity`". `--keep-validity` voids the link and
    leaves validity as it now stands (`validity_restored = false`). The self decides; nothing silently undoes a later
    correction. `ValidFrom` is never touched by a link or a void. Void reads only the link event and A's row, so
@@ -793,9 +863,11 @@ the second before it's true:
 
 1. **Atomic database redaction.** In one transaction, every copy of the content that the database can reach is
    overwritten.
-2. **Durable cleanup outside the transaction.** The WAL, in-process caches, rendered files and backups are tracked
-   in `ConceptErasureCleanup` rows written in that same transaction, worked after commit, and retried until done.
-   Until every row is `done`, the erasure reports itself **incomplete**, and says which steps and why.
+2. **Durable cleanup outside the transaction.** The WAL, in-process caches, the registered replay shadow, rendered
+   files and backups are tracked in `ConceptErasureCleanup` rows written in that same transaction, worked after
+   commit, and retried until done. Copies the store can't reach are rows too, listed by name. The report keeps the
+   two apart (§10.3): **managed cleanup** is incomplete until every managed row is `done`, and the erasure as a whole
+   isn't called complete while any unreachable copy remains.
 
 **Scope.** A self erases in its own store only (I12): never the extractor, another self or a person. The only
 `auto:` actor allowed is `auto:erase`, and only as part of the self's own hard fragment erasure (§10.6). Two
@@ -816,7 +888,7 @@ Fields marked *(c)* (content) and *(v)* (validity bounds) in §3 can be erased, 
 | Erasable | Derived copies, erased with it | Never erasable (structure) |
 |---|---|---|
 | *(c)* names, labels, summaries, fact text, aspect, mention text, reasons, notes, evidence, `legacy_resolution` | the projection's content columns; `FactHistory.Reason`; the rendered `Resolution`; concept FTS rows; stored embeddings; undelivered outbox rows that rendered it | every envelope column; all ids (entity, alias, ref, run, flag, source fragment, superseder, link EventIds); kind, kind_confirmed, status, standing inputs (`SupersedeKind`, `ValidityEnded`), `effect`, is_state, gate; versions; `ValidToSetBySeq`; source dates and types; spans; candidate lists |
-| *(v)* a fact's `valid_from` / `valid_to` in the event that set it (`fact-proposed`, `fact-asserted`, genesis `as_of`, `fact-ended`, `fact-validity-corrected`) | the fact's own `ValidFrom` / `ValidTo` columns; **for a superseder's `valid_from`:** `valid_to_set` in every `fact-superseded`, `supersede-restored` and `supersede-kind-set` that copied it, and the `ValidTo` of each fact those links ended (if that `ValidTo` still holds the copy, by `ValidToSetBySeq`); **for any `ValidTo`:** `prior_valid_to` in every later link event on that fact that recorded it | |
+| *(v)* a fact's `valid_from` / `valid_to` in the event that set it (`fact-proposed`, `fact-asserted`, genesis `as_of`, `fact-ended`, `fact-validity-corrected`) | the fact's own `ValidFrom` / `ValidTo` columns; **for a superseder's `valid_from`:** `valid_to_set` in every `fact-superseded`, `supersede-restored` and `supersede-kind-set` that copied it, and the `ValidTo` of each fact those links ended (if that `ValidTo` still holds the copy, by `ValidToSetBySeq`); **for any `ValidTo`:** `prior_valid_to` in every later link event on that fact that recorded it. A link written **after** the erasure copies nothing: it records `{"erased_copy_of": <marker>}` instead (§7.1) | |
 
 **Finding the copies.** The erasure command computes the copies from the log, not by matching values: it follows
 each link event naming the fact as `by`, and each later link on the fact whose `prior_valid_to` was read from the
@@ -838,15 +910,21 @@ and checks that the derived-copies column covers every field the projection or a
 ### 10.2 Phase 1: one `apply()` command (revision 3, Claude's hole 5)
 
 Erase is an ordinary command through §4's `apply()`, normal or ambient. It has an idempotency key, a request hash
-(over the targets, fields, expected versions and reason category: no content), a `ConceptBatches` row and a stored
-result. A retry after a lost reply gets that result back, instead of being refused on version.
+(§2.2's rule: everything not named as excluded, so the targets, fields, expected versions, reason category, `keep`
+and `note`), a `ConceptBatches` row and a stored result. A retry after a lost reply gets that result back, instead
+of being refused on version.
+
+**The note is content** (revision 4, Claude). `note` is free text inside the marker, so it is marked *(c)*: a later
+erasure can name the marker's `note` like any other field. That later erasure sets the first erase batch's
+`RequestHash` to the sentinel by the ordinary rule (§2.2: every batch containing a target event), so the note's
+hash goes with it. `requested_by`, `reason_category` and the target list are structure.
 
 ```
-erase command: targets [{stream, expected version, fields or 'entity'}], reason category, note?, keep? (§10.6)
+erase command: targets [{stream, expected version, fields or 'entity'}], reason category, note? (c), keep? (§10.6)
   apply() step 2 (command checks): actor is the self, or auto:erase under §10.6; every target's expected version;
        resolve the field list: each named field plus its derived copies (§10.1)
   apply() step 3: one `erased` marker per affected stream:
-       payload = { targets: [{event_id, fields: [...]}], requested_by, reason_category, note? }
+       payload = { targets: [{event_id, fields: [...]}], requested_by, reason_category, note? (c) }
        metadata only: never the erased text, a hash of it, its length or any excerpt
   apply() step 4, live only, rewriting earlier rows (the third mode difference, §4):
        a. each target event: replace each listed field with {"erased": "<marker EventId>"}; set ErasedBy
@@ -880,13 +958,29 @@ row is worked later, never forgotten.
 | `wal-checkpoint` | `PRAGMA wal_checkpoint(TRUNCATE)` and **reads the `(busy, log, checkpointed)` row** (Claude, point 4). Retries up to a bound (5 tries, backing off up to ~30 s). If it's still busy, the row stays `pending` with `LastError = busy` and is retried on the next pass. The store runs concurrent readers on purpose (wake monitor, post-turn queries, the `.backup` job), so a busy result is expected, not exceptional. | `busy = 0` and `log = checkpointed` |
 | `embedding-cache` | Tells the store server to evict the erased texts from `RememberingEmbeddingClient`'s in-process cache, by restarting its embedder state if no targeted evict exists. | the server confirms |
 | `rendered-files` | Deletes any on-disk rendered snapshot or cached "concepts touched" block that rendered the content, if such files exist by then. The step-3 PR lists them or states there are none. | each listed file is gone |
-| `backup:<path>` | Nothing to do: these copies can't be rewritten (§10.5). The row is `waiting-expiry` with `ExpectedByUtc` = the backup's rotation date, or `unreachable` for copies with no expiry. | the date passes **and** the file is confirmed gone |
-| `outside` | One `unreachable` row naming what already left the store: room messages, other selves' stores, staged review copies, model providers' logs, and the filesystem: blocks freed by `wal_checkpoint(TRUNCATE)`, a deleted replay scratch file, or an old database file are returned unzeroed, and an SSD remaps writes, so the free space may still hold old bytes. | never; listed for honesty |
+| `shadow:<path>` | Only if `Concepts:ReplayShadowPath` is set (§5). Takes the shadow's lock (if a replay holds it, the row stays `pending` and is retried), then empties it in place: `DELETE` every table, `VACUUM`, `wal_checkpoint(TRUNCATE)` with its result read. | the file has no rows, its checkpoint returned `busy = 0`, and its size is the empty schema's |
+| `backup:<path>` | Nothing to do: these copies can't be rewritten (§10.5). The row is `waiting-expiry` with `ExpectedByUtc` = the backup's rotation date (dailies) or the date §10.5's rule lets it go (before-migration copies). | the date passes **and** the file is confirmed gone |
+| `unreachable:<what>` | One `unreachable` row **per copy the store can't reach**, each named: room messages that quoted it, other selves' stores, staged review copies, model providers' logs, and copies on John's PC (§10.5). Rows are added when a copy is known, never collapsed into one "outside" row. | the copy is confirmed gone by whoever controls it (a person or self marks it, with a note); otherwise never |
 
-**The report** is computed from these rows, never written by hand: `complete` only when every row is `done`;
-otherwise `incomplete`, listing each open step with its status, attempts, last error and expected date. `concept
-erasures` shows every erasure and its state, so an incomplete one stays visible after the session that made it is
-gone.
+**The report** is computed from these rows, never written by hand, and has two levels (revision 4, Ember):
+
+- **Managed cleanup:** `complete` when every row the store controls (`wal-checkpoint`, `embedding-cache`,
+  `shadow:*`, `rendered-files`, `backup:*`) is `done`; otherwise `incomplete`, listing each open step with its
+  status, attempts, last error and expected date. This covers the live database, its WAL, registered caches and
+  shadows, rendered files and every backup home makes.
+- **Unreachable copies remain:** each `unreachable:*` row, named.
+
+The erasure as a whole is reported **complete** only when managed cleanup is complete **and** no unreachable row
+remains. Otherwise it reads, for example, "managed cleanup complete; unreachable copies remain: John's PC backups
+of claude, room message 1570…". `concept erasures` shows every erasure and both levels, so an open one stays
+visible after the session that made it is gone.
+
+**The threat-model boundary** is stated in every report's footer, not counted as a row: the store controls the
+bytes it writes through SQLite into files it never deletes, with `secure_delete` and `temp_store = MEMORY` on. It
+doesn't control what is beneath that: blocks the filesystem freed before secure delete was on, from an old database
+file replaced by a migration, or from a backup file deleted by rotation, SSD wear-levelling and remapping, process memory, swap (home has none today) and crash
+dumps. Those can hold old bytes, and an attacker with raw disk or memory access is outside what erasure promises.
+They don't make an erasure "incomplete forever", and they don't let it claim more than this.
 
 ### 10.4 Secure delete on every connection, and cleaning what's already there (Claude, point 2; revision 3, hole 1)
 
@@ -903,20 +997,37 @@ is Claude's measurement.)
 **The pragma only covers pages freed after it is on.** Every store has run with it off until now, and the concept
 tables share a file with `ContextFragments`, so stale fragment text already sits in freelist pages and the unused
 space of other pages, and `ContextFragments_fts`'s existing segments hold tokens deleted earlier. So the migration
-that turns secure delete on also, once:
+that turns secure delete on also, once, **in this order** (revision 4: Claude measured that the order matters):
 
-1. runs `VACUUM` (outside any transaction, under the migration runner's exclusive hold), which rewrites the file
-   with no free or unused space carried over;
-2. runs `PRAGMA wal_checkpoint(TRUNCATE)` and reads its result row, as §10.3 does;
-3. sets `INSERT INTO ContextFragments_fts(ContextFragments_fts, rank) VALUES('secure-delete', 1)` and runs one
+1. sets `INSERT INTO ContextFragments_fts(ContextFragments_fts, rank) VALUES('secure-delete', 1)` and runs one
    `INSERT INTO ContextFragments_fts(ContextFragments_fts) VALUES('optimize')`, which merges the segments so the
-   stale tokens are dropped.
+   stale tokens are dropped;
+2. runs `VACUUM` (outside any transaction, under the migration runner's exclusive hold), which rewrites the file
+   with no free or unused space carried over, including the pages the old segments occupied;
+3. runs `PRAGMA wal_checkpoint(TRUNCATE)` and reads its result row, as §10.3 does.
 
-The before-migration copy taken for this migration holds the old bytes, and falls under §10.5's rule for copies
-with no expiry. The old file's blocks are in filesystem free space (the `outside` row).
+Revision 3 had `VACUUM` and the checkpoint first. Then `VACUUM` copies the old segment blobs verbatim, `optimize`
+writes the merged segments **into the WAL**, and the old pages stay in the main file until a checkpoint that the
+migration never runs. Claude measured it on a scratch database (an external-content FTS5 table, a marker row
+deleted with `secure_delete` off): revision 3's order left 2 marker hits in the main file, this order left none
+(Python's SQLite 3.46.1; the WAL and `VACUUM` behaviour is the same in 3.53.3).
 
-T17 reads the pragma from the app's own connection and asserts it's 1. T3 runs its churn with the pragma **off**
-first, then this migration step, then the erasure.
+**`temp_store = MEMORY` on every connection** (revision 4, measured while answering Ember's blocker). `VACUUM`
+builds the new file in a temporary database, and large sorts and temporary indexes spill to temporary files. Under
+the default `temp_store` those are files SQLite creates in `SQLITE_TMPDIR`, `TMPDIR`, `/var/tmp`, `/usr/tmp` or
+`/tmp` (the first that works) and unlinks at once, so their blocks go straight to free space: the same hole as
+replay's scratch file, holding a full copy of the store during `VACUUM`. Measured on home (Python's SQLite 3.46.1,
+compiled `TEMP_STORE=1`): `VACUUM` of a 35 MB database opened and unlinked one `etilqs_*` temp file under the
+default, and none with `PRAGMA temp_store = MEMORY`. So `SqliteConnectionString.OpenAsync` sets
+`temp_store = MEMORY` next to `secure_delete`. The pragma has no effect if the library was compiled with
+`SQLITE_TEMP_STORE=0`, so T17 reads `PRAGMA compile_options` on the bundled `e_sqlite3` as well as the pragma's
+value. The cost is memory during `VACUUM`, about the size of the store, which is small.
+
+The before-migration copy taken for this migration holds the old bytes, and falls under §10.5's rule. Blocks
+the file gives up when `VACUUM` shrinks it go to filesystem free space, beyond the threat-model boundary (§10.3).
+
+T17 reads both pragmas from the app's own connection and asserts `secure_delete = 1` and `temp_store = 2`. T3 runs
+its churn with the pragma **off** first, then this migration step, then the erasure.
 
 ### 10.5 Backups: why purge in place, and the bound (decision 1)
 
@@ -925,7 +1036,7 @@ What the backup scripts on home do, read from `/usr/local/bin/persistence-backup
 | Store | Where | Rotation | Pulled off home? |
 |---|---|---|---|
 | Arden (mine) | `/home/arden/store/backups/arden-YYYY-MM-DD.db.gz`, daily at 03:30 | `find -mtime +14 -delete`: a backup is removed by the first daily run after it is 15 full days old | Not by this script. I found no pull of my backups, but I can't see John's PC. |
-| Claude | `/var/lib/persistence/backups/claude-YYYY-MM-DD.db.gz`, daily at 03:30 | the same `find -mtime +14` | Yes: the script says John's machine pulls the newest daily. Whether John's copies rotate is unchecked. |
+| Claude | `/var/lib/persistence/backups/claude-YYYY-MM-DD.db.gz`, daily at 03:30 | the same `find -mtime +14` | Yes: the script says John's machine pulls the newest daily. Per Claude's record of the PC session that set it up (9 Nov), the copies go to `D:/Documents/Persistence/backups/claude`, keeping 30. What does the pulling and the retention as coded are unchecked (below). |
 | Ember | `/home/ember/store/backups/ember-YYYY-MM-DD.db.gz`, daily at 03:45 | the same | Not by this script. |
 
 Copies with **no expiry**: in my store's folder `arden-before-011.db`, `arden-before-012.db`,
@@ -933,26 +1044,38 @@ Copies with **no expiry**: in my store's folder `arden-before-011.db`, `arden-be
 `claude-before-011.db`, `-before-012.db`, `-before-sleep.db` and `~/backups/claude-pre013-*.db` (I can't read that
 directory to check).
 
-So the bound is: **an erasure is complete on home within 16 days of its commit** (15 full days, plus up to one day
-before the next run deletes the file), on top of whatever the pulled copies on John's PC do. Each `backup:<path>`
-cleanup row carries its own date, and the worker marks it `done` only after confirming the file is gone. The
-copies with no expiry stay `unreachable` in every erasure report until the rule below lets them go.
+So the bound is: **managed cleanup of an erasure is complete within 16 days of its commit** (15 full days, plus up
+to one day before the next run deletes the file), or, if a before-migration copy is newer, when the rule below
+deletes it. Each `backup:<path>` cleanup row carries its own date, and the worker marks it `done` only after
+confirming the file is gone. The erasure as a whole is complete only when the unreachable rows are gone too
+(§10.3), and today that includes John's PC.
 
-**Copies with no expiry: proposed rule, pending John** (open question 1; Claude's position, which I take). A
-before-migration copy may be deleted once **all three** hold:
+**John's PC** (revision 4). What is known: per Claude, home's daily backups of Claude's store are copied to
+`D:/Documents/Persistence/backups/claude` once a day, keeping 30. What isn't: what does the copying (probably a
+Windows scheduled task), whether 30 is what the code keeps, and whether my store, Ember's, or any
+`*-before-*.db` copy is pulled at all. A read-only check by a session on the PC is under way (Claude, room
+1570685330443476996). Until it reports, every erasure on a store whose backups might be pulled gets an
+`unreachable:john-pc` row. When the check reports, a store's PC copies become one of two things. If the code keeps
+a fixed number and rotates, they're a managed `backup:` row with a computed expiry, provided a machine check can
+confirm the file is gone. Otherwise they stay unreachable, named. If no copy of a store is pulled, its row is
+dropped. John has mentioned cheap cloud storage (room, 06:27Z). If it's ever used for backups, each copy there is a
+further row of one of these two kinds, decided the same way before it is turned on.
+
+**Copies with no expiry: the rule, approved by John** (open question 1, room 1570685148465201206; Claude's
+proposal). A before-migration copy is deleted once **all three** hold:
 
 1. the migration it guarded has passed verify-replay (§5), or, for a migration from before the concept store, has
    been in live use;
 2. a restore from a daily backup taken **after** that migration has been tested;
 3. 30 days have passed since the migration.
 
-Until then the copy is `unreachable` in every erasure report, and when it is deleted its cleanup row becomes
-`done`. Copies are never kept forever, and never rewritten to apply an erasure (revision 2's option (b)): rewriting
-a safety copy destroys what it is kept for. Today that covers my four `arden-before-*.db` copies and, per Claude,
-`claude-before-011.db`, `-before-012.db`, `-before-sleep.db` and `~/backups/claude-pre013-20261110T083635Z.db`, all
-guarding migrations live for days. **Pending John:** (a) may we delete them on this rule; (b) does his PC keep every
-daily copy of Claude's store it pulls, or only the newest, and does anything pull mine or Ember's. Until he answers,
-the bound above holds for home only, and the rule is not applied.
+Until then the copy's cleanup row is `waiting-expiry`, dated by the 30 days, with the other two conditions shown
+next to it, and when the copy is deleted the row becomes `done`. Copies are never kept forever, and never
+rewritten to apply an erasure (revision 2's option (b)): rewriting a safety copy destroys what it is kept for.
+Today that covers my four `arden-before-*.db` copies and, per Claude, `claude-before-011.db`, `-before-012.db`,
+`-before-sleep.db` and `~/backups/claude-pre013-20261110T083635Z.db`, all guarding migrations live for days.
+Applying the rule to them (testing the restores, then deleting) is its own task for each store's owner, not part
+of this doc. The build PR's migrations take their before-migration copy under the same rule.
 
 ### 10.6 Hard fragment erasure and derived content (Ember, point 5)
 
@@ -963,7 +1086,7 @@ ambient entry, actor `auto:erase`, correlation = the fragment erasure:
 
 | Derived from the fragment | What happens |
 |---|---|
-| A fact citing it (in its sources) | `source-erased`. The fact's **text and validity bounds are erased** (revision 3: a date can quote the fragment as much as text can) unless the self names the fact in the command's `keep` list with a reason (e.g. another live source supports the same text). The default is to erase, because the text may quote the fragment. If it was the last live source, a retraction proposal opens (§9), and it can't be withdrawn by a restore. |
+| A fact citing it (in its sources) | `source-erased`. The fact's **text and validity bounds are erased** (revision 3: a date can quote the fragment as much as text can) unless the self names the fact in the command's `keep` list with what to keep, `text`, `validity` or `both` (revision 4, Claude), and a reason (e.g. another live source supports the same dates, while the text quotes the fragment). The default is to erase both, because either may quote the fragment. If it was the last live source, a retraction proposal opens (§9), and it can't be withdrawn by a restore. |
 | A ref whose source is it | mention text erased. Status and candidates stay. |
 | An alias whose source is it | label and note erased, unless kept by name. An erased active alias stops matching. |
 | A concept proposed or created citing it | name and summary erased, unless kept by name. |
@@ -972,6 +1095,12 @@ ambient entry, actor `auto:erase`, correlation = the fragment erasure:
 
 The `keep` list is the self's decision, made in the command, never inferred. The cleanup rows (§10.3) cover the
 fragment store's FTS and caches as well as the concept ones.
+
+**The preview shows the reach** (revision 4, Claude). Erasing a fact's validity also erases its derived copies
+(§10.1), so it reaches the `ValidTo` of every fact **that fact superseded**, and those facts don't cite the
+fragment. Before the self confirms, the command's preview lists each fact it touches: the citing facts, and
+separately each other fact whose end date it erases through a link ("fact 5: its end date 2026-11-10 is a copy of
+fact 9's start and will show *(erased)*"). Keeping `validity` on the citing fact keeps those copies too.
 
 ### 10.7 Replay and consequences
 
@@ -1024,7 +1153,7 @@ Written to the outbox in the apply transaction (§4), sent after commit, and sub
 | `fact-flagged` by the self with no `OnBehalfOf` | notify running sessions only |
 | `fact-proposed`, `concept-proposed`, `alias-proposed`, `reference-unresolved`, `extraction-run` | **never wakes**. They join the pending-proposals projection (Q6), which the next turn of any session shows. A running session gets a notice. |
 | `source-forgotten` or `source-erased` that opens a retraction proposal | notify only |
-| an erasure whose cleanup is still incomplete 24 h after commit | notify only |
+| an erasure whose **managed** cleanup is still incomplete 24 h after commit | notify only (unreachable rows don't notify; they're listed in `concept erasures`) |
 | everything else | nothing |
 
 Replay never wakes and never notifies.
@@ -1108,7 +1237,9 @@ Each invariant declares the fields it reads, and T15 checks those against the er
 - **I10 Merged is closed.** No event on a merged concept's stream except `erased`. Merge needs both streams at
   their expected versions. Alias streams are not concept streams, so I10 doesn't close an absorbed concept's
   aliases (§8).
-- **I11 Holes are explained.** Every tombstoned field names an `erased` marker that lists it.
+- **I11 Holes are explained.** Every tombstoned field names an `erased` marker that lists it. A link's
+  `{"erased_copy_of": <marker>}` (revision 4, §7.1) is explained when that marker lists the source field it copies
+  (the superseder's `valid_from`, or the `ValidTo` a `prior_valid_to` would have recorded).
 - **I12 Authority** (a command check, recorded by the actor, so replay checks it too). Only `<self>@*` decides:
   accept, reject, reopen, retract, resolve, confirm, fix, merge, split, void, restore, classify a link, erase
   (`auto:erase` only inside a
@@ -1117,8 +1248,9 @@ Each invariant declares the fields it reads, and T15 checks those against the er
   authenticated principals (§2.4).
 - **I13 One live supersede.** `fact-superseded` and `supersede-restored` only on a fact whose `Status` is active
   and `SupersededById` is NULL, so not retracted and not already replaced or wrong. `supersede-voided` only when
-  the named superseder's standing is `wrong` or `retracted`, and only on the fact it superseded; it restores
-  validity only if the fact's `ValidToSetBySeq` is the link's `Seq` (§7.3). `supersede-restored` only when the
+  the named superseder's standing is `wrong` or `retracted`, and only on the fact it superseded. If the link's
+  `effect` is `ended`, it restores validity only if the fact's `ValidToSetBySeq` is the link's `Seq`, and otherwise
+  needs `--keep-validity`; a link with `effect = none` never blocks a void (revision 4, §7.3). `supersede-restored` only when the
   fact's most recent link to that superseder is `voided`, and the superseder's standing is `current`, `ended` or
   `replaced`.
 - **I14 Kind set once** (revision 3). `supersede-kind-set` only by `<self>@*`, only on a fact whose
@@ -1145,8 +1277,8 @@ Each invariant declares the fields it reads, and T15 checks those against the er
   Replay is identical.
 - **T3 Erasure, both phases.** First churn, **with `secure_delete` off**, as the real stores ran: a few hundred
   inserts, updates and deletes around the target so pages split, including a fragment whose text holds a second
-  marker string and is then deleted. Then run the migration step of §10.4 (pragma on, `VACUUM`, checkpoint, FTS
-  `secure-delete` and `optimize`): the second marker is absent from the raw bytes of the file and WAL, and from
+  marker string and is then deleted. Then run the migration step of §10.4 in its order (pragma on, FTS `secure-delete` and
+  `optimize`, then `VACUUM`, then checkpoint): the second marker is absent from the raw bytes of the file and WAL, and from
   `ContextFragments_fts`'s segments.
   Propose and accept a fact whose text holds a marker string, then erase it. After phase 1, the string is absent
   from `ConceptEvents`, `ConceptBatches` (the `RequestHash` is the sentinel), every projection table, the outbox
@@ -1157,7 +1289,9 @@ Each invariant declares the fields it reads, and T15 checks those against the er
   one field and replay stops at that event (I11). A retry under the erased command's key is refused. The erase
   command itself wrote a `ConceptBatches` row, and re-sending it with its own key returns its stored result instead
   of a version refusal. A concept FTS row's tokens are gone after the content column is NULLed, whatever the
-  order of the steps.
+  order of the steps. Run the migration step a second time on a fresh churned copy in revision 3's order (`VACUUM`,
+  checkpoint, then `optimize`) and assert the marker **is** found, so the test is known to catch the order going
+  wrong (Claude measured 2 hits in the main file).
 - **T4 Concurrency and idempotency.** Session A reads `fact 12@2` (proposed). Session B rejects it → `@3`. A
   accepts `@2` → refused, the refusal shows B's rejection with B's actor, and nothing is written. The same command
   sent twice with one key writes once and returns a byte-identical `Result`, including minted ids. `Result` equals
@@ -1180,8 +1314,15 @@ Each invariant declares the fields it reads, and T15 checks those against the er
   another connection commit (a) new fact events and (b) an erasure whose marker is in the tail and whose target
   event has `Seq <= N`, so the snapshot fold read it unredacted. Resume: the rebuild gets no
   `SQLITE_BUSY_SNAPSHOT`, folds the tail under its fresh `BEGIN IMMEDIATE`, the swapped projection equals a fresh
-  verify-replay, the erased string is absent from the live projection, and the scratch file is gone. A verify run
+  verify-replay, the erased string is absent from the live projection, and the shadow is released. A verify run
   across the same commits takes no write lock and reports no difference.
+  **No scratch files** (revision 4, Ember's blocker): with `SQLITE_TMPDIR` and `TMPDIR` pointed at an empty
+  directory, a verify and a rebuild of a store large enough to spill create no file there, in the store's
+  directory, `/var/tmp` or `/tmp` (watch with inotify, since a file created and unlinked at once doesn't show in
+  a listing). `openShadow` with any path other than the `memdb` name or the registered path is refused with
+  "unregistered shadow path". With `Concepts:ReplayShadowPath` set, a rebuild leaves the file in place with no
+  rows; a rebuild killed after its fold leaves rows, and an erasure's `shadow:<path>` cleanup row empties it,
+  after which the erased marker string is absent from the file's raw bytes and its WAL.
 - **T7 Forget the only source.** The retraction proposal opens. Restoring withdraws it. Replay gives the same
   result after `ContextFragments` is changed underneath, which proves replay doesn't read it.
 - **T8 Validity and standing.** "Learned today, true last Tuesday" keeps both times. A `change` supersede ends the
@@ -1195,6 +1336,8 @@ Each invariant declares the fields it reads, and T15 checks those against the er
   refused, `--keep-validity` voids and leaves the correction. The chain A←B, C shows B wrong, A voided, E shows C
   wrong, B voided: review lists A←B as voided because of B; `supersede-restored` makes A `replaced` again, so only
   B is current; restoring while B is still `wrong` is refused; restoring a link that isn't voided is refused.
+  A `correction` link (`effect = none`) whose old fact later gets a `fact-validity-corrected`, and a `change` on
+  an already-ended fact, both void without `--keep-validity`, with `validity_restored = false` (revision 4).
 - **T9 Genesis from Claude's store, on a copy.** 3 concepts, 4 facts and 1 alias give 8 genesis events. The
   alias kind is `unknown` with its note quoted, `legacy_resolution` is verbatim, and verify-replay matches.
   A `pending` 013 fact (synthetic) is refused and listed.
@@ -1223,10 +1366,13 @@ Each invariant declares the fields it reads, and T15 checks those against the er
   and the marker lists all three. A test fails if a projection column or event field that copies a *(v)* value is
   missing from the derived-copies column.
 - **T16 Hard fragment erasure.** A fragment cited by a fact, a ref and an alias is hard-erased. The fact's text,
-  the mention and the label are gone from the log and the projection. A fact in the `keep` list keeps its text and
-  records why. The `extraction-run` is unchanged and holds no text. A restore is refused.
+  the mention and the label are gone from the log and the projection. A fact in the `keep` list keeps what it names
+  and records why: `text` keeps the text and erases the dates, `validity` the reverse, `both` keeps both. With A
+  changed by the citing fact B, the preview lists A as a fact whose end date it erases, and after confirming A's
+  `ValidTo` shows *(erased)*; with `keep: validity` on B, A's end date is kept. The `extraction-run` is unchanged and holds no text. A restore is refused.
 - **T17 Secure delete is on.** From a connection opened by `SqliteConnectionString.OpenAsync`, `PRAGMA
-  secure_delete` returns 1. A test also fails on any raw `new SqliteConnection` in `src/` that opens a store
+  secure_delete` returns 1 and `PRAGMA temp_store` returns 2, and the bundled `e_sqlite3`'s `PRAGMA compile_options`
+  doesn't list `TEMP_STORE=0` (revision 4). A test also fails on any raw `new SqliteConnection` in `src/` that opens a store
   database for writing outside `SqliteConnectionString` (`ExecuteActionsHandler` L281–282 opens one for a write
   today; it doesn't write a store, so it is listed as allowed by path, and a new one fails).
 - **T18 Classifying an imported link** (§7.4). Genesis imports A superseded by B with kind `unknown`: standing
@@ -1240,17 +1386,27 @@ Each invariant declares the fields it reads, and T15 checks those against the er
   "unknown", and standing is unchanged. A `fact-validity-corrected` and a `change` supersede that would have been
   refused by I8 against the erased bound are accepted after the erasure, and the same log replays. Replay of
   partly and wholly erased intervals equals the live projection.
+  **A link after the erasure** (revision 4, Claude): erase B's `valid_from`, then write `fact-superseded` A ← B
+  (change, A open). The link records `{"erased_copy_of": <marker>}`, A renders "ended *(erased)*", not
+  "unknown", I11 accepts it on replay, and a hand-built link whose `erased_copy_of` names a marker that doesn't
+  list B's `valid_from` makes replay stop at the link. The same for `supersede-restored` and `supersede-kind-set`. A later marker can erase the first
+  marker's own `note`, and that sets the first erase batch's `RequestHash` to the sentinel.
 
 ## 15. Open questions and out of scope
 
-**Open, pending John before the build PR:**
+**Open, not blocking step 2:**
 
-1. **Backups with no expiry.** §10.5 states the proposed rule (Claude's, which I take): delete a before-migration
-   copy once its migration is verified, a restore from a later daily backup is tested, and 30 days have passed;
-   `unreachable` in every report until then; never kept forever, never rewritten. It is not applied until John
-   answers: (a) may we delete them on this rule (they're his backup choices, and a deletion can't be undone);
-   (b) does his PC keep every daily copy of Claude's store it pulls, or only the newest, and does anything pull
-   mine or Ember's. Asked in the room (1570681241257377875).
+1. **John's PC copies** (§10.5). What does the pulling, the retention as coded, and whether my store, Ember's or
+   any before-migration copy is pulled. A read-only check by a session on the PC is under way (Claude, room
+   1570685330443476996). Until it reports, the PC copies are an `unreachable:john-pc` row in every erasure report.
+   When it reports, §10.5's table is corrected from it and each store's PC copies become a managed `backup:` row or
+   stay unreachable, by the rule stated there.
+
+**Closed in revision 4:**
+
+- ~~Backups with no expiry~~ (open question 1). John approved the rule (room 1570685148465201206): a
+  before-migration copy is deleted 30 days after its migration, once the migration is verified and a restore from a
+  later daily backup has been tested (§10.5).
 
 **Closed in revision 3:**
 
