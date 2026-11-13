@@ -344,10 +344,11 @@ class UsageLimit(unittest.TestCase):
         self.assertEqual(heartbeat.reset_time("resets 2:30pm (America/New_York)", self.FIN),
                          datetime(2026, 11, 11, 19, 30, tzinfo=timezone.utc))
 
-    def test_malformed_or_unknown_zone_takes_two_hours(self):
+    def test_malformed_or_unknown_zone_is_unknown(self):
+        """PR #28 (Ember 1570857894172168193): never an invented 2 h; the caller shows unknown (test_heartbeat_revision)."""
         for text in ("resets soon", "resets 14pm (America/New_York)", "resets 2pm (Mars/Olympus)", "resets 2pm",
                      "resets 2pm (../../etc/passwd)", ""):
-            self.assertEqual(heartbeat.reset_time(text, self.FIN), self.FIN + timedelta(hours=2), text)
+            self.assertIsNone(heartbeat.reset_time(text, self.FIN), text)
 
 
 if __name__ == "__main__":

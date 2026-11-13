@@ -279,21 +279,22 @@ class UsageHold(Base):
         self.assertEqual(len(self.hb_items("reports")), 1)
 
     def test_unknown_reset_is_visible_logged_once_and_rechecked(self):
-        self.quiet_usage(UNKNOWN)
+        self.quiet_usage(UNKNOWN)  # the quiet wake finished at 08:08 with no reset time
         hold = self.hb()["holds"]["usage"]
         self.assertEqual(hold["reset"], "unknown")
-        self.assertEqual(hold["until"], (at(8, 18) + heartbeat.UNKNOWN_RECHECK).isoformat())
-        self.assertNotEqual(hold["until"], (at(8, 18) + timedelta(hours=2)).isoformat())
-        self.assertIn("usage hold: reset unknown (no reset time in the output); rechecked every beat, next try 09:18Z",
+        self.assertEqual(hold["until"], (at(8, 8) + heartbeat.UNKNOWN_RECHECK).isoformat())
+        self.assertNotEqual(hold["until"], (at(8, 8) + timedelta(hours=2)).isoformat())
+        self.assertIn("usage hold: reset unknown (no reset time in the output); rechecked every beat, next try 09:08Z",
                       self.status())
-        for t in (at(8, 28), at(8, 38), at(9, 8)):
+        for t in (at(8, 28), at(8, 38), at(9, 0)):
             self.beat(t)
             self.assertEqual(self.hb_items(), [], t)
         notes = [l for l in self.lines if "usage" in l]
         self.assertEqual(notes, ["heartbeat: usage limit, reset unknown; the stalled layer holds and rechecks every "
-                                 "beat, next try 09:18Z"])
-        self.beat(at(9, 18))  # the recheck: one wake may try
+                                 "beat, next try 09:08Z"])
+        self.beat(at(9, 8))  # the recheck: one wake may try
         self.assertEqual(len(self.hb_items("quiet")), 1)
+        self.assertNotIn("usage", self.hb()["holds"])
 
     def test_unknown_hold_clears_early_when_a_firing_ends_without_the_limit(self):
         self.quiet_usage(UNKNOWN)
@@ -318,7 +319,7 @@ class UsageHold(Base):
         self.assertEqual(data["holds"]["usage"]["reset"], "unknown")
         self.beat(at(8, 40))  # past the tick gap, but held
         self.assertEqual(self.hb_items("tick"), [])
-        self.beat(at(9, 10))
+        self.beat(at(9, 0))
         self.assertEqual(len(self.hb_items("tick")), 1)
 
 
@@ -569,19 +570,22 @@ class Canary(Base):
                                                                    at(6, 1).isoformat(), stalled=True))
         self.fact(f, "started", at(6, 2), pid=999999, start_time=1, session=sid())
         self.finish(f, {"is_error": True, "result": CANARY})
-        rendered = []
+        rendered, exercised = [], set()
         t = at(6, 10)
         while t < at(20, 0):
             self.beat(t)
-            for w in self.hb_items():
-                body = {**USAGE, "result": CANARY} if w["hb"].startswith("quiet") else {"is_error": False, "result": CANARY}
+            for w in [x for x in self.items() if x.get("by") == "heartbeat"]:  # Q, R, ticks, A's nudges and C's retries
+                body = {**USAGE, "result": CANARY} if (w.get("hb") or "").startswith("quiet") \
+                    else {"is_error": (w.get("hb") or "").startswith("tick"), "result": CANARY}  # ticks fail: a fault
                 obs, _ = self.source(w["session"])
                 rendered += [line for _, lines in observed.render([obs], now=self.now) for line in lines]
                 self.fire_hb(w, body)
+            data = self.hb()
+            exercised |= {k for k in ("delivery_fault", "holds", "ticks", "reports_q", "quiet") if data.get(k)}
             t += timedelta(minutes=10)
             if t == at(9, 0):
                 self.working()
-        self.assertTrue(self.hb().get("delivery_fault") or self.hb().get("holds"), "the run exercised faults or holds")
+        self.assertEqual(exercised, {"delivery_fault", "holds", "ticks", "reports_q", "quiet"})
         swept = {
             "heartbeat.json": (self.state / "heartbeat.json").read_text(encoding="utf-8"),
             "heartbeat-mode.json": (self.state / "heartbeat-mode.json").read_text(encoding="utf-8"),

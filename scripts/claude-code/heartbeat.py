@@ -81,6 +81,17 @@ def stalled_on(home=None):
     return _setting(home, "PERSISTENCE_HEARTBEAT_STALLED", "").strip().lower() in ("true", "1")
 
 
+def source_named(home=None):
+    """Whether 'heartbeat' is named in PERSISTENCE_OBSERVE_SOURCES (the settings file only). The R and Q blocks and the
+    fault reach a session only through that source, so STALLED without it is refused (Ember's G5): source_off."""
+    names = _setting(home, "PERSISTENCE_OBSERVE_SOURCES", "")
+    return "heartbeat" in (n.strip() for n in names.split(","))
+
+
+def settings_path(home=None):
+    return Path(home or Path.home()) / ".claude" / "settings.json"
+
+
 QUIET_AFTER = 90  # H, minutes
 TICK_GAP = 30  # minutes, and the floor
 BACKOFF_MAX = timedelta(hours=12)
@@ -160,10 +171,14 @@ def wake_line(firing, condition, owner, at):
     return f"heartbeat wake {_uuid(firing)}: {condition}, owner {_uuid(owner)[:8] if owner else 'unowned'}, at {hhmm(at)}"
 
 
-# Usage limit (heartbeat.md "Usage limit"): keyed on is_error and the api error, never on subtype. The reset is read with
-# one anchored pattern from `result`; nothing else in `result` is used.
+# Usage limit (heartbeat.md "Usage limit"): keyed on is_error and the api error, never on subtype. Claude Code's output
+# has no structured reset field (checked again 2026-11-13 on two real usage-limit outputs: api_error,
+# api_error_status 429, and `result` text only). So the reset is read with one anchored pattern from `result`, nothing
+# else in `result` is used, and what comes back is structured: a time within 24 h, or None for unknown. Unknown is
+# never turned into an invented reset (Ember, 1570857894172168193): it is a visible hold that is rechecked every beat
+# and tries again after UNKNOWN_RECHECK, and C's and A's deferrals say so in the journal.
 RESET = re.compile(r"resets (1[0-2]|[1-9])(?::([0-5][0-9]))?(am|pm) \(([A-Za-z]+(?:/[A-Za-z_+-]+){0,2})\)")
-FALLBACK = timedelta(hours=2)
+UNKNOWN_RECHECK = timedelta(hours=1)
 
 
 def usage_limited(output):
@@ -175,16 +190,17 @@ def usage_limited(output):
 
 
 def reset_time(result, finished):
-    """The next occurrence of the reset's local time after `finished`, within 24 h; anything else: finished + 2 h."""
+    """The next occurrence of the reset's local time after `finished`, within 24 h; None when the reset is unknown
+    (missing, malformed, an unknown zone, or not within 24 h)."""
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-    m = RESET.search(result or "")
+    m = RESET.search(result if isinstance(result, str) else "")
     if not m:
-        return finished + FALLBACK
+        return None
     try:
         zone = ZoneInfo(m.group(4))
     except (ZoneInfoNotFoundError, ValueError):
-        return finished + FALLBACK
+        return None
     hour = int(m.group(1)) % 12 + (12 if m.group(3) == "pm" else 0)
     local = finished.astimezone(zone)
     for days in (0, 1):
@@ -192,7 +208,7 @@ def reset_time(result, finished):
         candidate = datetime(day.year, day.month, day.day, hour, int(m.group(2) or 0), tzinfo=zone)
         if finished < candidate <= finished + timedelta(hours=24):
             return candidate.astimezone(timezone.utc)
-    return finished + FALLBACK
+    return None
 
 
 # Reading what the heartbeat compares. Only a missing file is empty (Ember's B1, B2): a malformed or unreadable one
@@ -390,7 +406,11 @@ class Beat:
             used = sum(1 for a in chain if a.get("attempt") == "deferral")
             if used >= 3:
                 return "usage limit, deferrals used up"
-            at = reset_time(out.get("result"), finished or self.now) + timedelta(minutes=5)
+            end = finished or self.now
+            reset = reset_time(out.get("result"), end)
+            at = reset + timedelta(minutes=5) if reset else end + UNKNOWN_RECHECK
+            if reset is None:
+                self.note(f"heartbeat: usage limit on wake {firing}, reset unknown; deferral {used + 1} tries at {hhmm(at)}")
             self.add(origin, firing, e, "usage-limit", "deferral", used + 1, at, claim, cwd)
             return None
         if nudge or any(a.get("attempt") == "retry" for a in chain):
@@ -641,11 +661,27 @@ class Beat:
         self.data["delivery_fault"] = f
 
     def held(self, name):
-        until = _time(self.section("holds").get(name))
+        hold = self.section("holds").get(name)
+        until = _time(hold.get("until") if isinstance(hold, dict) else hold)
         return until is not None and self.now < until
 
     def mode(self):
         return getattr(self, "_mode", None) or {"mode": "detect"}
+
+    def source_on(self):
+        """STALLED on needs the heartbeat source. Without it: one visible state, misc.source_off (since when), one
+        journal line when it begins and one when it ends, and no R, Q or ticks (no wake whose block can't arrive)."""
+        misc = self.section("misc")
+        if source_named(self.home):
+            if "source_off" in misc:
+                del misc["source_off"]
+                self.note("heartbeat: source_off over: the heartbeat source is named again")
+            return True
+        if "source_off" not in misc:
+            misc["source_off"] = self.now.isoformat(timespec="seconds")
+            self.note("heartbeat: source_off: PERSISTENCE_HEARTBEAT_STALLED is on but 'heartbeat' isn't in "
+                      "PERSISTENCE_OBSERVE_SOURCES; no R, Q or ticks")
+        return False
 
     def stalled_layer(self):
         """Steps 2 to 4 of a beat (3, "order within a beat"), after B, C, A and D: settle what was queued, judge ticks,
@@ -670,6 +706,7 @@ class Beat:
             self.enq = {f["firing"]: f for f in facts if f.get("fact") == "enqueued" and isinstance(f.get("firing"), str)}
             self.hb_items = {w["id"]: w for w in self.queue if isinstance(w.get("hb"), str)}
             self.hb_fired = {f: e for f, e in self.enq.items() if isinstance(e.get("hb"), str)}
+            self.recheck_usage()
             self.settle_queued()
             self.judge_ticks()
             self.check_reports()
@@ -784,10 +821,11 @@ class Beat:
     def settle_queued(self):
         for firing, e in self.hb_fired.items():
             state = self.states.get(firing)
-            if state in ("never-started", "crashed", "failed") and firing not in self.section("fault_seen") \
-                    and not self.usage_hold(firing):
+            if state in ("never-started", "crashed", "failed") and firing not in self.section("fault_seen"):
+                # Seen once: a usage-limited one sets its hold once, so recheck_usage can end that hold for good.
                 self.section("fault_seen")[firing] = self.now.isoformat(timespec="seconds")
-                self.raise_fault("hb_failed", firing)
+                if not self.usage_hold(firing):
+                    self.raise_fault("hb_failed", firing)
         for key, entry in self.queued_entries():
             wake = entry["wake"]
             if wake in self.hb_items:
@@ -804,19 +842,51 @@ class Beat:
         q = self.data.get("quiet")
         if q and q.get("state") == "delivered" and self.states.get(q.get("wake")) not in (None, "running"):
             q["state"] = "none"  # its session ended; if the spell is still this one, nothing happened: back off
-            q["backoff"] = q.get("backoff", 0) + 1
+            if not self.usage_hold(q.get("wake")):
+                q["backoff"] = q.get("backoff", 0) + 1  # a usage-limited one never ran: the hold, not a backoff
 
     def usage_hold(self, firing):
         """A heartbeat firing that hit the usage limit is no fault and no failed attempt: nothing of the stalled layer
-        wakes before the reset plus 5 minutes (section 5, usage limit)."""
+        wakes before the reset plus 5 minutes (section 5, usage limit). holds.usage is structured: {reset: parsed |
+        unknown, since, until}. An unknown reset holds until UNKNOWN_RECHECK after the finish, with one journal line,
+        and is rechecked every beat (recheck_usage)."""
         out, finished = self.finished_output(firing)
         if not usage_limited(out):
             return False
-        until = reset_time(out.get("result"), finished or self.now) + timedelta(minutes=5)
+        end = finished or self.now
+        reset = reset_time(out.get("result"), end)
+        until = reset + timedelta(minutes=5) if reset else end + UNKNOWN_RECHECK
         holds = self.section("holds")
-        if (_time(holds.get("usage")) or self.now) <= until:
-            holds["usage"] = until.isoformat(timespec="seconds")
+        old = holds.get("usage") if isinstance(holds.get("usage"), dict) else {}
+        if (_time(old.get("until")) or self.now) <= until:
+            holds["usage"] = {"reset": "parsed" if reset else "unknown", "since": end.isoformat(timespec="seconds"),
+                              "until": until.isoformat(timespec="seconds")}
+            if not reset and old.get("until") != holds["usage"]["until"]:
+                self.note(f"heartbeat: usage limit, reset unknown; the stalled layer holds and rechecks every beat, "
+                          f"next try {hhmm(until)}")
         return True
+
+    def recheck_usage(self):
+        """Every beat: a hold past its until is dropped; an unknown one ends early once any firing finished after it
+        began without the usage limit (the provider answers again)."""
+        holds = self.section("holds")
+        hold = holds.get("usage")
+        if hold is None:
+            return
+        if not isinstance(hold, dict) or not self.held("usage"):
+            del holds["usage"]
+            return
+        since = _time(hold.get("since"))
+        if hold.get("reset") != "unknown" or since is None:
+            return
+        for f in self.facts:
+            if f.get("fact") != "finished" or (_time(f.get("at")) or EPOCH) <= since:
+                continue
+            out = self.outs.get(f.get("output"))
+            if isinstance(out, dict) and not usage_limited(out):
+                del holds["usage"]
+                self.note("heartbeat: usage hold over (a firing ended without the limit)")
+                return
 
     # 3.0 and 3.0.1: what "running" and "activity" mean.
     def running_now(self):
@@ -1401,7 +1471,7 @@ def beat(state=None, home=None, now=None, sink=journal, systemctl=systemctl_run,
                 status = "queue-unreadable"
                 whole = False
             b.check_units()  # D
-            if b.stalled and whole:
+            if b.stalled and whole and b.source_on():
                 b.stalled_layer()  # R, Q, then the tick last
         for line in notes:
             try:
@@ -1425,7 +1495,17 @@ class Refused(Exception):
     pass
 
 
-def command(args, state=None, now=None, out=print):
+def hold_line(hold):
+    """holds.usage for status: parsed or unknown, never a guess shown as a reset."""
+    until = _time(hold.get("until")) if isinstance(hold, dict) else None
+    if until is None:
+        return None
+    if hold.get("reset") == "parsed":
+        return f"usage hold until {hhmm(until)} (reset read from the output)"
+    return f"usage hold: reset unknown (no reset time in the output); rechecked every beat, next try {hhmm(until)}"
+
+
+def command(args, state=None, now=None, out=print, home=None):
     """status | working | detect | continue <tick id> | ack-fault <rev>. Returns 0, or 1 when refused."""
     import observed
 
@@ -1441,6 +1521,13 @@ def command(args, state=None, now=None, out=print):
                 out(f"mode {mode['mode']}" + (f", gen {mode['gen']}" if mode.get("gen") else "")
                     + (" (the file is malformed: detection)" if mode.get("malformed") else ""))
                 misc = data.get("misc", {})
+                out(f"settings: {settings_path(home)} (its env block only; the environment is never read)")
+                if misc.get("source_off"):
+                    out(f"stalled layer: source_off since {hhmm(_time(misc['source_off']) or now)} ('heartbeat' isn't "
+                        f"in PERSISTENCE_OBSERVE_SOURCES): no R, Q or ticks")
+                usage = data.get("holds", {}).get("usage")
+                if usage and hold_line(usage) and (_time(usage.get("until")) or now) > now:
+                    out(hold_line(usage))
                 if misc.get("last_tick"):
                     out(f"last tick {misc['last_tick']}")
                 if mode["mode"] == "suspended":
