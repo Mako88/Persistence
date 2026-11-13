@@ -133,7 +133,7 @@ class Interleaving(Base):
     def setup_kind(self, kind):
         self.activity(at(6, 33))
         if kind == "reports":
-            self.unread("unit:x.service:ab:failed", when=at(6, 0))
+            self.unread("unit:x.service:ab:failed", when=at(5, 0))
             self.beat(at(6, 40))
         else:
             self.beat(at(8, 8))
@@ -249,7 +249,7 @@ class UsageHold(Base):
     def test_r_parsed_reset_holds_and_counts_no_failure(self):
         self.activity(at(6, 33))
         key = "unit:x.service:ab:failed"
-        self.unread(key, when=at(6, 0))
+        self.unread(key, when=at(5, 0))
         self.beat(at(6, 40))
         [r] = self.hb_items("reports")
         self.fire_hb(r, USAGE, ack=False)  # the block never reached a session: the limit came first
@@ -268,7 +268,7 @@ class UsageHold(Base):
 
     def test_r_and_q_respect_an_existing_hold(self):
         self.activity(at(6, 33))
-        self.unread("unit:x.service:ab:failed", when=at(6, 0))
+        self.unread("unit:x.service:ab:failed", when=at(5, 0))
         data = self.hb()
         data["holds"] = {"usage": {"reset": "parsed", "since": at(6, 0).isoformat(), "until": at(12, 0).isoformat()}}
         heartbeat.save(self.state, data)
@@ -361,7 +361,7 @@ class SourceOff(Base):
     def test_stalled_without_the_heartbeat_source_is_refused_visibly(self):
         self.settings(PERSISTENCE_OBSERVE_SOURCES="prs, claims")
         self.activity(at(6, 33))
-        self.unread("unit:x.service:ab:failed", when=at(6, 0))
+        self.unread("unit:x.service:ab:failed", when=at(5, 0))
         self.working()
         t = at(6, 40)
         while t < at(14, 0):
@@ -428,9 +428,10 @@ class Choices(Base):
 
     def test_3_the_heartbeats_own_queued_wake_counts_as_due(self):
         self.activity(at(6, 33))
-        self.unread("unit:x.service:ab:failed", when=at(6, 0))
-        self.beat(at(8, 8))  # R runs first and queues its wake for now: Q sees a wake due and stays silent
+        self.unread("unit:x.service:ab:failed", when=at(5, 0))
+        self.beat(at(6, 40))  # R queues its wake; run-due hasn't fired it yet (its session's waiter, say)
         self.assertEqual(len(self.hb_items("reports")), 1)
+        self.beat(at(8, 8))  # Q's spell is due, but a wake of the heartbeat's own is queued: that is a wake due
         self.assertEqual(self.hb_items("quiet"), [])
 
     def test_4_a_paused_claim_key_skips_the_hour(self):
@@ -451,7 +452,7 @@ class AckRendered(Base):
         super().setUp()
         self.activity(at(6, 33))
         self.keys = [f"unit:u{i}.service:ab:failed" for i in range(8)]
-        self.unread(*self.keys, when=at(6, 0))
+        self.unread(*self.keys, when=at(5, 0))
         self.beat(at(6, 40))
         [self.r] = self.hb_items("reports")
 
@@ -483,7 +484,7 @@ class AckLockLost(Base):
     def test_lost_ack_lock_is_retryable_and_moves_no_breaker(self):
         self.activity(at(6, 33))
         key = "unit:x.service:ab:failed"
-        self.unread(key, when=at(6, 0))
+        self.unread(key, when=at(5, 0))
         self.beat(at(6, 40))
         [r] = self.hb_items("reports")
         f = r["id"]
@@ -537,7 +538,7 @@ class NoLiteralName(Base):
 
     def test_the_rendered_lines_name_the_running_user(self):
         self.activity(at(6, 33))
-        self.unread("unit:x.service:ab:failed", when=at(6, 0))
+        self.unread("unit:x.service:ab:failed", when=at(5, 0))
         self.beat(at(6, 40))
         [r] = self.hb_items("reports")
         coordination.append(self.state, coordination.enqueued_fact(r, self.now.isoformat(), stalled=True))

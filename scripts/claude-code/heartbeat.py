@@ -652,14 +652,29 @@ class Beat:
         then R, Q and the tick, the tick last."""
         if not self.ledger_ok:
             return  # no whole ledger this beat: no decision (as for A and C)
-        self.queue = read_queue(self.state)
-        self.hb_items = {w["id"]: w for w in self.queue if isinstance(w.get("hb"), str)}
-        self.hb_fired = {f: e for f, e in self.enq.items() if isinstance(e.get("hb"), str)}
-        self.settle_queued()
-        self.judge_ticks()
-        self.check_reports()
-        self.check_quiet()
-        self.check_tick()
+        # One snapshot strategy (Ember's G3): the queue and the ledger are read together under wakes.lock, which run-due
+        # holds across its two writes (the enqueued fact, then the queue), and the lock is held until the layer's last
+        # enqueue. So no firing can fall between the two reads, and none can move while the layer decides. C and A
+        # keep their own reads, as on main.
+        with coordination.lock(self.state, "wakes"):
+            self.queue = read_queue(self.state)
+            try:
+                facts, complete = coordination.snapshot(self.state)
+            except coordination.LedgerError:
+                return
+            if not complete:
+                return
+            self.facts = facts
+            self.outs = self.outputs(facts)
+            self.states = firing_states(facts, self.now, self.table, wrapper_alive, self.data["crashed_seen"], self.outs)
+            self.enq = {f["firing"]: f for f in facts if f.get("fact") == "enqueued" and isinstance(f.get("firing"), str)}
+            self.hb_items = {w["id"]: w for w in self.queue if isinstance(w.get("hb"), str)}
+            self.hb_fired = {f: e for f, e in self.enq.items() if isinstance(e.get("hb"), str)}
+            self.settle_queued()
+            self.judge_ticks()
+            self.check_reports()
+            self.check_quiet()
+            self.check_tick()
 
     # 3.2: reconcile, both directions, before any decision.
     def reconcile(self):
@@ -1037,11 +1052,14 @@ class Beat:
         self.section("known")[wid] = self.now.isoformat(timespec="seconds")
         save(self.state, self.data)  # fault point A
         try:
-            hook.add_heartbeat_wake(id=wid, kind=kind, session=str(uuid.uuid4()), launch="session-id",
-                                    at=self.now.timestamp(), cwd=str(Path(self.home or Path.home()) / "work"), hb=hb,
-                                    fill=fill, set_at=self.now)  # fault point B
+            item = hook.add_heartbeat_wake(id=wid, kind=kind, session=str(uuid.uuid4()), launch="session-id",
+                                           at=self.now.timestamp(), cwd=str(Path(self.home or Path.home()) / "work"),
+                                           hb=hb, fill=fill, set_at=self.now)  # fault point B
         except ValueError as e:
             print(f"heartbeat: no {kind} wake: {e}", file=sys.stderr)
+            return
+        if item:
+            self.hb_items[wid] = item
 
 
 START_GRACE = timedelta(minutes=5)
