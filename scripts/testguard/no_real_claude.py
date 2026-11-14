@@ -8,11 +8,18 @@ even when the code under test is wrong, in three layers:
   unset, so a login shell reads no profile that would put the real claude back on PATH, and
   anything a module derives from HOME at import (hook.STATE) is a throwaway.
 - A fake `claude` is first on PATH. It records its arguments and exits 97; it starts nothing.
-- Popen refuses, before starting it, any argv whose program resolves to the real claude binary.
-After each test the processes it started are waited on (briefly), and a test during which the fake was reached fails,
-named; at exit any later call still fails the run. A test that means to reach the fake says so with `expected()`."""
+- Popen refuses, before starting it, any argv whose program resolves to the real claude binary, and any launch that
+  names `claude` anywhere in its argv (a `bash -lc "... claude -p ..."` string, cwd-exec's `python3 -I cwd_exec.py fd
+  bash -lc ...`) outside `expected()`. The refusal is recorded as well as raised, so a test fails even when the code
+  under test swallows the exception, and even when the launch would have died before reaching any binary (the
+  de220054 incident, 2026-11-13: run_due's launch shell failed on a deleted state dir, so the fake was never reached
+  and the test passed green on the real launch path).
+After each test the processes it started are waited on (briefly), and a test during which the fake was reached or a
+launch was refused fails, named; at exit any later call still fails the run. A test that means to reach the fake says
+so with `expected()`."""
 import atexit
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -43,7 +50,21 @@ if os.name == "nt":
     os.environ["USERPROFILE"] = str(HOME)
 
 _children = []
+_refused = []  # launches of claude refused outside expected(): each fails the test it happened in
+_expecting = 0
 _init = subprocess.Popen.__init__
+# `claude` as a word of its own or the last part of a path, in any argv element or shell string: not `.claude/` or
+# `claude-code/`.
+_NAMES_CLAUDE = re.compile(r"""(?:^|[\s;&|()<>"'`/=])claude(?=$|[\s;&|()<>"'`])""")
+
+
+def names_claude(argv):
+    """Whether a launch's argv names `claude` anywhere: the program, an argument, or a word in a shell string."""
+    for a in argv:
+        text = os.fsdecode(a) if isinstance(a, (str, bytes, os.PathLike)) else str(a)
+        if _NAMES_CLAUDE.search(text) or (REAL and text and os.path.realpath(text) == REAL):
+            return True
+    return False
 
 
 def _guarded_init(self, args, *a, **k):
@@ -52,7 +73,12 @@ def _guarded_init(self, args, *a, **k):
     env = k.get("env")
     found = shutil.which(program, path=(env or os.environ).get("PATH")) if program else None
     if REAL and found and os.path.realpath(found) == REAL:
+        if not _expecting:
+            _refused.append(repr(argv))
         raise AssertionError(f"a test tried to start the real claude ({REAL}): {argv!r}")
+    if not _expecting and names_claude(argv):
+        _refused.append(repr(argv))
+        raise AssertionError(f"a test launched claude outside no_real_claude.expected(): {argv!r}")
     _init(self, args, *a, **k)
     _children.append(self)
 
@@ -78,10 +104,13 @@ def calls():
 @contextmanager
 def expected():
     """A test that reaches the fake on purpose (the guard's own test); yields the calls made inside it."""
+    global _expecting
     made = []
+    _expecting += 1
     try:
         yield made
     finally:
+        _expecting -= 1
         settle()
         for c in calls():
             made.append(c.read_text(encoding="utf-8"))
@@ -99,12 +128,15 @@ def _guarded_run(self, result=None):
     out = _run(self, result)
     settle()
     found = calls()
-    if found:
-        report = _report(found)
+    refused = _refused[:]
+    del _refused[:]
+    if found or refused:
+        report = "; ".join(filter(None, [_report(found), *(f"refused {r}" for r in refused)]))
         for c in found:
             c.rename(SEEN / c.name)
         try:
-            raise AssertionError(f"this test reached `claude` (the guard's fake; a real one would have started): {report}")
+            raise AssertionError(f"this test reached `claude` (the guard's fake; a real one would have started), or tried "
+                                 f"to launch it outside expected(): {report}")
         except AssertionError:
             if result is None:
                 raise
@@ -119,8 +151,9 @@ unittest.TestCase.run = _guarded_run
 def _at_exit():
     settle(2.0)
     found = calls()
-    if found:
-        sys.stderr.write(f"no_real_claude: `claude` was reached outside any test: {_report(found)}\n")
+    if found or _refused:
+        sys.stderr.write(f"no_real_claude: `claude` was reached or launched outside any test: "
+                         f"{'; '.join(filter(None, [_report(found), *_refused]))}\n")
         sys.stderr.flush()
         os._exit(1)
     shutil.rmtree(ROOT, ignore_errors=True)

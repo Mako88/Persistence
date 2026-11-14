@@ -55,8 +55,8 @@ CLAIM_KINDS = set(CLAIM_CONDITIONS.values())
 
 def enabled(home=None):
     """PERSISTENCE_HEARTBEAT from this self's ~/.claude/settings.json env block only, never os.environ (as claims'
-    switch): on when "true" or "1"."""
-    return _setting(home, "PERSISTENCE_HEARTBEAT", "").strip().lower() in ("true", "1")
+    switch): on when "true" or "1" (switch_on)."""
+    return switch_on(_setting(home, "PERSISTENCE_HEARTBEAT", ""))
 
 
 def per_hour(home=None):
@@ -77,8 +77,18 @@ def _setting(home, name, default):
 
 def stalled_on(home=None):
     """PERSISTENCE_HEARTBEAT_STALLED (heartbeat-core-interface.md): the stalled-work layer. Off, a beat is B, C, A, D
-    only, as before it existed. Read like PERSISTENCE_HEARTBEAT: the settings file only, "true" or "1"."""
-    return _setting(home, "PERSISTENCE_HEARTBEAT_STALLED", "").strip().lower() in ("true", "1")
+    only, as before it existed. Read like PERSISTENCE_HEARTBEAT: the settings file only, switch_on's rule.
+
+    The one predicate for this switch: hook.stalled_layer_on (run-due) asks this function and keeps no copy, so the beat
+    and run-due can't disagree on a value (Claude's point on #28)."""
+    return switch_on(_setting(home, "PERSISTENCE_HEARTBEAT_STALLED", ""))
+
+
+def switch_on(value):
+    """The on/off rule for the heartbeat's switches, as _setting returns them (a str, JSON values through str()): on
+    only for "true" or "1", trimmed, any case, so JSON true and 1 are on too. Everything else is off, the string
+    "false" above all: "false", "0", "", "yes", JSON false, 0 and null, and a missing setting or settings file."""
+    return isinstance(value, str) and value.strip().lower() in ("true", "1")
 
 
 def source_named(home=None):
@@ -695,6 +705,15 @@ class Beat:
         # holds across its two writes (the enqueued fact, then the queue), and the lock is held until the layer's last
         # enqueue. So no firing can fall between the two reads, and none can move while the layer decides. C and A
         # keep their own reads, as on main.
+        # The lock is a BACKSTOP, not the only guard (checked for Claude's point on #28). Without it, no interleaving
+        # breaks this layer, because three things hold together: (1) the queue is read BEFORE the ledger; (2) the only
+        # other processes that take an item off the queue, run-due and a live session's waiter, append its fact first
+        # (enqueued, taken) and rewrite the queue after, so an item read as gone from the queue is already in the ledger
+        # read after it: a firing is seen in one or both, never in neither; (3) heartbeat items are added and removed
+        # otherwise only by the beat itself, under heartbeat.lock (adds idempotent by id).
+        # Removing only the lock survives test_never_two_live_wakes_for_one_key_at_any_point; removing it AND reading the
+        # ledger first fails that test. The lock stays so the snapshot doesn't rest on (2) holding for every future
+        # writer; test_the_stalled_layer_reads_the_queue_before_the_ledger pins (1).
         with coordination.lock(self.state, "wakes"):
             self.queue = read_queue(self.state)
             try:
