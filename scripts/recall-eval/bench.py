@@ -8,6 +8,10 @@ recall (a relevance floor, per-session dedup, skipping automated turns) can be s
     bench.py report <results.jsonl>... [--labels <labels.jsonl>] [--watch <id,id>]
                                                 the numbers, as markdown: ids and counts, never fragment text
     bench.py unjudged <results.jsonl>...        per case, the shown ids no label has judged yet
+    bench.py run ... --floor cos=<x>|z=<x> --split tune|held
+                                                one relevance-floor arm, on one half of the labels' split
+    bench.py sweep <results.jsonl>... [--go <arm>]
+                                                every floor arm paired per prompt against off; the pick, or the go check
 
 What is measured. By default (`--layer hook`) each case goes through the real `hook.py recall`, the
 UserPromptSubmit hook, imported from scripts/claude-code: its gate on automated turns, its exclusion of what the
@@ -79,10 +83,32 @@ def _eval():
     return mod
 
 
-def store_env(path):
+FLOOR_ENV = {"cos": "PERSISTENCE_EMBEDDING_MINCOSINE", "z": "PERSISTENCE_EMBEDDING_MINTOPZ"}
+
+
+def parse_floor(spec):
+    """`--floor cos=0.65` or `--floor z=2.5` (or `off`): the store's relevance floor for this run, as (signal, value)."""
+    if not spec or spec == "off":
+        return None
+    signal, _, value = spec.partition("=")
+    if signal not in FLOOR_ENV:
+        raise SystemExit(f"--floor {spec}: cos=<cosine> or z=<z-score> or off")
+    return signal, float(value)
+
+
+def floor_name(floor):
+    return "off" if not floor else f"{floor[0]}={floor[1]:g}"
+
+
+def store_env(path, floor=None):
     env = {k: os.environ.get(k, v) for k, v in LIVE_ENV.items()}
     if path == "words":
         env["PERSISTENCE_EMBEDDING_ENABLED"] = "false"
+    # The floor is the bench's to set, never inherited: an arm is exactly what it says (off unless asked for).
+    for var in FLOOR_ENV.values():
+        env[var] = ""
+    if floor:
+        env[FLOOR_ENV[floor[0]]] = repr(floor[1])
     return env
 
 
@@ -140,7 +166,7 @@ def recall_query(prompt):
 class HookTurns:
     """The real hook.py, imported once, its store calls bent to the CLI on a snapshot, its state in a temp dir."""
 
-    def __init__(self, exe, path, diagnostics):
+    def __init__(self, exe, path, diagnostics, floor=None):
         self.state = tempfile.mkdtemp(prefix="recall-bench-state-")
         h = load_hook(self.state)
         # Belt and braces: nothing below may reach a served store, local or remote.
@@ -148,11 +174,12 @@ class HookTurns:
         h.remote = lambda: None
         h.keep_soon = lambda event, delay=5: None             # keeps the transcript into the store: not here
         h.cued = lambda event, moment, text: ""               # cues are a separate mechanism, not recall
-        self.h, self.exe, self.env, self.db, self.project = h, exe, store_env(path), None, ""
+        self.h, self.exe, self.env, self.db, self.project = h, exe, store_env(path, floor), None, ""
         self.diagnostics = diagnostics
         h.project = lambda event: self.project
 
         self.paths = []                                         # the store's account of each recall this turn
+        self.pools = []                                         # each recall's semantic candidates and floor, this turn
 
         self.errors = []                                        # store calls that failed: the run is void
 
@@ -163,6 +190,7 @@ class HookTurns:
                                  stdin=stdin, env=self.env)
             if recall:
                 self.paths.append(path_of(err) if self.diagnostics else ("unknown", "store gave no account (no --diagnostics)"))
+                self.pools += pools_of(err, len(self.paths))
             if code != 0 and args and args[0] in ("recall", "core"):
                 # The hook reads a failed call as "nothing" (so a live turn goes on); here it would score as recall
                 # showing nothing, silently (a full disk did exactly that, 2026-11-12). Never a number: stop the run.
@@ -194,7 +222,7 @@ class HookTurns:
         import contextlib
         import io
         os.environ["PERSISTENCE_RECALL_COUNT"] = str(count)
-        self.paths, self.said_words = [], False
+        self.paths, self.pools, self.said_words = [], [], False
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             self.h.recall({"session_id": session, "prompt": prompt, "cwd": os.getcwd()})
@@ -210,7 +238,7 @@ class HookTurns:
         return [int(i) for i in ID.findall(recalled)], len(ctx), (None if recalled else ctx[:160]), actual
 
 
-def store_turn(exe, db, env, prompt, project, count, exclude, diagnostics):
+def store_turn(exe, db, env, prompt, project, count, exclude, diagnostics, pools=None):
     """`--layer store`: the store's recall as the hook calls it, without the hook's gate or memory."""
     prompt = recall_query(prompt)
     code, out, err = cli(exe, db, ["recall", "--text", "-", "--limit", str(count), "--snippet", "300",
@@ -222,6 +250,8 @@ def store_turn(exe, db, env, prompt, project, count, exclude, diagnostics):
     if code != 0:
         raise RuntimeError(err[-400:])
     actual = path_of(err) if diagnostics else ("unknown", "store gave no account (no --diagnostics)")
+    if pools is not None:
+        pools += pools_of(err, 1)
     return [int(i) for i in ID.findall(out)], len(out.strip()), None, actual
 
 
@@ -239,6 +269,25 @@ def turn_path(paths):
         whys = list(dict.fromkeys(w for _, w in paths if w))
         return (paths[0][0], "; ".join(whys) or None)
     return ("mixed", " | ".join(f"call {i + 1}: {p}" + (f" ({w})" if w else "") for i, (p, w) in enumerate(paths)))
+
+
+POOL_LINE = re.compile(r"^recall-semantic: (.*)$", re.M)
+
+
+def pools_of(stderr, call):
+    """The store's `recall-semantic:` lines (one per meaning-based ranking in a recall): every candidate's cosine
+    before the floor, the top candidate's z against the whole store, the floor and what it dropped. Ids and numbers
+    only. None from a store that predates them."""
+    out = []
+    for m in POOL_LINE.finditer(stderr or ""):
+        fields = dict(kv.split("=", 1) for kv in m.group(1).split(" ") if "=" in kv)
+        num = lambda k: None if fields.get(k, "-") == "-" else float(fields[k])
+        cands = [c.split(":") for c in fields.get("cands", "").split(",") if c]
+        out.append({"call": call, "stored": int(fields.get("stored", 0)), "mean": num("mean"), "sd": num("sd"),
+                    "top": num("top"), "z": num("z"), "floor": fields.get("floor"),
+                    "dropped": int(fields.get("dropped", 0)), "emptied": fields.get("emptied") == "yes",
+                    "cands": [[int(i), float(c)] for i, c in cands]})
+    return out
 
 
 def path_of(stderr):
@@ -259,7 +308,7 @@ def has_diagnostics(exe, db):
         shutil.rmtree(probe, ignore_errors=True)
 
 
-def settings_of(exe, path, layer, diagnostics, labels):
+def settings_of(exe, path, layer, diagnostics, labels, floor=None, split=None):
     """The settings in effect, each with where it came from, for the top of the report: a default left in place
     (my store's settings) can hide a finding, as query tail 1200 would have hidden Claude's fallback rate."""
     env = store_env(path)
@@ -271,7 +320,7 @@ def settings_of(exe, path, layer, diagnostics, labels):
     for k, v in (("PERSISTENCE_EMBEDDING_QUERYCHUNKCHARS", "0"), ("PERSISTENCE_EMBEDDING_QUERYCHUNKSCORE", "max")):
         knobs[k] = (os.environ.get(k, v), "env" if k in os.environ else "store default")
     return {"exe": exe, "exe_sha256": sha256(exe)[:16], "diagnostics": diagnostics, "layer": layer,
-            "labels_sha256": sha256(labels)[:16], "knobs": knobs}
+            "labels_sha256": sha256(labels)[:16], "knobs": knobs, "floor": floor_name(floor), "split": split}
 
 
 # --- isolation --------------------------------------------------------------------------------------------------
@@ -389,8 +438,13 @@ def heads(db):
         c.close()
 
 
-def run(labels, snap, path, layer, counts, exe, out, modes=("evolving", "fixed")):
+def run(labels, snap, path, layer, counts, exe, out, modes=("evolving", "fixed"), floor=None, split=None):
     config, cases = load_labels(labels)
+    if split:
+        # One half of a predeclared split (the labels' `split`): cases with no split (sessions, automated) aren't in it.
+        cases = [c for c in cases if c.get("split") == split]
+        if not cases:
+            raise SystemExit(f"no case in {labels} has split {split!r}")
     ev = _eval()
     before = sha256(snap)
     work = tempfile.mkdtemp(prefix="recall-bench-work-")
@@ -399,16 +453,16 @@ def run(labels, snap, path, layer, counts, exe, out, modes=("evolving", "fixed")
         diagnostics = has_diagnostics(exe, snap)
         if not diagnostics:
             print("(this store exe gives no account of its path: every turn's actual path is 'unknown')", file=sys.stderr)
-        hook = HookTurns(exe, path, diagnostics) if layer == "hook" else None
-        settings = settings_of(exe, path, layer, diagnostics, labels)
-        env = store_env(path)
+        hook = HookTurns(exe, path, diagnostics, floor) if layer == "hook" else None
+        settings = settings_of(exe, path, layer, diagnostics, labels, floor, split)
+        env = store_env(path, floor)
         rows = []
         for count in counts:
             for n, case in enumerate(cases):
                 kind = case.get("kind", "gold")
                 for mode in (modes if kind == "session" else (None,)):
                     rows += run_case(ev, bases, work, hook, env, exe, diagnostics, config, case, n, kind, mode, path,
-                                     layer, count)
+                                     layer, count, floor)
         if sha256(snap) != before:
             raise RuntimeError(f"the snapshot {snap} changed during the run: results are not to be trusted")
     finally:
@@ -421,7 +475,7 @@ def run(labels, snap, path, layer, counts, exe, out, modes=("evolving", "fixed")
     return rows
 
 
-def run_case(ev, bases, work, hook, env, exe, diagnostics, config, case, n, kind, mode, path, layer, count):
+def run_case(ev, bases, work, hook, env, exe, diagnostics, config, case, n, kind, mode, path, layer, count, floor=None):
     """One case (one turn, or a session's turns), each turn on a fresh copy: of the store as of that turn
     (`evolving`) or as of the first (`fixed`, and every single-turn case)."""
     project = case.get("project", config.get("project", ""))
@@ -451,9 +505,10 @@ def run_case(ev, bases, work, hook, env, exe, diagnostics, config, case, n, kind
                 hook.db = db
             if hook:
                 ids, chars, notice, actual = hook.turn(session, q, count)
-                said_words = hook.said_words
+                said_words, pools = hook.said_words, hook.pools
             else:
-                ids, chars, notice, actual = store_turn(exe, db, env, q, project, count, exclude, diagnostics)
+                pools = []
+                ids, chars, notice, actual = store_turn(exe, db, env, q, project, count, exclude, diagnostics, pools)
                 exclude.update(ids)
                 said_words = None
             gold = set(turn.get("gold", []))
@@ -461,6 +516,7 @@ def run_case(ev, bases, work, hook, env, exe, diagnostics, config, case, n, kind
             judged = ok | set(turn.get("noise", []))
             row = {"case": case["id"] + (f"#{t + 1}" if kind == "session" else ""), "kind": kind, "path": path,
                    "layer": layer, "count": count, "session_store": mode, "as_of": as_of,
+                   "floor": floor_name(floor), "split": case.get("split"), "class": case.get("class"), "pool": pools,
                    "actual": actual[0], "actual_why": actual[1], "prompt_chars": len(q),
                    "query_chars": len(recall_query(q)),
                    "synthetic": case.get("synthetic", "query" in turn),
@@ -469,7 +525,8 @@ def run_case(ev, bases, work, hook, env, exe, diagnostics, config, case, n, kind
                    "gold": sorted(gold), "gold_in_core": sorted(gold & set(map(int, held))),
                    "gold_absent": sorted(gold - active(base, gold)),
                    "relevant": [i for i in ids if i in ok], "unjudged": [i for i in ids if i not in judged],
-                   "repeats": [i for i in ids if i in shown_before], "heads": [i for i in ids if i in heads_of(base)]}
+                   "repeats": [i for i in ids if i in shown_before], "heads": [i for i in ids if i in heads_of(base)],
+                   "said_before": [i for i in ids if i in said_of(base)]}
             live_gold = gold - set(row["gold_in_core"]) - set(row["gold_absent"])
             row["hit"] = bool(live_gold & set(ids)) if live_gold else None
             shown_before.update(ids)
@@ -492,6 +549,21 @@ def heads_of(db):
     return _heads[db]
 
 
+CHAT_MESSAGE = 3          # FragmentType.ChatMessage: a past utterance, shown under "Said before"
+_said = {}
+
+
+def said_of(db):
+    """The ids in `db` that are past utterances (ChatMessage), the "said before" items a relevance floor can't reach."""
+    if db not in _said:
+        c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            _said[db] = {r[0] for r in c.execute("SELECT Id FROM ContextFragments WHERE FragmentType=?", (CHAT_MESSAGE,))}
+        finally:
+            c.close()
+    return _said[db]
+
+
 # --- report -----------------------------------------------------------------------------------------------------
 
 def pct(a, b):
@@ -505,9 +577,9 @@ def rejudge(rows, labels):
     by = {}
     for c in cases:
         for t, turn in enumerate(c["turns"] if c.get("kind") == "session" else [c]):
-            by[c["id"] + (f"#{t + 1}" if c.get("kind") == "session" else "")] = turn
+            by[c["id"] + (f"#{t + 1}" if c.get("kind") == "session" else "")] = (turn, c.get("class"))
     for r in rows:
-        turn = by.get(r["case"])
+        turn, r["class"] = by.get(r["case"], (None, r.get("class")))
         if turn is None:
             continue
         gold = set(turn.get("gold", []))
@@ -629,6 +701,135 @@ def report(paths, watch=(), labels=None):
     return "\n".join(out)
 
 
+# --- sweep (relevance floor, Step B; README "Relevance floor") ---------------------------------------------------------
+
+def sweep(paths, labels=None, go=None, count=3, dbs=()):
+    """The relevance-floor sweep, as markdown (ids and counts only). Each arm is one `run --floor` over the same cases;
+    every arm is compared with the floor-off arm on the same snapshot, PAIRED per prompt: N made right, M made wrong.
+    Only gold and none cases, only turns whose actual path was semantic in both arms (the floor acts on meaning; a turn
+    that fell back to words is left out and counted). One section per store (snapshot), so another self's runs sit
+    beside mine without being pooled with them.
+
+    Pick (tune half): among the arms that lose at most 1 gold hit against off, the one with the fewest chars shown on
+    real none cases; ties go to fewer gold lost, then to the weaker floor. With `go <arm>` (held-out half, once): GO
+    only if that arm loses at most 1 gold hit AND at least halves the chars shown on real none cases, both paired
+    against off on the final output.
+
+    Two splits of real none (Claude's review 5905945539): "said before", the past utterances among the items shown
+    (no floor reaches them), and acks vs the rest, by the label's `class` ("ack"). Results from before rows carried
+    `said_before` get it from `dbs`, the snapshots they were run on (matched by sha256); without one it shows "-"."""
+    rows = [json.loads(l) for p in paths for l in open(p, encoding="utf-8") if l.strip()]
+    rows = rejudge(rows, labels) if labels else rows
+    by_sha = {sha256(d): d for d in dbs}
+    for r in rows:
+        if "said_before" not in r and r.get("snapshot_sha256") in by_sha:
+            r["said_before"] = [i for i in r["shown"] if i in said_of(by_sha[r["snapshot_sha256"]])]
+    rows = [r for r in rows if r["count"] == count and r["path"] == "semantic" and r["kind"] in ("gold", "none")]
+    out = []
+    for snap in sorted({r["snapshot_sha256"] for r in rows}):
+        R = [r for r in rows if r["snapshot_sha256"] == snap]
+        arms = {}
+        for r in R:
+            arms.setdefault(r.get("floor", "off"), {})[r["case"]] = r
+        if "off" not in arms:
+            out.append(f"## store {snap[:16]}…: no floor-off arm, nothing to pair against\n")
+            continue
+        off = arms["off"]
+        splits = sorted({str(r.get("split")) for r in R})
+        st = R[0]["settings"]
+        out.append(f"## Store {snap[:16]}… (split {', '.join(splits)}; @{count}; exe {st['exe_sha256']}…; "
+                   f"labels {st['labels_sha256']}…)\n")
+        out.append("| arm | gold reached | gold lost / gained | gold chars | real none: showed anything | "
+                   "real none: chars (vs off) | real none: emptied / newly shown | synth none: showed / chars | left out | "
+                   "real none: said before / shown | real none acks: chars (vs off) | real none other: chars (vs off) |")
+        out.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
+        classed = any(r.get("class") for r in R if r["kind"] == "none" and not r["synthetic"])
+
+        def chars_vs_off(arm, cases):
+            a, o = sum(arm[c]["chars"] for c in cases), sum(off[c]["chars"] for c in cases)
+            return f"{a}/{o} ({100 * a / o:.0f}%)" if o else f"{a}/0"
+
+        def key(name):
+            if name == "off":
+                return (0, 0.0)
+            sig, _, v = name.partition("=")
+            return (1 if sig == "cos" else 2, float(v))
+
+        summary = {}
+        for name in sorted(arms, key=key):
+            arm = arms[name]
+            both = [c for c in arm if c in off]
+            clean = [c for c in both if arm[c]["actual"] == "semantic" and off[c]["actual"] == "semantic"]
+            left = len(both) - len(clean) + len(set(arm) ^ set(off))
+            g = [c for c in clean if arm[c]["kind"] == "gold" and arm[c]["hit"] is not None]
+            reached = sum(arm[c]["hit"] for c in g)
+            lost = sum(off[c]["hit"] and not arm[c]["hit"] for c in g)
+            gained = sum(arm[c]["hit"] and not off[c]["hit"] for c in g)
+            gchars = sum(arm[c]["chars"] for c in clean if arm[c]["kind"] == "gold")
+            nr = [c for c in clean if arm[c]["kind"] == "none" and not arm[c]["synthetic"]]
+            ns = [c for c in clean if arm[c]["kind"] == "none" and arm[c]["synthetic"]]
+            showed = sum(bool(arm[c]["shown"]) for c in nr)
+            nchars, nchars_off = sum(arm[c]["chars"] for c in nr), sum(off[c]["chars"] for c in nr)
+            emptied = sum(bool(off[c]["shown"]) and not arm[c]["shown"] for c in nr)
+            newly = sum(not off[c]["shown"] and bool(arm[c]["shown"]) for c in nr)
+            ratio = chars_vs_off(arm, nr)
+            said = ("-" if any("said_before" not in arm[c] for c in nr) else
+                    f"{sum(len(arm[c]['said_before']) for c in nr)}/{sum(len(arm[c]['shown']) for c in nr)}")
+            acks = [c for c in nr if arm[c].get("class") == "ack"]
+            other = [c for c in nr if arm[c].get("class") != "ack"]
+            ack_cols = (f"{chars_vs_off(arm, acks)} (n {len(acks)}) | {chars_vs_off(arm, other)} (n {len(other)})"
+                        if classed else "- | -")
+            out.append(f"| {name} | {reached}/{len(g)} | {lost} / {gained} | {gchars} | {showed}/{len(nr)} | {ratio} | "
+                       f"{emptied} / {newly} | {sum(bool(arm[c]['shown']) for c in ns)}/{len(ns)} / "
+                       f"{sum(arm[c]['chars'] for c in ns)} | {left} | {said} | {ack_cols} |")
+            summary[name] = {"lost": lost, "nchars": nchars, "nchars_off": nchars_off, "n_gold": len(g),
+                             "n_none": len(nr)}
+        out.append("")
+        if not classed:
+            out.append("(No `class` on these real none labels, so no ack split: give each ack case `\"class\": \"ack\"`.)\n")
+        candidates = [n for n in summary if n != "off" and summary[n]["lost"] <= 1]
+        if go:
+            s_ = summary.get(go)
+            if not s_:
+                out.append(f"**Go check:** arm {go} was not run on this store.\n")
+            else:
+                halved = s_["nchars_off"] > 0 and s_["nchars"] * 2 <= s_["nchars_off"]
+                ok = s_["lost"] <= 1 and halved
+                out.append(f"**Go check ({go}, this split):** gold lost {s_['lost']} (at most 1: "
+                           f"{'yes' if s_['lost'] <= 1 else 'NO'}); real none chars {s_['nchars']} of {s_['nchars_off']} "
+                           f"(halved: {'yes' if halved else 'NO'}). **{'GO' if ok else 'NO GO'}.**\n")
+        elif candidates:
+            pick = min(candidates, key=lambda n: (summary[n]["nchars"], summary[n]["lost"], key(n)[0], key(n)[1]))
+            out.append(f"**Pick (this split):** {pick}: of the arms losing at most 1 gold hit, fewest chars on real none "
+                       f"cases ({summary[pick]['nchars']} of {summary[pick]['nchars_off']}).\n")
+        else:
+            out.append("**Pick:** none: no floor arm here loses at most 1 gold hit (or no floor arm was run).\n")
+        # What the floor sees, from the off arm's own record: the turn's first recall call, its first ranking with
+        # candidates (a hook's re-ask without exclusion is a different question, so not counted).
+        def first_pool(r):
+            return next((p for p in r.get("pool") or [] if p["call"] == 1 and p["cands"]), None)
+        def spread(kind, synth=None, ack=None):
+            vals = [first_pool(off[c]) for c in off if off[c]["kind"] == kind and off[c]["actual"] == "semantic"
+                    and (synth is None or off[c]["synthetic"] == synth)
+                    and (ack is None or (off[c].get("class") == "ack") == ack)]
+            vals = [v for v in vals if v]
+            if not vals:
+                return "-"
+            tops = sorted(v["top"] for v in vals)
+            zs = sorted(v["z"] for v in vals if v["z"] is not None)
+            med = lambda xs: xs[len(xs) // 2] if xs else float("nan")
+            return (f"n {len(vals)}; top cosine {tops[0]:.2f}..{tops[-1]:.2f} (median {med(tops):.2f}); "
+                    f"z {zs[0]:.2f}..{zs[-1]:.2f} (median {med(zs):.2f})" if zs else f"n {len(vals)}")
+        out.append("What the floor sees (floor-off arm, first recall call's first ranking with candidates):\n")
+        out.append(f"- gold: {spread('gold')}")
+        out.append(f"- real none: {spread('none', False)}")
+        if classed:
+            out.append(f"  - acks: {spread('none', False, True)}")
+            out.append(f"  - other: {spread('none', False, False)}")
+        out.append(f"- synthetic none: {spread('none', True)}\n")
+    return "\n".join(out)
+
+
 def unjudged(paths):
     """Per case, the shown ids no label judges yet: add each to the case's `ok` or `noise` and the precision line
     stops being a lower bound. Ids only."""
@@ -656,17 +857,29 @@ def main(argv):
     r.add_argument("--counts", default="3,5")
     r.add_argument("--exe", default=EXE)
     r.add_argument("--out", required=True)
+    r.add_argument("--floor", default="off", help="the store's relevance floor for this run: cos=<x>, z=<x> or off")
+    r.add_argument("--split", choices=["tune", "held"], help="only the cases in this half of the labels' split")
     g = sub.add_parser("report")
     g.add_argument("results", nargs="+")
     g.add_argument("--watch", default="", help="ids whose share of what is shown to report (none by default)")
     g.add_argument("--labels", help="judge with this labels file now, not as at run time")
+    w = sub.add_parser("sweep")
+    w.add_argument("results", nargs="+")
+    w.add_argument("--labels", help="judge with this labels file now, not as at run time")
+    w.add_argument("--go", help="the arm tuning picked (e.g. cos=0.65): check it against the go rule on this split")
+    w.add_argument("--count", type=int, default=3)
+    w.add_argument("--db", action="append", default=[],
+                   help="a snapshot the results were run on: gives older rows their said-before count (repeatable)")
     u = sub.add_parser("unjudged")
     u.add_argument("results", nargs="+")
     a = p.parse_args(argv)
     if a.cmd == "snapshot":
         snapshot(a.live, a.out, a.exe)
     elif a.cmd == "run":
-        run(a.labels, a.db, a.path, a.layer, [int(c) for c in a.counts.split(",")], a.exe, a.out)
+        run(a.labels, a.db, a.path, a.layer, [int(c) for c in a.counts.split(",")], a.exe, a.out,
+            floor=parse_floor(a.floor), split=a.split)
+    elif a.cmd == "sweep":
+        print(sweep(a.results, a.labels, a.go, a.count, a.db))
     elif a.cmd == "unjudged":
         unjudged(a.results)
     else:

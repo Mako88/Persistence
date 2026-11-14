@@ -68,9 +68,18 @@ public class QueryEmbedder(IEmbeddingClient embeddings, IAppConfig config, IDisp
         }
     }
 
+    private readonly List<RelevanceFloor> pools = [];
+
+    /// <summary>Each meaning-based ranking of fragments in this recall, in order: its candidates, scores and floor (ids and numbers).</summary>
+    public IReadOnlyList<RelevanceFloor> Pools => pools;
+
+    /// <summary>Notes one meaning-based ranking's candidates and floor, for `recall --diagnostics`.</summary>
+    public void Pool(RelevanceFloor floor) => pools.Add(floor);
+
     /// <summary>Starts a recall afresh: no fallback noted, nothing compared, nothing remembered as failed.</summary>
     public void Clear()
     {
+        pools.Clear();
         Fallback = null;
         failed = null;
         failedWhy = null;

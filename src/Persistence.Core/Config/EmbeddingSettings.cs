@@ -97,6 +97,32 @@ public class EmbeddingSettings
     /// <summary>Elapsed-time budget for a recall's query embedding, in milliseconds; what is left when it runs out is reported.</summary>
     public int QueryChunkBudgetMs { get; set; } = 8000;
 
+    /// <summary>
+    /// Relevance floor, absolute (the relevance-floor plan, Step B; scripts/recall-eval/README.md): a meaning-based candidate whose cosine to the
+    /// query is under this is dropped from the semantic list <em>before</em> rank fusion. The words (BM25) list is never
+    /// filtered, so an item under the floor that shares words with the message can still be shown. Null (the default) is
+    /// off: today's recall exactly. Off by default so no store's recall changes until its self opts in from its own run.
+    /// </summary>
+    public double? MinCosine { get; set; }
+
+    /// <summary>
+    /// Relevance floor, query-relative: the best cosine's z-score against every stored vector's cosine for this query.
+    /// Under it, nothing stands out from the store, and the semantic list enters fusion empty (words still fuse as usual).
+    /// Null (the default) is off.
+    /// </summary>
+    public double? MinTopZ { get; set; }
+
+    /// <summary>Settings for the relevance floor that could not be read; a problem at start, as for the chunk settings.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public List<string> UnreadableFloor { get; } = [];
+
+    /// <summary>Why the relevance floor cannot run, or null when it can (or is off).</summary>
+    public string? RelevanceFloorProblem() =>
+        UnreadableFloor.Count > 0 ? $"Not a number: {string.Join(", ", UnreadableFloor)}."
+        : MinCosine is { } c && (double.IsNaN(c) || c < -1 || c > 1) ? $"MinCosine is {c}: -1 to 1, or unset (off)."
+        : MinTopZ is { } z && (double.IsNaN(z) || double.IsInfinity(z)) ? $"MinTopZ is {z}: a number, or unset (off)."
+        : null;
+
     /// <summary>Settings given that could not be read (an environment value that is not a number); a problem at start.</summary>
     [System.Text.Json.Serialization.JsonIgnore]
     public List<string> Unreadable { get; } = [];
