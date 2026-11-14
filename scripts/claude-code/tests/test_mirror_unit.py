@@ -6,7 +6,7 @@ The checkout's reference-transaction hook also pushes origin/main to the mirror,
 so a run whose fetch advanced main raced the hook's push into the same ref. It failed twice with "incorrect old value
 provided" (2026-11-10 10:18, 2026-11-13 13:52 server time), each time in a run that advanced main; rebuilt in temporary
 repositories, the old command with that hook failed 17 of 20 such runs. The fix is that the mirror is the only writer
-of its refs (no checkout, no push, and the hook deleted when this unit is installed), and runs of it are serialised."""
+of its refs (no checkout, no push, and the hook moved aside when this unit is installed), and runs of it are serialised."""
 import os
 import shlex
 import shutil
@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "testguard"))
 import no_real_claude  # noqa: E402,F401  first: no test can start a real claude (Arden 1570199499278909491)
 
 UNIT = Path(__file__).resolve().parent.parent / "systemd" / "persistence-mirror.service"
+RUNBOOK = UNIT.with_name("persistence-mirror.md")
 
 
 def unit():
@@ -28,7 +29,8 @@ def unit():
     env, command = {}, None
     for line in UNIT.read_text().splitlines():
         if line.startswith("Environment="):
-            key, value = line[len("Environment="):].split("=", 1)
+            (assignment,) = shlex.split(line[len("Environment="):])  # systemd quotes an assignment with spaces whole
+            key, value = assignment.split("=", 1)
             env[key] = value
         elif line.startswith("ExecStart="):
             argv = shlex.split(line[len("ExecStart="):])
@@ -77,11 +79,31 @@ class Mirror(unittest.TestCase):
 
     def test_the_unit_names_only_the_mirror_and_upstream(self):
         env, command = unit()
-        self.assertEqual(env, {"MIRROR": "/srv/persistence.git", "UPSTREAM": "git@github.com:Mako88/Persistence.git"})
+        self.assertEqual(env, {
+            "MIRROR": "/srv/persistence.git",
+            "UPSTREAM": "git@github.com:Mako88/Persistence.git",
+            # No agent and no terminal under systemd: one pinned key, and a failure instead of a prompt.
+            "GIT_SSH_COMMAND": "ssh -i /home/ubuntu/.ssh/id_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes",
+        })
         # No working checkout, no push: the mirror's refs have no other writer.
         self.assertNotIn("/home/", command)
         self.assertNotIn("push", command)
         self.assertIn('flock -w 120 "$MIRROR"', command)
+        self.assertIn("--no-tags", command)
+
+    def test_install_step_1_checks_the_units_own_fetch_path(self):
+        # The tests below fetch from local paths, so SSH as ubuntu is checked only by install step 1 (Arden, review
+        # 5900691699). It must use the unit's exact URL and SSH command, or it checks something else.
+        env, _ = unit()
+        runbook = RUNBOOK.read_text()
+        step1 = runbook[runbook.index("# 1. "):runbook.index("# 2. ")]
+        self.assertIn(f"GIT_SSH_COMMAND='{env['GIT_SSH_COMMAND']}'", step1)
+        self.assertIn(f"git ls-remote {env['UPSTREAM']} refs/heads/main", step1)
+        self.assertIn("sudo -u ubuntu env -i", step1)
+        # Neither the old unit nor the hook is versioned: kept, never deleted.
+        self.assertNotIn("rm ", runbook)
+        self.assertIn('mv "$HOOK" "$HOOK.disabled-$STAMP"', runbook)
+        self.assertIn('mv "$HOOK.disabled-$STAMP" "$HOOK"', runbook)
 
     def test_follows_upstream_main_including_a_force_push(self):
         head = self.advance()
@@ -94,6 +116,14 @@ class Mirror(unittest.TestCase):
         result = self.run_unit()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.mirrored(), rewritten)
+
+    def test_tags_are_not_mirrored(self):
+        # Only main has one writer here; a followed tag would be a ref nobody decided to publish (Arden's minor point).
+        self.advance()
+        git("tag", "t1", cwd=self.work)
+        git("push", "-q", str(self.upstream), "t1", cwd=self.work)
+        self.assertEqual(self.run_unit().returncode, 0)
+        self.assertEqual(git("--git-dir", str(self.mirror), "tag", "--list"), "")
 
     def test_a_run_that_changes_nothing_succeeds(self):
         head = self.advance()

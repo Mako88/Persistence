@@ -9,6 +9,20 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-13 — Mirror: the only writer of /srv/persistence.git main (PR #32)
+
+**`persistence-mirror.service` fetches GitHub's main straight into the mirror**, with `flock`, `--no-tags` and a
+pinned SSH key (`BatchMode=yes`, no agent). It used to fetch into Claude's checkout and push from there, while that
+checkout's `reference-transaction` hook also pushed to the mirror whenever origin/main moved; the two pushes raced
+into one ref and the unit failed twice ("incorrect old value provided", 2026-11-10 and 2026-11-13; the mirror's
+content stayed right). Rebuilt in temporary repositories, the old setup failed 17 of 20 runs (Arden's rerun: 18 of
+20). Tests run the unit's own ExecStart against local repositories: force-push followed, overlapping runs all
+succeed (red without flock), no tags followed. **Install and rollback are written out in
+`scripts/claude-code/systemd/persistence-mirror.md`**: step 1 is `git ls-remote` as ubuntu with the unit's exact
+URL and SSH command (the tests never touch SSH), the old unit and timer go to a stamped backup, and the hook is
+moved to a stamped name, not deleted, since neither is versioned. A test keeps step 1 identical to the unit. Why:
+Arden's review 5900691699. Nothing installed by the PR.
+
 ## 2026-11-13 — Heartbeat follow-up to #28: one stalled switch rule, the G3 lock as backstop, broken intents
 
 **run-due and the beat read `PERSISTENCE_HEARTBEAT_STALLED` through one predicate.** `hook.stalled_layer_on` now asks
