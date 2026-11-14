@@ -457,6 +457,18 @@ public class AppConfig : IAppConfig
         Chunk("QUERYCHUNKMAX", v => config.Embedding.QueryChunkMax = v);
         Chunk("QUERYCHUNKBATCH", v => config.Embedding.QueryChunkBatch = v);
         Chunk("QUERYCHUNKBUDGETMS", v => config.Embedding.QueryChunkBudgetMs = v);
+        // The relevance floor: unset is off; set and unreadable fails at start (RelevanceFloorProblem), never a quiet off.
+        void Floor(string suffix, Action<double> set)
+        {
+            if (Env(suffix) is { } raw && raw.Trim().Length > 0)
+            {
+                if (double.TryParse(raw, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var value)) set(value);
+                else config.Embedding.UnreadableFloor.Add($"{EnvPrefix}EMBEDDING_{suffix}");
+            }
+        }
+
+        Floor("MINCOSINE", v => config.Embedding.MinCosine = v);
+        Floor("MINTOPZ", v => config.Embedding.MinTopZ = v);
         if (Env("QUERYCHUNKSCORE") is { Length: > 0 } score) config.Embedding.QueryChunkScore = score.Trim().ToLowerInvariant();
     }
 

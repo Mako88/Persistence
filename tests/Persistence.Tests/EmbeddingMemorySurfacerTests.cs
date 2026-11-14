@@ -236,6 +236,96 @@ public class EmbeddingMemorySurfacerTests
         Assert.Equal(0, new EmbeddingSettings().QueryTailChars);
     }
 
+    // -- Relevance floor (off by default; on the semantic list only, before fusion) --
+
+    // Query [1,0]. Cosines: #2 1.0, #3 0.8, #4 0.6 (semantic only); #1 is found by words and also has a vector at 0.6.
+    private static readonly (long, float[])[] FloorVectors =
+        [(2L, [1f, 0f]), (3L, [0.8f, 0.6f]), (4L, [0.6f, 0.8f]), (1L, [0.6f, 0.8f])];
+
+    private static IAppConfig FloorConfig(double? minCosine, double? minTopZ)
+    {
+        var config = new Mock<IAppConfig>();
+        config.Setup(c => c.Embedding).Returns(new EmbeddingSettings
+        {
+            Enabled = true, ApiBaseUrl = "http://localhost:8081/v1", BackfillPerTurn = 32, FusionK = 60,
+            QualityWeight = 0, MinCosine = minCosine, MinTopZ = minTopZ,
+        });
+        return config.Object;
+    }
+
+    private static EmbeddingMemorySurfacer BuildFloor(double? minCosine, double? minTopZ, QueryEmbedder queryEmbedder,
+        FakeEmbeddingClient embeddings, (long, float[])[]? vectors = null)
+    {
+        var fragmentRepo = new Mock<IContextFragmentRepository>();
+        var known = new[] { Frag(1), Frag(2), Frag(3), Frag(4) }.ToDictionary(f => f.Id);
+        fragmentRepo.Setup(r => r.GetHeadsAsync(It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<long, (long HeadId, int Hops)>());
+        fragmentRepo.Setup(r => r.SearchRelevantAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([known[1]]);
+        fragmentRepo.Setup(r => r.GetByIdsAsync(It.IsAny<IEnumerable<long>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IEnumerable<long> ids, CancellationToken _) => ids.Where(known.ContainsKey).Select(id => known[id]).ToList());
+        var repo = new FakeEmbeddingRepository();
+        foreach (var (id, vector) in vectors ?? FloorVectors)
+        {
+            repo.Stored[id] = new StoredEmbedding(id, vector, "hash");
+        }
+
+        return new EmbeddingMemorySurfacer(new MemorySurfacer(fragmentRepo.Object), embeddings, repo, fragmentRepo.Object,
+            FloorConfig(minCosine, minTopZ), queryEmbedder);
+    }
+
+    [Fact]
+    public async Task RelevanceFloor_Off_IsTodaysRecallAndRecordsEveryCandidatesCosine()
+    {
+        var embeddings = new FakeEmbeddingClient();
+        var qe = new QueryEmbedder(embeddings, FloorConfig(null, null), Mock.Of<IDisplayProvider>());
+        var surfaced = await BuildFloor(null, null, qe, embeddings).SurfaceAsync([], "query", count: 4, CancellationToken.None);
+
+        // RRF of words [1] and meaning [2,3,1,4] (#1 and #4 tie at 0.6; id breaks it): #1 is in both lists.
+        Assert.Equal([1L, 2L, 3L, 4L], surfaced.Select(f => f.Id));
+        var pool = Assert.Single(qe.Pools);
+        Assert.Equal([2L, 3L], pool.Candidates.Take(2).Select(c => c.Id));
+        Assert.Equal(1.0, pool.Top!.Value, 4);
+        Assert.Equal(0, pool.Dropped);
+        Assert.Contains("floor=off dropped=0 emptied=no cands=2:1.0000,3:0.8000,", pool.Line());
+    }
+
+    [Fact]
+    public async Task RelevanceFloor_MinCosine_DropsASemanticOnlyItemButNotOneWordsAlsoFound()
+    {
+        var embeddings = new FakeEmbeddingClient();
+        var qe = new QueryEmbedder(embeddings, FloorConfig(0.7, null), Mock.Of<IDisplayProvider>());
+        var surfaced = await BuildFloor(0.7, null, qe, embeddings).SurfaceAsync([], "query", count: 4, CancellationToken.None);
+
+        // #4 (0.6, meaning only) is never shown; #1 (0.6) is still shown, through words; the words list is unfiltered.
+        Assert.DoesNotContain(4L, surfaced.Select(f => f.Id));
+        Assert.Contains(1L, surfaced.Select(f => f.Id));
+        Assert.Equal([1L, 2L, 3L], surfaced.Select(f => f.Id)); // #1 and #2 tie at 1/61; id breaks it
+        Assert.Equal(2, qe.Pools.Single().Dropped); // #1 and #4 left the semantic list; #1 came back through words
+        Assert.Contains("floor=cos>=0.7000 dropped=2", qe.Pools.Single().Line());
+    }
+
+    [Fact]
+    public async Task RelevanceFloor_TopZUnderTheGate_SemanticListEntersFusionEmptyAndWordsStillFuse()
+    {
+        // A flat distribution: every stored cosine the same, so nothing stands out (sd 0: no z, and the gate closes).
+        (long, float[])[] flat = [(2L, [0.6f, 0.8f]), (3L, [0.6f, 0.8f]), (4L, [0.6f, 0.8f]), (1L, [0.6f, 0.8f])];
+        var embeddings = new FakeEmbeddingClient();
+        var qe = new QueryEmbedder(embeddings, FloorConfig(null, 1.0), Mock.Of<IDisplayProvider>());
+        var surfaced = await BuildFloor(null, 1.0, qe, embeddings, flat).SurfaceAsync([], "query", count: 4, CancellationToken.None);
+
+        Assert.Equal([1L], surfaced.Select(f => f.Id)); // words alone
+        Assert.True(qe.Pools.Single().Emptied);
+        Assert.Contains("z=- floor=z>=1.0000 dropped=4 emptied=yes", qe.Pools.Single().Line());
+
+        // A standout clears the same gate: the default vectors give #2 a z well over 1.
+        var qe2 = new QueryEmbedder(embeddings, FloorConfig(null, 1.0), Mock.Of<IDisplayProvider>());
+        var surfaced2 = await BuildFloor(null, 1.0, qe2, embeddings).SurfaceAsync([], "query", count: 4, CancellationToken.None);
+        Assert.Equal([1L, 2L, 3L, 4L], surfaced2.Select(f => f.Id));
+        Assert.False(qe2.Pools.Single().Emptied);
+        Assert.True(qe2.Pools.Single().TopZ > 1.0);
+    }
+
     [Fact]
     public async Task SurfaceAsync_TokenDenseTailRefused_ShrinksAndRetriesUntilItEmbeds()
     {

@@ -144,6 +144,39 @@ count):
 
 Chars are what the hook actually injects (the whole additionalContext, notices included).
 
+## Relevance floor (sweep)
+
+From the relevance-floor plan (Step B; Arden, 2026-11-14, with Ember's held-out split and floor-before-fusion). The store has two floors, **both off unless set**, each acting on the
+meaning-based candidate list only, **before** rank fusion; the words (BM25) list is never filtered, so an item under a
+floor can still come back through shared words, and what is scored is the final output the hook injects.
+
+- `PERSISTENCE_EMBEDDING_MINCOSINE=<x>`: a semantic candidate whose plain cosine is under x is dropped before fusion.
+- `PERSISTENCE_EMBEDDING_MINTOPZ=<x>`: the best eligible candidate's z-score against the query's cosines to every
+  stored vector; under x (or no spread at all), the semantic list enters fusion empty. Words fuse as usual.
+- Set and unreadable (or a cosine outside -1..1) fails at start, never a quiet "off".
+
+`recall --diagnostics` adds one `recall-semantic:` line per meaning-based ranking: the store size, the mean and spread
+of the query's cosines, the top candidate's cosine and z, the floor in effect, how many it dropped, and every
+candidate as `id:cosine` (before the floor). Ids and numbers only. Each turn's results row keeps them as `pool`.
+
+```sh
+python3 bench.py run labels.jsonl --db "$D/snap.db" --counts 3 --split tune --floor off    --out "$D/tune.jsonl"
+python3 bench.py run labels.jsonl --db "$D/snap.db" --counts 3 --split tune --floor cos=0.6 --out "$D/tune.jsonl"
+python3 bench.py run labels.jsonl --db "$D/snap.db" --counts 3 --split tune --floor z=2.5  --out "$D/tune.jsonl"
+python3 bench.py sweep "$D/tune.jsonl"                      # every arm paired with off; the pick
+python3 bench.py run labels.jsonl ... --split held --floor off  --out "$D/held.jsonl"   # once each, after the pick
+python3 bench.py run labels.jsonl ... --split held --floor <picked> --out "$D/held.jsonl"
+python3 bench.py sweep "$D/held.jsonl" --go <picked>        # GO or NO GO
+```
+
+`--split` runs one half of the labels' predeclared `split` (cases without one, sessions and automated, are not in
+either). `--floor` sets the store's floor for that arm and clears any inherited from the environment. `sweep` pairs
+every arm with the floor-off arm per prompt, over gold and none cases whose turn went semantic in both (others are
+counted as left out), one section per store snapshot. **Pick** (tune): of the arms losing at most 1 gold hit, the one
+with the fewest chars on real none cases (ties: fewer gold lost, then the weaker floor). **Go** (held-out, once):
+the picked arm loses at most 1 gold hit AND at least halves chars on real none cases. It also prints the spread of
+top cosine and z for gold, real none and synthetic none prompts, from the off arm's own record.
+
 ## Running it on another store
 
 The harness is the same; the labels are yours. Write a labels file against your own store (your ids, your

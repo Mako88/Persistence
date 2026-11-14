@@ -660,7 +660,8 @@ internal sealed partial class FragmentStore(
         var chunks = queryEmbedder.Query is { Chunked: true } query
             ? query.Line(queryEmbedder.BestChunks.Where(b => shown.Contains(b.Key)).ToDictionary(b => b.Key, b => b.Value))
             : null;
-        return new Recalled(kept, elsewhere, utterances, await FramesAsync(kept, skip, project), queryEmbedder.Fallback, path, why, chunks);
+        return new Recalled(kept, elsewhere, utterances, await FramesAsync(kept, skip, project), queryEmbedder.Fallback, path, why, chunks,
+            queryEmbedder.Pools.ToList());
     }
 
     /// <summary>Embeds up to <paramref name="limit"/> past utterances that have none yet, for conversation recall.</summary>
@@ -679,7 +680,8 @@ internal sealed partial class FragmentStore(
         string? Fallback = null,
         string Path = RecallPath.Unknown,
         string? PathWhy = null,
-        string? Chunks = null);
+        string? Chunks = null,
+        IReadOnlyList<RelevanceFloor>? Pools = null);
 
     /// <summary>
     /// The projects whose names a text says as words: <c>minecraft-mods</c> is named by "the Minecraft mods

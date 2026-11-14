@@ -136,5 +136,79 @@ class StrippedQueries(unittest.TestCase):
         self.assertEqual(("mean", "env"), knobs["PERSISTENCE_EMBEDDING_QUERYCHUNKSCORE"])
 
 
+class RelevanceFloor(unittest.TestCase):
+    """Step B of the relevance-floor plan: the store's candidate line parses; an arm's floor is exactly what it says;
+    the sweep pairs each arm with off per prompt and applies the pick and go rules."""
+
+    LINE = ("recall-path: semantic\n"
+            "recall-semantic: stored=100 mean=0.4000 sd=0.0500 top=0.8000 z=8.0000 floor=cos>=0.6500 dropped=1 "
+            "emptied=no cands=12:0.8000,7:0.6000\n"
+            "recall-semantic: stored=100 mean=0.4000 sd=0.0000 top=- z=- floor=z>=2.0000 dropped=0 emptied=yes cands=\n")
+
+    def test_pool_lines_parse_to_ids_and_numbers(self):
+        a, b = bench.pools_of(self.LINE, 2)
+        self.assertEqual({"call": 2, "stored": 100, "mean": 0.4, "sd": 0.05, "top": 0.8, "z": 8.0,
+                          "floor": "cos>=0.6500", "dropped": 1, "emptied": False, "cands": [[12, 0.8], [7, 0.6]]}, a)
+        self.assertEqual((None, None, True, []), (b["top"], b["z"], b["emptied"], b["cands"]))
+        self.assertEqual([], bench.pools_of("recall-path: semantic\n", 1))   # an older store: no pool, not an error
+
+    def test_an_arm_sets_only_its_own_floor_and_never_inherits_one(self):
+        with mock.patch.dict(bench.os.environ, {"PERSISTENCE_EMBEDDING_MINCOSINE": "0.9"}):
+            off = bench.store_env("semantic", None)
+            z = bench.store_env("semantic", bench.parse_floor("z=2.5"))
+        self.assertEqual(("", ""), (off["PERSISTENCE_EMBEDDING_MINCOSINE"], off["PERSISTENCE_EMBEDDING_MINTOPZ"]))
+        self.assertEqual(("", "2.5"), (z["PERSISTENCE_EMBEDDING_MINCOSINE"], z["PERSISTENCE_EMBEDDING_MINTOPZ"]))
+        self.assertIsNone(bench.parse_floor("off"))
+        self.assertEqual("cos=0.65", bench.floor_name(bench.parse_floor("cos=0.65")))
+        with self.assertRaises(SystemExit):
+            bench.parse_floor("bm25=3")
+
+    @staticmethod
+    def row(case, floor, kind, shown, chars, hit=None, actual="semantic", synthetic=False):
+        return {"case": case, "floor": floor, "kind": kind, "shown": shown, "chars": chars, "hit": hit,
+                "actual": actual, "synthetic": synthetic, "count": 3, "path": "semantic", "split": "tune",
+                "snapshot_sha256": "a" * 64, "pool": [],
+                "settings": {"exe_sha256": "e" * 16, "labels_sha256": "l" * 16}}
+
+    def write(self, rows):
+        import tempfile
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        path = Path(d) / "r.jsonl"
+        path.write_text("".join(bench.json.dumps(r) + "\n" for r in rows))
+        return str(path)
+
+    def rows(self):
+        r = self.row
+        return [
+            r("g1", "off", "gold", [1], 500, True), r("g2", "off", "gold", [2], 500, True),
+            r("n1", "off", "none", [5], 1000), r("n2", "off", "none", [6], 1000),
+            r("nw", "off", "none", [7], 999, actual="words-fallback"),
+            # cos=0.7: loses one gold, empties both real none prompts
+            r("g1", "cos=0.7", "gold", [1], 500, True), r("g2", "cos=0.7", "gold", [], 60, False),
+            r("n1", "cos=0.7", "none", [], 0), r("n2", "cos=0.7", "none", [], 0),
+            r("nw", "cos=0.7", "none", [7], 999, actual="words-fallback"),
+            # z=3: loses both gold: not eligible however much it removes
+            r("g1", "z=3", "gold", [], 0, False), r("g2", "z=3", "gold", [], 0, False),
+            r("n1", "z=3", "none", [], 0), r("n2", "z=3", "none", [], 0),
+            r("nw", "z=3", "none", [], 0, actual="words-fallback"),
+        ]
+
+    def test_sweep_pairs_per_prompt_leaves_out_words_turns_and_picks_within_one_lost_gold(self):
+        out = bench.sweep([self.write(self.rows())])
+        self.assertIn("| cos=0.7 | 1/2 | 1 / 0 | 560 | 0/2 | 0/2000 (0%) | 2 / 0 | 0/0 / 0 | 1 |", out)
+        self.assertIn("| z=3 | 0/2 | 2 / 0 |", out)
+        self.assertIn("**Pick (this split):** cos=0.7", out)
+
+    def test_go_needs_at_most_one_gold_lost_and_none_chars_halved(self):
+        self.assertIn("**GO.**", bench.sweep([self.write(self.rows())], go="cos=0.7"))
+        self.assertIn("**NO GO.**", bench.sweep([self.write(self.rows())], go="z=3"))
+        rows = [r for r in self.rows() if not (r["floor"] == "cos=0.7" and r["case"] == "n2")]
+        rows.append(self.row("n2", "cos=0.7", "none", [6], 1000))     # 1000 of 2000: exactly halved counts
+        self.assertIn("**GO.**", bench.sweep([self.write(rows)], go="cos=0.7"))
+        rows[-1]["chars"] = 1001
+        self.assertIn("**NO GO.**", bench.sweep([self.write(rows)], go="cos=0.7"))
+
+
 if __name__ == "__main__":
     unittest.main()

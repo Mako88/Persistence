@@ -130,9 +130,11 @@ public class EmbeddingMemorySurfacer : IMemorySurfacer
 
         // Rank ids by similarity first, then hydrate only the top of the list: the vectors are the
         // cheap part, the fragment rows are not. Unchunked, the score is the cosine to the one query vector, as always.
-        var topIds = stored.Values
+        var all = stored.Values
             .Select(e => (e.ContextFragmentId, best: query.Score(e.Vector)))
             .Select(x => (x.ContextFragmentId, score: x.best.Score, chunk: x.best.Chunk))
+            .ToList();
+        var topIds = all
             .Where(x => x.score > 0)
             .OrderByDescending(x => x.score)
             .Take(pool * 2)
@@ -161,12 +163,19 @@ public class EmbeddingMemorySurfacer : IMemorySurfacer
                         && x.head.Status == ContextFragmentStatus.Active
                         && authorable.Contains(x.head.FragmentType)
                         && !exclude.Contains(x.head.Id))
-            .Select(x => (x.head, score: x.similarity * MemorySurfacer.Quality(x.head, config.Embedding.QualityWeight), x.chunk))
+            .Select(x => (x.head, x.similarity, score: x.similarity * MemorySurfacer.Quality(x.head, config.Embedding.QualityWeight), x.chunk))
             .GroupBy(x => x.head.Id)
             .Select(g => g.OrderByDescending(x => x.score).First()) // old and head both matching: the better score
             .OrderByDescending(x => x.score)
-            .Take(pool)
             .ToList();
+
+        // The relevance floor (off unless set), on the semantic list only and before fusion: the words list is never
+        // filtered, so an item under it can still come back through shared words. What is recorded is the list before
+        // the floor, so a bench can see every candidate's cosine whatever floor it ran with (ids and numbers only).
+        var floor = RelevanceFloor.Of(all.Select(x => x.score).ToList(), ranked.Select(x => (x.head.Id, x.similarity)).ToList(),
+            config.Embedding.MinCosine, config.Embedding.MinTopZ);
+        queryEmbedder.Pool(floor with { Candidates = floor.Candidates.Take(pool).ToList() });
+        ranked = ranked.Where(x => floor.Keeps(x.similarity)).Take(pool).ToList();
 
         // Each candidate's best semantic chunk (chunked max only); the recall reports it for the items it shows.
         foreach (var x in ranked)

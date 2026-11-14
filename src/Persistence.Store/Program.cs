@@ -150,6 +150,11 @@ try
         throw new UsageException($"Query chunking cannot start: {problem}");
     }
 
+    if (config.Embedding.RelevanceFloorProblem() is { } floorProblem)
+    {
+        throw new UsageException($"The relevance floor cannot start: {floorProblem}");
+    }
+
     var store = await FragmentStore.OpenAsync(config, line.Has("debug"));
     store.Identity = $"{config.PeerName} {config.DatabasePath}";
     if (line.Command == "serve")
@@ -495,6 +500,13 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
                 if (recalled.Chunks is { } chunks)
                 {
                     Console.Error.WriteLine(chunks);
+                }
+
+                // Each meaning-based ranking this recall made (one per surfacing round), with every candidate's cosine
+                // and what the relevance floor dropped: ids and numbers, never text (the bench's `pool`).
+                foreach (var pool in recalled.Pools ?? [])
+                {
+                    Console.Error.WriteLine(pool.Line());
                 }
             }
 

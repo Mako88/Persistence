@@ -105,6 +105,40 @@ public class AppConfigTests : EnvironmentVariableTestBase
     }
 
     [Fact]
+    public async Task TheRelevanceFloorIsOffByDefaultReadFromTheEnvironmentAndUnreadableIsAProblem()
+    {
+        var missing = Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}.json");
+        var off = await AppConfig.LoadAsync(missing);
+        Assert.Null(off.Embedding.MinCosine);
+        Assert.Null(off.Embedding.MinTopZ);
+        Assert.Null(off.Embedding.RelevanceFloorProblem());
+
+        Environment.SetEnvironmentVariable("PERSISTENCE_EMBEDDING_MINCOSINE", "0.65");
+        Environment.SetEnvironmentVariable("PERSISTENCE_EMBEDDING_MINTOPZ", "2.5");
+        try
+        {
+            var on = await AppConfig.LoadAsync(missing);
+            Assert.Equal(0.65, on.Embedding.MinCosine);
+            Assert.Equal(2.5, on.Embedding.MinTopZ);
+            Assert.Null(on.Embedding.RelevanceFloorProblem());
+
+            // Set and unreadable fails at start, never a quiet "off".
+            Environment.SetEnvironmentVariable("PERSISTENCE_EMBEDDING_MINCOSINE", "0,65");
+            var bad = await AppConfig.LoadAsync(missing);
+            Assert.Null(bad.Embedding.MinCosine);
+            Assert.Contains("PERSISTENCE_EMBEDDING_MINCOSINE", bad.Embedding.RelevanceFloorProblem());
+
+            Environment.SetEnvironmentVariable("PERSISTENCE_EMBEDDING_MINCOSINE", "1.5");
+            Assert.Contains("MinCosine is 1.5", (await AppConfig.LoadAsync(missing)).Embedding.RelevanceFloorProblem());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PERSISTENCE_EMBEDDING_MINCOSINE", null);
+            Environment.SetEnvironmentVariable("PERSISTENCE_EMBEDDING_MINTOPZ", null);
+        }
+    }
+
+    [Fact]
     public async Task TheNewerNoteBlockIsOffByDefaultAndEachStoreCanTurnItOn()
     {
         // Per store, like PERSISTENCE_PEERNAME and PERSISTENCE_EMBEDDING_ENABLED: set in that store's own service.
