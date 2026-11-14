@@ -61,13 +61,16 @@ for f in persistence-mirror.service persistence-mirror.timer; do
   sudo install -m 0644 -o root -g root "$NEW/$f" "$UNITS/$f"
   cmp "$NEW/$f" "$UNITS/$f"
 done
+rm -r "$NEW"
 sudo systemctl daemon-reload
 
 # 7. One run by hand, then the timer.
 sudo systemctl start persistence-mirror.service
 test "$(systemctl show -p Result --value persistence-mirror.service)" = success
 test "$(git --git-dir=/srv/persistence.git rev-parse refs/heads/main)" = "$(git -C "$REPO" rev-parse origin/main)"
-sudo -u arden git ls-remote /srv/persistence.git refs/heads/main
+# As arden, from /: sudo keeps the caller's cwd, and arden can't stat ubuntu's checkout (git then exits 128;
+# install of 2026-11-14, STAMP 20261114T042450Z).
+(cd / && sudo -u arden git ls-remote /srv/persistence.git refs/heads/main)
 sudo systemctl start persistence-mirror.timer
 systemctl list-timers persistence-mirror.timer
 ```

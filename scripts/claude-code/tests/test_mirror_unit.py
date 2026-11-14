@@ -101,7 +101,8 @@ class Mirror(unittest.TestCase):
         self.assertIn(f"git ls-remote {env['UPSTREAM']} refs/heads/main", step1)
         self.assertIn("sudo -u ubuntu env -i", step1)
         # Neither the old unit nor the hook is versioned: kept, never deleted.
-        self.assertNotIn("rm ", runbook)
+        # The only removal is step 6's own temporary directory (Arden's nit, review 5901571578).
+        self.assertEqual([l.strip() for l in runbook.splitlines() if "rm " in l], ['rm -r "$NEW"'])
         self.assertIn('mv "$HOOK" "$HOOK.disabled-$STAMP"', runbook)
         self.assertIn('mv "$HOOK.disabled-$STAMP" "$HOOK"', runbook)
 
@@ -139,6 +140,29 @@ class Mirror(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         for f in ("persistence-mirror.service", "persistence-mirror.timer"):
             self.assertEqual((units / f).read_text(), UNIT.with_name(f).read_text())
+        self.assertEqual(list(root.glob("persistence-mirror-test.*")), [], "step 6 leaves its temporary directory")
+
+    def test_runbook_runs_other_users_commands_from_root(self):
+        # The second install failed here (2026-11-14, STAMP 20261114T042450Z): step 7's `sudo -u arden git ls-remote`
+        # ran in ubuntu's checkout, which arden can't stat, and git exited 128. sudo keeps the caller's cwd, so every
+        # line that runs as another user must cd / first. Run each such line from an unreadable-to-them cwd, with sudo
+        # shimmed to record the cwd it was started in, then do nothing.
+        lines = [l.strip() for l in RUNBOOK.read_text().splitlines()
+                 if "sudo -u " in l and "sudo -u ubuntu" not in l and not l.lstrip().startswith("#")]
+        self.assertTrue(lines, "step 7 checks the mirror as arden")
+        root = Path(self.tmp.name)
+        bin_, record, here = root / "bin", root / "cwd", root / "checkout"
+        bin_.mkdir()
+        here.mkdir()
+        sudo = bin_ / "sudo"
+        sudo.write_text(f'#!/bin/sh\npwd >> {shlex.quote(str(record))}\n')
+        sudo.chmod(0o755)
+        env = {**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}"}
+        for line in lines:
+            record.unlink(missing_ok=True)
+            result = subprocess.run(["/bin/bash", "-c", f"set -eu\n{line}"], cwd=here, env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(record.read_text().splitlines(), ["/"], line)
 
     def test_follows_upstream_main_including_a_force_push(self):
         head = self.advance()
