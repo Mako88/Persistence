@@ -39,23 +39,32 @@ checked against main at 01755e3.
   backfill is off by default. After any change to the model, config or template, C falls to what has been
   read since, and every concept with older eligible fragments reads `partial` until backfill is allowed (bench
   §7 item 4) and reaches them. It is honest, and expected after the first template tweak, not a fault.
-- The state is a **pure function** of three counts over the concept's eligible fragments, all computed from
-  the log: E eligible, C covered, and F, the concept's accepted facts (any standing) **that cite at least one
-  eligible fragment**. So F > 0 implies E > 0, and rule 3 always has a fragment to name. A fact can cite only
+- The state is a **pure function** of four counts, all computed from the log. Three are over the concept's
+  eligible fragments: E eligible, C covered, and F, the concept's accepted facts (any standing) **that cite at least one
+  eligible fragment**. So F > 0 implies E > 0, and rule 4 always has a fragment to name. A fact can cite only
   fragments that aren't eligible (extracted from a new fragment while the alias that matched it is still
   proposed and the concept has no focus tags). It is still shown as a fact, with its source, but it isn't in F:
-  F counts what the coverage it sits beside accounts for. The rules are tried in this order and the
+  F counts what the coverage it sits beside accounts for. **A** is the concept's accepted facts (any standing)
+  from any source: curated fragments, eligible or not, and chat (§7). A ≥ F always. F is a coverage count;
+  A alone decides whether the concept has accepted facts at all (amended by §7, Ember 1571253909236875365).
+  The rules are tried in this order and the
   first that holds wins, the way §7.2 computes standing, so every concept the block shows is in exactly one
   state. Every state shows the same counts line, `F facts from C of E fragments` (work-claude's ask, via John
-  1570856993189789909), so coverage is inspectable rather than a badge:
-  1. F = 0: `no accepted facts yet`, plus `N pending` if any proposals wait, `not in your focus set` if it
+  1570856993189789909), so coverage is inspectable rather than a badge. When A > F the line adds
+  `, A - F more from other sources` (chat, or fragments outside eligibility), so accepted facts are never
+  hidden behind a coverage count:
+  1. A = 0: `no accepted facts yet`, plus `N pending` if any proposals wait, `not in your focus set` if it
      isn't, and `all E read, none found` if C = E > 0. (This rule comes first, so a concept whose fragments
      are all covered while every fact is still pending reads as `no accepted facts yet; N pending`, never as
      caught up.)
   2. C < E: `partial`, plus `N pending` if any.
-  3. Otherwise (F > 0, C = E): `caught up through #3412 (2026-11-13)`, the newest eligible fragment.
+  3. F = 0 (so A > 0, and C = E): `no facts from your fragments yet`, plus `N pending` if any, and `all E
+     read, none found` if E > 0. Never `caught up`: there may be no fragment to name, and the accepted facts
+     it has don't come from the fragments the coverage counts.
+  4. Otherwise (F > 0, C = E): `caught up through #3412 (2026-11-13)`, the newest eligible fragment.
 
-  For example: `partial: 4 facts from 9 of 12 fragments; 2 pending`.
+  For example: `partial: 4 facts from 9 of 12 fragments; 2 pending`, or, for a concept known only from chat,
+  `no facts from your fragments yet: 0 facts from 0 of 0 fragments, 3 more from other sources`.
 - A half-filled block never reads as complete. With no state named, the self can't tell an empty concept from
   one the extractor hasn't reached. The review predicts exactly that confusion for the first weeks.
 
@@ -279,8 +288,10 @@ evidence"). Sections 1 to 6 still hold for curated fragments.
 1. **Chat is a source, measured separately.** The extractor may read chat as well as curated fragments. The two
    are separate sources: each run says which it read, and item 5's numbers are reported for chat and for
    curated-only side by side (missed durable facts is itself a comparison of the two). Chat
-   extraction has its own switch, off by default, separate from curated extraction. Coverage states (§1) stay
-   about curated fragments: a chat-derived fact is shown with its source, but it is not in E, C or F.
+   extraction has its own switch, off by default, separate from curated extraction. Coverage (E, C, F) stays
+   about curated fragments: a chat-derived fact is shown with its source, but it is not in E, C or F. It
+   **is** in A, the total of accepted facts, and A, not F, decides `no accepted facts yet` (§1, amended for
+   this). So a concept with accepted chat facts never claims to have none (Ember 1571253909236875365).
 2. **The unit is one room message, and the speaker is its Discord author.** The source is a single message with
    its Discord message id and the author Discord reports. It is never a wake prompt: the wrapper bundles
    several messages and is entered under one login, so it is never a source (as in §2). The text never decides
@@ -298,8 +309,13 @@ evidence"). Sections 1 to 6 still hold for curated fragments.
    - **relevance**: how much the source bears on the concept;
    - **stance**: `supports`, `contradicts` or `mentions`;
    - **authority**: the speaker's standing on this domain (John on John's PC is high; anyone quoting him is not).
-     Who sets it (labelled by the self per speaker and domain, or inferred by the extractor) is open, and left
-     to change 10's design;
+     **Authority is the self's own policy, per speaker and domain, never extractor inference** (Ember
+     1571253909236875365). The link records the policy entry it applied (speaker, domain, level), or `none`
+     when the self has no entry for that pair, and `none` counts as lowest. The extractor may propose a
+     policy change (a new pair or a different level) as a proposal like any other, which only the self
+     accepts (I12), and never applies it to the run that proposed it. Policy changes are events, so a link's
+     authority replays. Any later auto-accept rule (item 3) reads only self-set authority, so no extractor
+     output can raise the trust that would accept its own output;
    - **claim mode**: one of `asserted`, `hedged`, `quoted` or `hypothetical` (a joke counts as hypothetical), as
      the source says it. This replaces a bare quoted flag, so a later rule can check "asserted" and precision
      can be reported per mode;
@@ -333,11 +349,48 @@ evidence"). Sections 1 to 6 still hold for curated fragments.
    them. So a chat source records the fragment id(s) it was read from as well as the Discord message id (and the
    span within the fragment). The fragment is where the text lives; the message id is the unit and the
    speaker. Forgetting or erasing that fragment then reaches the chat-derived facts by the existing path, and
-   erasing one message must reach every fragment that carries it. The source also pins the text it read (an
-   edited-at or a hash), because Discord messages can be edited. Not tracked yet: a delete or edit made on
-   Discord by the author. Today that changes nothing in the store; following it is a later PR, not assumed
-   here.
-8. **Concepts become the main recall surface over time; fragment recall stays.** Extraction is lossy and starts
+   erasing one message must reach every fragment that carries it (item 8). Not tracked yet: a delete or edit
+   made on Discord by the author. Today that changes nothing in the store; following it is a later PR, not
+   assumed here.
+
+   **The source pins the exact text it read with a hash** (Ember 1571253909236875365). The pin is
+   `sha256` of the source span as read from the fragment, after this normalization and nothing else: Unicode
+   NFC; CRLF and CR to LF; the room renderer's line-break mark (`⏎` with its surrounding single spaces) to LF.
+   No case folding, no whitespace collapsing, no trimming inside the span. An edited-at may be stored alongside
+   it, but it does not pin: two different texts can carry the same edited-at (or none), and only the hash
+   says which text the fact came from. Two fragment copies of the same message are copies of the same text
+   only when their span hashes are equal. A truncated copy (a wake prompt that cut the message with a
+   `continues` mark) hashes differently and counts as a different, partial span, never as the message.
+8. **Erasure has two cases, and they reach different things** (Ember 1571253909236875365).
+   - **Erasing a Discord message** (by message id) is the self saying that message's text must go. It
+     traverses every stored copy: every fragment carrying the message, found by message id in the chat
+     sources and by scanning the fragment store for that id, since some copies may never have been read by
+     the extractor; the message's span in each of those fragments, which is redacted in place; every chat
+     source link with that message id; and everything derived from those links, by the existing §10.6 table
+     (facts' text and validity, refs, aliases, concepts, and the validity copies §10.1 lists). The preview
+     lists every fragment and every fact it touches before the self confirms. A copy whose span can't be
+     located (a reformatted or truncated render) is listed as an unreachable copy in the report (E4.2), so
+     the erasure reads incomplete rather than claiming success.
+   - **Erasing one fragment copy** (hard fragment erasure, concept-events.md §10.6) erases that fragment and
+     what is derived only from it. It does not discard provenance that other copies independently support:
+     a chat source that also cites another live fragment whose span has the same hash (item 7) loses only
+     the erased fragment id, stays a live source, and does not count as the fact's last live source. A
+     fact whose every chat source is still supported this way keeps its text and validity by default, and
+     the preview says why ("message 1571… is still carried by #4102"). A fact with no such support is
+     erased by §10.6 as it stands. To remove the message itself, the self erases the message, not a copy.
+
+   **Two build tests pin these cases, and no chat-extraction build ships without both:**
+   - *message erasure reaches every copy:* one message carried in three wake-prompt fragments, two read by
+     the extractor and one never read, with a fact from it and a fact superseded by that fact. Erasing the
+     message redacts its span in all three fragments, erases both chat source links and the fact's text and
+     validity, shows *(erased)* on the superseded fact's end date, and leaves the other messages in those
+     fragments byte-identical.
+   - *fragment erasure keeps independent support:* the same message in two fragments with equal span hashes,
+     and a fact citing both. Erasing one fragment removes that fragment id from the source, keeps the fact's
+     text, validity and live source, and opens no retraction proposal. A third case in the same test: the
+     second copy is truncated (different hash), so erasing the full copy erases the fact's text and validity
+     and opens the retraction proposal, as §10.6 does today.
+9. **Concepts become the main recall surface over time; fragment recall stays.** Extraction is lossy and starts
    incomplete. Fragments keep the exact wording and are the fallback for whatever the concepts don't yet cover.
    As coverage grows, fragment recall can take less of the budget (§2). It is not removed.
 
@@ -363,10 +416,19 @@ evidence"). Sections 1 to 6 still hold for curated fragments.
    line, and leaves an omitted notice unarchived and an omitted cue unshown. Each bound includes its heading
    and omission line (inbox 7,500, Observed now 1,500), and a test checks each output against CAP (§2).
 9. A chat source on fact sources: one room message by Discord message id, plus the fragment id(s) it was read
-   from and the span within it (§7 item 7), its Discord author as speaker, the pinned text (edited-at or
-   hash), and the modality (typed or voice). A separate switch for chat extraction, off by default (§7).
+   from and the span within it (§7 item 7), its Discord author as speaker, the span's pinned hash under §7
+   item 7's normalization (edited-at optional, never the pin), and the modality (typed or voice). A separate
+   switch for chat extraction, off by default (§7).
 10. Separate fields on each source link (relevance, stance, authority, claim mode, confidence with modality) in
    place of one weight (§7 item 4). Today `fact-proposed` carries each source's date and type only.
+11. A count A of accepted facts from any source beside E, C and F, with §1's amended rules 1 and 3 and the
+   counts line's `more from other sources` (§1, §7 item 1).
+12. An authority policy per self, keyed by speaker and domain, changed only by self events (I12); an
+   extractor proposal kind for a policy change; each source link records the policy entry it applied, or
+   `none` (§7 item 4).
+13. A message-erasure command by Discord message id, and the independent-support rule in hard fragment
+   erasure, with the two build tests of §7 item 8 (concept-events.md §10.6 gets the support rule when the
+   build PR lands).
 
 ## Out of scope here, noted
 
