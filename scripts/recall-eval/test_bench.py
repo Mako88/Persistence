@@ -209,6 +209,41 @@ class RelevanceFloor(unittest.TestCase):
         rows[-1]["chars"] = 1001
         self.assertIn("**NO GO.**", bench.sweep([self.write(rows)], go="cos=0.7"))
 
+    def test_said_before_and_ack_columns(self):
+        rows = self.rows()
+        for r in rows:
+            if r["case"] == "n1":
+                r["class"] = "ack"
+            r["said_before"] = [i for i in r["shown"] if i == 5]       # #5, shown on n1 (an ack), is a past utterance
+        out = bench.sweep([self.write(rows)])
+        # off: 1 of the 2 items shown on real none is said before; acks 1000 of 1000, the rest 1000 of 1000
+        self.assertIn("| off | 2/2 | 0 / 0 | 1000 | 2/2 | 2000/2000 (100%) | 0 / 0 | 0/0 / 0 | 1 | 1/2 | 1000/1000 (100%) (n 1) | 1000/1000 (100%) (n 1) |", out)
+        self.assertIn("| 1 | 0/0 | 0/1000 (0%) (n 1) | 0/1000 (0%) (n 1) |", out)
+        self.assertNotIn("no ack split", out)
+
+    def test_no_class_or_said_before_shows_dashes_not_numbers(self):
+        out = bench.sweep([self.write(self.rows())])
+        self.assertIn("| 1 | - | - | - |", out)
+        self.assertIn("no ack split", out)
+
+    def test_older_rows_get_said_before_from_their_snapshot(self):
+        import sqlite3
+        import tempfile
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        db = str(Path(d) / "snap.db")
+        c = sqlite3.connect(db)
+        c.execute("CREATE TABLE ContextFragments (Id INTEGER, FragmentType INTEGER)")
+        c.executemany("INSERT INTO ContextFragments VALUES (?, ?)", [(5, 3), (6, 7)])
+        c.commit()
+        c.close()
+        rows = self.rows()
+        for r in rows:
+            r["snapshot_sha256"] = bench.sha256(db)
+        self.assertIn("| off | 2/2 | 0 / 0 | 1000 | 2/2 | 2000/2000 (100%) | 0 / 0 | 0/0 / 0 | 1 | 1/2 |",
+                      bench.sweep([self.write(rows)], dbs=[db]))
+        self.assertIn("| 1 | - |", bench.sweep([self.write(rows)]))              # no snapshot given: not a guess
+
 
 if __name__ == "__main__":
     unittest.main()

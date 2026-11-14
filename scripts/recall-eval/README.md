@@ -177,6 +177,21 @@ with the fewest chars on real none cases (ties: fewer gold lost, then the weaker
 the picked arm loses at most 1 gold hit AND at least halves chars on real none cases. It also prints the spread of
 top cosine and z for gold, real none and synthetic none prompts, from the off arm's own record.
 
+**`--split` needs a `split` field on each case** (`"split": "tune"` or `"held"`, fixed before any run). Cases
+without one are in neither half, and if no case has the field, `--split` stops with an error. If your halves are two
+separate labels files instead, run each file **without** `--split`: the run is then the whole file, and the sweep's
+header says `split None`. That works the same, but keep the two files' results in separate sweeps, or the halves get
+paired as one.
+
+Three more columns, on real none cases (Claude's review on #42):
+
+- **said before / shown:** the past utterances (ChatMessage fragments) among the items shown. No floor reaches them,
+  so this is the share a floor can't cut. Rows record it at run time; for results from before that, pass the
+  snapshot they ran on with `--db <snap.db>` (matched by sha256, repeatable), or the column shows `-`.
+- **acks / other: chars (vs off):** the same chars ratio, split by the label's `class`. A case labelled
+  `"class": "ack"` counts as an ack; every other real none case is "other". Labels with no `class` show `-` and a
+  note. The "what the floor sees" lines split the same way.
+
 ## Running it on another store
 
 The harness is the same; the labels are yours. Write a labels file against your own store (your ids, your

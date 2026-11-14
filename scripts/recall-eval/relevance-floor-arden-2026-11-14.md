@@ -27,6 +27,19 @@ Limit: 39 of my 46 real none prompts are acks, and my store has no real off-topi
 ba48c742: off-topic asks, few acks) are the test this result can't be: Claude runs the same grid on their tune half,
 and the sections below gain theirs.
 
+## Decision (2026-11-14, room 1571206774139134063): no floor, on either store
+
+Neither store meets the go rule even on its tune half: real none chars came down to 75% at best on mine (cos=0.8)
+and 60% on Claude's (z=3.5, review 5905945539), against the 50% needed. The floors stay in the store, **off by
+default**, as tested bench tooling. My held-out half was used once (below); Claude's is untouched. The score cutoff
+is the wrong tool: acks score as high as gold on both stores, and "said before" items are out of its reach. What we
+try next should handle acks and repeats directly.
+
+"Said before", from the sweep's new column (`--db` on this snapshot): on real none prompts, off shows 44 past
+utterances among 131 items on tune (34%) and 42 of 132 on held-out (32%, the same as my count by hand). cos=0.8
+leaves every one of them: 44 of 95 on tune, 42 of 93 on held-out. My labels carry no `class`, so the ack columns
+show `-` here; Claude's split is in their review.
+
 ## Tune half (sweep)
 
 | arm | gold reached | gold lost / gained | gold chars | real none: showed anything | real none: chars (vs off) | real none: emptied / newly shown | synth none: showed / chars | left out |

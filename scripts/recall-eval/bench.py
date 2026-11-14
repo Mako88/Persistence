@@ -516,7 +516,7 @@ def run_case(ev, bases, work, hook, env, exe, diagnostics, config, case, n, kind
             judged = ok | set(turn.get("noise", []))
             row = {"case": case["id"] + (f"#{t + 1}" if kind == "session" else ""), "kind": kind, "path": path,
                    "layer": layer, "count": count, "session_store": mode, "as_of": as_of,
-                   "floor": floor_name(floor), "split": case.get("split"), "pool": pools,
+                   "floor": floor_name(floor), "split": case.get("split"), "class": case.get("class"), "pool": pools,
                    "actual": actual[0], "actual_why": actual[1], "prompt_chars": len(q),
                    "query_chars": len(recall_query(q)),
                    "synthetic": case.get("synthetic", "query" in turn),
@@ -525,7 +525,8 @@ def run_case(ev, bases, work, hook, env, exe, diagnostics, config, case, n, kind
                    "gold": sorted(gold), "gold_in_core": sorted(gold & set(map(int, held))),
                    "gold_absent": sorted(gold - active(base, gold)),
                    "relevant": [i for i in ids if i in ok], "unjudged": [i for i in ids if i not in judged],
-                   "repeats": [i for i in ids if i in shown_before], "heads": [i for i in ids if i in heads_of(base)]}
+                   "repeats": [i for i in ids if i in shown_before], "heads": [i for i in ids if i in heads_of(base)],
+                   "said_before": [i for i in ids if i in said_of(base)]}
             live_gold = gold - set(row["gold_in_core"]) - set(row["gold_absent"])
             row["hit"] = bool(live_gold & set(ids)) if live_gold else None
             shown_before.update(ids)
@@ -548,6 +549,21 @@ def heads_of(db):
     return _heads[db]
 
 
+CHAT_MESSAGE = 3          # FragmentType.ChatMessage: a past utterance, shown under "Said before"
+_said = {}
+
+
+def said_of(db):
+    """The ids in `db` that are past utterances (ChatMessage), the "said before" items a relevance floor can't reach."""
+    if db not in _said:
+        c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            _said[db] = {r[0] for r in c.execute("SELECT Id FROM ContextFragments WHERE FragmentType=?", (CHAT_MESSAGE,))}
+        finally:
+            c.close()
+    return _said[db]
+
+
 # --- report -----------------------------------------------------------------------------------------------------
 
 def pct(a, b):
@@ -561,9 +577,9 @@ def rejudge(rows, labels):
     by = {}
     for c in cases:
         for t, turn in enumerate(c["turns"] if c.get("kind") == "session" else [c]):
-            by[c["id"] + (f"#{t + 1}" if c.get("kind") == "session" else "")] = turn
+            by[c["id"] + (f"#{t + 1}" if c.get("kind") == "session" else "")] = (turn, c.get("class"))
     for r in rows:
-        turn = by.get(r["case"])
+        turn, r["class"] = by.get(r["case"], (None, r.get("class")))
         if turn is None:
             continue
         gold = set(turn.get("gold", []))
@@ -687,7 +703,7 @@ def report(paths, watch=(), labels=None):
 
 # --- sweep (relevance floor, Step B; README "Relevance floor") ---------------------------------------------------------
 
-def sweep(paths, labels=None, go=None, count=3):
+def sweep(paths, labels=None, go=None, count=3, dbs=()):
     """The relevance-floor sweep, as markdown (ids and counts only). Each arm is one `run --floor` over the same cases;
     every arm is compared with the floor-off arm on the same snapshot, PAIRED per prompt: N made right, M made wrong.
     Only gold and none cases, only turns whose actual path was semantic in both arms (the floor acts on meaning; a turn
@@ -697,9 +713,17 @@ def sweep(paths, labels=None, go=None, count=3):
     Pick (tune half): among the arms that lose at most 1 gold hit against off, the one with the fewest chars shown on
     real none cases; ties go to fewer gold lost, then to the weaker floor. With `go <arm>` (held-out half, once): GO
     only if that arm loses at most 1 gold hit AND at least halves the chars shown on real none cases, both paired
-    against off on the final output."""
+    against off on the final output.
+
+    Two splits of real none (Claude's review 5905945539): "said before", the past utterances among the items shown
+    (no floor reaches them), and acks vs the rest, by the label's `class` ("ack"). Results from before rows carried
+    `said_before` get it from `dbs`, the snapshots they were run on (matched by sha256); without one it shows "-"."""
     rows = [json.loads(l) for p in paths for l in open(p, encoding="utf-8") if l.strip()]
     rows = rejudge(rows, labels) if labels else rows
+    by_sha = {sha256(d): d for d in dbs}
+    for r in rows:
+        if "said_before" not in r and r.get("snapshot_sha256") in by_sha:
+            r["said_before"] = [i for i in r["shown"] if i in said_of(by_sha[r["snapshot_sha256"]])]
     rows = [r for r in rows if r["count"] == count and r["path"] == "semantic" and r["kind"] in ("gold", "none")]
     out = []
     for snap in sorted({r["snapshot_sha256"] for r in rows}):
@@ -716,8 +740,14 @@ def sweep(paths, labels=None, go=None, count=3):
         out.append(f"## Store {snap[:16]}… (split {', '.join(splits)}; @{count}; exe {st['exe_sha256']}…; "
                    f"labels {st['labels_sha256']}…)\n")
         out.append("| arm | gold reached | gold lost / gained | gold chars | real none: showed anything | "
-                   "real none: chars (vs off) | real none: emptied / newly shown | synth none: showed / chars | left out |")
-        out.append("|---|---|---|---|---|---|---|---|---|")
+                   "real none: chars (vs off) | real none: emptied / newly shown | synth none: showed / chars | left out | "
+                   "real none: said before / shown | real none acks: chars (vs off) | real none other: chars (vs off) |")
+        out.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
+        classed = any(r.get("class") for r in R if r["kind"] == "none" and not r["synthetic"])
+
+        def chars_vs_off(arm, cases):
+            a, o = sum(arm[c]["chars"] for c in cases), sum(off[c]["chars"] for c in cases)
+            return f"{a}/{o} ({100 * a / o:.0f}%)" if o else f"{a}/0"
 
         def key(name):
             if name == "off":
@@ -742,13 +772,21 @@ def sweep(paths, labels=None, go=None, count=3):
             nchars, nchars_off = sum(arm[c]["chars"] for c in nr), sum(off[c]["chars"] for c in nr)
             emptied = sum(bool(off[c]["shown"]) and not arm[c]["shown"] for c in nr)
             newly = sum(not off[c]["shown"] and bool(arm[c]["shown"]) for c in nr)
-            ratio = f"{nchars}/{nchars_off} ({100 * nchars / nchars_off:.0f}%)" if nchars_off else f"{nchars}/0"
+            ratio = chars_vs_off(arm, nr)
+            said = ("-" if any("said_before" not in arm[c] for c in nr) else
+                    f"{sum(len(arm[c]['said_before']) for c in nr)}/{sum(len(arm[c]['shown']) for c in nr)}")
+            acks = [c for c in nr if arm[c].get("class") == "ack"]
+            other = [c for c in nr if arm[c].get("class") != "ack"]
+            ack_cols = (f"{chars_vs_off(arm, acks)} (n {len(acks)}) | {chars_vs_off(arm, other)} (n {len(other)})"
+                        if classed else "- | -")
             out.append(f"| {name} | {reached}/{len(g)} | {lost} / {gained} | {gchars} | {showed}/{len(nr)} | {ratio} | "
                        f"{emptied} / {newly} | {sum(bool(arm[c]['shown']) for c in ns)}/{len(ns)} / "
-                       f"{sum(arm[c]['chars'] for c in ns)} | {left} |")
+                       f"{sum(arm[c]['chars'] for c in ns)} | {left} | {said} | {ack_cols} |")
             summary[name] = {"lost": lost, "nchars": nchars, "nchars_off": nchars_off, "n_gold": len(g),
                              "n_none": len(nr)}
         out.append("")
+        if not classed:
+            out.append("(No `class` on these real none labels, so no ack split: give each ack case `\"class\": \"ack\"`.)\n")
         candidates = [n for n in summary if n != "off" and summary[n]["lost"] <= 1]
         if go:
             s_ = summary.get(go)
@@ -770,9 +808,10 @@ def sweep(paths, labels=None, go=None, count=3):
         # candidates (a hook's re-ask without exclusion is a different question, so not counted).
         def first_pool(r):
             return next((p for p in r.get("pool") or [] if p["call"] == 1 and p["cands"]), None)
-        def spread(kind, synth=None):
+        def spread(kind, synth=None, ack=None):
             vals = [first_pool(off[c]) for c in off if off[c]["kind"] == kind and off[c]["actual"] == "semantic"
-                    and (synth is None or off[c]["synthetic"] == synth)]
+                    and (synth is None or off[c]["synthetic"] == synth)
+                    and (ack is None or (off[c].get("class") == "ack") == ack)]
             vals = [v for v in vals if v]
             if not vals:
                 return "-"
@@ -784,6 +823,9 @@ def sweep(paths, labels=None, go=None, count=3):
         out.append("What the floor sees (floor-off arm, first recall call's first ranking with candidates):\n")
         out.append(f"- gold: {spread('gold')}")
         out.append(f"- real none: {spread('none', False)}")
+        if classed:
+            out.append(f"  - acks: {spread('none', False, True)}")
+            out.append(f"  - other: {spread('none', False, False)}")
         out.append(f"- synthetic none: {spread('none', True)}\n")
     return "\n".join(out)
 
@@ -826,6 +868,8 @@ def main(argv):
     w.add_argument("--labels", help="judge with this labels file now, not as at run time")
     w.add_argument("--go", help="the arm tuning picked (e.g. cos=0.65): check it against the go rule on this split")
     w.add_argument("--count", type=int, default=3)
+    w.add_argument("--db", action="append", default=[],
+                   help="a snapshot the results were run on: gives older rows their said-before count (repeatable)")
     u = sub.add_parser("unjudged")
     u.add_argument("results", nargs="+")
     a = p.parse_args(argv)
@@ -835,7 +879,7 @@ def main(argv):
         run(a.labels, a.db, a.path, a.layer, [int(c) for c in a.counts.split(",")], a.exe, a.out,
             floor=parse_floor(a.floor), split=a.split)
     elif a.cmd == "sweep":
-        print(sweep(a.results, a.labels, a.go, a.count))
+        print(sweep(a.results, a.labels, a.go, a.count, a.db))
     elif a.cmd == "unjudged":
         unjudged(a.results)
     else:
