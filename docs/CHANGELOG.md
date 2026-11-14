@@ -9,6 +9,20 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-13 — Heartbeat follow-up to #28: one stalled switch rule, the G3 lock as backstop, broken intents
+
+**run-due and the beat read `PERSISTENCE_HEARTBEAT_STALLED` through one predicate.** `hook.stalled_layer_on` now asks
+`heartbeat.stalled_on` and keeps no copy. Both switches (`PERSISTENCE_HEARTBEAT` and `..._STALLED`) use one rule,
+`heartbeat.switch_on`: on only for `"true"` or `"1"` (trimmed, any case; JSON `true` and `1` too). The string
+`"false"`, `"0"`, `""`, `"yes"`, JSON `false`, `0`, `null`, and a missing or broken settings file are all off. Why:
+Claude's point on #28 (room 1570872186808307785). The two copies agreed at e4161ca, but a `"false"` read as on by
+only one of them is the wrong failure at switch-on. The parity table includes `"false"`. **The G3 lock stays, as a
+backstop:** no interleaving needs it, because the stalled layer reads the queue before the ledger and every process
+that takes an item off the queue writes its fact first. The comment in `Beat.stalled_layer` says so, and a test pins
+the read order. **An ack intent that doesn't parse is abandoned**, not live (empty, truncated, non-object, bad time),
+so it can't hold an entry queued. That was already the behaviour; it is now tested. Tests:
+`tests/test_heartbeat_followup.py`, each checked by mutation.
+
 ## 2026-11-13 — Heartbeat core (PR #28): Ember's and Claude's review changes
 
 **Feature off is main again; one queue/ledger snapshot; a usage reset that is never invented.** After Ember's CHANGES
