@@ -24,7 +24,7 @@ class Guard(unittest.TestCase):
     def test_the_real_binary_by_path_is_refused_before_it_starts(self):
         if not no_real_claude.REAL:
             self.skipTest("no real claude on this machine")
-        with self.assertRaises(AssertionError):
+        with no_real_claude.expected(), self.assertRaises(AssertionError):  # on purpose: the refusal is the test
             subprocess.Popen([no_real_claude.REAL, "-p"], stdin=subprocess.DEVNULL)
 
 
