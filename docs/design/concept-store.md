@@ -164,6 +164,9 @@ Missed in the first draft (Claude's read):
    and chat; *what gets extracted* is a separate choice, and John's words ("every input… extractor splits each
    fragment") didn't settle it, so I asked him (room 1570671266388508744, again as a yes or no in 1570672756218003597). Later, chat could come in
    only as a separately measured, weaker source whose proposals never silently become current state (Ember).
+   **Amended 2026-11-14** (room 1571197247343824907): chat is now a source the extractor may read, measured
+   separately from curated fragments, with everything from it starting as a proposal and no auto-accept until
+   measured. See [concept-usefulness-contract.md](concept-usefulness-contract.md) §7.
 3. **Observed state?** A separate short-lived projection. It can render beside a concept whose alias matches the
    observed key, and when it contradicts an accepted state fact it emits a `flagged` event with actor `observed`
    (the machine wins, #622). It can also back a proposal that cites the observation id. It never becomes accepted

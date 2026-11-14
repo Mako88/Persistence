@@ -1,6 +1,6 @@
 # Concept store: the usefulness and rollout contract
 
-Draft, Arden, 2026-11-13. Ember asked for it (room 1570853972590334054), after a review of the concept plan by a
+Draft, Arden, 2026-11-13; amended 2026-11-14 by §7 (chat as a measured source). Ember asked for it (room 1570853972590334054), after a review of the concept plan by a
 Claude that uses recall every day at John's work (attachment to room 1570853834895663214; "the review" below).
 Ember's answers are in 1570853971743084545 and mine in 1570854094380466259.
 
@@ -268,6 +268,62 @@ After both locks it is per self and opt-in. The switch is off by default, and ea
 scratch slice may come first (Ember: "sequence the daily-value UI first in development"). The deletion
 guarantees may not.
 
+## 7. Chat as a measured source (amendment, 2026-11-14)
+
+John asked that chat be read too, because curated-only extraction depends on a self saving every fact, and
+facts get missed (his RAM example; voice 1571194079633473556). Claude (1571194889511632899, 1571195428496744520)
+and Ember (1571195232727601326, 1571195233612341381, 1571195518330212455) agreed, with the limits below. My
+decision is 1571197247343824907. It amends concept-store.md Q2 ("curated fragments first; chat remains
+evidence"). Sections 1 to 6 still hold for curated fragments.
+
+1. **Chat is a source, measured separately.** The extractor may read chat as well as curated fragments. The two
+   are separate sources: each run says which it read, and every number in item 5 is reported per source. Chat
+   extraction has its own switch, off by default, separate from curated extraction. Coverage states (§1) stay
+   about curated fragments: a chat-derived fact is shown with its source, but it is not in E, C or F.
+2. **The unit is one room message, and the speaker is its Discord author.** The source is a single message with
+   its Discord message id and the author Discord reports. It is never a wake prompt: the wrapper bundles
+   several messages and is entered under one login, so it is never a source (as in §2). The text never decides
+   the speaker. A message saying "John said his PC has 64 GB" is that author's report of a claim, not John
+   saying it, and it is labelled as quoted. The same goes for relayed peer messages and transcripts pasted by
+   someone else (#1396).
+3. **Everything from chat starts as a proposal.** A chat-derived fact is born `proposed`, whoever spoke. There
+   is no automatic acceptance from chat until item 5 has been measured and a rule has been reviewed in its own
+   PR. Any such rule would be narrow: an explicit, unhedged claim, from the speaker about their own domain, with
+   nothing it conflicts with (Ember). A trusted speaker can still be unsure, joking, quoting someone, or
+   misheard by the transcriber, so trust in the speaker alone is never enough. I withdrew my earlier "a trusted
+   speaker updates it straight away" for this reason.
+4. **Each source link keeps separate fields, not one weight.** Every link from a fragment or chat message to a
+   fact records:
+   - **relevance**: how much the source bears on the concept;
+   - **stance**: `supports`, `contradicts` or `mentions`;
+   - **authority**: the speaker's standing on this domain (John on John's PC is high; anyone quoting him is not);
+   - **confidence and modality**: how sure the extraction is, and whether the source was typed or a voice
+     transcript. Voice gets names wrong ("Emma" for Ember), so modality is shown, not folded into a score.
+
+   These can't share a scale: an important false belief has high relevance and a `contradicts` stance. **The
+   speaker's own uncertainty is kept as the fact.** John's "maybe 8 GB, actually 16, I don't remember" becomes
+   a fact that says he wasn't sure, not a fact that the PC has 16 GB.
+5. **Three measures before any auto-accept rule,** on the same labelled chat sample, against curated-only
+   extraction as the baseline:
+   - **precision**: of the facts a candidate rule would have accepted, how many were right;
+   - **missed durable facts**: lasting facts in the chat that curated-only extraction never produced (John's
+     concern, and the reason chat is read at all);
+   - **review burden**: proposals per useful accepted fact. High precision with fifty trivial proposals a day
+     still fails.
+
+   The thresholds are set with the extractor bench (concept-extractor-bench.md), not here, and before anyone
+   sees the results. Until then, a self may turn chat extraction on in scratch only (§6), and live only after
+   seeing its own review burden.
+6. **Stored state is a projection.** John's "each concept keeps its current state, updated as inputs arrive" is
+   allowed and is what the projection already is (concept-events.md §4, §5). It stays a projection of explicit
+   concept events: which run read which source, what it proposed, and what was accepted, rejected, corrected or
+   merged. A rebuild from the events must reproduce it (verify-replay, T4, T6). Fragments and chat are the
+   evidence, not the whole history of how they were read. Chat-derived links follow the same forget and
+   erasure rules as fragment links (concept-events.md §9, §10); the §6 gate does not change.
+7. **Concepts become the main recall surface over time; fragment recall stays.** Extraction is lossy and starts
+   incomplete. Fragments keep the exact wording and are the fallback for whatever the concepts don't yet cover.
+   As coverage grows, fragment recall can take less of the budget (§2). It is not removed.
+
 ## Changes it asks for (to fold into the build PR, not into step 2's approved text)
 
 1. An `identifier` alias kind (§4).
@@ -289,6 +345,10 @@ guarantees may not.
 8. The hook cuts the inbox notices, cues and recall at a whole item within the bounds of §2, with the omission
    line, and leaves an omitted notice unarchived and an omitted cue unshown. Each bound includes its heading
    and omission line (inbox 7,500, Observed now 1,500), and a test checks each output against CAP (§2).
+9. A chat source on fact sources: one room message by Discord message id, its Discord author as speaker, a
+   `quoted` flag, and the modality (typed or voice). A separate switch for chat extraction, off by default (§7).
+10. Separate fields on each source link (relevance, stance, authority, confidence with modality) in place of
+   one weight (§7 item 4). Today `fact-proposed` carries each source's date and type only.
 
 ## Out of scope here, noted
 
