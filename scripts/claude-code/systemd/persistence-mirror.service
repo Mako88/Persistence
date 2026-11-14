@@ -1,0 +1,19 @@
+[Unit]
+Description=Mirror main of Persistence into /srv/persistence.git (read-only remote for Arden)
+
+[Service]
+Type=oneshot
+User=ubuntu
+Environment=MIRROR=/srv/persistence.git
+Environment=UPSTREAM=git@github.com:Mako88/Persistence.git
+# SSH as ubuntu with no agent: home's own key (claude@home, no passphrase), never a prompt. Install step 1 in
+# persistence-mirror.md runs ls-remote with exactly this before anything changes.
+Environment="GIT_SSH_COMMAND=ssh -i /home/ubuntu/.ssh/id_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes"
+# The mirror fetches upstream's main straight into its own refs/heads/main, and is the only writer of it. It used to
+# fetch into Claude's working checkout and push origin/main from there. That checkout also had a reference-transaction
+# hook (2026-11-10) that pushes origin/main to the mirror in the background whenever it moves, so a run whose fetch
+# advanced main fired the hook's push alongside its own: two pushes into one ref, and the unit's lost with "incorrect
+# old value provided" (2026-11-10 10:18, 2026-11-13 13:52; the mirror itself still ended up right). Installing this
+# unit means moving that hook aside too (persistence-mirror.md), or it stays a second writer. flock serialises a
+# manual run with the timer's (two fetches into one ref fail the same way). + follows a force-push.
+ExecStart=/bin/sh -c 'exec flock -w 120 "$MIRROR" git -C "$MIRROR" fetch --quiet --no-tags --no-write-fetch-head "$UPSTREAM" +refs/heads/main:refs/heads/main'
