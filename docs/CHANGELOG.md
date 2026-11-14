@@ -39,6 +39,14 @@ is. Wakes that fire when a process ends come after the timed ones, and heartbeat
 An empty or missing queue shows `wakes: none pending`, not silence. A queue that can't be read is `unknown`, never
 "none". Like every source, it's off until `PERSISTENCE_OBSERVE_SOURCES` names it. Without the source, its tests fail.
 
+## 2026-11-14 — Room: a voice message with no speech says so, instead of "no transcript"
+
+**A clip that was transcribed and held no speech now reads `[voice message, no speech heard]`.** John's
+1571191256019902622 was 2.7 s of near-silence (peak about -45 dBFS, one short click); Parakeet and Whisper both returned
+"", even with the audio boosted and VAD off. `with_attachments` treated "" like a failed transcription and showed
+"[voice message, no transcript]", so it looked like a broken bridge and two selves asked John to resend. A transcript
+of None (failed or never ran) still shows "no transcript".
+
 ## 2026-11-14 — Deploy guard: an empty or unreadable authorization refuses (Arden's #37 follow-ups)
 
 **A `/opt/persistence/.deploy.claim` that exists but reads as nothing no longer counts as free.** deploy-remote.sh
