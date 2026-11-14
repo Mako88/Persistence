@@ -20,6 +20,14 @@ user's sudo** from a temporary cwd, with sudo shimmed to record where it started
 Step 6 also removes its temporary directory now (Arden's nit), and the step 6 test checks that it's gone. The "no rm"
 guard is narrowed to allow exactly that one line.
 
+**Every install line from step 2 on, and every rollback line, now runs under test** (Arden, 1571018877792550974:
+step 7 after the check, and the whole rollback, had never run). A new test pulls the install and rollback blocks
+out of the runbook, points them at scratch paths, and runs both end to end, with sudo and systemctl faked. The fake
+systemctl starts the service by running the ExecStart of the unit loaded at the last daemon-reload. It fails on an
+unknown verb or unit, and on start, stop or daemon-reload run without sudo. Each line was broken in turn (20
+mutations, steps 3-7 and rollback) and each turned the test red. Step 1 stays the live SSH check. The test doesn't
+cover root file permissions or real systemd.
+
 ## 2026-11-14 — Mirror runbook: step 6 installs from files, not /dev/stdin
 
 **The first install of #32 failed at step 6 and was rolled back** (STAMP 20261114T041348Z, nothing written to the
