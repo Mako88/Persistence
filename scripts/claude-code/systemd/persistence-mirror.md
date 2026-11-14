@@ -51,11 +51,15 @@ sha256sum "$UNITS"/persistence-mirror.* "$BACKUP"/persistence-mirror.*
 mv "$HOOK" "$HOOK.disabled-$STAMP"
 test ! -e "$HOOK"
 
-# 6. Install the new unit and timer from the merged commit.
+# 6. Install the new unit and timer from the merged commit, via files: this host's install (uutils coreutils)
+#    fails from /dev/stdin when the destination exists, as it does here (install of 2026-11-14, STAMP 20261114T041348Z).
 git -C "$REPO" fetch -q origin
 git -C "$REPO" merge-base --is-ancestor "$MERGED" origin/main
+NEW=$(mktemp -d "${TMPDIR:-/tmp}/persistence-mirror-$STAMP.XXXXXX")
 for f in persistence-mirror.service persistence-mirror.timer; do
-  git -C "$REPO" show "$MERGED:scripts/claude-code/systemd/$f" | sudo install -m 0644 -o root -g root /dev/stdin "$UNITS/$f"
+  git -C "$REPO" show "$MERGED:scripts/claude-code/systemd/$f" > "$NEW/$f"
+  sudo install -m 0644 -o root -g root "$NEW/$f" "$UNITS/$f"
+  cmp "$NEW/$f" "$UNITS/$f"
 done
 sudo systemctl daemon-reload
 

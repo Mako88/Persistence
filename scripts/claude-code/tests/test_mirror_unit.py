@@ -105,6 +105,41 @@ class Mirror(unittest.TestCase):
         self.assertIn('mv "$HOOK" "$HOOK.disabled-$STAMP"', runbook)
         self.assertIn('mv "$HOOK.disabled-$STAMP" "$HOOK"', runbook)
 
+    def test_install_step_6_replaces_existing_units(self):
+        # The first install failed here (2026-11-14): `git show | install /dev/stdin "$UNITS/$f"` exits 1 with "No such
+        # file or directory" under uutils coreutils whenever the destination exists, and on home it always does. So run
+        # step 6's own lines, against old units, with sudo shimmed to drop only the root ownership.
+        runbook = RUNBOOK.read_text()
+        step6 = runbook[runbook.index("# 6. "):runbook.index("# 7. ")]
+        step6 = step6.replace("sudo systemctl daemon-reload", "")
+        self.assertNotIn("/dev/stdin", "\n".join(l for l in step6.splitlines() if not l.lstrip().startswith("#")))
+        root = Path(self.tmp.name)
+        repo, units, bin_ = root / "repo", root / "units", root / "bin"
+        git("init", "-q", "-b", "main", str(repo))
+        for key, value in (("user.name", "t"), ("user.email", "t@example.invalid"), ("commit.gpgsign", "false")):
+            git("config", key, value, cwd=repo)
+        (repo / "scripts/claude-code/systemd").mkdir(parents=True)
+        for f in ("persistence-mirror.service", "persistence-mirror.timer"):
+            shutil.copy(UNIT.with_name(f), repo / "scripts/claude-code/systemd" / f)
+        git("add", ".", cwd=repo)
+        git("commit", "-q", "-m", "units", cwd=repo)
+        merged = git("rev-parse", "HEAD", cwd=repo)
+        git("clone", "-q", "--bare", str(repo), str(root / "origin.git"))
+        git("remote", "add", "origin", str(root / "origin.git"), cwd=repo)
+        units.mkdir()
+        for f in ("persistence-mirror.service", "persistence-mirror.timer"):
+            (units / f).write_text("old\n")
+        bin_.mkdir()
+        sudo = bin_ / "sudo"
+        sudo.write_text('#!/bin/sh\nfor a; do shift; case "$a" in -o|-g) skip=1;; *) [ -n "$skip" ] && skip= || set -- "$@" "$a";; esac; done\nexec "$@"\n')
+        sudo.chmod(0o755)
+        env = {**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}", "TMPDIR": str(root)}
+        script = f'set -eu\nSTAMP=test\nREPO={shlex.quote(str(repo))}\nUNITS={shlex.quote(str(units))}\nMERGED={merged}\n{step6}'
+        result = subprocess.run(["/bin/bash", "-c", script], env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for f in ("persistence-mirror.service", "persistence-mirror.timer"):
+            self.assertEqual((units / f).read_text(), UNIT.with_name(f).read_text())
+
     def test_follows_upstream_main_including_a_force_push(self):
         head = self.advance()
         self.assertEqual(self.run_unit().returncode, 0)

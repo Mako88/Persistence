@@ -9,6 +9,16 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-14 — Mirror runbook: step 6 installs from files, not /dev/stdin
+
+**The first install of #32 failed at step 6 and was rolled back** (STAMP 20261114T041348Z, nothing written to the
+units). `git show … | sudo install … /dev/stdin "$UNITS/$f"` exits 1 with "No such file or directory": home's
+`install` is uutils coreutils 0.10.0, and it fails from /dev/stdin whenever the destination exists, which it always
+does here. Writing to a new file works, which is why it passed a quick check. Step 6 now writes each unit to a
+temporary file, installs from that, and `cmp`s the result. **A new test runs step 6's own lines** against existing
+units, with sudo shimmed to drop only the root ownership. It goes red with the old line. The earlier tests ran the
+unit and checked step 1's text but never ran an install line, so this is the first test that does.
+
 ## 2026-11-13 — Mirror: the only writer of /srv/persistence.git main (PR #32)
 
 **`persistence-mirror.service` fetches GitHub's main straight into the mirror**, with `flock`, `--no-tags` and a
