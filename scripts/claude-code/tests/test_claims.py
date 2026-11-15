@@ -459,6 +459,27 @@ class OptionsAreNotWords(Base):
         self.assertEqual(self.run_cli("done", record["id"], "--", "-1 flaky test")[0], 0)
         self.assertEqual(self.c.get(record["id"])["outcome"], "-1 flaky test")
 
+    def test_after_a_double_dash_until_and_help_are_text(self):
+        """Arden's notes on #51 (review 5911679202): `--` didn't stop `--until` being read, and `-h` after `--` still
+        printed usage."""
+        record = self.mine()
+        code, out, err = self.run_cli("pause", record["id"], "--", "--until", "the deploy", "-h")
+        self.assertEqual(code, 0, err)
+        record = self.c.get(record["id"])
+        self.assertEqual((record["status"], record["pause_until"]), ("paused", None))
+        self.assertIn("--until the deploy -h", json.dumps(record))
+        other = self.mine(task="Another")
+        self.assertEqual(self.run_cli("done", other["id"], "--", "--help", "text was wrong")[0], 0)
+        self.assertEqual(self.c.get(other["id"])["outcome"], "--help text was wrong")
+
+    def test_until_before_a_double_dash_is_still_read(self):
+        until = (self.clock() + timedelta(hours=2)).isoformat(timespec="seconds")
+        record = self.mine()
+        self.assertEqual(self.run_cli("pause", record["id"], "--until", until, "--", "-1 on review")[0], 0)
+        record = self.c.get(record["id"])
+        self.assertEqual(record["pause_until"], until)
+        self.assertIn("-1 on review", json.dumps(record))
+
     def test_help_after_a_verb_exits_2_so_a_script_cannot_read_it_as_done(self):
         """Arden: `done <id> fixed --help bug` printed usage and exited 0 with the claim still open."""
         record = self.mine()
