@@ -83,6 +83,12 @@ of them says when it stopped being true.
   `event_range` is the oldest and newest finish shown. Each gets its short id, its state, the time it
   finished and its task, truncated. At most 4, plus a count.
 
+- `wakes` (added 2026-11-15): the wake queue (`wakes.json` beside the state dir, i.e. `hook.WAKES`). It shows a
+  count, then at most 4 wakes soonest first: time (UTC), how long until it or how overdue, the reason (truncated),
+  and a `heartbeat` or `work session` mark. Pid wakes come last. An empty or missing queue shows `wakes: none pending`,
+  because silence there is what hid a deferred deploy with no wake behind it. An unreadable queue is `unknown`.
+  It has no ack and writes nothing.
+
 ## Also in this PR: room sessions can run `note` again
 
 Room sessions run in `dontAsk` mode, and only `room`, `pstore` and `pwake` are allowed there. The

@@ -483,8 +483,63 @@ def _heartbeat_ack_locked(ctx, got):
         write_atomic(path, json.dumps(data, indent=1, sort_keys=True))
 
 
+# --- wakes: what is set to bring this self back, soonest first; none pending is said, not left as silence ---
+# (2026-11-15: "deploy tonight" sat in a note for hours with no wake behind it, and nothing on waking showed the gap.)
+
+WAKES_SHOWN = 4
+
+
+def wakes_file(ctx):
+    return ctx.state.parent / "wakes.json"  # hook.WAKES: the queue sits beside the state dir
+
+
+def wakes_read(event, ctx):
+    try:
+        items = json.loads(wakes_file(ctx).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        items = []
+    except (OSError, ValueError) as e:
+        raise Unreadable(f"{wakes_file(ctx).name} can't be read: {type(e).__name__}")
+    if not isinstance(items, list):
+        raise Unreadable(f"{wakes_file(ctx).name} isn't a list")
+    items = [w for w in items if isinstance(w, dict)]
+    if not items:
+        return Observation("wakes", ctx.now, lines=("wakes: none pending",))
+    now = ctx.now.timestamp()
+
+    def line(w):
+        tags = []
+        if w.get("pid"):
+            when = f"when pid {w['pid']} ends"
+        else:
+            try:
+                at = float(w["at"])
+            except (KeyError, TypeError, ValueError):
+                at = None
+            when = "at an unreadable time" if at is None else hhmm(datetime.fromtimestamp(at, timezone.utc))
+            if at is not None:
+                gap = timedelta(seconds=at - now)
+                tags.append(f"in {age(gap)}" if at > now else f"{age(-gap)} overdue")
+        if w.get("by") == "heartbeat":
+            tags.append("heartbeat")
+        if w.get("work"):
+            tags.append("work session")
+        return f"wake {when}" + (f" ({', '.join(tags)})" if tags else "") + f": {short(w.get('reason'), 90)}"
+
+    def order(w):  # timed wakes by time; pid wakes after them, since they have no time
+        try:
+            return (0, float(w["at"])) if not w.get("pid") else (1, 0.0)
+        except (KeyError, TypeError, ValueError):
+            return (2, 0.0)
+
+    items.sort(key=order)
+    return Observation("wakes", ctx.now, lines=(f"wakes pending: {len(items)}", *(line(w) for w in items[:WAKES_SHOWN])),
+                       truncated=max(0, len(items) - WAKES_SHOWN))
+
+
 SOURCES = {"prs": Source(prs, prs_ack), "deployed": Source(deployed), "switches": Source(switches),
-           "claims": Source(claims_done, claims_ack), "heartbeat": Source(heartbeat_read, heartbeat_ack)}
+           "claims": Source(claims_done, claims_ack), "heartbeat": Source(heartbeat_read, heartbeat_ack),
+           "wakes": Source(wakes_read)}
 
 
 # --- the runner, the one renderer, and the ack ---

@@ -579,11 +579,61 @@ class Claims(unittest.TestCase):
         self.assertEqual(["task number 2" in line for line in self.look().lines], [True])
 
 
+class Wakes(unittest.TestCase):
+    """Pending wakes in the block (2026-11-15): "deploy tonight" sat in a note for hours with no wake behind it, and
+    nothing on waking showed the gap. So none pending is said outright, never left as silence."""
+
+    def setUp(self):
+        root = Path(tempfile.mkdtemp())
+        self.state = root / "state"
+        self.state.mkdir()
+        self.file = root / "wakes.json"
+
+    def read(self, items=None):
+        if items is not None:
+            self.file.write_text(json.dumps(items))
+        return observed.wakes_read({"session_id": "me"}, ctx(self.state, now=NOW))
+
+    def test_none_pending_is_said(self):
+        self.assertEqual(self.read().lines, ("wakes: none pending",))
+        self.assertEqual(self.read([]).lines, ("wakes: none pending",))
+
+    def test_pending_wakes_soonest_first_with_overdue_and_pid(self):
+        t = NOW.timestamp()
+        got = self.read([{"id": "b", "at": t + 3600, "reason": "deploy main\nto home", "work": True},
+                         {"id": "a", "at": t + 600, "reason": "check CI"},
+                         {"id": "c", "pid": 4242, "reason": "build done"},
+                         {"id": "d", "at": t - 300, "reason": "nudge", "by": "heartbeat"}])
+        self.assertEqual(got.status, "ok")
+        self.assertEqual(got.lines, ("wakes pending: 4",
+                                     "wake 03:55Z (5m overdue, heartbeat): nudge",
+                                     "wake 04:10Z (in 10m): check CI",
+                                     "wake 05:00Z (in 1.0h, work session): deploy main to home",
+                                     "wake when pid 4242 ends: build done"))
+
+    def test_more_than_shown_are_counted(self):
+        t = NOW.timestamp()
+        got = self.read([{"id": str(i), "at": t + 60 * (i + 1), "reason": f"r{i}"} for i in range(7)])
+        self.assertEqual(len(got.lines), 1 + observed.WAKES_SHOWN)
+        self.assertEqual(got.lines[0], "wakes pending: 7")
+        self.assertEqual(got.truncated, 7 - observed.WAKES_SHOWN)
+
+    def test_unreadable_queue_is_unknown_not_none(self):
+        self.file.write_text("{not json")
+        [got] = observed.observe({"session_id": "me"}, ctx(self.state, {"PERSISTENCE_OBSERVE_SOURCES": "wakes"}, now=NOW))
+        self.assertEqual(got.status, "unknown")
+        self.assertNotIn("wakes: none pending", got.lines)
+
+    def test_reads_the_queue_hook_writes(self):
+        self.assertEqual(observed.wakes_file(ctx(hook.STATE)), hook.WAKES)
+
+
 class Pure(unittest.TestCase):
     """Reading a source twice gives the same Observation and leaves the state dir exactly as it was (Ember's seam)."""
 
     def test_every_source_read_twice_is_identical_and_writes_nothing(self):
-        state = Path(tempfile.mkdtemp())
+        state = Path(tempfile.mkdtemp()) / "state"  # wakes.json sits beside the state dir, as hook.WAKES does
+        state.mkdir()
         (state / "tasks").mkdir()
         (state / "tasks" / "a.json").write_text(json.dumps({"id": "a" * 8, "task": "t", "status": "done", "owner": "o",
                                                              "updated": (NOW - timedelta(minutes=5)).isoformat()}))
@@ -595,19 +645,22 @@ class Pure(unittest.TestCase):
         (state / "heartbeat.json").write_text(json.dumps({  # a fault, and a queued R entry this session is the wake of
             "delivery_fault": {"rev": 2, "since": NOW.isoformat(), "counts": {"cap": 1, "hb_failed": 1, "undeliverable": 0}},
             "reports_q": {"unit:a.service:1:failed": {"state": "queued", "wake": wake}}}))
+        (state.parent / "wakes.json").write_text(json.dumps([{"id": "w", "at": NOW.timestamp() + 600, "reason": "r"}]))
         (state / "fired.jsonl").write_text(json.dumps({"firing": wake, "fact": "enqueued", "at": NOW.isoformat(),
                                                        "session": "me", "hb": "reports"}) + "\n")
-        self.assertEqual(set(observed.SOURCES), {"prs", "deployed", "switches", "claims", "heartbeat"},
+        self.assertEqual(set(observed.SOURCES), {"prs", "deployed", "switches", "claims", "heartbeat", "wakes"},
                          "a new source joins this test")
         with mock.patch.object(observed, "github_get", get):
             for name, source in observed.SOURCES.items():
-                before = snapshot(state)
+                before = snapshot(state.parent)
                 c = ctx(state, values, run=hook.run_quiet, now=NOW)
                 first, second = source.read({"session_id": "me"}, c), source.read({"session_id": "me"}, c)
                 self.assertEqual(first, second, name)
-                self.assertEqual(snapshot(state), before, f"{name}'s read wrote to the state dir")
+                self.assertEqual(snapshot(state.parent), before, f"{name}'s read wrote to the state dir")
                 if name == "heartbeat":
                     self.assertTrue(first.lines and first.ack, "the fixture should make the heartbeat source render")
+                if name == "wakes":
+                    self.assertEqual(first.lines[0], "wakes pending: 1", "the fixture should make the wakes source render")
 
 
 class CliName(unittest.TestCase):
