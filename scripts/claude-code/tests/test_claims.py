@@ -472,6 +472,21 @@ class OptionsAreNotWords(Base):
         self.assertEqual(self.run_cli("done", other["id"], "--", "--help", "text was wrong")[0], 0)
         self.assertEqual(self.c.get(other["id"])["outcome"], "--help text was wrong")
 
+    def test_a_double_dash_mid_text_ends_the_options_and_is_dropped(self):
+        """#55 (Arden's note on #54): `--why w -- x` kept "w -- x", and `--outcome a -- --outcome b` was refused."""
+        record = self.mine()
+        self.assertEqual(self.run_cli("pause", record["id"], "--why", "w", "--", "x")[0], 0)
+        dumped = json.dumps(self.c.get(record["id"]))
+        self.assertIn('"w x"', dumped)
+        self.assertNotIn("w -- x", dumped)
+        other = self.mine(task="Another")
+        code, out, err = self.run_cli("done", other["id"], "--outcome", "a", "--", "--outcome", "b")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.c.get(other["id"])["outcome"], "a --outcome b")
+        third = self.mine(task="A third")
+        self.assertEqual(self.run_cli("done", third["id"], "--outcome", "--", "-1 flaky")[0], 0)
+        self.assertEqual(self.c.get(third["id"])["outcome"], "-1 flaky")
+
     def test_until_before_a_double_dash_is_still_read(self):
         until = (self.clock() + timedelta(hours=2)).isoformat(timespec="seconds")
         record = self.mine()

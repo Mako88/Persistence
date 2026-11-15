@@ -708,19 +708,20 @@ def _option(rest, flag, what):
 def _words(rest, what, flag=None):
     """The free text of a verb: its words joined. `flag` (`--outcome`, `--why`) may name it; any other leading word
     that looks like an option is refused, not kept as text (11 of 149 claims by 2026-11-15 held "--outcome ...",
-    "--help" or "--subject deploy ..." as their words). A leading `--` ends the options: the rest is kept as given,
-    so text that really starts with '-' can be recorded."""
-    if rest[:1] == ["--"]:
-        return " ".join(rest[1:]).strip()
-    if flag and rest[:1] == [flag]:
-        rest = rest[1:]
-    if flag and flag in rest:
+    "--help" or "--subject deploy ..." as their words). The first `--` ends the options wherever it stands, and is
+    dropped: every word after it is text as given, so text that really starts with '-' can be recorded (#55:
+    `--why w -- x` kept "w -- x", and `--outcome a -- --outcome b` was refused)."""
+    end = _options_end(rest)
+    head, tail = rest[:end], rest[end + 1:]
+    if flag and head[:1] == [flag]:
+        head = head[1:]
+    if flag and flag in head:
         raise Refused(f"{flag} is given twice, or after the {what} began")
-    text = " ".join(rest).strip()
+    text = " ".join(head).strip()
     if text.startswith("-"):
         raise Refused(f"{text.split()[0]!r} isn't an option here, and the {what} can't start with '-' "
                       f"(start it with `--` to keep it as given; run bare `ptask` for usage)")
-    return text
+    return " ".join(head + tail).strip()
 
 
 def cli(args, env=None, state=None, home=None, cwd=None, out=print, err=None, now=None):
