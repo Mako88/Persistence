@@ -253,6 +253,16 @@ class AcceptanceCases(Base):
     def test_a_stored_huge_integer_wake_time_does_not_stop_the_beat(self):
         self.quiet_beside_a_stored(10 ** 400)
 
+    # Arden's review of #46: a good wake beside a bad one must still be the next wake, not dropped with it.
+    def test_a_good_wake_beside_a_stored_1e20_is_still_the_next_wake(self):
+        hook.wakes(lambda items: items + [{"id": sid(), "session": sid(), "at": 1e20, "reason": "bad"},
+                                          {"id": sid(), "session": sid(), "at": at(17, 11).timestamp(), "reason": "x",
+                                           "set": at(6, 30).isoformat()}])
+        self.activity(at(6, 33))
+        self.beat(at(8, 8))
+        [q] = self.hb_items("quiet")
+        self.assertIn("nothing scheduled before 17:11", q["reason"])
+
     def test_afternoon_nothing_while_a_wake_is_due_within_H(self):
         self.activity(at(15, 31))
         self.c  # noqa
