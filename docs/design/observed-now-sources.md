@@ -87,7 +87,8 @@ of them says when it stopped being true.
   count, then at most 4 wakes soonest first: time (UTC), how long until it or how overdue, the reason (truncated),
   and a `heartbeat` or `work session` mark. Pid wakes come last. An empty or missing queue shows `wakes: none pending`,
   because silence there is what hid a deferred deploy with no wake behind it. An unreadable queue is `unknown`.
-  It has no ack and writes nothing.
+  A single wake whose time can't be a date (missing, not a number, 1e20, Infinity, NaN) shows on its own line as
+  `at an unreadable time`, sorted last, so it never hides the others. It has no ack and writes nothing.
 
 ## Also in this PR: room sessions can run `note` again
 

@@ -45,6 +45,7 @@ Standard library only, Python 3.9+: hooks run under whatever `python` the shell 
 """
 
 import json
+import math
 import re
 import os
 import shlex
@@ -1815,6 +1816,32 @@ def write_queue_locked(items):
     os.replace(tmp, WAKES)
 
 
+WAKE_MAX_MINUTES = 366 * 24 * 60  # a wake further out than a year either way is a typo, not a plan
+
+
+def wake_minutes(value):
+    """Minutes until a wake: a finite number no further than a year either way, or ValueError (Arden's review of #44).
+    `"in": 1e20` or "inf" used to be stored, and every reader that turned the time into a date then failed."""
+    try:
+        minutes = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"a wake time is a number of minutes, not {value!r}")
+    if not math.isfinite(minutes) or abs(minutes) > WAKE_MAX_MINUTES:
+        raise ValueError(f"a wake time must be a finite number of minutes within a year ({WAKE_MAX_MINUTES}), not {value!r}")
+    return minutes
+
+
+def wake_list_line(w):
+    """One line of `wake list`. A stored time that can't be a date (from before wake_minutes) says so, not a traceback."""
+    if w.get("pid"):
+        return f"when pid {w['pid']} ends: {w.get('reason')}"
+    try:
+        when = datetime.fromtimestamp(float(w["at"])).strftime("at %H:%M")
+    except (KeyError, TypeError, ValueError, OverflowError, OSError):
+        when = "at an unreadable time"
+    return f"{when}: {w.get('reason')}"
+
+
 def add_wake(event):
     """A wake set by the peer: at a time ({"in": minutes}) or when a process ends ({"pid": n}), with
     the reason it will be woken with."""
@@ -1837,7 +1864,11 @@ def add_wake(event):
     if event.get("pid"):
         item["pid"] = int(event["pid"])
     else:
-        item["at"] = datetime.now().timestamp() + 60 * float(event.get("in", 30))
+        try:
+            item["at"] = datetime.now().timestamp() + 60 * wake_minutes(event.get("in", 30))
+        except ValueError as e:
+            print(f"wake not set: {e}", file=sys.stderr)
+            return {"refused": str(e)}
     try:
         wakes(lambda items: items + [item])
     except WakesUnreadable as e:
@@ -2203,7 +2234,7 @@ def set_handoff(wake, home=None):
                          room_from=record.get("room_from"), room_upto=record.get("room_upto"), subject=wake.get("subject"))
         item = {"id": str(uuid.uuid4()), "reason": wake["reason"], "set": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "cwd": claim["cwd"], "session": wake["session"], "work": True, "claim": claim["id"],
-                "at": datetime.now().timestamp() + 60 * float(wake.get("in", 30))}
+                "at": datetime.now().timestamp() + 60 * wake_minutes(wake.get("in", 30))}
         write_queue_locked(items + [item])
     return claim, item
 
@@ -2495,7 +2526,7 @@ def wake_request(argv):
         else:
             subject = rest[1]
         rest = rest[2:]
-    wake = {"pid": when[4:]} if when.startswith("pid:") else {"in": float(when.rstrip("m"))}
+    wake = {"pid": when[4:]} if when.startswith("pid:") else {"in": wake_minutes(when.rstrip("m"))}
     wake["reason"] = " ".join(rest)
     wake["session"] = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
     wake["cwd"] = os.getcwd()  # where run-due resumes it, when no live session takes it
@@ -3081,8 +3112,7 @@ def main():
         import urllib.request
 
         if sys.argv[2] == "list":
-            print("\n".join(f"{w.get('pid') and 'when pid ' + str(w['pid']) + ' ends' or datetime.fromtimestamp(w['at']).strftime('at %H:%M')}: {w['reason']}"
-                            for w in wakes()) or "(no wakes set)")
+            print("\n".join(wake_list_line(w) for w in wakes()) or "(no wakes set)")
             return
         try:
             wake = wake_request(sys.argv[2:])

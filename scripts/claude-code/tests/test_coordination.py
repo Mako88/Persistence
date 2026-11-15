@@ -75,6 +75,37 @@ class WakesLock(Base):
         self.assertEqual(len(hook.wakes()), 80)
 
 
+class WakeTimes(Base):
+    """A wake time must be a finite number of minutes within a year (Arden's review of #44): `"in": 1e20` or "inf" was
+    accepted, and the stored time then broke every reader that turned it into a date."""
+
+    IMPOSSIBLE = (float("inf"), float("-inf"), float("nan"), 1e20, -1e20, "inf", "nan", 60 * 24 * 367)
+
+    def test_the_adder_refuses_an_impossible_time_and_writes_nothing(self):
+        for bad in self.IMPOSSIBLE:
+            with self.subTest(minutes=bad):
+                reply = hook.add_wake({"reason": "r", "in": bad})
+                self.assertNotIn("set", reply)
+                self.assertIn("refused", reply)
+                self.assertEqual(hook.wakes(), [])
+
+    def test_the_cli_refuses_an_impossible_time(self):
+        for bad in ("inf", "-inf", "nan", "1e20", "NaN", str(60 * 24 * 367)):
+            with self.subTest(minutes=bad), self.assertRaises(ValueError):
+                hook.wake_request([bad, "r"])
+
+    def test_ordinary_times_up_to_a_year_are_still_set(self):
+        for good in (1, 0.5, "30", 60 * 24 * 366):
+            with self.subTest(minutes=good):
+                self.assertIn("set", hook.add_wake({"reason": "r", "in": good}))
+        self.assertEqual(len(hook.wakes()), 4)
+
+    def test_wake_list_shows_an_impossible_stored_time_instead_of_failing(self):
+        self.assertEqual(hook.wake_list_line({"at": 1e20, "reason": "r"}), "at an unreadable time: r")
+        self.assertEqual(hook.wake_list_line({"at": float("nan"), "reason": "r"}), "at an unreadable time: r")
+        self.assertEqual(hook.wake_list_line({"pid": 7, "reason": "r"}), "when pid 7 ends: r")
+
+
 class FiringIds(Base):
     def test_add_wake_gives_every_new_item_a_fresh_uuid4(self):
         a = hook.add_wake({"reason": "same", "in": 1})["set"]
