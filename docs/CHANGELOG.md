@@ -26,6 +26,10 @@ now exits 2, so a script can't take `done <id> fixed --help bug` as done.
 `--until`, and `-h` after `--` still printed usage. Both now look only before the `--`. **Bare `pwake` prints usage and
 exits 2** instead of raising IndexError on `sys.argv[2]`.
 
+**A `--` mid-text ends the options too** (#55, Arden's note on #54). `pause <id> --why w -- x` kept "w -- x" as the
+why, and `done <id> --outcome a -- --outcome b` was refused. The first `--` anywhere is now dropped and every word after
+it is text.
+
 ## 2026-11-15 — install-hooks.sh tests pin the group and stop a hidden home root before it writes
 
 Arden's review notes 1 and 2 on #47 (review 5911447830). **The group is pinned.** The test user here is
