@@ -938,6 +938,13 @@ class AttachmentText(unittest.TestCase):
                                              transcript="  "),
                          "[voice message, no speech heard] (audio: /s/v.ogg)")
 
+    def test_voice_transcribed_as_empty_string_is_no_speech_not_a_failure(self):
+        # "" is the value both transcribers actually returned for that clip. A check that treats any falsy transcript
+        # as missing ("not transcript" instead of "is None") brings the bug back for "" but not for "  " (Arden, #41).
+        self.assertEqual(rc.with_attachments("", ["v.ogg"], voice=True, saved={"v.ogg": ("file", "/s/v.ogg")},
+                                             transcript=""),
+                         "[voice message, no speech heard] (audio: /s/v.ogg)")
+
 
 class InDiscordOrder(unittest.TestCase):
     """A short voice message sent after a long one is transcribed first (John, 2026-11-10)."""
