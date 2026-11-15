@@ -2,6 +2,8 @@
 wakes.lock in the one lock order, write-then-rename and no `[]` on bad JSON under an update ("wakes.json: one lock,
 three rewriters"), firing ids ("Firing id"), and the ledger's append and snapshot protocol for the `enqueued` fact
 ("The ledger of fired wakes"). The heartbeat's own tests (states, retries, reports) are the heartbeat PR's."""
+import contextlib
+import io
 import json
 import os
 import subprocess
@@ -104,6 +106,23 @@ class WakeTimes(Base):
         self.assertEqual(hook.wake_list_line({"at": 1e20, "reason": "r"}), "at an unreadable time: r")
         self.assertEqual(hook.wake_list_line({"at": float("nan"), "reason": "r"}), "at an unreadable time: r")
         self.assertEqual(hook.wake_list_line({"pid": 7, "reason": "r"}), "when pid 7 ends: r")
+
+    def test_an_integer_too_big_for_a_float_is_refused_not_raised(self):
+        # Arden's review of #45: float(10**400) raises OverflowError, which wake_minutes let through.
+        reply = hook.add_wake({"reason": "r", "in": 10 ** 400})
+        self.assertIn("refused", reply)
+        self.assertEqual(hook.wakes(), [])
+        with self.assertRaises(ValueError):
+            hook.wake_minutes(-10 ** 400)
+
+    def test_the_wake_list_command_prints_wake_list_line(self):
+        # Arden's review of #45: nothing checked that `wake list` itself goes through wake_list_line.
+        self.wakes_path.write_text(json.dumps([{"at": 1e20, "reason": "bad"}, {"pid": 7, "reason": "p"}]), encoding="utf-8")
+        out = io.TextIOWrapper(io.BytesIO(), encoding="utf-8")  # main() reconfigures stdout, which StringIO can't
+        with mock.patch.object(sys, "argv", ["hook.py", "wake", "list"]), contextlib.redirect_stdout(out):
+            hook.main()
+        out.flush()
+        self.assertEqual(out.buffer.getvalue().decode().splitlines(), ["at an unreadable time: bad", "when pid 7 ends: p"])
 
 
 class FiringIds(Base):

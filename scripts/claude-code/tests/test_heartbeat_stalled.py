@@ -232,6 +232,27 @@ class AcceptanceCases(Base):
         self.beat(at(11, 8))  # 2H after 08:08
         self.assertEqual(len(self.hb_items("quiet")), 1)
 
+    # Arden's review of #45: next_due turned every numeric `at` into a date, so one stored 1e20 or NaN (from before
+    # wake_minutes) raised inside the beat. It is skipped: the quiet wake still goes, naming no next wake.
+    def quiet_beside_a_stored(self, bad):
+        hook.wakes(lambda items: items + [{"id": sid(), "session": sid(), "at": bad, "reason": "bad"}])
+        self.activity(at(6, 33))
+        self.beat(at(8, 8))
+        [q] = self.hb_items("quiet")
+        self.assertIn("nothing scheduled before none", q["reason"])
+
+    def test_a_stored_1e20_wake_time_does_not_stop_the_beat(self):
+        self.quiet_beside_a_stored(1e20)
+
+    def test_a_stored_nan_wake_time_does_not_stop_the_beat(self):
+        self.quiet_beside_a_stored(float("nan"))
+
+    def test_a_stored_infinite_wake_time_does_not_stop_the_beat(self):
+        self.quiet_beside_a_stored(float("inf"))
+
+    def test_a_stored_huge_integer_wake_time_does_not_stop_the_beat(self):
+        self.quiet_beside_a_stored(10 ** 400)
+
     def test_afternoon_nothing_while_a_wake_is_due_within_H(self):
         self.activity(at(15, 31))
         self.c  # noqa

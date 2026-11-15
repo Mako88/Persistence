@@ -1824,6 +1824,8 @@ def wake_minutes(value):
     `"in": 1e20` or "inf" used to be stored, and every reader that turned the time into a date then failed."""
     try:
         minutes = float(value)
+    except OverflowError:  # an int past a float's range (10**400; Arden's review of #45): as impossible as 1e20
+        minutes = math.inf
     except (TypeError, ValueError):
         raise ValueError(f"a wake time is a number of minutes, not {value!r}")
     if not math.isfinite(minutes) or abs(minutes) > WAKE_MAX_MINUTES:
@@ -2226,6 +2228,7 @@ def set_handoff(wake, home=None):
     origin = record.get("origin_session")
     if not claims.full_id(origin):
         raise ValueError("a hand-off is set by a room session with its full id (CLAUDE_CODE_SESSION_ID)")
+    minutes = wake_minutes(wake.get("in", 30))  # before the claim: a refused time must not leave a claim with no wake
     c = claims.Claims(STATE, home=home)
     with coordination.lock(STATE, "wakes"):
         items = queue_locked()
@@ -2234,7 +2237,7 @@ def set_handoff(wake, home=None):
                          room_from=record.get("room_from"), room_upto=record.get("room_upto"), subject=wake.get("subject"))
         item = {"id": str(uuid.uuid4()), "reason": wake["reason"], "set": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "cwd": claim["cwd"], "session": wake["session"], "work": True, "claim": claim["id"],
-                "at": datetime.now().timestamp() + 60 * wake_minutes(wake.get("in", 30))}
+                "at": datetime.now().timestamp() + 60 * minutes}
         write_queue_locked(items + [item])
     return claim, item
 

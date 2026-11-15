@@ -962,8 +962,10 @@ class Beat:
         return any(isinstance(w.get("at"), (int, float)) and w["at"] < (self.now + span).timestamp() for w in self.queue)
 
     def next_due(self):
-        ats = [w["at"] for w in self.queue if isinstance(w.get("at"), (int, float))]
-        return datetime.fromtimestamp(min(ats), timezone.utc) if ats else None
+        """The soonest timed wake. A stored time that can't be a date (1e20, NaN, from before wake_minutes; Arden's
+        review of #45) is skipped: it used to raise here and stop the beat. `wake list` and Observed now show it."""
+        ats = [at for at in (_wake_moment(w.get("at")) for w in self.queue) if at is not None]
+        return min(ats) if ats else None
 
     # R: reports reach a self.
     def unread_keys(self):
@@ -1393,6 +1395,16 @@ def nudge_entry(record):
 
     start = claims.spell_start(record)
     return next((h for h in reversed(record["history"][start or 0:]) if h["action"] == "nudge"), None)
+
+
+def _wake_moment(value):
+    """A wake's stored `at` as a UTC datetime, or None when it isn't a number or can't be a date."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    try:
+        return datetime.fromtimestamp(value, timezone.utc)
+    except (ValueError, OverflowError, OSError):
+        return None
 
 
 def _time(value):
