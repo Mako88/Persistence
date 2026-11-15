@@ -386,6 +386,52 @@ class RoomSessionsCantOwn(Base):
         self.assertEqual(self.files(), [])
 
 
+class OptionsAreNotWords(Base):
+    """A word that looks like an option is never kept as a claim's task, why or outcome: `ptask claim --help` made a live
+    claim whose task was "--help" (71156f30), and 9 outcomes began "--outcome" (2026-11-15)."""
+
+    def run_cli(self, *args):
+        out, err = [], []
+        code = claims.cli(list(args), env={"CLAUDE_CODE_SESSION_ID": self.me}, state=self.state, home=self.home,
+                          cwd=str(self.home / "work"), out=out.append, err=err.append, now=self.clock)
+        return code, "\n".join(out), "\n".join(err)
+
+    def test_help_after_a_verb_prints_usage_and_changes_nothing(self):
+        record = self.mine()
+        for args in (("claim", "--help"), ("claim", "-h"), ("done", record["id"], "--help"), ("pause", record["id"], "--help")):
+            with self.subTest(args=args):
+                code, out, err = self.run_cli(*args)
+                self.assertEqual(code, 0, err)
+                self.assertIn("ptask claim", out)
+        self.assertEqual(self.files(), [f"{record['id']}.json"])
+        self.assertEqual(self.c.get(record["id"])["status"], "claimed")
+
+    def test_a_task_that_starts_with_an_option_is_refused(self):
+        for args in (("claim", "--subjekt", "deploy", "Deploy"), ("claim", "--subject deploy Deploy main")):
+            with self.subTest(args=args):
+                code, out, err = self.run_cli(*args)
+                self.assertEqual(code, 1)
+                self.assertIn("isn't an option here", err)
+        self.assertEqual(self.files(), [])
+
+    def test_outcome_and_why_may_be_named_and_the_flag_is_not_kept(self):
+        first, second = self.mine(), self.mine(task="Another")
+        self.assertEqual(self.run_cli("done", first["id"], "--outcome", "#48 merged 55c343e")[0], 0)
+        self.assertEqual(self.c.get(first["id"])["outcome"], "#48 merged 55c343e")
+        self.assertEqual(self.run_cli("pause", second["id"], "--why", "waiting on review")[0], 0)
+        self.assertNotIn("--why", json.dumps(self.c.get(second["id"])))
+        self.assertIn("waiting on review", json.dumps(self.c.get(second["id"])))
+        self.assertEqual(self.run_cli("abandon", second["id"], "plain words")[0], 0)
+        self.assertEqual(self.c.get(second["id"])["outcome"], "plain words")
+
+    def test_another_option_in_an_outcome_is_refused_and_the_claim_stays_open(self):
+        record = self.mine()
+        code, out, err = self.run_cli("done", record["id"], "--result", "merged")
+        self.assertEqual(code, 1)
+        self.assertIn("'--result'", err)
+        self.assertEqual(self.c.get(record["id"])["status"], "claimed")
+
+
 class ExactLiveness(Base):
     """Exact liveness: a live process for another id, or for a prefix of the owner's id, is not the owner running.
     The cases are one table, shared with FragmentStore.ProcessHoldsSession's."""

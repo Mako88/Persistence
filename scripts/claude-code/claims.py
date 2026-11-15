@@ -667,9 +667,9 @@ USAGE = """ptask claim [--cwd <dir>] [--subject <slug>] "<task>"
                                          a subject allows one live claim per job (deploy: --subject deploy)
 ptask list                               this self's claims not yet closed
 ptask show <id>                          one claim, whole
-ptask pause <id> [--until <UTC time>] "<why>"
+ptask pause <id> [--until <UTC time>] [--why] "<why>"
 ptask resume <id> | touch <id>
-ptask done <id> ["<outcome>"] | abandon <id> ["<outcome>"]
+ptask done <id> [--outcome] ["<outcome>"] | abandon <id> [--outcome] ["<outcome>"]
 ptask take <id>                          take a claim whose owner isn't running and has no wake pending
 ptask holds <id> <subject>               exit 0 only if this session holds claim <id>, claimed, with that subject
 ptask closed <id>                        exit 0 only if claim <id> is in this self's claims and done or abandoned"""
@@ -684,6 +684,19 @@ def _describe(record, now):
     return f"{record['id']}  {status}  owner {owner}  updated {record['updated']}"
 
 
+def _words(rest, what, flag=None):
+    """The free text of a verb: its words joined. `flag` (`--outcome`, `--why`) may name it; any other leading word
+    that looks like an option is refused, not kept as text (11 of 149 claims by 2026-11-15 held "--outcome ...",
+    "--help" or "--subject deploy ..." as their words)."""
+    if flag and rest[:1] == [flag]:
+        rest = rest[1:]
+    text = " ".join(rest).strip()
+    if text.startswith("-"):
+        raise Refused(f"{text.split()[0]!r} isn't an option here, and the {what} can't start with '-' "
+                      f"(run bare `ptask` for usage)")
+    return text
+
+
 def cli(args, env=None, state=None, home=None, cwd=None, out=print, err=None, now=None):
     env = os.environ if env is None else env
     err = err or (lambda text: print(text, file=sys.stderr))
@@ -694,6 +707,9 @@ def cli(args, env=None, state=None, home=None, cwd=None, out=print, err=None, no
         out(USAGE)
         return 0 if args else 2
     verb, rest = args[0], list(args[1:])
+    if any(a in ("-h", "--help") for a in rest):  # `ptask claim --help` once made a claim whose task was "--help"
+        out(USAGE)
+        return 0
     try:
         if verb in ("claim", "take") and room:
             raise Refused(f"a room session can't own a claim (its id is resumed by the bridge); use pwake, which "
@@ -707,7 +723,7 @@ def cli(args, env=None, state=None, home=None, cwd=None, out=print, err=None, no
                 else:
                     subject = rest[1]
                 rest = rest[2:]
-            task = " ".join(rest).strip()
+            task = _words(rest, "task")
             if not task:
                 raise Refused('ptask claim needs the task: ptask claim "<task>"')
             record = c.claim(task, session, where, base=here, subject=subject)
@@ -733,13 +749,13 @@ def cli(args, env=None, state=None, home=None, cwd=None, out=print, err=None, no
             until = None
             if rest[:1] == ["--until"] and len(rest) > 1:
                 until, rest = rest[1], rest[2:]
-            record = c.pause(claim_id, session, until=until, why=" ".join(rest))
+            record = c.pause(claim_id, session, until=until, why=_words(rest, "why", "--why"))
             out(f"paused {record['id']}" + (f" until {record['pause_until']}" if record["pause_until"] else ""))
         elif verb in ("resume", "touch") and len(rest) == 1:
             record = getattr(c, verb)(rest[0], session)
             out(f"{verb}d {record['id']}: {record['status']}" if verb == "resume" else f"touched {record['id']}")
         elif verb in ("done", "abandon") and rest:
-            record = getattr(c, verb)(rest[0], session, outcome=" ".join(rest[1:]))
+            record = getattr(c, verb)(rest[0], session, outcome=_words(rest[1:], "outcome", "--outcome"))
             out(f"{record['status']} {record['id']}")
         elif verb == "take" and len(rest) == 1:
             seen = c.get(rest[0])
