@@ -493,6 +493,15 @@ def wakes_file(ctx):
     return ctx.state.parent / "wakes.json"  # hook.WAKES: the queue sits beside the state dir
 
 
+def wake_at(w):
+    """A timed wake's time as a UTC datetime, or None when it can't be one: missing, not a number, or impossible (1e20,
+    Infinity, NaN; Arden's review of #44). One bad wake reads as unreadable on its own line, never hiding the rest."""
+    try:
+        return datetime.fromtimestamp(float(w["at"]), timezone.utc)
+    except (KeyError, TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
 def wakes_read(event, ctx):
     try:
         items = json.loads(wakes_file(ctx).read_text(encoding="utf-8"))
@@ -505,21 +514,16 @@ def wakes_read(event, ctx):
     items = [w for w in items if isinstance(w, dict)]
     if not items:
         return Observation("wakes", ctx.now, lines=("wakes: none pending",))
-    now = ctx.now.timestamp()
-
     def line(w):
         tags = []
         if w.get("pid"):
             when = f"when pid {w['pid']} ends"
         else:
-            try:
-                at = float(w["at"])
-            except (KeyError, TypeError, ValueError):
-                at = None
-            when = "at an unreadable time" if at is None else hhmm(datetime.fromtimestamp(at, timezone.utc))
+            at = wake_at(w)
+            when = "at an unreadable time" if at is None else hhmm(at)
             if at is not None:
-                gap = timedelta(seconds=at - now)
-                tags.append(f"in {age(gap)}" if at > now else f"{age(-gap)} overdue")
+                gap = at - ctx.now
+                tags.append(f"in {age(gap)}" if at > ctx.now else f"{age(-gap)} overdue")
         if w.get("by") == "heartbeat":
             tags.append("heartbeat")
         if w.get("work"):
@@ -527,10 +531,10 @@ def wakes_read(event, ctx):
         return f"wake {when}" + (f" ({', '.join(tags)})" if tags else "") + f": {short(w.get('reason'), 90)}"
 
     def order(w):  # timed wakes by time; pid wakes after them, since they have no time
-        try:
-            return (0, float(w["at"])) if not w.get("pid") else (1, 0.0)
-        except (KeyError, TypeError, ValueError):
-            return (2, 0.0)
+        if w.get("pid"):
+            return (1, 0.0)
+        at = wake_at(w)
+        return (0, at.timestamp()) if at else (2, 0.0)
 
     items.sort(key=order)
     return Observation("wakes", ctx.now, lines=(f"wakes pending: {len(items)}", *(line(w) for w in items[:WAKES_SHOWN])),

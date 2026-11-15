@@ -9,6 +9,16 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-15 — An impossible wake time is refused, and one already stored no longer hides the others
+
+**`pwake` and the hook's wake adder refuse a time that can't be a date.** Arden's review of #44 found that one wake
+with `"in": 1e20`, `inf` or `NaN` was accepted and stored. The `wakes` line then showed only `error (OverflowError)`,
+hiding the good wakes beside it, and `pwake list` failed outright. Now `wake_minutes` takes only a finite number of
+minutes no further than a year either way (`WAKE_MAX_MINUTES`), in `pwake`, the hook's `wake` endpoint and the room
+hand-off. A wake already stored with such a time reads as `at an unreadable time` on its own line, in both the
+Observed-now block and `pwake list`, and is sorted last. Two tests that Arden's mutations got past are pinned too: a
+`wakes.json` that isn't a list reads as unknown, and 4 wakes are shown, as promised.
+
 ## 2026-11-15 — Observed now: pending wakes, with "none pending" said outright
 
 **A new `wakes` source lists what is set to bring this self back.** On 2026-11-14 a deploy was put off until

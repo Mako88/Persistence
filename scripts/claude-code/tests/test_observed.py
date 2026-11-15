@@ -614,9 +614,27 @@ class Wakes(unittest.TestCase):
     def test_more_than_shown_are_counted(self):
         t = NOW.timestamp()
         got = self.read([{"id": str(i), "at": t + 60 * (i + 1), "reason": f"r{i}"} for i in range(7)])
-        self.assertEqual(len(got.lines), 1 + observed.WAKES_SHOWN)
+        self.assertEqual(len(got.lines), 1 + 4, "4 wakes shown is what the PR text and the design doc promise")
         self.assertEqual(got.lines[0], "wakes pending: 7")
-        self.assertEqual(got.truncated, 7 - observed.WAKES_SHOWN)
+        self.assertEqual(got.truncated, 3)
+
+    def test_an_impossible_time_is_flagged_on_its_own_line_and_the_good_wakes_still_show(self):
+        # Arden's review of #44: one wake at 1e20, -1e20, Infinity or NaN made fromtimestamp raise, and the whole
+        # source showed error, hiding the good wakes beside it.
+        t = NOW.timestamp()
+        for bad in (1e20, -1e20, float("inf"), float("-inf"), float("nan")):
+            with self.subTest(at=bad):
+                got = self.read([{"id": "x", "at": bad, "reason": "bad time"}, {"id": "a", "at": t + 600, "reason": "check CI"}])
+                self.assertEqual(got.status, "ok")
+                self.assertEqual(got.lines, ("wakes pending: 2",
+                                             "wake 04:10Z (in 10m): check CI",
+                                             "wake at an unreadable time: bad time"))
+
+    def test_a_queue_that_is_not_a_list_is_unknown(self):
+        self.file.write_text("{}")  # valid JSON, not a list (a mutation survived #44 without this test)
+        [got] = observed.observe({"session_id": "me"}, ctx(self.state, {"PERSISTENCE_OBSERVE_SOURCES": "wakes"}, now=NOW))
+        self.assertEqual(got.status, "unknown")
+        self.assertNotIn("wakes: none pending", got.lines)
 
     def test_unreadable_queue_is_unknown_not_none(self):
         self.file.write_text("{not json")
