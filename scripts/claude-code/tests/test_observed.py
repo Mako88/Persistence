@@ -630,6 +630,14 @@ class Wakes(unittest.TestCase):
                                              "wake 04:10Z (in 10m): check CI",
                                              "wake at an unreadable time: bad time"))
 
+    def test_an_unreadable_time_sorts_after_pid_wakes(self):
+        # Arden's review of #45: the order was (time, pid, unreadable) in the code, and no test pinned it.
+        t = NOW.timestamp()
+        got = self.read([{"id": "x", "at": float("nan"), "reason": "bad time"}, {"id": "p", "pid": 4242, "reason": "build"},
+                         {"id": "a", "at": t + 600, "reason": "check CI"}])
+        self.assertEqual(got.lines, ("wakes pending: 3", "wake 04:10Z (in 10m): check CI", "wake when pid 4242 ends: build",
+                                     "wake at an unreadable time: bad time"))
+
     def test_a_queue_that_is_not_a_list_is_unknown(self):
         self.file.write_text("{}")  # valid JSON, not a list (a mutation survived #44 without this test)
         [got] = observed.observe({"session_id": "me"}, ctx(self.state, {"PERSISTENCE_OBSERVE_SOURCES": "wakes"}, now=NOW))

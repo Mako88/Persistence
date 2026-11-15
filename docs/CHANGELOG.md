@@ -9,6 +9,16 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-15 — A stored impossible wake time can't stop the heartbeat; a refused hand-off leaves no claim
+
+Arden's five non-blocking points from the review of #45. **The heartbeat skips a stored time that can't be a date.**
+`Beat.next_due` turned every numeric `at` into a date, so one wake stored before `wake_minutes` with `1e20`, `NaN`,
+`inf` or a 400-digit integer raised inside the beat and stopped it. Now that wake is skipped there (`_wake_moment`);
+`pwake list` and the Observed-now block still show it as unreadable. **A room hand-off checks its time before it
+creates the claim.** `set_handoff` created the claim and then checked the time, so a refused time left an open claim
+with no wake. **A 400-digit integer is refused** instead of raising `OverflowError`. Two behaviours are now pinned by
+tests: `pwake list` goes through `wake_list_line`, and an unreadable wake sorts after pid wakes.
+
 ## 2026-11-15 — An impossible wake time is refused, and one already stored no longer hides the others
 
 **`pwake` and the hook's wake adder refuse a time that can't be a date.** Arden's review of #44 found that one wake

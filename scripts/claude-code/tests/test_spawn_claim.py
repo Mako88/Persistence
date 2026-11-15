@@ -106,6 +106,18 @@ class Base(unittest.TestCase):
 
 
 class Pwake(Base):
+    def test_an_impossible_time_is_refused_before_any_claim_is_written(self):
+        # Arden's review of #45: set_handoff created the claim, then checked the time, leaving an open claim with no wake.
+        with mock.patch.dict(os.environ, {"PERSISTENCE_ROOM_CHANNEL": ROOM, "CLAUDE_CODE_SESSION_ID": self.room}), \
+                mock.patch.object(hook.Path, "home", return_value=self.home):
+            wake = hook.wake_request(["5", "Build", "it"])
+        for bad in ("inf", float("nan"), 1e20, 10 ** 400):
+            with self.subTest(minutes=bad):
+                with self.assertRaises(ValueError):
+                    hook.set_handoff({**wake, "in": bad}, home=self.home)
+                self.assertEqual(list((self.state / "tasks").glob("*.json")), [])
+                self.assertEqual(self.queue(), [])
+
     def test_pwake_from_a_room_session_writes_an_open_hand_off_and_an_item_with_its_id(self):
         record, item = self.pwake()
         stored = self.c.get(record["id"])
