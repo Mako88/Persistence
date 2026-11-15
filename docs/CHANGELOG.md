@@ -9,6 +9,17 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-15 — install-hooks.sh tests pin the group and stop a hidden home root before it writes
+
+Arden's review notes 1 and 2 on #47 (review 5911447830). **The group is pinned.** The test user here is
+`ubuntu:ubuntu`, so a hard-coded `-g "$u"` passed unseen. A shim `id` now gives the user a primary group with a
+different name, the `install` shim records `-g`, and a new test checks every call uses it. Putting `-g "$u"` back fails
+only that test. **A hidden home root fails before it writes.** The `install` and `cp` shims refuse any path outside
+the test's temp dir and exit 97 without running, and every write the script makes into a home goes through one of them.
+A new test runs a copy of the script that uses a canary dir instead of `$1`: the copy is refused and the canary is left
+unchanged. With the guard off, that test fails. Note 3 (root following a planted symlink in a user-owned dir) is filed
+as an issue.
+
 ## 2026-11-15 — deploy-remote.sh makes a peer's previous/ as that peer
 
 Arden found `~/.claude/persistence/previous/` in their home owned by root after the 75c4053 deploy, so they couldn't
