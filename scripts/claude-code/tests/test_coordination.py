@@ -125,6 +125,17 @@ class WakeTimes(Base):
         self.assertEqual(out.buffer.getvalue().decode().splitlines(), ["at an unreadable time: bad", "when pid 7 ends: p"])
 
 
+    def test_bare_wake_prints_usage_and_exits_2(self):
+        # Bare `pwake` raised IndexError on sys.argv[2] (2026-11-15).
+        err = io.StringIO()
+        with mock.patch.object(sys, "argv", ["hook.py", "wake"]), contextlib.redirect_stderr(err), \
+                self.assertRaises(SystemExit) as stop:
+            hook.main()
+        self.assertEqual(stop.exception.code, 2)
+        self.assertIn("usage: pwake", err.getvalue())
+        self.assertEqual(hook.wakes(), [])
+
+
 class FiringIds(Base):
     def test_add_wake_gives_every_new_item_a_fresh_uuid4(self):
         a = hook.add_wake({"reason": "same", "in": 1})["set"]

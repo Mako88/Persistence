@@ -3114,6 +3114,10 @@ def main():
     if sys.argv[1] == "wake":  # `wake <minutes|pid:N> <reason>` or `wake list`, run by the peer
         import urllib.request
 
+        if len(sys.argv) < 3:  # bare `pwake` raised IndexError here (2026-11-15)
+            print("usage: pwake <minutes|pid:N> [--from <message id>] [--subject <slug>] <reason>, or pwake list",
+                  file=sys.stderr)
+            sys.exit(2)
         if sys.argv[2] == "list":
             print("\n".join(wake_list_line(w) for w in wakes()) or "(no wakes set)")
             return

@@ -684,11 +684,17 @@ def _describe(record, now):
     return f"{record['id']}  {status}  owner {owner}  updated {record['updated']}"
 
 
+def _options_end(rest):
+    """Where a verb's options stop: at a `--`, after which every word is text (Arden's #51 notes: `--until` and `-h`
+    after `--` were still read as options)."""
+    return rest.index("--") if "--" in rest else len(rest)
+
+
 def _option(rest, flag, what):
-    """Pull `flag <value>` out of a verb's words wherever it stands, so options read in any order. Given twice, or with
-    no value, it is refused rather than kept as text (Arden, 2026-11-15: `pause <id> --why w --until T` kept
-    "w --until T" as the why and paused with no time to resume)."""
-    at = [i for i, word in enumerate(rest) if word == flag]
+    """Pull `flag <value>` out of a verb's words wherever it stands before a `--`, so options read in any order. Given
+    twice, or with no value, it is refused rather than kept as text (Arden, 2026-11-15: `pause <id> --why w --until T`
+    kept "w --until T" as the why and paused with no time to resume)."""
+    at = [i for i, word in enumerate(rest[:_options_end(rest)]) if word == flag]
     if not at:
         return None, rest
     if len(at) > 1:
@@ -727,7 +733,7 @@ def cli(args, env=None, state=None, home=None, cwd=None, out=print, err=None, no
         out(USAGE)
         return 0 if args else 2
     verb, rest = args[0], list(args[1:])
-    if any(a in ("-h", "--help") for a in rest):  # `ptask claim --help` once made a claim whose task was "--help"
+    if any(a in ("-h", "--help") for a in rest[:_options_end(rest)]):  # `ptask claim --help` made a claim of "--help"
         out(USAGE)
         return 2  # nothing was done: a script reading the exit code must not take `done <id> x --help` as done
     try:

@@ -22,6 +22,10 @@ stands; an option given twice, after the text began, or with no value is refused
 leading `--` ends the options, so text that really starts with '-' can be kept. Usage printed for `--help` after a verb
 now exits 2, so a script can't take `done <id> fixed --help bug` as done.
 
+**After `--`, every word is text** (Arden's non-blocking notes on review 5911679202). `pause <id> -- --until x` still read
+`--until`, and `-h` after `--` still printed usage. Both now look only before the `--`. **Bare `pwake` prints usage and
+exits 2** instead of raising IndexError on `sys.argv[2]`.
+
 ## 2026-11-15 — install-hooks.sh tests pin the group and stop a hidden home root before it writes
 
 Arden's review notes 1 and 2 on #47 (review 5911447830). **The group is pinned.** The test user here is
