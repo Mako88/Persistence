@@ -401,7 +401,7 @@ class OptionsAreNotWords(Base):
         for args in (("claim", "--help"), ("claim", "-h"), ("done", record["id"], "--help"), ("pause", record["id"], "--help")):
             with self.subTest(args=args):
                 code, out, err = self.run_cli(*args)
-                self.assertEqual(code, 0, err)
+                self.assertEqual(code, 2, err)
                 self.assertIn("ptask claim", out)
         self.assertEqual(self.files(), [f"{record['id']}.json"])
         self.assertEqual(self.c.get(record["id"])["status"], "claimed")
@@ -429,6 +429,41 @@ class OptionsAreNotWords(Base):
         code, out, err = self.run_cli("done", record["id"], "--result", "merged")
         self.assertEqual(code, 1)
         self.assertIn("'--result'", err)
+        self.assertEqual(self.c.get(record["id"])["status"], "claimed")
+
+    def test_pause_reads_until_and_why_in_either_order(self):
+        """Arden, review 5911639397: `pause <id> --why w --until T` kept "w --until T" as the why, pause_until null."""
+        until = (self.clock() + timedelta(hours=2)).isoformat(timespec="seconds")
+        for order in (("--until", until, "--why", "waiting on review"), ("--why", "waiting on review", "--until", until),
+                      ("waiting on review", "--until", until), ("--until", until, "waiting on review")):
+            with self.subTest(order=order):
+                record = self.mine()
+                code, out, err = self.run_cli("pause", record["id"], *order)
+                self.assertEqual(code, 0, err)
+                record = self.c.get(record["id"])
+                self.assertEqual(record["pause_until"], until)
+                self.assertNotIn("--", json.dumps(record))
+                self.assertIn("waiting on review", json.dumps(record))
+
+    def test_a_misplaced_or_doubled_option_is_refused_and_the_claim_stays_open(self):
+        for args in (("pause", "w", "--until"), ("pause", "--until", "2026-11-16T00:00Z", "--until", "2026-11-17T00:00Z", "w"),
+                     ("pause", "--why", "w", "--why", "x"), ("done", "--outcome", "merged", "--outcome", "x")):
+            with self.subTest(args=args):
+                record = self.mine()
+                code, out, err = self.run_cli(args[0], record["id"], *args[1:])
+                self.assertEqual(code, 1, out)
+                self.assertEqual(self.c.get(record["id"])["status"], "claimed")
+
+    def test_a_leading_double_dash_ends_the_options(self):
+        record = self.mine()
+        self.assertEqual(self.run_cli("done", record["id"], "--", "-1 flaky test")[0], 0)
+        self.assertEqual(self.c.get(record["id"])["outcome"], "-1 flaky test")
+
+    def test_help_after_a_verb_exits_2_so_a_script_cannot_read_it_as_done(self):
+        """Arden: `done <id> fixed --help bug` printed usage and exited 0 with the claim still open."""
+        record = self.mine()
+        code, out, err = self.run_cli("done", record["id"], "fixed", "--help", "bug")
+        self.assertEqual(code, 2)
         self.assertEqual(self.c.get(record["id"])["status"], "claimed")
 
 

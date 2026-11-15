@@ -667,7 +667,7 @@ USAGE = """ptask claim [--cwd <dir>] [--subject <slug>] "<task>"
                                          a subject allows one live claim per job (deploy: --subject deploy)
 ptask list                               this self's claims not yet closed
 ptask show <id>                          one claim, whole
-ptask pause <id> [--until <UTC time>] [--why] "<why>"
+ptask pause <id> [--until <UTC time>] [--why] "<why>"   (options in any order; `--` ends them)
 ptask resume <id> | touch <id>
 ptask done <id> [--outcome] ["<outcome>"] | abandon <id> [--outcome] ["<outcome>"]
 ptask take <id>                          take a claim whose owner isn't running and has no wake pending
@@ -684,16 +684,36 @@ def _describe(record, now):
     return f"{record['id']}  {status}  owner {owner}  updated {record['updated']}"
 
 
+def _option(rest, flag, what):
+    """Pull `flag <value>` out of a verb's words wherever it stands, so options read in any order. Given twice, or with
+    no value, it is refused rather than kept as text (Arden, 2026-11-15: `pause <id> --why w --until T` kept
+    "w --until T" as the why and paused with no time to resume)."""
+    at = [i for i, word in enumerate(rest) if word == flag]
+    if not at:
+        return None, rest
+    if len(at) > 1:
+        raise Refused(f"{flag} is given twice")
+    i = at[0]
+    if i + 1 >= len(rest) or rest[i + 1].startswith("--"):
+        raise Refused(f"{flag} needs {what}")
+    return rest[i + 1], rest[:i] + rest[i + 2:]
+
+
 def _words(rest, what, flag=None):
     """The free text of a verb: its words joined. `flag` (`--outcome`, `--why`) may name it; any other leading word
     that looks like an option is refused, not kept as text (11 of 149 claims by 2026-11-15 held "--outcome ...",
-    "--help" or "--subject deploy ..." as their words)."""
+    "--help" or "--subject deploy ..." as their words). A leading `--` ends the options: the rest is kept as given,
+    so text that really starts with '-' can be recorded."""
+    if rest[:1] == ["--"]:
+        return " ".join(rest[1:]).strip()
     if flag and rest[:1] == [flag]:
         rest = rest[1:]
+    if flag and flag in rest:
+        raise Refused(f"{flag} is given twice, or after the {what} began")
     text = " ".join(rest).strip()
     if text.startswith("-"):
         raise Refused(f"{text.split()[0]!r} isn't an option here, and the {what} can't start with '-' "
-                      f"(run bare `ptask` for usage)")
+                      f"(start it with `--` to keep it as given; run bare `ptask` for usage)")
     return text
 
 
@@ -709,7 +729,7 @@ def cli(args, env=None, state=None, home=None, cwd=None, out=print, err=None, no
     verb, rest = args[0], list(args[1:])
     if any(a in ("-h", "--help") for a in rest):  # `ptask claim --help` once made a claim whose task was "--help"
         out(USAGE)
-        return 0
+        return 2  # nothing was done: a script reading the exit code must not take `done <id> x --help` as done
     try:
         if verb in ("claim", "take") and room:
             raise Refused(f"a room session can't own a claim (its id is resumed by the bridge); use pwake, which "
@@ -746,9 +766,7 @@ def cli(args, env=None, state=None, home=None, cwd=None, out=print, err=None, no
             out(json.dumps(record, indent=1, ensure_ascii=False))
         elif verb == "pause" and rest:
             claim_id, rest = rest[0], rest[1:]
-            until = None
-            if rest[:1] == ["--until"] and len(rest) > 1:
-                until, rest = rest[1], rest[2:]
+            until, rest = _option(rest, "--until", "a UTC time")
             record = c.pause(claim_id, session, until=until, why=_words(rest, "why", "--why"))
             out(f"paused {record['id']}" + (f" until {record['pause_until']}" if record["pause_until"] else ""))
         elif verb in ("resume", "touch") and len(rest) == 1:
