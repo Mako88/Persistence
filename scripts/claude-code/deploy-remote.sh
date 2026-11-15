@@ -70,7 +70,8 @@ tar -czf "$work/store.tgz" -C "$work/pub" .
 # sources from observed.py; persistence-heartbeat@.service runs heartbeat.py from the same place (a beat with the switch
 # off exits at its first line, so deploying it turns nothing on): all seven go beside it. A file that differs from the one
 # it replaces is copied first to ~/.claude/persistence/previous/<UTC stamp>/ and named in the output, so nothing is
-# overwritten silently and the way back is a copy, not a guess. Each user's ledger-since is then written if it isn't
+# overwritten silently and the way back is a copy, not a guess. install-hooks.sh does this part on the host,
+# making every directory in a peer's home as that peer. Each user's ledger-since is then written if it isn't
 # there yet (coordination.py, seed-ledger-since: once, never rewritten), so the heartbeat knows where its ledger begins;
 # a seeding that fails says "ledger-since NOT written" and the deploy goes on (no file: every firing judged as before).
 # Every user named gets every file: a self whose heartbeat is live gets its running heartbeat.py replaced, so name only
@@ -83,7 +84,7 @@ py=(hook.py coordination.py claims.py cwd_exec.py run_line.py observed.py heartb
 # overwritten what the running one copied.
 stage=/tmp/persistence-deploy.$claim.$$
 ssh "$host" "mkdir -m 700 $stage"
-scp -q "$work/store.tgz" "${py[@]/#/$repo/scripts/claude-code/}" "$host:$stage/"
+scp -q "$work/store.tgz" "${py[@]/#/$repo/scripts/claude-code/}" "$repo/scripts/claude-code/install-hooks.sh" "$host:$stage/"
 # Arden's B: the claim is checked again once the host's lock is held, right before anything is installed. The host
 # says LOCKED (lock held, authorization unchanged) and waits; this side re-runs `holds` in the caller's own claims and
 # answers go or stop. Anything but go, an EOF included, refuses there with nothing installed.
@@ -104,17 +105,9 @@ coproc REMOTE { ssh "$host" "set -e
   sudo chmod -R a+rX /opt/persistence/store
   sudo chmod 755 /opt/persistence/store/persistence-store
   stamp=\$(date -u +%Y%m%dT%H%M%SZ)
+  sudo bash $stage/install-hooks.sh /home/ $stage \$stamp \"${py[*]}\" ${users[*]:-}
   for u in ${users[*]:-}; do
-    d=/home/\$u/.claude/persistence; kept=
-    for f in ${py[*]}; do
-      if sudo test -f \$d/\$f && ! sudo cmp -s $stage/\$f \$d/\$f; then
-        sudo install -d -o \$u -g \$u -m 700 \$d/previous/\$stamp
-        sudo cp -p \$d/\$f \$d/previous/\$stamp/\$f
-        kept=\"\$kept \$f\"
-      fi
-      sudo install -o \$u -g \$u -m 644 $stage/\$f \$d/\$f
-    done
-    if [ -n \"\$kept\" ]; then echo \"\$u: replaced\$kept; the copies they replaced are in \$d/previous/\$stamp\"; else echo \"\$u: no hook file changed\"; fi
+    d=/home/\$u/.claude/persistence
     if seeded=\$(sudo -u \$u env PERSISTENCE_STATE_DIR=\$d/state python3 -I \$d/coordination.py seed-ledger-since); then
       echo \"\$u: \$seeded\"
     else

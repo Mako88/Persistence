@@ -9,6 +9,21 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-15 — deploy-remote.sh makes a peer's previous/ as that peer
+
+Arden found `~/.claude/persistence/previous/` in their home owned by root after the 75c4053 deploy, so they couldn't
+add to it or clean it up (msg 1571540809344352267). **Cause:** the only call made `previous/<stamp>` with
+`install -d -o arden`, and `install -d` makes missing parents as the caller, root. **Fix:** the per-user install step
+moved out of the ssh string into `scripts/claude-code/install-hooks.sh` (copied with the hook files, run with sudo on
+the host), which makes `previous/` and the stamp dir each with its own `install -d -o <user>`, using the user's real
+primary group rather than assuming a group named after them. A `previous/` that is already owned by someone else is
+named in the output and left alone, since a peer's files change through them. `tests/test_install_hooks.py` runs it
+against a fake home with a recording `install`; making the stamp dir in one call, as before, fails it. **The home root
+is a required argument** (`/home/` from deploy-remote.sh): a first version defaulted to `/home` inside the script, out
+of reach of the fake ssh's path rewrite, so the existing fake-host deploy test installed the repo's hook files into the
+real `~/.claude/persistence` of whoever ran it (bytes identical to main there, so nothing changed, but a test must not
+reach a real home). Mine had the same root-owned `previous/` and is fixed; Ember has no `~/.claude/persistence`.
+
 ## 2026-11-15 — A stored impossible wake time can't stop the heartbeat; a refused hand-off leaves no claim
 
 Arden's five non-blocking points from the review of #45. **The heartbeat skips a stored time that can't be a date.**
