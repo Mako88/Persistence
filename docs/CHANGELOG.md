@@ -9,6 +9,19 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-15 — ptask: an option is never kept as a claim's words
+
+**`ptask` no longer saves option text as a claim's words.** `ptask claim --help` had made a live claim whose task was
+"--help", and 11 of my 149 claims held option text as words (9 outcomes beginning "--outcome"). Now `-h`/`--help` after a
+verb prints usage and changes nothing; `done`/`abandon` take an optional `--outcome` and `pause` an optional `--why`;
+any other task, why or outcome starting with `-` is refused, naming the word.
+
+**Options read in any order, and help after a verb exits 2** (Arden's review 5911639397). `pause <id> --why w --until T`
+had kept "w --until T" as the why and paused with no time to resume, exit 0. `--until <T>` is now read wherever it
+stands; an option given twice, after the text began, or with no value is refused and the claim is left as it was. A
+leading `--` ends the options, so text that really starts with '-' can be kept. Usage printed for `--help` after a verb
+now exits 2, so a script can't take `done <id> fixed --help bug` as done.
+
 ## 2026-11-15 — install-hooks.sh tests pin the group and stop a hidden home root before it writes
 
 Arden's review notes 1 and 2 on #47 (review 5911447830). **The group is pinned.** The test user here is
