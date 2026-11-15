@@ -667,7 +667,7 @@ USAGE = """ptask claim [--cwd <dir>] [--subject <slug>] "<task>"
                                          a subject allows one live claim per job (deploy: --subject deploy)
 ptask list                               this self's claims not yet closed
 ptask show <id>                          one claim, whole
-ptask pause <id> [--until <UTC time>] [--why] "<why>"   (options in any order; `--` ends them)
+ptask pause <id> [--until <UTC time>] [--why] "<why>"   (options in any order; the first `--` ends them and is dropped)
 ptask resume <id> | touch <id>
 ptask done <id> [--outcome] ["<outcome>"] | abandon <id> [--outcome] ["<outcome>"]
 ptask take <id>                          take a claim whose owner isn't running and has no wake pending
