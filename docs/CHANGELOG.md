@@ -9,6 +9,16 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-15 — Observed now: pending wakes, with "none pending" said outright
+
+**A new `wakes` source lists what is set to bring this self back.** On 2026-11-14 a deploy was put off until
+"tonight", but no wake was set. The working note said "deploy tonight" for hours, and nothing seen on waking showed
+the gap (room msg 1571463346073374823). The source reads `wakes.json` (beside the state dir, as `hook.WAKES` does)
+and shows a count, then up to 4 wakes soonest first. Each has its UTC time and how long until it, or how overdue it
+is. Wakes that fire when a process ends come after the timed ones, and heartbeat and work-session wakes are marked.
+An empty or missing queue shows `wakes: none pending`, not silence. A queue that can't be read is `unknown`, never
+"none". Like every source, it's off until `PERSISTENCE_OBSERVE_SOURCES` names it. Without the source, its tests fail.
+
 ## 2026-11-14 — Deploy guard: an empty or unreadable authorization refuses (Arden's #37 follow-ups)
 
 **A `/opt/persistence/.deploy.claim` that exists but reads as nothing no longer counts as free.** deploy-remote.sh
