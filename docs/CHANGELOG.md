@@ -9,6 +9,24 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-16 — Concept-first recall v0, behind a switch
+
+- **What:** John asked us to build concept-based recall and learn from using it (room 1571675418992582787).
+  With `PERSISTENCE_CONCEPTS` on, a turn's recall opens with the concepts the message names. Names match by
+  exact name or alias in the message only, never in a room wake's wrapper. Each concept shows its current
+  facts, accepted before proposed, with the fragment ids behind each fact and the sentence of the fragment
+  that backs it. Ordinary recall follows unchanged. The block is bounded at 3,300 characters (usefulness
+  contract §2) and ends with `N omitted` when it cuts anything. After each turn the Stop hook starts
+  `hook.py concepts catch-up` detached. It sends curated fragments saved since its floor to Haiku 5.5 and
+  writes the facts with `--by extractor:<run>`, and the store now makes every such fact a proposal. Each run
+  is logged to `state/concepts/runs.jsonl`: model, template sha256, the concepts it was shown, the raw
+  answer, what it parsed and what the store said. Aliases the model offers are logged, never written.
+- **Store:** `concept touched --text <t> [--json]`, `concept list`, `list --after <id>` (newer fragments,
+  oldest first).
+- **Why the event log isn't in v0:** concept-events.md (step 2) stays the target. v0 is meant to answer
+  whether concept-first recall helps, and the log changes nothing a turn sees. The run log carries the
+  extractor provenance in the meantime. The cuts are listed in the PR.
+
 ## 2026-11-15 — ptask: an option is never kept as a claim's words
 
 **`ptask` no longer saves option text as a claim's words.** `ptask claim --help` had made a live claim whose task was

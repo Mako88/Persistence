@@ -33,8 +33,9 @@ from pathlib import Path
 # What deploy-remote.sh installs beside the hook, all of which the beat loads from ~/.claude/persistence: heartbeat.py,
 # the modules it imports (directly or through claims and hook), run_line.py (wrapper_alive imports it) and cwd_exec.py
 # (claims spawns through it). An old copy of any of them runs the new heartbeat against old rules. A test holds this
-# equal to deploy-remote.sh's list.
-DEPLOYED = ("heartbeat.py", "coordination.py", "claims.py", "cwd_exec.py", "run_line.py", "hook.py", "observed.py")
+# equal to deploy-remote.sh's list. concepts.py (concept-first recall's extractor) is loaded by `hook.py concepts` only,
+# not by the beat, but it is installed with the rest, so it is checked with the rest.
+DEPLOYED = ("heartbeat.py", "coordination.py", "claims.py", "cwd_exec.py", "run_line.py", "hook.py", "observed.py", "concepts.py")
 
 
 @dataclass

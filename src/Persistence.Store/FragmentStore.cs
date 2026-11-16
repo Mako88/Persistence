@@ -558,7 +558,11 @@ internal sealed partial class FragmentStore(
     public async Task<ContextFragmentEntity> GetAsync(long id) =>
         await fragments.GetByIdAsync(id) ?? throw new RefusedException($"There is no fragment #{id}.");
 
-    public async Task<IReadOnlyList<ContextFragmentEntity>> ListAsync(string? typeName, string? tagPath, bool archived, int limit)
+    /// <summary>
+    /// Fragments of a type or tag (the curated types when neither is given), most important first; with
+    /// <paramref name="after"/>, only those with a higher id, oldest first, so a reader can catch up on what is new.
+    /// </summary>
+    public async Task<IReadOnlyList<ContextFragmentEntity>> ListAsync(string? typeName, string? tagPath, bool archived, int limit, long? after = null)
     {
         IEnumerable<ContextFragmentEntity> found;
 
@@ -582,8 +586,10 @@ internal sealed partial class FragmentStore(
         }
 
         var wanted = archived ? ContextFragmentStatus.Archived : ContextFragmentStatus.Active;
-        var ids = found.Where(f => !f.IsDeleted && f.Status == wanted)
-            .OrderByDescending(f => f.Importance).ThenByDescending(f => f.LastModifiedUtc)
+        var live = found.Where(f => !f.IsDeleted && f.Status == wanted);
+        var ids = (after is { } floor
+                ? live.Where(f => f.Id > floor).OrderBy(f => f.Id)
+                : live.OrderByDescending(f => f.Importance).ThenByDescending(f => f.LastModifiedUtc))
             .Take(limit).Select(f => f.Id).ToList();
         var listed = await HydratedAsync(ids);
         await NoteHeadsAsync(listed);

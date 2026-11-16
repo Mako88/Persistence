@@ -112,7 +112,9 @@ internal sealed partial class FragmentStore
         string? Why(ConceptRow c, string role) => !AboutWho(c) ? null
             : c.Confirmed ? $"its {role} {c.Name} is a {c.Kind}" : $"its {role} {c.Name} has no confirmed kind, so counts as a person (`concept kind`)";
         var whys = new[] { Why(subj, "subject"), obj is null ? null : Why(obj, "object"),
-            types.Where(t => WhoSources.Contains(t.Value)).Select(t => $"#{t.Key} is {(ContextFragmentType)t.Value}").FirstOrDefault() is { } w ? $"its source {w}" : null }
+            types.Where(t => WhoSources.Contains(t.Value)).Select(t => $"#{t.Key} is {(ContextFragmentType)t.Value}").FirstOrDefault() is { } w ? $"its source {w}" : null,
+            // The extractor proposes and the self accepts (concept-store.md), whatever the fact is about.
+            FromExtractor(extractedBy) ? "the extractor proposes; only the self accepts" : null }
             .Where(x => x is not null).ToList();
         var proposal = whys.Count > 0;
         var id = await concepts.AddFactAsync(subj.Id, obj?.Id, text, isState, asOf, extractedBy ?? "by hand",
@@ -207,6 +209,10 @@ internal sealed partial class FragmentStore
         await concepts.AddAliasAsync(c.Id, alias, note);
         return c;
     }
+
+    /// <summary>Whether a fact was written by the automatic extractor (<c>--by extractor:...</c>), never by the self.</summary>
+    public static bool FromExtractor(string? extractedBy) =>
+        extractedBy is not null && extractedBy.StartsWith("extractor", StringComparison.OrdinalIgnoreCase);
 
     private async Task<FactRow> StandingFactAsync(long id)
     {

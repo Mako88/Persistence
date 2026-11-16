@@ -39,12 +39,16 @@ const string Usage = """
               [--state] [--as-of <date>] [--supersedes <fact id>] [--kind <thing|person|self|value>] [--by <extractor>]
               | accept <fact id> [--reason] | reject <fact id> --reason | reopen <fact id> --reason | flag <fact id> --reason [--by]
               | kind <name> <thing|person|self|value> | alias <name> <alias> [--note]
+              | touched --text <text|-> [--json] [--concepts 5] [--facts 3] [--budget 3300] | list
                                             the concept graph (docs/design/concept-graph.md): facts about concepts,
                                             each citing its fragments. A fact about a person, a self or a value (or
                                             from an Identity/Relational fragment) is a proposal only the owner
                                             accepts; a concept counts as a person until its kind is confirmed.
                                             Change supersedes; a rejection is kept and not offered again until
-                                            reopened; adding a fact that already stands adds nothing
+                                            reopened; adding a fact that already stands adds nothing. A fact
+                                            --by extractor:... is always a proposal. `touched` shows the concepts a
+                                            text names (exact name or alias), with facts and their fragments, the
+                                            block concept-first recall puts first; `list` is every concept as JSON
       nearest <words...> [--text <text|->] [--limit 3]
                                             the authored fragments nearest a text, with their scores: what `add`
                                             checks for a view written twice (it names a near one after saving)
@@ -53,7 +57,7 @@ const string Usage = """
       archive <id> | restore <id>           out of the core and recent lists, still searchable; reversible
       forget <id> [--reason <text>]         soft-delete, hidden everywhere; unforget <id> brings it back
       show <id>
-      list [--type <type>] [--tag <a/b>] [--archived] [--limit 50]
+      list [--type <type>] [--tag <a/b>] [--archived] [--limit 50] [--after <id>]  --after: newer ids only, oldest first
       search <words...> [--limit 20]        full text, conversation included
       recall <words...> [--text <text|->] [--limit 3] [--exclude <id,id>]... [--snippet 300] [--project <name>]
              [--wander 0] [--said 0] [--before <when>] [--diagnostics]
@@ -427,8 +431,16 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
                     case "review":
                         Console.WriteLine(await store.ConceptReviewAsync());
                         break;
+                    case "touched":
+                        var said = line.Text("text") ?? throw new UsageException("concept touched needs --text <text> (or - for stdin).");
+                        Console.WriteLine(line.Has("json") ? await store.ConceptsTouchedJsonAsync(said)
+                            : await store.ConceptBlockAsync(said, line.GetInt("concepts", 5), line.GetInt("facts", 3), line.GetInt("budget", FragmentStore.ConceptBudget)));
+                        break;
+                    case "list":
+                        Console.WriteLine(await store.ConceptListJsonAsync());
+                        break;
                     default:
-                        throw new UsageException($"concept {line.Positional[0]}? It takes show, add, accept, reject, reopen, flag, kind, alias or review.");
+                        throw new UsageException($"concept {line.Positional[0]}? It takes show, add, accept, reject, reopen, flag, kind, alias, review, touched or list.");
                 }
             }
 
@@ -478,7 +490,8 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
 
             break;
         case "list":
-            Print(line, await store.ListAsync(line.Get("type"), line.Get("tag"), line.Has("archived"), line.GetInt("limit", 50)));
+            Print(line, await store.ListAsync(line.Get("type"), line.Get("tag"), line.Has("archived"), line.GetInt("limit", 50),
+                line.Get("after") is { } after ? long.Parse(after.TrimStart('#')) : null));
             break;
         case "search":
             Print(line, await store.SearchAsync(string.Join(' ', line.Positional), line.GetInt("limit", 20)), store.Session);
