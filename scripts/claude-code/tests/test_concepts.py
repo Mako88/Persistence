@@ -480,6 +480,77 @@ class Ambiguous(unittest.TestCase):
         self.assertTrue(any("#1" in d and "already" in d for d in done), done)
         self.assertTrue(any("#13" in d and "unsure" in d for d in done), done)       # unsure is asked again
 
+    def test_a_fact_under_an_alias_of_the_merged_concept_is_not_written(self):
+        # Arden, review 5915601823: `concept add` resolves aliases, and 'Emma' is an alias of the merged Ember, so a
+        # fact filed under it landed on the merged concept. Any alias the store holds for it is as bare as the name.
+        self.store.peer_exists = True
+        answer = json.dumps({"concepts": [], "facts": [
+            {"subject": "Emma", "text": "drew a picture", "object": None},
+            {"subject": "John", "text": "was shown a picture by", "object": "EMMA"},
+            {"subject": "Ember (John's daughter)", "text": "drew a picture", "object": None}], "supersedes": []})
+        x = self.extractor(answer)
+        x.start(0)
+        self.assertEqual(["#5: 1 written"], x.catch_up(limit=1))
+        self.assertEqual(["Ember (John's daughter)"], [a[2] for a in self.store.adds()])
+        rec = json.loads((Path(self.tmp.name) / "concepts" / "runs.jsonl").read_text().splitlines()[0])
+        self.assertEqual(2, len(rec["skipped"]))
+        self.assertIn("an alias of 'Ember'", rec["skipped"][0]["why"])
+
+    def test_the_bare_names_come_from_the_store_not_a_list_of_known_aliases(self):
+        x = self.extractor("{}")
+        self.assertEqual({"ember": "Ember", "emma": "Ember"}, x.bare())
+        # only the merged concept's aliases: a referent's own alias, or another concept's, is a name to file under
+        self.assertEqual({"ember": "Ember"}, x.bare([{"name": "Ember (peer)", "aliases": ["Ember"]},
+                                                    {"name": "Arden", "aliases": ["Emma"]}]))
+        self.assertEqual({}, self.extractor("{}", ambiguous={}).bare())
+
+    def test_a_fragment_that_uses_only_the_alias_is_shown_the_referents(self):
+        self.store.fragments[0]["content"] = "Emma drew a picture for John."
+        x = self.extractor(json.dumps({"concepts": [], "facts": [], "supersedes": []}))
+        x.start(0)
+        x.catch_up(limit=1)
+        self.assertIn('"Ember" names more than one concept', self.prompts[0])
+        self.assertIn("Ember (John's daughter) | person", self.prompts[0])
+        self.assertNotIn("\nEmber | person", self.prompts[0])
+
+    def test_split_asks_three_times_and_proposes_only_when_all_agree(self):
+        # Arden, review 5915601823: #3 came out peer twice, daughter twice, unsure once over five live runs. A pick
+        # that changes between runs is a coin flip, not a reading; it stays put and is listed with its votes.
+        votes = {1: iter(["Ember (John's daughter)"] * 3), 12: iter(["Ember (peer)", "Ember (John's daughter)", "Ember (peer)"]),
+                 13: iter(["Ember (peer)", "unsure", "Ember (peer)"])}
+        def answer(prompt):
+            fact = int(prompt.split("FACT #")[1].split(":")[0])
+            return json.dumps({"referent": next(votes[fact]), "why": "because"})
+        x = self.extractor(answer)
+        done = x.split("Ember")
+        self.assertEqual(9, len(self.prompts))                                         # three runs per fact
+        self.assertEqual(["Ember (John's daughter)"], [a[2] for a in self.store.adds()])
+        self.assertIn("3/3 agree", done[0])
+        self.assertEqual("#12: left on Ember: disagreed (votes: Ember (peer) 2, Ember (John's daughter) 1)", done[1])
+        self.assertEqual("#13: left on Ember: disagreed (votes: Ember (peer) 2, unsure 1)", done[2])
+        recs = [json.loads(l) for l in (Path(self.tmp.name) / "concepts" / "splits.jsonl").read_text().splitlines()]
+        self.assertEqual(["agreed", "disagreed", "disagreed"], [r["outcome"] for r in recs])
+        self.assertEqual(["Ember (peer)", "Ember (John's daughter)", "Ember (peer)"], recs[1]["votes"])
+        self.assertEqual([True, False, False], [r["proposed"] for r in recs])
+
+    def test_split_runs_is_configurable_and_a_model_error_is_a_vote_against(self):
+        calls = iter([json.dumps({"referent": "Ember (John's daughter)"}), "not json"] + [json.dumps({"referent": "unsure"})] * 10)
+        x = self.extractor(lambda p: next(calls))
+        done = x.split("Ember", runs=2)
+        self.assertEqual(6, len(self.prompts))
+        self.assertEqual([], self.store.adds())
+        self.assertIn("disagreed (votes: Ember (John's daughter) 1, error 1)", done[0])
+        self.assertIn("unsure (votes: unsure 2)", done[1])
+
+    def test_split_cli_takes_runs(self):
+        out = io.StringIO()
+        with redirect_stdout(out), mock.patch.object(concepts, "call_haiku", side_effect=self.split_answer):
+            (Path(self.tmp.name) / "concepts").mkdir()
+            (Path(self.tmp.name) / "concepts" / "ambiguous.json").write_text(json.dumps(EMBERS))
+            self.assertEqual(0, concepts.main(["split", "Ember", "--runs", "1"], self.tmp.name, self.store))
+        self.assertIn("1/1 agree", out.getvalue())
+        self.assertEqual(2, concepts.main(["split", "Ember", "--runs", "0"], self.tmp.name, self.store))
+
     def test_split_needs_the_name_to_be_listed_as_ambiguous(self):
         x = self.extractor(self.split_answer, ambiguous={})
         self.assertIn("not listed", x.split("Ember")[0])

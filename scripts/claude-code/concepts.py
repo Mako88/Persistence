@@ -16,13 +16,15 @@ store will have moved on by then (concept-store.md gap 9).
     hook.py concepts start [--from <fragment id>]   set the floor (default: the newest curated fragment now)
     hook.py concepts catch-up [--max 4]             extract what is new since the floor (the Stop hook runs this)
     hook.py concepts status                         the floor, the last runs, and whether the switch is on
-    hook.py concepts split <name>                   propose moving each fact of a merged concept to its referent (#60)
+    hook.py concepts split <name> [--runs 3]        propose moving each fact of a merged concept to its referent (#60)
 
 One name can be two concepts (Ember the peer self; John's daughter Ember: #60). state/concepts/ambiguous.json lists such
 names, each with its referents and the cues that tell them apart; absent, nothing changes but the empty AMBIGUOUS NAMES
-section. Listed, the model is shown both referents whenever the fragment uses the name, a fact it still files under the
-bare name is logged and not written, and `split <name>` asks the model, per fact of the old merged concept, which
-referent its cited fragments mean, then proposes the fact under that one, superseding the old line on accept.
+section. Listed, the model is shown both referents whenever the fragment uses the name or an alias of the old merged
+concept, a fact it still files under the bare name or such an alias (the store resolves aliases, so 'Emma' would land on
+the merged 'Ember': Arden, review 5915601823) is logged and not written, and `split <name>` asks the model, per fact of
+the old merged concept and --runs times over, which referent it means; only a unanimous answer is proposed, under that
+referent, superseding the old line on accept. Anything else stays put, listed as unsure or disagreed with the votes.
 """
 import fcntl
 import hashlib
@@ -94,12 +96,13 @@ class Extractor:
     """One self's extractor. `store` runs a store CLI command and returns its output (hook.store); `call` sends a
     prompt to the model and returns its text. Both are passed in so a test never starts a model or a store."""
 
-    def __init__(self, state_dir, store, call=None, owner=None, ambiguous=None):
+    def __init__(self, state_dir, store, call=None, owner=None, ambiguous=None, split_runs=3):
         self.dir = Path(state_dir) / "concepts"
         self.store = store
         self.call = call or call_haiku
         self.owner = owner or os.environ.get("PERSISTENCE_PEER_NAME") or "Claude"
         self.ambiguous = load_ambiguous(self.dir / "ambiguous.json") if ambiguous is None else ambiguous
+        self.split_runs = split_runs
 
     @property
     def floor_file(self):
@@ -174,8 +177,8 @@ class Extractor:
         content = frag.get("content") or ""
         known = json.loads(self.store("concept", "list") or "[]")
         touched = json.loads(self.store("concept", "touched", "--json", "--text", "-", stdin=content) or "[]")
-        named = self.names_in(content)
-        bare = {label.lower() for label in self.ambiguous}
+        bare = self.bare(known)
+        named = self.names_in(content, bare)
         # A listed name's own concept (the merged one) is not offered for reuse, nor its facts: `split` moves those.
         # Its referents are offered, as named, whether or not the fragment spells their full names.
         known = [c for c in known if c["name"].lower() not in bare]
@@ -207,17 +210,37 @@ class Extractor:
             return rec
         rec["seconds"] = round(time.time() - t0, 1)
         rec["skipped"] = []
-        rec["written"] = self.write(frag["id"], rec["parsed"], run, {f["id"] for t in touched for f in t["facts"]}, rec["skipped"])
+        rec["written"] = self.write(frag["id"], rec["parsed"], run, {f["id"] for t in touched for f in t["facts"]}, rec["skipped"], bare)
         return rec
 
-    def names_in(self, text):
-        """The listed ambiguous names the text uses, as whole words (Ember, Ember's; not Remember)."""
-        return [label for label in self.ambiguous if re.search(rf"(?<!\w){re.escape(label)}(?!\w)", text or "", re.I)]
+    def bare(self, known=None):
+        """{lowercased name: its listed label} for every name that would file a fact on an ambiguous name's merged
+        concept: the label itself and each alias the store holds for the concept of that name, since `concept add`
+        resolves aliases too ('Emma' -> Ember; Arden, review 5915601823). `known` is `concept list`'s answer, asked
+        for when not given."""
+        bare = {label.lower(): label for label in self.ambiguous}
+        if not bare:
+            return bare
+        if known is None:
+            known = json.loads(self.store("concept", "list") or "[]")
+        for c in known:
+            label = bare.get((c.get("name") or "").lower())
+            if label and c["name"].lower() == label.lower():
+                for alias in c.get("aliases") or []:
+                    bare.setdefault(alias.lower(), label)
+        return bare
+
+    def names_in(self, text, bare=None):
+        """The listed ambiguous names the text uses, as whole words (Ember, Ember's; not Remember), or through an alias
+        of the merged concept (Emma), in the order they are listed."""
+        bare = bare if bare is not None else {label.lower(): label for label in self.ambiguous}
+        hits = {label for name, label in bare.items() if re.search(rf"(?<!\w){re.escape(name)}(?!\w)", text or "", re.I)}
+        return [label for label in self.ambiguous if label in hits]
 
     def kind_of(self, name):
         return next((r.get("kind") for rs in self.ambiguous.values() for r in rs if r["name"].lower() == name.lower()), None)
 
-    def write(self, fragment, got, run, current_ids, skipped=None):
+    def write(self, fragment, got, run, current_ids, skipped=None, bare=None):
         kinds = {}
         for c in got.get("concepts") or []:
             name = clean(c.get("name"))
@@ -232,7 +255,8 @@ class Extractor:
                 continue
             if old in current_ids:
                 replaces[by] = old
-        bare = {label.lower() for label in self.ambiguous}
+        if bare is None:
+            bare = self.bare()
         written = []
         for i, f in enumerate(facts):
             subject, text = clean(f.get("subject")), one_line(f.get("text") or "") if isinstance(f.get("text"), str) else ""
@@ -242,7 +266,10 @@ class Extractor:
             hit = next((n for n in (subject, obj) if n and n.lower() in bare), None)
             if hit:   # filed under the bare name would merge its referents again (#60): logged, not written
                 if skipped is not None:
-                    skipped.append({"subject": subject, "object": obj, "text": text, "why": f"ambiguous name {hit!r}: names more than one concept"})
+                    label = bare[hit.lower()]
+                    why = f"ambiguous name {hit!r}: names more than one concept" if hit.lower() == label.lower() else \
+                        f"ambiguous name {hit!r}: an alias of {label!r}, which names more than one concept"
+                    skipped.append({"subject": subject, "object": obj, "text": text, "why": why})
                 continue
             args = ["concept", "add", subject, "--fact", text, "--source", str(fragment), "--by", run]
             if obj and obj.lower() != subject.lower():
@@ -265,12 +292,15 @@ class Extractor:
     def splits(self):
         return self.dir / "splits.jsonl"
 
-    def split(self, label):
-        """Proposes moving each standing fact of the merged concept `label` to the referent its cited fragments mean
-        (#60). Each move is `concept add` under the referent, with the same text, sources, state and date, `--by
+    def split(self, label, runs=None):
+        """Proposes moving each standing fact of the merged concept `label` to the referent it means (#60). The model is
+        asked `runs` times per fact (default self.split_runs, 3); only when every answer names the same referent is the
+        move proposed: `concept add` under the referent, with the same text, sources, state and date, `--by
         extractor:split-...` so the store makes it a proposal, and `--supersedes` the old fact, which accepting retires.
-        Unsure answers leave the fact where it is. One line per fact in splits.jsonl; a fact already moved is not
-        proposed again."""
+        A fact the runs disagree on, or are all unsure of, is left where it is and listed with its votes: a coin flip
+        must not reach the review queue looking like a reading (Arden, review 5915601823). One line per fact in
+        splits.jsonl; a fact already moved is not proposed again, and one left is asked again next time."""
+        runs = max(1, int(runs or self.split_runs))
         key = next((k for k in self.ambiguous if k.lower() == label.lower()), None)
         if key is None:
             return [f"{label!r} is not listed in {self.dir / 'ambiguous.json'}: nothing to split into"]
@@ -296,19 +326,28 @@ class Extractor:
                 id=f["id"], subject=f["subject"], object=f["object"] or "-", text=f["text"],
                 fragments="\n\n".join(self.store("show", str(s)).strip()[:4000] for s in sources) or "(none)")
             rec = {"run": run, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "label": key, "fact": f["id"],
-                   "model": MODEL, "proposed": False}
-            try:
-                rec["raw"] = self.call(prompt)
-                got = parse(rec["raw"])
-                pick = names.get(str(got.get("referent") or "").strip().lower())
-                rec["why"] = one_line(str(got.get("why") or ""))
-            except Exception as e:
-                rec["error"] = f"{type(e).__name__}: {e}"
-                pick = None
-            if pick is None:
-                rec.setdefault("error", "unsure")
-                done.append(f"#{f['id']}: left on {key}: {rec.get('error')}" + (f" ({rec['why']})" if rec.get("why") else ""))
+                   "model": MODEL, "runs": runs, "votes": [], "whys": [], "raws": [], "proposed": False}
+            for _ in range(runs):
+                try:
+                    raw = self.call(prompt)
+                    rec["raws"].append(raw)
+                    got = parse(raw)
+                    pick = names.get(str(got.get("referent") or "").strip().lower())
+                    vote = pick["name"] if pick else "unsure"
+                    rec["whys"].append(one_line(str(got.get("why") or "")))
+                except Exception as e:
+                    vote = "error"
+                    rec["whys"].append(f"{type(e).__name__}: {e}")
+                rec["votes"].append(vote)
+            agreed = rec["votes"][0] if len(set(rec["votes"])) == 1 and rec["votes"][0].lower() in names else None
+            if agreed is None:
+                rec["outcome"] = "unsure" if all(v == "unsure" for v in rec["votes"]) else \
+                    "error" if all(v == "error" for v in rec["votes"]) else "disagreed"
+                tally = ", ".join(f"{v} {rec['votes'].count(v)}" for v in dict.fromkeys(rec["votes"]))
+                why = next((w for w in rec["whys"] if w), "")
+                done.append(f"#{f['id']}: left on {key}: {rec['outcome']} (votes: {tally})" + (f" ({why})" if rec["outcome"] != "disagreed" and why else ""))
             else:
+                pick = names[agreed.lower()]
                 subj = pick["name"] if f["subject"].lower() == key.lower() else f["subject"]
                 obj = pick["name"] if (f["object"] or "").lower() == key.lower() else f["object"]
                 args = ["concept", "add", subj, "--fact", f["text"], "--source", ",".join(map(str, sources)), "--by", run,
@@ -321,9 +360,9 @@ class Extractor:
                     args += ["--as-of", str(f["as_of"])[:10]]
                 if subj == pick["name"] and pick.get("kind"):
                     args += ["--kind", pick["kind"]]
-                rec["referent"], rec["said"] = pick["name"], self.store(*args).strip()[:300]
+                rec["outcome"], rec["referent"], rec["said"] = "agreed", pick["name"], self.store(*args).strip()[:300]
                 rec["proposed"] = bool(rec["said"])   # the CLI answers "" when the store refused or could not run
-                done.append(f"#{f['id']}: " + (f"proposed under {pick['name']}: {rec['said']}" if rec["proposed"] else f"{pick['name']}, but the store refused"))
+                done.append(f"#{f['id']}: " + (f"proposed under {pick['name']} ({runs}/{runs} agree): {rec['said']}" if rec["proposed"] else f"{pick['name']}, but the store refused"))
             with self.splits.open("a", encoding="utf-8") as out:
                 out.write(json.dumps(rec) + "\n")
         return done
@@ -415,7 +454,14 @@ def main(argv, state_dir, store):
         print(x.status())
         return 0
     if verb == "split" and len(argv) > 1:
-        print("\n".join(x.split(argv[1])))
+        runs = None
+        if "--runs" in argv:
+            i = argv.index("--runs")
+            if i + 1 >= len(argv) or not argv[i + 1].isdigit() or int(argv[i + 1]) < 1:
+                print("--runs takes a whole number of at least 1", file=sys.stderr)
+                return 2
+            runs = int(argv[i + 1])
+        print("\n".join(x.split(argv[1], runs)))
         return 0
     print(__doc__, file=sys.stderr)
     return 2
