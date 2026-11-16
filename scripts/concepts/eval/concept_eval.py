@@ -75,14 +75,25 @@ def from_v0(line):
             by.setdefault(int(s["by"]), []).append(int(s["fact"]))
         except (KeyError, TypeError, ValueError):
             pass
-    written = list(line.get("written") or [])
+    written = [w for w in line.get("written") or [] if isinstance(w, dict)]
+    # From template 3 (PR #68) v0 guards what it writes (a cap, dropped instructions and proposals stated as done) and
+    # each `written` entry names its parsed index `i`. Then the facts are what was written, not what was parsed: review
+    # load, the sheet and every check are about what reaches the store. Older lines keep the parsed list.
+    by_index = {w["i"]: w for w in written if isinstance(w.get("i"), int)}
     facts = []
     for i, f in enumerate(facts_in):
         f = f if isinstance(f, dict) else {}
-        said = next((w.get("said") for w in written
-                     if w.get("subject") == (f.get("subject") or "").strip() and w.get("text") == (f.get("text") or "").strip()), None)
+        if by_index and i not in by_index:
+            continue
+        w = by_index.get(i) or next((w for w in written if w.get("subject") == (f.get("subject") or "").strip()
+                                     and w.get("text") == (f.get("text") or "").strip()), {})
+        said = w.get("said")
+        # as_of and supersedes as written when v0 logs them; else as parsed, with a `lasting` fact undated (v0 never
+        # passes --as-of for one). A parsed supersede v0 rewrote (the swapped form) is only seen once v0 logs it.
+        as_of = w["as_of"] if "as_of" in w else (None if f.get("lasting") is True else f.get("as_of"))
+        sup = [int(x) for x in w["supersedes"]] if isinstance(w.get("supersedes"), list) else by.get(i, [])
         facts.append({"i": i, "subject": f.get("subject"), "object": f.get("object"), "text": f.get("text"),
-                      "is_state": f.get("is_state"), "as_of": f.get("as_of"), "supersedes": by.get(i, []),
+                      "is_state": f.get("is_state"), "as_of": as_of, "supersedes": sup,
                       "supersede_kind": None, "said": said, "status": status_from_said(said)})
     concepts = []
     for c in got.get("concepts") or []:
@@ -94,7 +105,8 @@ def from_v0(line):
             "model": line.get("model"), "template_sha256": line.get("template_sha256"), "seconds": line.get("seconds"),
             "error": line.get("error"), "shown": [s.get("name") for s in line.get("shown") or []],
             "concepts": concepts, "facts": facts, "unresolved": [], "aliases_written": [],
-            "has_refs": False, "has_supersede_kind": False, "stale_supersede": line.get("eval_stale_supersede")}
+            "has_refs": False, "has_supersede_kind": False, "stale_supersede": line.get("eval_stale_supersede"),
+            "not_written": len(facts_in) - len(facts) if by_index else 0}
 
 
 def status_from_said(said):
@@ -700,7 +712,8 @@ def main(argv=None):
         dates = json.loads(Path(a.dates).read_text()) if a.dates else {}
         insts = {int(i["fragment"]): i for i in gold.instances if i.get("status") != "pending"} if gold else {}
         for rec in records(a.runs):
-            line = [f"#{rec['fragment']} run {rec['repeat']}: {len(rec['facts'])} facts, {len(rec['concepts'])} concepts"]
+            line = [f"#{rec['fragment']} run {rec['repeat']}: {len(rec['facts'])} facts, {len(rec['concepts'])} concepts"
+                    + (f" ({rec['not_written']} parsed, not written)" if rec.get("not_written") else "")]
             bad = invalid(rec, gold)
             if bad:
                 line.append("INVALID: " + "; ".join(bad))

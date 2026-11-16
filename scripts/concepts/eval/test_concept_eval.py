@@ -116,6 +116,23 @@ class Checks(unittest.TestCase):
         wrong, defaulted, measured = ce.validity(rec, inst, {"1": "2026-11-15"})
         self.assertEqual((wrong, defaulted, measured), ([], [0], True))
 
+    def test_from_template_3_the_facts_are_what_was_written(self):
+        # PR #68: v0 caps and guards what it writes, and each written entry names its parsed index.
+        rec = line(1, [fact("A"), fact("B", as_of="2026-11-09"), fact("C"), fact("D", as_of="2026-11-02")],
+                   supersedes=[{"fact": 41, "by": 2}])
+        rec["parsed"]["facts"][1]["lasting"] = True
+        rec["written"] = [{"i": 1, "subject": "B", "text": "t", "said": "Proposed"},
+                          {"i": 2, "subject": "C", "text": "t", "said": "Proposed", "supersedes": [40]},
+                          {"i": 3, "subject": "D", "text": "t", "said": "Proposed"}]
+        r = ce.from_v0(rec)
+        self.assertEqual([1, 2, 3], [f["i"] for f in r["facts"]])   # A was parsed, not written: not on the sheet, not in the load
+        self.assertEqual(1, r["not_written"])
+        self.assertEqual([None, None, "2026-11-02"], [f["as_of"] for f in r["facts"]])   # lasting: v0 writes no --as-of
+        self.assertEqual([40], r["facts"][1]["supersedes"])   # as written, not as parsed
+        self.assertEqual(["B", "C", "D"], [row["subject"] for row in sorted(ce.sheet([r], seed=1), key=lambda x: x["subject"])])
+        old = ce.from_v0(line(1, [fact("A"), fact("B")]))   # before template 3: the parsed list, as before
+        self.assertEqual(([0, 1], 0), ([f["i"] for f in old["facts"]], old["not_written"]))
+
     def test_supersede_on_an_extension_and_a_missed_stale_state(self):
         rec = ce.from_v0(line(1, [fact("A")], supersedes=[{"fact": 41, "by": 0}]))
         self.assertEqual(ce.supersedes(rec, {"supersede": "none"})["unexpected"], [41])

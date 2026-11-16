@@ -24,6 +24,11 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
   only on them go too. Why SQL and not a store verb: a delete verb would be live-store surface only an eval needs
   (Claude, room 1571765945196748801). Claude's snapshot build uses the same helper, so the schema knowledge is in
   one place.
+- **The v0 adapter reads what was written, not what was parsed** (Claude's suggestion on #68). From template 3 v0
+  caps and guards its writes and each `written` entry names its parsed index, so review load, the blind sheet and the
+  checks count only facts that reached the store; `check` prints how many were parsed and not written. A `lasting`
+  fact counts as undated, as v0 writes it, and `written` entries' own `as_of`/`supersedes` win when v0 logs them.
+  Older run lines keep the parsed list.
 
 ## 2026-11-16 — Concept catch-up reads archived fragments (#63)
 
