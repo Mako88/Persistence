@@ -275,6 +275,47 @@ class Extractor(unittest.TestCase):
         self.assertEqual(1, len(self.prompts))
         self.assertEqual([8], [r["fragment"] for r in self.runs()])   # runs.jsonl stays one extraction per line (#62 reads it)
 
+    def test_a_batch_of_only_replaced_fragments_still_moves_the_floor(self):
+        # Arden's note 1 on #64: a sleep pass that merges several views can leave a whole batch replaced. If the skip
+        # didn't move the floor, every later catch-up would stop on that same batch and nothing after it would be read.
+        self.store.fragments[1:1] = [
+            {"id": 6, "type": "Personal", "status": "Archived", "supersededBy": 9, "content": "view one", "created": "2026-11-16T00:00:00Z"},
+            {"id": 7, "type": "Personal", "status": "Archived", "supersededBy": 9, "content": "view two", "created": "2026-11-16T00:00:00Z"}]
+        self.store.fragments.append({"id": 9, "type": "Personal", "content": "Merged view.", "created": "2026-11-16T00:02:00Z"})
+        x = self.extractor()
+        x.start(5)
+        self.assertEqual(["#6: replaced by a later fragment, not read", "#7: replaced by a later fragment, not read"], x.catch_up(limit=2))
+        self.assertEqual(7, x.floor())
+        self.assertEqual([], self.prompts)
+        self.assertEqual(["#8: 2 written", "#9: 2 written"], x.catch_up(limit=2))
+
+    def test_start_counts_an_archived_fragment_as_the_newest(self):
+        # Arden's note 2 on #64: inbox messages are often the newest and are archived once shown. A floor set below one
+        # would make the first catch-up read a fragment from before `start`.
+        self.store.fragments.append({"id": 11, "type": "Personal", "status": "Archived", "supersededBy": None,
+                                     "content": "Message for work.", "created": "2026-11-16T00:03:00Z"})
+        x = self.extractor()
+        self.assertEqual(11, x.start())
+        self.assertEqual([], x.catch_up())
+        self.assertEqual([], self.prompts)
+
+    def test_a_fragment_archived_between_the_two_list_calls_is_read_once(self):
+        # Arden's note 3 on #64: inbox messages are archived when shown at session start, which can overlap a detached
+        # catch-up. Archived after the active list and before the archived one, it is in both answers.
+        store = self.store
+        def archiving(*args, **kw):
+            out = store(*args, **kw)
+            if args[0] == "list" and "--archived" not in args:
+                store.fragments[0]["status"] = "Archived"
+                store.fragments[0]["supersededBy"] = None
+            return out
+        x = concepts.Extractor(self.tmp.name, archiving, call=lambda p: (self.prompts.append(p), ANSWER)[1], owner="Claude")
+        self.assertEqual([5, 8], [f["id"] for f in x.above(0, 4)])
+        store.fragments[0]["status"] = "Active"
+        x.start(0)
+        self.assertEqual(["#5: 2 written", "#8: 2 written"], x.catch_up(limit=4))
+        self.assertEqual(2, len(self.prompts))
+
 
 if __name__ == "__main__":
     unittest.main()

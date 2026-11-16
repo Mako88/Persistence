@@ -101,11 +101,16 @@ class Extractor:
     def above(self, floor, limit):
         """The first `limit` curated fragments above `floor`, oldest first, active and archived alike (#63). The store's
         `list` gives one status or the other, never both, so it asks for each and merges: the first `limit` of the
-        union are always among the first `limit` of each. Forgotten fragments are never listed."""
-        both = []
+        union are always among the first `limit` of each. Forgotten fragments are never listed.
+        Keyed by id: a fragment archived between the two calls (an inbox message shown at a session start while a
+        detached catch-up runs) is in both answers, and is read once, as its later, archived self. The reverse, one
+        unarchived between them, is in neither and is missed; unarchiving is rare, archiving on delivery is not, so
+        active is asked first."""
+        both = {}
         for status in ([], ["--archived"]):
-            both += json.loads(self.store("list", "--after", str(floor), "--limit", str(limit), *status, "--json") or "[]")
-        return sorted(both, key=lambda f: f["id"])[:limit]
+            for f in json.loads(self.store("list", "--after", str(floor), "--limit", str(limit), *status, "--json") or "[]"):
+                both[f["id"]] = f
+        return sorted(both.values(), key=lambda f: f["id"])[:limit]
 
     def newest(self):
         return max((f["id"] for f in self.above(0, 1000000)), default=0)

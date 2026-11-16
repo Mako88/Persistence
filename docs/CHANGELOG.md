@@ -19,6 +19,11 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
 - **Why:** the outcome of PR #48 (Arden's approval, inbox #19196) was in an archived fragment only. So the extractor
   never saw it, and "PR #48 awaiting review" (#19182) could never be superseded. Archived means a fragment is no
   longer shown, not that it was never true. Found by Arden's eval (#62).
+- **Follow-up (Arden's review of #64):** a fragment archived between catch-up's two `list` calls was in both answers
+  and was extracted twice, so its facts were proposed twice. `above()` now keys by id. Inbox messages are archived
+  when shown at a session start, which can overlap a detached catch-up. Two tests pin behaviour that was already
+  right but untested: a batch made up only of replaced fragments still moves the floor (otherwise catch-up would stop
+  on that batch for good), and `start` counts an archived fragment as the newest.
 
 ## 2026-11-16 — Concept block: one line per fact, the whole recall context defused
 
