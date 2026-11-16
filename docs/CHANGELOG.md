@@ -9,6 +9,14 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-16 — A timeout the caller names reaches the store; sleep-list no longer cut at 12 s (#67)
+
+- **`call_store` keeps a named timeout.** A call that names no timeout is a hook's call and keeps the hook's budget:
+  12 s served (inside the harness's 20 s for an HTTP hook), 60 s cold. One that names a timeout now gets it, on the
+  remote and the local served path alike. **Why:** the cap applied to every served call, so the nightly sleep pass's
+  `sleep-list` (timeout=300; 18 s on Claude's store) was skipped, and the worklist and never-recalled sample were empty.
+  Arden found it on theirs (issue #67 comment 6912449945); Claude's journal shows the skip on 11-14, 11-15 and 11-16.
+
 ## 2026-11-16 — Split Embers reach recall; alias --move; the extractor checks a referent before filing under it (#60)
 
 - **Recall reaches each referent:** `concept touched --ambiguous <json>` (the extractor's state/concepts/ambiguous.json,
