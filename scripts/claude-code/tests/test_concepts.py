@@ -442,13 +442,17 @@ class Ambiguous(unittest.TestCase):
             (Path(self.tmp.name) / "concepts" / "runs.jsonl").read_text().splitlines()[0])["shown"] if s["id"] == 90))
 
     @staticmethod
-    def confirming(answer, readings=None):
-        """`answer` to the extractor's prompt; to a referent check, the referent `readings` gives for the fact's text
-        (a picture is the daughter's, a review the peer's, by default)."""
+    def confirming(answer, readings=None, whole=("both",)):
+        """`answer` to the extractor's prompt; to the whole-fragment reading, the `whole` answers in turn ("both" by
+        default, so each fact is asked); to a fact's check, the referent `readings` gives for the fact's text (a
+        picture is the daughter's, a review the peer's, by default)."""
         readings = readings or {"picture": "Ember (John's daughter)", "PR #48": "Ember (peer)"}
+        whole = iter(whole * 50)
         def call(prompt):
             if "CANDIDATES" not in prompt:
                 return answer
+            if "THE EXTRACTOR'S FACT" not in prompt:
+                return json.dumps({"referent": next(whole), "why": "the fragment says"})
             fact = prompt.split("THE EXTRACTOR'S FACT: ")[1].split("\n")[0]
             return json.dumps({"referent": next((r for k, r in readings.items() if k in fact), "unsure"), "why": "the fragment says"})
         return call
@@ -606,8 +610,9 @@ class Ambiguous(unittest.TestCase):
         x.start(0)
         self.assertEqual(["#5: 2 written"], x.catch_up(limit=1))
         self.assertEqual(["Ember (John's daughter)", "John"], [a[2] for a in self.store.adds()])
-        checks = [p for p in self.prompts if "CANDIDATES" in p]
-        self.assertEqual(2, len(checks))                                                # only facts that name a referent
+        checks = [p for p in self.prompts if "THE EXTRACTOR'S FACT" in p]
+        self.assertEqual(2, len(checks))
+        self.assertEqual(3, sum("CANDIDATES" in p and p not in checks for p in self.prompts))   # the fragment read 3 times, once                                                # only facts that name a referent
         self.assertIn("THE EXTRACTOR'S FACT: John -> Ember: said Ember's relayed", checks[0])   # blind to the pick
         self.assertNotIn("Ember (peer)", checks[0].split("THE EXTRACTOR'S FACT: ")[1])
         self.assertIn("FRAGMENT #5:\nJohn's daughter is Ember. Her minecraft-mods requests", checks[0])   # the fragment decides
@@ -616,6 +621,29 @@ class Ambiguous(unittest.TestCase):
         rec = json.loads((Path(self.tmp.name) / "concepts" / "runs.jsonl").read_text().splitlines()[0])
         self.assertEqual("referent not confirmed: filed under 'Ember (peer)', asked again: Ember (John's daughter) 1", rec["skipped"][0]["why"])
         self.assertEqual([False, True], [c["confirmed"] for c in rec["referent_checks"]])
+
+    def test_a_fragment_read_as_one_referent_settles_its_facts_without_asking_each(self):
+        # The second gate run: the per-fact check, led by the extractor's wording, confirmed the peer once. The whole
+        # fragment is an easier question; when all three readings name one referent, a fact under the other is dropped.
+        answer = json.dumps({"concepts": [], "facts": [
+            {"subject": "John", "text": "said the relay through Claude's store was the coolest", "object": "Ember (peer)"},
+            {"subject": "Ember (John's daughter)", "text": "is John's daughter", "object": None}], "supersedes": []})
+        for whole, written, asked in (([ "Ember (John's daughter)"] * 3, 1, 0),
+                                      (["Ember (John's daughter)", "Ember (John's daughter)", "Ember (peer)"], 1, 2),
+                                      (["both"] * 3, 1, 2)):
+            with self.subTest(whole=whole):
+                self.prompts.clear()
+                self.store.calls.clear()
+                (Path(self.tmp.name) / "concepts" / "runs.jsonl").unlink(missing_ok=True)
+                x = self.extractor(self.confirming(answer, {"relay": "Ember (John's daughter)", "daughter": "Ember (John's daughter)"}, tuple(whole)))
+                x.start(0)
+                self.assertEqual([f"#5: {written} written"], x.catch_up(limit=1))
+                self.assertEqual(["Ember (John's daughter)"], [a[2] for a in self.store.adds()])
+                self.assertEqual(asked, sum("THE EXTRACTOR'S FACT" in p for p in self.prompts))
+                rec = json.loads((Path(self.tmp.name) / "concepts" / "runs.jsonl").read_text().splitlines()[0])
+                self.assertEqual(whole, rec["referent_reading"]["Ember"]["votes"])
+                if asked == 0:
+                    self.assertIn('but the fragment means "Ember (John\'s daughter)"', rec["skipped"][0]["why"])
 
     def test_a_referent_is_confirmed_only_when_every_check_names_it(self):
         answer = json.dumps({"concepts": [], "facts": [{"subject": "Ember (peer)", "text": "reviewed PR #48", "object": None}], "supersedes": []})
@@ -628,6 +656,8 @@ class Ambiguous(unittest.TestCase):
                 def call(prompt):
                     if "CANDIDATES" not in prompt:
                         return answer
+                    if "THE EXTRACTOR'S FACT" not in prompt:
+                        return json.dumps({"referent": "both"})
                     v = next(it)
                     return v if v == "not json" else json.dumps({"referent": v})
                 x = concepts.Extractor(self.tmp.name, self.store, call=call, owner="Claude", ambiguous=EMBERS, confirm_runs=3)
