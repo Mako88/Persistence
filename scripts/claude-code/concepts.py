@@ -2,7 +2,7 @@
 
 Off unless PERSISTENCE_CONCEPTS is on. When on, the Stop hook starts `hook.py concepts catch-up` detached after a turn,
 and it reads the curated fragments (Identity, Relational, Personal) saved since the floor, oldest first, a few at a
-time. For each one it asks a cheap model (Haiku 5.5, through `claude -p` with no user settings, so none of the self's
+time, archived ones too unless a later fragment replaced them (#63). For each one it asks a cheap model (Haiku 5.5, through `claude -p` with no user settings, so none of the self's
 hooks run) for the concepts it names and the facts it states, and writes each fact to the store with
 `concept add ... --by extractor:<run>`. The store makes every such fact a proposal: the extractor proposes, the self
 accepts (concept-store.md). Aliases the model offers are logged, never written: an alias changes what matches, so only
@@ -98,9 +98,17 @@ class Extractor:
         tmp.write_text(str(value))
         tmp.replace(self.floor_file)
 
+    def above(self, floor, limit):
+        """The first `limit` curated fragments above `floor`, oldest first, active and archived alike (#63). The store's
+        `list` gives one status or the other, never both, so it asks for each and merges: the first `limit` of the
+        union are always among the first `limit` of each. Forgotten fragments are never listed."""
+        both = []
+        for status in ([], ["--archived"]):
+            both += json.loads(self.store("list", "--after", str(floor), "--limit", str(limit), *status, "--json") or "[]")
+        return sorted(both, key=lambda f: f["id"])[:limit]
+
     def newest(self):
-        listed = json.loads(self.store("list", "--after", "0", "--limit", "1000000", "--json") or "[]")
-        return max((f["id"] for f in listed), default=0)
+        return max((f["id"] for f in self.above(0, 1000000)), default=0)
 
     def start(self, start_from=None):
         value = self.newest() if start_from is None else int(start_from)
@@ -119,9 +127,12 @@ class Extractor:
             floor = self.floor()
             if floor is None:
                 return ["no floor: `hook.py concepts start` sets one"]
-            fresh = json.loads(self.store("list", "--after", str(floor), "--limit", str(limit), "--json") or "[]")
             done = []
-            for frag in fresh:
+            for frag in self.above(floor, limit):
+                if replaced(frag):
+                    self.set_floor(frag["id"])
+                    done.append(f"#{frag['id']}: replaced by a later fragment, not read")
+                    continue
                 rec = self.extract(frag)
                 with self.runs.open("a", encoding="utf-8") as f:
                     f.write(json.dumps(rec) + "\n")
@@ -202,6 +213,13 @@ class Extractor:
                 r = json.loads(line)
                 lines.append(f"  {r['at']} #{r['fragment']} {r.get('seconds')}s: " + (r.get("error") or f"{len(r['written'])} written"))
         return "\n".join(lines)
+
+
+def replaced(frag):
+    """Archived because a later fragment took its place (superseded, merged, or split). The replacement has a higher id,
+    so catch-up reads it in turn; reading this one too would propose the same facts twice. Any other archived fragment,
+    an inbox message once shown above all, is read: archived means no longer shown, not never true (#63)."""
+    return frag.get("status") == "Archived" and frag.get("supersededBy") is not None   # a split sets it too
 
 
 def one_line(text):

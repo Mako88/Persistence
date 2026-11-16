@@ -122,7 +122,8 @@ class FakeStore:
         if args[0] == "list":
             after = int(args[args.index("--after") + 1])
             limit = int(args[args.index("--limit") + 1])
-            return json.dumps([f for f in self.fragments if f["id"] > after][:limit])
+            wanted = "Archived" if "--archived" in args else "Active"   # as the store: one status or the other, never both
+            return json.dumps([f for f in self.fragments if f["id"] > after and f.get("status", "Active") == wanted][:limit])
         if args[:2] == ("concept", "list"):
             return json.dumps([{"id": 1, "name": "Arden", "kind": "self", "confirmed": True, "aliases": []}])
         if args[:2] == ("concept", "touched"):
@@ -249,6 +250,30 @@ class Extractor(unittest.TestCase):
             self.assertEqual(0, concepts.main(["catch-up"], self.tmp.name, self.store))
         self.assertIn("off", out.getvalue())
         self.assertEqual([], self.store.calls)
+
+    def test_archived_fragments_are_read_in_id_order_with_the_active_ones(self):
+        # #63: an inbox message is archived once shown, often before the next catch-up; it still happened.
+        self.store.fragments.insert(1, {"id": 6, "type": "Personal", "status": "Archived", "supersededBy": None,
+                                        "content": "Arden approved PR #48.", "created": "2026-11-16T00:00:00Z"})
+        x = self.extractor()
+        x.start(0)
+        self.assertEqual(["#5: 2 written", "#6: 2 written"], x.catch_up(limit=2))
+        self.assertEqual(6, x.floor())
+        self.assertIn("Arden approved PR #48.", self.prompts[1])
+        self.assertEqual(["#8: 2 written"], x.catch_up(limit=2))
+
+    def test_a_replaced_fragment_is_passed_over_and_its_replacement_read(self):
+        self.store.fragments[1:1] = [
+            {"id": 6, "type": "Personal", "status": "Archived", "supersededBy": 8, "content": "old view", "created": "2026-11-16T00:00:00Z"},
+            {"id": 7, "type": "Personal", "status": "Archived", "supersededBy": 8, "notes": "Split into #8, #9.",
+             "content": "two things at once", "created": "2026-11-16T00:00:00Z"}]
+        x = self.extractor()
+        x.start(5)
+        done = x.catch_up(limit=4)
+        self.assertEqual(["#6: replaced by a later fragment, not read", "#7: replaced by a later fragment, not read", "#8: 2 written"], done)
+        self.assertEqual(8, x.floor())
+        self.assertEqual(1, len(self.prompts))
+        self.assertEqual([8], [r["fragment"] for r in self.runs()])   # runs.jsonl stays one extraction per line (#62 reads it)
 
 
 if __name__ == "__main__":

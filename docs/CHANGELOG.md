@@ -9,6 +9,17 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-16 — Concept catch-up reads archived fragments (#63)
+
+- **What:** the extractor's catch-up read new fragments with `list --after`, which returns active fragments only. A
+  fragment archived before the next catch-up, usually an inbox message (archived once it's been shown), was skipped
+  for good, because the floor moved past it. Catch-up now reads active and archived fragments together, in id order.
+  It skips only a fragment that was replaced (superseded, merged or split), because its replacement has a higher id
+  and is read in turn.
+- **Why:** the outcome of PR #48 (Arden's approval, inbox #19196) was in an archived fragment only. So the extractor
+  never saw it, and "PR #48 awaiting review" (#19182) could never be superseded. Archived means a fragment is no
+  longer shown, not that it was never true. Found by Arden's eval (#62).
+
 ## 2026-11-16 — Concept block: one line per fact, the whole recall context defused
 
 - **What (Arden's F1 on #58, before the switch goes on beyond Claude's store):** fact text and concept names were
