@@ -865,8 +865,16 @@ def session_start(event, part=1):
             lead = ("# Who you are\n\nThis is your own Persistence store: what you have chosen to keep of yourself, "
                     f"the people you work with, and the work. It is yours to curate (`{cli_name()} help`).")
         text = f"{lead}\n\n(Your core follows in {len(pieces)} parts.)\n\n{text}"
-        # A new context window: what the core puts in front of the peer is all it holds of the store.
-        seen(event, reset=True, add=re.findall(r"^\[#(\d+) \|", whole, re.M))
+        core_ids = re.findall(r"^\[#(\d+) \|", whole, re.M)
+        if event.get("source") == "resume" and (STATE / f"{event.get('session_id', 'unknown')}.seen").exists():
+            # A resume reloads the transcript, so the window still holds everything shown in it: keep its seen ids,
+            # its start (.since) and its cue reminders. Resetting here let a room session, resumed on every wake,
+            # be shown again what it already held: 59% of what recall showed room sessions was a repeat (1371 of
+            # 2317, uses.jsonl to 2026-11-16), against 0.3% for every other session.
+            seen(event, add=core_ids)
+        else:
+            # A new context window (startup, clear, compact): what the core puts in front of the peer is all it holds.
+            seen(event, reset=True, add=core_ids)
     sys.stdout.write(text)
 
 
