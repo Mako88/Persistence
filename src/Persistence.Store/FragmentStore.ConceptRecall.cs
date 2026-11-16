@@ -171,7 +171,7 @@ internal sealed partial class FragmentStore
         var line = $"\n{omitted.Count} omitted";
         for (var n = omitted.Count; n > 0; n--)
         {
-            var named = $"{line}: {string.Join(", ", omitted.Take(n))}{(n < omitted.Count ? ", …" : "")}";
+            var named = $"{line}: {string.Join(", ", omitted.Take(n).Select(OneLine))}{(n < omitted.Count ? ", …" : "")}";
             if (named.Length <= room)
             {
                 return named;
@@ -188,7 +188,7 @@ internal sealed partial class FragmentStore
         var proposed = t.Facts.Count(f => f.Status == "proposed");
         var fragments = t.Sources.Values.SelectMany(s => s).Distinct().Count();
         var kind = c.Confirmed ? c.Kind : "kind unconfirmed";
-        var sb = new StringBuilder($"\n\n{c.Name} ({kind}{(t.Aliases.Count > 0 ? "; aka " + string.Join(", ", t.Aliases) : "")}): ");
+        var sb = new StringBuilder($"\n\n{OneLine(c.Name)} ({kind}{(t.Aliases.Count > 0 ? "; aka " + string.Join(", ", t.Aliases.Select(OneLine)) : "")}): ");
         sb.Append(t.Facts.Count == 0 ? "no facts yet" : $"{accepted} accepted, {proposed} proposed, from {fragments} fragment{(fragments == 1 ? "" : "s")}");
         foreach (var f in t.Facts.Take(facts))
         {
@@ -205,7 +205,7 @@ internal sealed partial class FragmentStore
 
         if (t.Facts.Count > facts)
         {
-            sb.Append($"\n  {t.Facts.Count - facts} more: `concept show {c.Name}`");
+            sb.Append($"\n  {t.Facts.Count - facts} more: `concept show {OneLine(c.Name)}`");
         }
 
         return sb.ToString();

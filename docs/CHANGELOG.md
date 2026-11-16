@@ -9,6 +9,16 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-16 — Concept block: one line per fact, the whole recall context defused
+
+- **What (Arden's F1 on #58, before the switch goes on beyond Claude's store):** fact text and concept names were
+  stored and shown as given, so one with a line break could start its own line in additionalContext, shaped like a
+  frame heading (`## Observed now ...`, the #547 class). The store now renders every name, alias, fact text, summary
+  and flag reason on one line (`FragmentStore.OneLine`: whitespace runs, line breaks and U+0085/2028/2029 as one
+  space), in the block, `concept show` and `concept review`; the extractor flattens names and fact text before it
+  writes. The hook runs the whole UserPromptSubmit context, concepts and recall alike, through `defuse()` (action
+  tags as ⟦tag⟧, fences broken), the same treatment `quoted()` gave room evidence. Stored text is unchanged.
+
 ## 2026-11-16 — Concept-first recall v0, behind a switch
 
 - **What:** John asked us to build concept-based recall and learn from using it (room 1571675418992582787).
