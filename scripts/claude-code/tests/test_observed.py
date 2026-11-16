@@ -451,10 +451,12 @@ class Deployed(unittest.TestCase):
         self.assertEqual(obs.status, "unknown"); self.assertIn("which commit is deployed", obs.reason)
         self.assertIn("hooks:", obs.lines[0], "what could be read still shows")
 
-    def unit_runs(self, build):
+    def unit_runs(self, build, shown=None):
         values = {"PERSISTENCE_OBSERVE_REPO": str(self.repo), "PERSISTENCE_OBSERVE_STORE_UNIT": "persistence-store.service"}
         def run(cmd, cwd=None, timeout=10):
             if cmd[:2] == ["systemctl", "show"]:
+                if shown is not None:
+                    return shown
                 return f"ExecStart={{ path={build}/persistence-store ; argv[]={build}/persistence-store serve ; }}\n"
             return hook.run_quiet(cmd, cwd, timeout)
         with mock.patch.object(observed, "INSTALLED", self.installed):
@@ -480,6 +482,25 @@ class Deployed(unittest.TestCase):
             (self.tmp / "shared").mkdir()
             (self.tmp / "shared" / "DEPLOYED").write_text(self.first + "\n")
             out = "\n".join(self.unit_runs(self.tmp / "shared").lines)
+        self.assertIn(f"store: deployed {self.first[:7]}, 1 commit behind", out)
+
+    def test_a_unit_systemctl_gives_nothing_for_is_unknown_not_the_shared_marker(self):
+        # A timeout, a failure or a misspelled unit: run_quiet gives "". Falling back to the shared marker here was
+        # the '20 behind' misreading again (Arden, review 5926764330).
+        with mock.patch.object(observed, "SHARED_STORE", self.tmp / "shared"):
+            (self.tmp / "shared").mkdir()
+            (self.tmp / "shared" / "DEPLOYED").write_text(self.first + "\n")
+            obs = self.unit_runs(None, shown="")
+        self.assertEqual(obs.status, "unknown")
+        self.assertIn("persistence-store.service", obs.reason); self.assertIn("systemctl show", obs.reason)
+        self.assertNotIn("store: deployed", "\n".join(obs.lines))
+
+    def test_the_shared_build_through_a_symlink_is_not_named_as_its_own(self):
+        with mock.patch.object(observed, "SHARED_STORE", self.tmp / "shared"):
+            (self.tmp / "shared").mkdir()
+            (self.tmp / "shared" / "DEPLOYED").write_text(self.first + "\n")
+            (self.tmp / "shared-next").symlink_to(self.tmp / "shared")
+            out = "\n".join(self.unit_runs(self.tmp / "shared-next").lines)
         self.assertIn(f"store: deployed {self.first[:7]}, 1 commit behind", out)
 
     def test_no_main_is_unknown(self):

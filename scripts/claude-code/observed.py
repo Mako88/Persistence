@@ -195,20 +195,25 @@ EXEC_PATH = re.compile(r"\bpath=(\S+)")
 
 
 def store_marker(ctx):
-    """The DEPLOYED marker of the build the store unit actually runs, and that build's folder when it isn't the shared
-    one. A drop-in can point the unit at its own build (a change approved for one account only), and then the shared
-    marker names a commit that isn't running: on 2026-11-16 it read '20 commits behind' for a store at main's code.
-    An explicit PERSISTENCE_OBSERVE_STORE_MARKER wins; a build without a marker is reported unknown, never the shared one."""
+    """The DEPLOYED marker of the build the store unit actually runs, that build's folder when it isn't the shared one,
+    and why it couldn't be found (marker None). A drop-in can point the unit at its own build (a change approved for one
+    account only), and then the shared marker names a commit that isn't running: on 2026-11-16 it read '20 commits
+    behind' for a store at main's code. An explicit PERSISTENCE_OBSERVE_STORE_MARKER wins; the shared marker is read only
+    when no unit is set. A unit whose ExecStart can't be read (systemctl timed out or failed, a misspelled unit), or a
+    build without a marker, is reported unknown, never the shared one.
+    ExecStart is the unit's loaded definition, not the running process: after a daemon-reload without a restart they can
+    differ. /proc/<MainPID>/exe would be the ground truth but needs the store's uid; the unit is what can be read."""
     explicit = ctx.setting("PERSISTENCE_OBSERVE_STORE_MARKER", "")
     if explicit:
-        return Path(explicit), None
+        return Path(explicit), None, ""
     unit = ctx.setting("PERSISTENCE_OBSERVE_STORE_UNIT", "")
-    if unit:
-        found = EXEC_PATH.search(ctx.run(["systemctl", "show", "-p", "ExecStart", unit], None, 5) or "")
-        if found:
-            build = Path(found.group(1)).parent
-            return build / "DEPLOYED", (build if build != SHARED_STORE else None)
-    return SHARED_STORE / "DEPLOYED", None
+    if not unit:
+        return SHARED_STORE / "DEPLOYED", None, ""
+    found = EXEC_PATH.search(ctx.run(["systemctl", "show", "-p", "ExecStart", unit], None, 5) or "")
+    if not found:
+        return None, None, f"store unit {unit}: systemctl show gave no ExecStart path"
+    build = Path(found.group(1)).parent
+    return build / "DEPLOYED", (build if build.resolve() != SHARED_STORE.resolve() else None), ""
 
 
 def deployed(event, ctx):
@@ -236,12 +241,15 @@ def deployed(event, ctx):
             out.append("hooks: " + "; ".join(filter(None, [
                 f"{', '.join(differ)} differ from main ({main[:7]})" if differ else "",
                 f"missing: {', '.join(missing)}" if missing else ""])))
-    marker, build = store_marker(ctx)
-    try:
-        sha = marker.read_text(encoding="utf-8").split()[0]
-    except (OSError, IndexError):
-        unknown.append(f"store: which commit is deployed (no {marker})")
-        sha = None
+    marker, build, why = store_marker(ctx)
+    sha = None
+    if marker is None:
+        unknown.append(f"store: which commit is deployed ({why})")
+    else:
+        try:
+            sha = marker.read_text(encoding="utf-8").split()[0]
+        except (OSError, IndexError):
+            unknown.append(f"store: which commit is deployed (no {marker})")
     if sha:
         behind = ctx.run(["git", "rev-list", "--count", f"{sha}..main"], repo).strip()
         where = f" (own build {build.name})" if build else ""
