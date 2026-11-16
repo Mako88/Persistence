@@ -116,6 +116,26 @@ class Checks(unittest.TestCase):
         wrong, defaulted, measured = ce.validity(rec, inst, {"1": "2026-11-15"})
         self.assertEqual((wrong, defaulted, measured), ([], [0], True))
 
+    def test_a_date_the_text_gives_is_not_defaulted_even_when_it_is_the_fragments_own(self):
+        # Claude's judged #62 sheet: 113 of the 122 facts flagged 'as_of = fragment date' were right, because the
+        # fragment's text states that date. Labelled, H passes them; with no date in the text, the same fact fails H.
+        rec = ce.from_v0(line(1, [fact("A", as_of="2026-11-15")]))
+        dates = {"1": "2026-11-15"}
+        stated = gold({"id": "h", "fragment": 1, "split": "held-out", "validity": {"text_dates": ["2026-11-15"]}})
+        silent = gold({"id": "h", "fragment": 1, "split": "held-out", "validity": {"text_dates": []}})
+        self.assertEqual("pass", find(ce.score_store("s", [rec], stated, None, dates), "gold H")["result"])
+        self.assertEqual("FAIL", find(ce.score_store("s", [rec], silent, None, dates), "gold H")["result"])
+
+    def test_the_live_gold_labels_the_dates_every_instance_states(self):
+        # Without a label, H can only guess that any fragment-date as_of is a default. The live gold labels them all.
+        g = ce.Gold.load(Path(__file__).resolve().parent / "gold" / "claude-live.json")
+        self.assertTrue(g.instances)
+        for inst in g.instances:
+            dates = inst.get("validity", {}).get("text_dates")
+            self.assertIsInstance(dates, list, inst["id"])
+            for d in dates:
+                self.assertRegex(d, r"^\d{4}-\d{2}-\d{2}$", inst["id"])
+
     def test_from_template_3_the_facts_are_what_was_written(self):
         # PR #68: v0 caps and guards what it writes, and each written entry names its parsed index.
         rec = line(1, [fact("A"), fact("B", as_of="2026-11-09"), fact("C"), fact("D", as_of="2026-11-02")],

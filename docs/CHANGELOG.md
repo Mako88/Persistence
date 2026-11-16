@@ -29,6 +29,13 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
   checks count only facts that reached the store; `check` prints how many were parsed and not written. A `lasting`
   fact counts as undated, as v0 writes it, and `written` entries' own `as_of`/`supersedes` win when v0 logs them.
   Older run lines keep the parsed list.
+- **The live gold labels the dates each fragment's text gives** (case H). Claude's blind judging of the live run
+  called 113 of the 122 facts flagged "as_of = fragment date" right, because those fragments state that date in their
+  own text. With no `validity` label, H counted every one of them as a default, so it failed #14754 and #19196 on
+  facts that were right. Each instance now carries `validity.text_dates`, read from snapshot 0c157a74. On the
+  same runs H goes from 2 of 4 failing to 0 of 4. The label is per fragment, so a text date put on the wrong fact
+  (the day something was said, used as the start of a lifelong relation) is still the judge's `wrong-validity`.
+  The count of all facts carrying the fragment's date stays report-only.
 
 ## 2026-11-16 — Concept catch-up reads archived fragments (#63)
 
