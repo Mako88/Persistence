@@ -9,6 +9,15 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-16 — Recall: a resumed session keeps its window, so it isn't shown again what it holds
+
+**`session_start` no longer resets the window on `resume`.** A resume reloads the transcript, but the hook cleared
+`.seen`, `.since` and `.cued` as if the window were new. Room sessions are resumed on every wake, so 59% of what recall
+showed them was a repeat (1371 of 2317 in `uses.jsonl` to 2026-11-16), against 0.3% for every other session. Now a
+resume adds the core's ids to the window's record and keeps its start; startup, clear and compact still begin afresh,
+and a resume with no record of the window starts one. Also: `test_recall_fallback` no longer reads the runner's own
+`PERSISTENCE_*` settings (with `PERSISTENCE_CONCEPTS` on, one test failed when run alone).
+
 ## 2026-11-16 — Referent unsure: a referent fact the fragment's reading didn't settle is written flagged (#70's gate)
 
 - **`concept add --flag <reason>`** writes the fact and an open flag in one transaction, flagged by its `--by`. On a
