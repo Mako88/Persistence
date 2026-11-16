@@ -11,8 +11,8 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
 
 ## 2026-11-16 — Sleep passes hand their proposals to a working session (#67)
 
-- **`hook.py sleep` hands the night's record on.** When `PERSISTENCE_SLEEP_HANDOFF_AT=HH:MM` is set, a record that
-  doesn't say `Proposals: none` goes to the work inbox by its id alone, and to the one live `sleep-handoff` claim,
+- **`hook.py sleep` hands the night's record on.** When `PERSISTENCE_SLEEP_HANDOFF_AT=HH:MM` is set, the record
+  `sleep-begin` wrote (by the id in its reply, once `sleep-end` has closed it), if it doesn't say `Proposals: none` goes to the work inbox by its id alone, and to the one live `sleep-handoff` claim,
   which gets a wake at that hour. While an earlier night's claim is still live, it's widened to name this record
   (`Claims.amend`, by the harness, with the old task in the history entry), so no second claim is made. The wake is
   `alone`: run-due holds it while another claimed work session is running. The launched session gets a sleep prompt

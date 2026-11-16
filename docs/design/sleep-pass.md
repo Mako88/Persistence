@@ -118,9 +118,11 @@ fragments. Both are in the worklist and the prompt.
 
 - **Proposals are handed on (issue #67, 2026-11-16).** Five nights of proposals went unrun on Claude's store and
   five on Arden's, because only the next night's pass read a record. With `PERSISTENCE_SLEEP_HANDOFF_AT=HH:MM` set
-  (env or settings.json; unset, nothing is handed on, so each self opts in), the runner looks at the newest
-  `sleep/pass` record once the pass ends. If the pass wrote one and it doesn't say `Proposals: none` (the prompt
-  asks for that exact line), the runner hands it on. The work inbox gets `Sleep record #<id>` (the id only, never
+  (env or settings.json; unset, nothing is handed on, so each self opts in), the runner takes the record
+  `sleep-begin` wrote (its id is in begin's reply; `sleep-end` rewrites that same fragment) and, once it is closed
+  and doesn't say `Proposals: none` (the prompt asks for that exact line), hands it on. Not "the newest record
+  after the pass": that is already tonight's from begin, so comparing it with the newest before handed nothing on
+  (Arden's review of #73). The work inbox gets `Sleep record #<id>` (the id only, never
   the commands), and a claim with subject `sleep-handoff` gets a wake at that hour. Arden's three conditions, each
   pinned by a test: a night whose earlier handoff is still live joins that claim (`amend`, old task kept in the
   history), so there's no second one; the inbox holds only the id; and the wake is `alone`, so run-due holds it

@@ -2754,7 +2754,7 @@ def sleep_pass(argv):
     if code != 0:
         print(f"no sleep pass tonight: {err.strip() or 'the store did not answer'}")
         return 1
-    before = newest_sleep_record()
+    record = pass_record(opened)  # the pass's record is written now and closed by sleep-end: that one is handed on
     worklist = store("sleep-list", timeout=300)
     in_scope = (worklist.rsplit("ids for joining use counts", 1)[-1]).split()
     since = datetime.now(timezone.utc).timestamp() - 30 * 86400
@@ -2793,7 +2793,7 @@ def sleep_pass(argv):
               f"its record (session {session[:8]}; its output is {out}). What the store logged follows.")
     print(f"sleep pass done: session {session[:8]}, prompt {prompt}, output {out}")
     try:
-        sleep_handoff(before, session)
+        sleep_handoff(record, session)
     except Exception as e:  # printed in the unit's output, never retried in a loop (issue #67)
         print(f"the sleep handoff failed: {e!r}")
     return 0
@@ -2803,10 +2803,11 @@ SLEEP_SUBJECT = "sleep-handoff"
 SLEEP_HANDED = "sleep-handed.json"  # the records already handed on, so a second run on one night adds nothing
 
 
-def newest_sleep_record():
-    """The id of the newest sleep/pass record, or None."""
-    code, out, _ = call_store("list", "--tag", "sleep/pass", "--limit", "1", quiet=True)
-    found = re.search(r"^\[#(\d+) \|", out, flags=re.M) if code == 0 else None
+def pass_record(opened):
+    """The id of the record sleep-begin wrote ("Sleep pass #4802 is open until ..."), or None. The store writes it at
+    begin and sleep-end rewrites that same fragment, so the newest sleep/pass record after begin is already tonight's:
+    comparing newest before and after handed nothing on (Arden's review of #73, #4802 before = after)."""
+    found = re.search(r"Sleep pass #(\d+) is open", opened or "")
     return found.group(1) if found else None
 
 
@@ -2820,9 +2821,9 @@ def minutes_until(at, now=None):
     return (target - now).total_seconds() / 60
 
 
-def sleep_handoff(before, night, home=None):
-    """Issue #67: a pass's proposals reach a tracked list, not only the next night's pass. The night's record, if one
-    was written and it doesn't say `Proposals: none`, goes to the work inbox by its id alone (Arden's condition 2), and
+def sleep_handoff(record, night, home=None):
+    """Issue #67: a pass's proposals reach a tracked list, not only the next night's pass. The night's record (the id
+    sleep-begin gave, see pass_record), once closed and unless it says `Proposals: none`, goes to the work inbox by its id alone (Arden's condition 2), and
     to the one live claim for SLEEP_SUBJECT: a new open claim with a wake at PERSISTENCE_SLEEP_HANDOFF_AT, or, while an
     earlier night's claim is live, that claim widened to name this record too (condition 1, no stacking). The wake is
     `alone`: run-due holds it while another work session runs (condition 3). Opt-in per self: unset, nothing is
@@ -2833,9 +2834,8 @@ def sleep_handoff(before, night, home=None):
     at = setting("PERSISTENCE_SLEEP_HANDOFF_AT", "")
     if not at:
         return None
-    record = newest_sleep_record()
-    if not record or record == before:
-        print("sleep handoff: this pass wrote no record, so nothing is handed on")
+    if not record:
+        print("sleep handoff: sleep-begin's reply named no record, so nothing is handed on")
         return None
     handed_file = STATE / SLEEP_HANDED
     try:
@@ -2847,6 +2847,10 @@ def sleep_handoff(before, night, home=None):
     code, text, err = call_store("show", record, quiet=True)
     if code != 0:
         print(f"sleep handoff: record #{record} could not be read, so it is not handed on: {err.strip()}")
+        return None
+    header = text.split("\n", 1)[0]
+    if not re.search(r"\bsleep/pass\b", header) or re.search(r"\bsleep/open\b", header):
+        print(f"sleep handoff: #{record} is not a closed sleep pass record, so it is not handed on")
         return None
     if re.search(r"^\s*Proposals:\s*none\.?\s*$", text, flags=re.M | re.I):
         print(f"sleep handoff: record #{record} proposes nothing")
