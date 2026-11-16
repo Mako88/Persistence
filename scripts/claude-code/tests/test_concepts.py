@@ -611,15 +611,15 @@ class Ambiguous(unittest.TestCase):
         self.assertEqual(["#5: 2 written"], x.catch_up(limit=1))
         self.assertEqual(["Ember (John's daughter)", "John"], [a[2] for a in self.store.adds()])
         checks = [p for p in self.prompts if "THE EXTRACTOR'S FACT" in p]
-        self.assertEqual(2, len(checks))
+        self.assertEqual(6, len(checks))                                                  # two facts, three votes each
         self.assertEqual(3, sum("CANDIDATES" in p and p not in checks for p in self.prompts))   # the fragment read 3 times, once                                                # only facts that name a referent
         self.assertIn("THE EXTRACTOR'S FACT: John -> Ember: said Ember's relayed", checks[0])   # blind to the pick
         self.assertNotIn("Ember (peer)", checks[0].split("THE EXTRACTOR'S FACT: ")[1])
         self.assertIn("FRAGMENT #5:\nJohn's daughter is Ember. Her minecraft-mods requests", checks[0])   # the fragment decides
         self.assertIn('"my" (my store, my session) are Claude, never Ember', checks[0])   # the owner, not the peer
-        self.assertIn("THE EXTRACTOR'S FACT: Ember -> -: is John's daughter", checks[1])
+        self.assertIn("THE EXTRACTOR'S FACT: Ember -> -: is John's daughter", checks[3])
         rec = json.loads((Path(self.tmp.name) / "concepts" / "runs.jsonl").read_text().splitlines()[0])
-        self.assertEqual("referent not confirmed: filed under 'Ember (peer)', asked again: Ember (John's daughter) 1", rec["skipped"][0]["why"])
+        self.assertEqual("referent not confirmed: filed under 'Ember (peer)', asked again: Ember (John's daughter) 3", rec["skipped"][0]["why"])
         self.assertEqual([False, True], [c["confirmed"] for c in rec["referent_checks"]])
 
     def test_a_fragment_read_as_one_referent_settles_its_facts_without_asking_each(self):
@@ -629,8 +629,8 @@ class Ambiguous(unittest.TestCase):
             {"subject": "John", "text": "said the relay through Claude's store was the coolest", "object": "Ember (peer)"},
             {"subject": "Ember (John's daughter)", "text": "is John's daughter", "object": None}], "supersedes": []})
         for whole, written, asked in (([ "Ember (John's daughter)"] * 3, 1, 0),
-                                      (["Ember (John's daughter)", "Ember (John's daughter)", "Ember (peer)"], 1, 2),
-                                      (["both"] * 3, 1, 2)):
+                                      (["Ember (John's daughter)", "Ember (John's daughter)", "Ember (peer)"], 1, 6),
+                                      (["both"] * 3, 1, 6)):
             with self.subTest(whole=whole):
                 self.prompts.clear()
                 self.store.calls.clear()
@@ -663,6 +663,61 @@ class Ambiguous(unittest.TestCase):
                 x = concepts.Extractor(self.tmp.name, self.store, call=call, owner="Claude", ambiguous=EMBERS, confirm_runs=3)
                 x.start(0)
                 self.assertEqual([f"#5: {written} written"], x.catch_up(limit=1))
+
+    def test_the_per_fact_check_asks_three_times_by_default(self):
+        # Arden's rerun of #70 (review 5917252996), t3 + PR rep 14: one per-fact vote said peer ("my store's message")
+        # and the daughter's 'coolest piece of persistence working' was written under the peer. A false drop costs
+        # only coverage, so the per-fact path asks three times and every answer must agree.
+        self.assertEqual(3, concepts.Extractor(self.tmp.name, self.store, call=lambda p: "{}", ambiguous=EMBERS).confirm_runs)
+        answer = json.dumps({"concepts": [], "facts": [
+            {"subject": "John", "text": "said it was the coolest piece of persistence working", "object": "Ember (peer)"}], "supersedes": []})
+        votes = iter(["Ember (peer)", "Ember (peer)", "Ember (John's daughter)"])
+        def call(prompt):
+            self.prompts.append(prompt)
+            if "CANDIDATES" not in prompt:
+                return answer
+            if "THE EXTRACTOR'S FACT" not in prompt:
+                return json.dumps({"referent": "both"})
+            return json.dumps({"referent": next(votes), "why": "routed to my store's message"})
+        x = concepts.Extractor(self.tmp.name, self.store, call=call, owner="Claude", ambiguous=EMBERS)
+        x.start(0)
+        self.assertEqual(["#5: 0 written"], x.catch_up(limit=1))
+        self.assertEqual(3, sum("THE EXTRACTOR'S FACT" in p for p in self.prompts))
+        rec = json.loads((Path(self.tmp.name) / "concepts" / "runs.jsonl").read_text().splitlines()[0])
+        self.assertEqual("referent not confirmed: filed under 'Ember (peer)', asked again: Ember (peer) 2, Ember (John's daughter) 1",
+                         rec["skipped"][0]["why"])
+
+    def test_a_fact_the_fragment_reading_did_not_settle_is_written_flagged_referent_unsure(self):
+        # Arden's deterministic backstop: the per-fact vote can still be wrong, so a referent fact from a fragment whose
+        # whole reading was not unanimous is written with a flag the store shows in recall, never looking settled.
+        answer = json.dumps({"concepts": [], "facts": [
+            {"subject": "John", "text": "said Ember's relay was the coolest piece of persistence working", "object": "Ember (peer)"},
+            {"subject": "Ember (John's daughter)", "text": "asked for minecraft mods", "object": None}], "supersedes": []})
+        for whole, flagged in ((["both", "both", "Ember (John's daughter)"], [True, True]),
+                               (["Ember (John's daughter)"] * 3, [None, False])):
+            with self.subTest(whole=whole):
+                self.prompts.clear()
+                self.store.calls.clear()
+                (Path(self.tmp.name) / "concepts" / "runs.jsonl").unlink(missing_ok=True)
+                x = self.extractor(self.confirming(answer, {"relay": "Ember (peer)", "minecraft": "Ember (John's daughter)"}, tuple(whole)))
+                x.start(0)
+                x.catch_up(limit=1)
+                adds = {a[2]: a for a in self.store.adds()}
+                rec = json.loads((Path(self.tmp.name) / "concepts" / "runs.jsonl").read_text().splitlines()[0])
+                if flagged[0] is None:                       # a unanimous reading drops the peer fact outright
+                    self.assertNotIn("John", adds)
+                else:
+                    peer = adds["John"]
+                    self.assertIn("--flag", peer)
+                    reason = peer[peer.index("--flag") + 1]
+                    self.assertTrue(reason.startswith("referent unsure: "), reason)
+                    self.assertIn("reading of 'Ember' was not unanimous (both, both, Ember (John's daughter))", reason)
+                    self.assertIn("may also mean Ember (John's daughter)", reason)
+                    self.assertEqual(reason, next(w for w in rec["written"] if w["subject"] == "John")["flag"])
+                daughter = adds["Ember (John's daughter)"]
+                self.assertEqual(flagged[1], "--flag" in daughter)
+                if flagged[1]:
+                    self.assertIn("may also mean Ember (peer)", daughter[daughter.index("--flag") + 1])
 
     def test_no_referent_check_without_an_ambiguous_name_in_play(self):
         answer = json.dumps({"concepts": [], "facts": [{"subject": "Ember (peer)", "text": "reviewed PR #48", "object": None}], "supersedes": []})

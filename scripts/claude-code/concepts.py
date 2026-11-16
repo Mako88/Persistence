@@ -26,8 +26,9 @@ the merged 'Ember': Arden, review 5915601823) is logged and not written, and `sp
 the old merged concept and --runs times over, which referent it means; only a unanimous answer is proposed, under that
 referent, superseding the old line on accept. Anything else stays put, listed as unsure or disagreed with the votes.
 A fact the extractor files under one of those referents, from a fragment that uses the name, is asked again (CHECK_PROMPT),
-blind to the pick (the bare name in its place) and with the fragment as evidence; it is written only if every
-answer names the same referent (#14625 on Arden's #68 run: the daughter's relay filed under the peer). The hook passes
+blind to the pick (the bare name in its place) and with the fragment as evidence, three times; it is written only if every
+answer names the same referent (#14625 on Arden's #68 run: the daughter's relay filed under the peer), and then flagged
+'referent unsure' unless the whole fragment's reading settled it (Arden, review 5917252996). The hook passes
 the same file to `concept touched --ambiguous`, so a message saying "Ember" reaches both referents.
 """
 import fcntl
@@ -139,7 +140,7 @@ class Extractor:
     """One self's extractor. `store` runs a store CLI command and returns its output (hook.store); `call` sends a
     prompt to the model and returns its text. Both are passed in so a test never starts a model or a store."""
 
-    def __init__(self, state_dir, store, call=None, owner=None, ambiguous=None, split_runs=3, confirm_runs=1, read_runs=3):
+    def __init__(self, state_dir, store, call=None, owner=None, ambiguous=None, split_runs=3, confirm_runs=3, read_runs=3):
         self.dir = Path(state_dir) / "concepts"
         self.store = store
         self.call = call or call_haiku
@@ -293,21 +294,26 @@ class Extractor:
         return readings[label]["referent"]
 
     def confirm_referent(self, subject, obj, text, referents, fragment, content, checks, readings=None):
-        """None when the fact names no referent of an ambiguous name the fragment uses, or when every such referent is
-        confirmed; otherwise why it is not. Each referent in the fact is asked about `confirm_runs` times (CHECK_PROMPT),
-        the fact shown with the bare name in that place so the extractor's pick can't lead the answer, and the
-        fragment as its evidence. Only an answer naming the same referent every time confirms it: a different referent,
-        unsure or an error leaves the fact unwritten and logged, since a fact under the wrong person is the severe miss.
-        Before any of that, the fragment as a whole is asked which referent it means (READ_PROMPT): when every answer
-        names one, a fact under it stands and a fact under another is dropped with no per-fact question."""
+        """(why not, flag): why the fact is not to be written, or None; and the flag to write it with, or None.
+        Nothing to say when the fact names no referent of an ambiguous name the fragment uses.
+        First the fragment as a whole is asked which referent it means (READ_PROMPT): when every answer names one, a
+        fact under it stands and a fact under another is dropped with no per-fact question. Otherwise each referent in
+        the fact is asked about `confirm_runs` times (CHECK_PROMPT, 3 by default: one vote let #14625 through on
+        Arden's rerun of #70), the fact shown with the bare name in that place so the extractor's pick can't lead the
+        answer, and the fragment as its evidence. Only an answer naming the same referent every time confirms it: a
+        different referent, unsure or an error leaves the fact unwritten and logged, since a fact under the wrong
+        person is the severe miss. A fact confirmed that way is still written flagged 'referent unsure' (Arden's
+        deterministic backstop, review 5917252996): the votes can be wrong, and then the fact must not reach recall
+        looking settled. The store shows the flag in recall and first in review, until the self accepts or rejects."""
         readings = {} if readings is None else readings
+        unsure = []
         for name in dict.fromkeys(n for n in (subject, obj) if n and n.lower() in referents):
             label = referents[name.lower()]
             refs = self.ambiguous[label]
             whole = self.reading(label, fragment, content, readings)
             if whole is not None:
                 if whole.lower() != name.lower():
-                    return f"referent not confirmed: filed under {name!r}, but the fragment means {whole!r} by {label!r}"
+                    return f"referent not confirmed: filed under {name!r}, but the fragment means {whole!r} by {label!r}", None
                 continue
             prompt = CHECK_PROMPT.format(
                 label=label, owner=self.owner, candidates="\n".join(f"{r['name']} | {r.get('kind', '?')} | {r.get('cues', '')}" for r in refs),
@@ -319,8 +325,11 @@ class Extractor:
             checks.append(check)
             if not check["confirmed"]:
                 tally = ", ".join(f"{v} {check['votes'].count(v)}" for v in dict.fromkeys(check["votes"]))
-                return f"referent not confirmed: filed under {name!r}, asked again: {tally}"
-        return None
+                return f"referent not confirmed: filed under {name!r}, asked again: {tally}", None
+            others = " or ".join(r["name"] for r in refs if r["name"].lower() != name.lower())
+            unsure.append(f"the fragment's reading of {label!r} was not unanimous ({', '.join(readings[label]['votes'])}); "
+                          f"{name} may also mean {others}")
+        return None, ("referent unsure: " + "; ".join(unsure)) if unsure else None
 
     def bare(self, known=None):
         """{lowercased name: its listed label} for every name that would file a fact on an ambiguous name's merged
@@ -391,18 +400,18 @@ class Extractor:
             if claim == "proposal" and not PROPOSAL.search(text):   # 'my additions' as 'Claude added' (#19324 on #62)
                 log(subject, obj, text, "a proposal whose text states it as done")
                 continue
-            why = confirm(subject, obj, text) if confirm else None
+            why, flag = confirm(subject, obj, text) if confirm else (None, None)
             if why:
                 log(subject, obj, text, why)
                 continue
-            keep.append((i, f, subject, obj, text))
+            keep.append((i, f, subject, obj, text, flag))
         # The cap (plan §4.4, review load median <= 5): a fact that supersedes one shown goes first, since a stale fact
         # left standing is worse than a new one missed; the rest in the model's order, which the prompt asks be most useful first.
         ranked = sorted(keep, key=lambda k: (k[0] not in replaces, k[0]))
-        for i, f, subject, obj, text in ranked[MAX_FACTS:]:
+        for i, f, subject, obj, text, _ in ranked[MAX_FACTS:]:
             log(subject, obj, text, f"over the cap of {MAX_FACTS} facts per fragment")
         written = []
-        for i, f, subject, obj, text in sorted(ranked[:MAX_FACTS]):
+        for i, f, subject, obj, text, flag in sorted(ranked[:MAX_FACTS], key=lambda k: k[0]):
             args = ["concept", "add", subject, "--fact", text, "--source", str(fragment), "--by", run]
             if obj and obj.lower() != subject.lower():
                 args += ["--object", obj]
@@ -421,10 +430,12 @@ class Extractor:
                 args += ["--kind", kinds[subject.lower()]]
             if i in replaces:
                 args += ["--supersedes", str(replaces[i])]
+            if flag:   # a store without --flag refuses the whole add, so an unsure fact is never written unflagged
+                args += ["--flag", flag]
             said = self.store(*args)
             # as_of and supersedes as passed, so a reader of runs.jsonl needn't re-derive the lasting rule or the swap (#62's adapter).
             written.append({"i": i, "subject": subject, "object": obj, "text": text, "as_of": as_of, "supersedes": replaces.get(i),
-                            "said": said.strip()[:300]})
+                            "flag": flag, "said": said.strip()[:300]})
         return written
 
     @property

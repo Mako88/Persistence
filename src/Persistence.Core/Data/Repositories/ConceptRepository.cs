@@ -99,7 +99,7 @@ public class ConceptRepository : IConceptRepository
     }
 
     public async Task<long> AddFactAsync(long subjectId, long? objectId, string text, bool isState, string? asOfUtc,
-        string extractedBy, IReadOnlyCollection<long> sources, string status, long? supersedes)
+        string extractedBy, IReadOnlyCollection<long> sources, string status, long? supersedes, string? flag = null)
     {
         await using var c = await SqliteConnectionString.OpenAsync(connectionString);
         await using var tx = await c.BeginTransactionAsync();
@@ -120,6 +120,13 @@ public class ConceptRepository : IConceptRepository
               RecordedAtUtc = (SELECT MAX(f.CreatedUtc) FROM FactSources s JOIN ContextFragments f ON f.Id = s.FragmentId WHERE s.FactId = @id)
             WHERE Id = @id
             """, new { id, status }, tx);
+        // A flag given with the fact goes in with it: a fact meant to be flagged is never visible unflagged (#70's gate).
+        if (!string.IsNullOrWhiteSpace(flag))
+        {
+            await c.ExecuteAsync("INSERT INTO FactFlags (FactId, FlaggedBy, Reason, CreatedUtc) VALUES (@id, @by, @reason, @now)",
+                new { id, by = extractedBy, reason = flag.Trim(), now = Now() }, tx);
+        }
+
         await tx.CommitAsync();
         return id;
     }

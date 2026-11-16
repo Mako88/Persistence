@@ -36,7 +36,7 @@ const string Usage = """
                                             stop (my last message as a turn ends). --content adds a fragment to it;
                                             `edit <id> --tag cue/<moment>/<name>` puts an existing one on it
       concept [review] | show <name> [--history] | add <subject> --fact <text> --source <id>[,<id>]... [--object <name>]
-              [--state] [--as-of <date>] [--supersedes <fact id>] [--kind <thing|person|self|value>] [--by <extractor>]
+              [--state] [--as-of <date>] [--supersedes <fact id>] [--kind <thing|person|self|value>] [--by <extractor>] [--flag <reason>]
               | accept <fact id> [--reason] | reject <fact id> --reason | reopen <fact id> --reason | flag <fact id> --reason [--by]
               | kind <name> <thing|person|self|value> | alias <name> <alias> [--note] [--move --reason <why>]
               | touched --text <text|-> [--json] [--concepts 5] [--facts 3] [--budget 3300] [--ambiguous <json>] | list
@@ -51,7 +51,8 @@ const string Usage = """
                                             block concept-first recall puts first (--ambiguous: names that mean more
                                             than one concept reach each of them, #60); `list` is every concept as JSON.
                                             `alias --move` moves an alias another concept holds, its history kept in
-                                            the alias's note
+                                            the alias's note. `add --flag` writes the fact flagged in the same step;
+                                            recall shows a flagged fact so, and review lists flags first
       nearest <words...> [--text <text|->] [--limit 3]
                                             the authored fragments nearest a text, with their scores: what `add`
                                             checks for a view written twice (it names a near one after saving)
@@ -401,7 +402,7 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
                             line.GetAll("source").SelectMany(v => v.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
                                 .Select(v => long.TryParse(v.TrimStart('#'), out var id) ? id : throw new UsageException($"'{v}' is not a fragment id.")).ToList(),
                             line.Get("object"), line.Has("state"), line.Get("as-of"), line.Get("by"),
-                            line.Get("supersedes") is { } sup ? long.Parse(sup.TrimStart('#')) : null, line.Get("kind"));
+                            line.Get("supersedes") is { } sup ? long.Parse(sup.TrimStart('#')) : null, line.Get("kind"), line.Get("flag"));
                         Console.WriteLine((stood ? $"Already {(fact.Status == "proposed" ? "proposed" : "stands")}, nothing added: "
                                 : why is not null ? $"Proposed, waiting for `concept review` ({why}): " : "Added: ")
                             + await store.RenderFactAsync(fact));

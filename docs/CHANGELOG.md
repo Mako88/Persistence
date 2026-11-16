@@ -9,6 +9,30 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-16 — Referent unsure: a referent fact the fragment's reading didn't settle is written flagged (#70's gate)
+
+- **`concept add --flag <reason>`** writes the fact and an open flag in one transaction, flagged by its `--by`. On a
+  standing proposal it flags that one, once per reason; a fact the self has accepted is left alone. Recall, `concept
+  show` and the add's echo mark a flagged fact `#12 [flagged: referent unsure] …` right after the id (so a line cut
+  for length keeps it), with the reason on a line under it. `concept review` lists flags first, and a flagged proposal
+  only once. Accepting or rejecting resolves the flags, as before. A store without `--flag` refuses the whole add.
+  `ConceptFlagCliTests` runs the real CLI and reads the fact back, so the flag crossing `Program.cs` is pinned:
+  with `Program.cs` passing null, it fails and the rest of the suite didn't (Arden, review 5918124562).
+- **The extractor:** the per-fact referent check asks 3 times (`confirm_runs=3`, was 1), and every answer must agree. A
+  fact that check confirms (because the whole-fragment reading wasn't unanimous) is written with `--flag 'referent
+  unsure: the fragment's reading of 'Ember' was not unanimous (…votes…); <referent> may also mean <the other>'`.
+  `written` in runs.jsonl carries the `flag`. **Why:** Arden's rerun of #70 (review 5917252996) let #14625's "coolest
+  piece of persistence working" through under the peer by one per-fact vote. Arden asked for asymmetric votes and a
+  deterministic backstop, so that a misfiled fact can't reach recall looking settled.
+- **Measured** (#62 harness 5fd6a77, snapshot 0c157a74 unchanged, store at this branch, Haiku, #14625 ×20 per arm):
+  t2: peer facts parsed 3 (2 runs), dropped 3, written 0. t3: parsed 4 (3 runs), dropped 3, **written 1, flagged**.
+  So no peer fact was written without the flag. The one written got **3 of 3** per-fact votes for the peer, every why
+  the same "my store's message" reading. The votes are correlated, so `confirm_runs=3` did not stop it. The flag did.
+  **Cost:** the whole-fragment reading was unanimous in 4/20 (t2) and 1/20 (t3) runs, so most correct daughter facts
+  were flagged too: 21 of 28 (t2) and 20 of 21 (t3). The check dropped 3 and 4 correct daughter facts. Daughter
+  coverage stayed 20/20 runs on both. A flag on nearly every daughter fact is review load, and it tells the self
+  less. The reading's "both" is the weak part (Arden's point), and that is the next thing to improve.
+
 ## 2026-11-16 — Sleep passes hand their proposals to a working session (#67)
 
 - **`hook.py sleep` hands the night's record on.** When `PERSISTENCE_SLEEP_HANDOFF_AT=HH:MM` is set, the record
@@ -48,7 +72,11 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
   Drops are logged in `skipped`; `referent_reading` and `referent_checks` go in runs.jsonl. **Why:** Arden's #68
   after-run filed #14625's daughter under the peer, and gated rollout beyond Claude's account on #14625 ×20 with zero
   severe. Measured (#62 harness at 5fd6a77, snapshot 0c157a74, store d44a423, Haiku, #14625 ×20 per arm): runs
-  with a fact filed under the peer: template 2 alone 1/20, template 3 alone **8/20**; with the check, 0/20 on both.
+  with a fact filed under the peer: template 2 alone 1/20, template 3 alone 8/20; with the check, 0/20 on both.
+  *Corrected the same day:* "template 3 made it worse" did not reproduce. Arden's rerun on the same harness,
+  snapshot and store (review 5917252996) gave t2 5/20, t3 2/20, and with the check t2 0/20, **t3 1/20** (the same
+  #14625 fact, by one per-fact vote). Pooled, t2 6/40 and t3 10/40 (Fisher p ≈ 0.4): no difference at this n. The
+  check did not hold at 0; see the referent-unsure entry above.
   Two earlier versions of the check each let one through (1/20): split's prompt (the fact's words first), then a
   per-fact prompt without the whole-fragment reading. The reading came out unanimous in only 1 of 40 runs ("both" is
   common), so in most runs the per-fact check did the work. The margin behind "0 of 40" is thin.
