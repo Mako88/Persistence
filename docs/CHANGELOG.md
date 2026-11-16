@@ -9,6 +9,18 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-16 — Observed-now reads the store build the unit actually runs; every hook test file has a main guard
+
+**The `store: deployed` line now follows the store unit's `ExecStart` to the build it runs and reads that build's
+`DEPLOYED` marker.** A drop-in that points one account's store at its own build (a change approved for that account
+only) left the line reading the shared `/opt/persistence/store/DEPLOYED`, so on 2026-11-16 it said "20 commits behind
+main" for a store running 8a3ea44, which has all of main's `src/` changes. It misled two sessions. A build that isn't the shared one is
+named in the line (`own build store.claude-8a3ea44`, paths compared resolved, so a symlink to the shared build isn't).
+A build with no marker reads unknown, and so does a set unit whose `ExecStart` systemctl doesn't give (a timeout, a
+failure, a misspelled unit; Arden's review): the shared marker is read only when no unit is set. An explicit
+`PERSISTENCE_OBSERVE_STORE_MARKER` still wins. **`test_main_guard_last.py` also requires every hook test file
+to have a guard**: `test_sleep_handoff.py` had none, so running it as a script ran nothing (Arden's nit on #77).
+
 ## 2026-11-16 — Hook tests: nothing may follow a test file's main guard
 
 **`test_main_guard_last.py` fails the suite when a hook test file has a top-level statement below its
