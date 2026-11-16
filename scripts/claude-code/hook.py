@@ -54,7 +54,7 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import NamedTuple
 
@@ -2092,8 +2092,10 @@ def run_due(grace=120, home=None):
             if launch[0] == "claim":
                 _, w, record, fd = launch
                 handoff = {k: record[k] for k in TASK_FIELDS}
-                speaker = heartbeat_speaker() if w.get("by") == "heartbeat" else None
-                print(start_work_session(record["cwd"], w["reason"], "room", w["session"], handoff=handoff, cwd_fd=fd,
+                origin = w.get("origin") if w.get("origin") in WORK_PROMPTS else "room"
+                speaker = heartbeat_speaker() if w.get("by") == "heartbeat" else (
+                    f"{os.environ.get('PERSISTENCE_PEERNAME') or 'me'} (my sleep pass's handoff)" if origin == "sleep" else None)
+                print(start_work_session(record["cwd"], w["reason"], origin, w["session"], handoff=handoff, cwd_fd=fd,
                                          claim=record["id"], firings=[w["id"]], speaker=speaker))
             elif launch[0] == "heartbeat":
                 _launch_heartbeat(*launch[1:])
@@ -2157,6 +2159,9 @@ def _run_due_locked(c, claims, now, at, grace, launches, stalled=False):
                     continue
                 if alive:
                     continue  # a run of it is going: its wake waits for the next minute
+                if any(w.get("alone") for w in mine) and other_work_running(c, table, session):
+                    # One work session at a time (Arden's condition 3 on #67): it waits for the next minute.
+                    mine = [w for w in mine if not w.get("alone")]
                 for w in mine:
                     if w.get("by") == "heartbeat" and not _heartbeat_spawn(c, w):
                         # A heartbeat nudge or retry (heartbeat.md, "How a nudge or retry happens"): its launch is
@@ -2179,6 +2184,14 @@ def _run_due_locked(c, claims, now, at, grace, launches, stalled=False):
                 if plain:
                     launches.append(("plain", session, plain))
             write_queue_locked([w for w in items if w not in gone])
+
+
+def other_work_running(c, table, session):
+    """Whether a claimed work session other than `session` is running now, by exact id in the process table."""
+    import claims
+
+    return any(r["status"] == "claimed" and r["owner"] and r["owner"] != session and claims.running(r["owner"], table)
+               for r in c.all())
 
 
 def heartbeat_speaker():
@@ -2306,7 +2319,8 @@ def set_handoff(wake, home=None):
                          room_from=record.get("room_from"), room_upto=record.get("room_upto"), subject=wake.get("subject"))
         item = {"id": str(uuid.uuid4()), "reason": wake["reason"], "set": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "cwd": claim["cwd"], "session": wake["session"], "work": True, "claim": claim["id"],
-                "at": datetime.now().timestamp() + 60 * minutes}
+                "at": datetime.now().timestamp() + 60 * minutes,
+                **{k: wake[k] for k in ("alone", "origin") if wake.get(k)}}
         write_queue_locked(items + [item])
     return claim, item
 
@@ -2316,6 +2330,10 @@ WORK_PROMPTS = {
             "permissions, started for that. Anything the room session sent ahead is in your inbox above (or "
             "`pstore list --tag inbox/work`). Do the work, then say what you did in the room (`room say`) if it "
             "matters to the people there.",
+    "sleep": "Your sleep pass handed its proposals on: {reasons}\n\nYou are a working session in {cwd}, with full "
+             "permissions, started for that. Each record is in the store; your inbox names them by id only. A proposal "
+             "is a draft from the night: check it against what has changed since, then run it or drop it with a reason. "
+             "Say what you did in the room (`room say`) if it matters to the people there.",
     "home": "Messages for John's PC came in from home: {reasons}\n\nYou are a working session on John's PC in {cwd}, with "
             "full permissions, started for them by the link (the hook server's watch on this machine's messages); no "
             "one is watching this session live. Read each message named above with `pstore show <id>` (another session "
@@ -2712,6 +2730,8 @@ Identity fragments: propose, don't change. Don't forget anything, don't archive,
 
 End with `pstore sleep-end --content <the record>`: a line saying what the night was, each change as
 `#old → #new: what was dropped`, and each proposal as a command a waking session can run, with its reason.
+If you propose nothing, the record says so in a line of its own, exactly `Proposals: none`: any other record
+is handed to a working session in the morning.
 The store appends its own log of the changes. The record is what the morning reads, so make it plain.
 """
 
@@ -2734,6 +2754,7 @@ def sleep_pass(argv):
     if code != 0:
         print(f"no sleep pass tonight: {err.strip() or 'the store did not answer'}")
         return 1
+    before = newest_sleep_record()
     worklist = store("sleep-list", timeout=300)
     in_scope = (worklist.rsplit("ids for joining use counts", 1)[-1]).split()
     since = datetime.now(timezone.utc).timestamp() - 30 * 86400
@@ -2771,7 +2792,98 @@ def sleep_pass(argv):
         store("sleep-end", "--content", f"Sleep pass, {datetime.now():%Y-%m-%d}: the session ended without writing "
               f"its record (session {session[:8]}; its output is {out}). What the store logged follows.")
     print(f"sleep pass done: session {session[:8]}, prompt {prompt}, output {out}")
+    try:
+        sleep_handoff(before, session)
+    except Exception as e:  # printed in the unit's output, never retried in a loop (issue #67)
+        print(f"the sleep handoff failed: {e!r}")
     return 0
+
+
+SLEEP_SUBJECT = "sleep-handoff"
+SLEEP_HANDED = "sleep-handed.json"  # the records already handed on, so a second run on one night adds nothing
+
+
+def newest_sleep_record():
+    """The id of the newest sleep/pass record, or None."""
+    code, out, _ = call_store("list", "--tag", "sleep/pass", "--limit", "1", quiet=True)
+    found = re.search(r"^\[#(\d+) \|", out, flags=re.M) if code == 0 else None
+    return found.group(1) if found else None
+
+
+def minutes_until(at, now=None):
+    """Minutes to the next local HH:MM; a time that has passed today is tomorrow's."""
+    now = now or datetime.now()
+    hour, minute = (int(x) for x in at.split(":"))
+    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if target <= now:
+        target += timedelta(days=1)
+    return (target - now).total_seconds() / 60
+
+
+def sleep_handoff(before, night, home=None):
+    """Issue #67: a pass's proposals reach a tracked list, not only the next night's pass. The night's record, if one
+    was written and it doesn't say `Proposals: none`, goes to the work inbox by its id alone (Arden's condition 2), and
+    to the one live claim for SLEEP_SUBJECT: a new open claim with a wake at PERSISTENCE_SLEEP_HANDOFF_AT, or, while an
+    earlier night's claim is live, that claim widened to name this record too (condition 1, no stacking). The wake is
+    `alone`: run-due holds it while another work session runs (condition 3). Opt-in per self: unset, nothing is
+    handed on. Returns the claim, or None."""
+    import claims
+    import uuid
+
+    at = setting("PERSISTENCE_SLEEP_HANDOFF_AT", "")
+    if not at:
+        return None
+    record = newest_sleep_record()
+    if not record or record == before:
+        print("sleep handoff: this pass wrote no record, so nothing is handed on")
+        return None
+    handed_file = STATE / SLEEP_HANDED
+    try:
+        handed = json.loads(handed_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        handed = []
+    if record in handed:
+        return None
+    code, text, err = call_store("show", record, quiet=True)
+    if code != 0:
+        print(f"sleep handoff: record #{record} could not be read, so it is not handed on: {err.strip()}")
+        return None
+    if re.search(r"^\s*Proposals:\s*none\.?\s*$", text, flags=re.M | re.I):
+        print(f"sleep handoff: record #{record} proposes nothing")
+        return None
+    c = claims.Claims(STATE, home=home)
+    live = c.live_for(SLEEP_SUBJECT)
+    if live:
+        claim = live[0]
+        named = re.findall(r"#(\d+)", claim["task"].split(":", 1)[0])
+        claim = c.amend(claim["id"], sleep_task([*named, record]), added=record)
+        print(f"sleep handoff: record #{record} joins live claim {claim['id']} ({claim['status']})")
+    else:
+        try:
+            minutes = minutes_until(at)
+        except ValueError:
+            print(f"sleep handoff: PERSISTENCE_SLEEP_HANDOFF_AT is {at!r}, not HH:MM, so the wake is set for now")
+            minutes = 1
+        work = (Path.home() / "work") if (Path.home() / "work").is_dir() else Path.home()
+        task = sleep_task([record])
+        handoff = dict.fromkeys(TASK_FIELDS)
+        handoff.update(task=task, origin_session=night)
+        claim, item = set_handoff({"in": minutes, "reason": task, "session": str(uuid.uuid4()), "work": True,
+                                   "cwd": str(work), "handoff": handoff, "subject": SLEEP_SUBJECT, "alone": True,
+                                   "origin": "sleep"}, home=home)
+        print(f"sleep handoff: record #{record}, claim {claim['id']}, wake at {at}")
+    send_command(["work", f"Sleep record #{record}: its proposals are for the sleep handoff claim."])
+    STATE.mkdir(parents=True, exist_ok=True)
+    handed_file.write_text(json.dumps((handed + [record])[-100:]), encoding="utf-8")
+    return claim
+
+
+def sleep_task(records):
+    """The handoff claim's task: ids and fixed words, never a record's text."""
+    ids = ", ".join(f"#{r}" for r in dict.fromkeys(records))
+    return (f"Sleep records {ids}: run or drop each proposal in them, read from the store (`pstore show <id>`), "
+            f"oldest first; drafts of one fragment from overlapping nights are read together and one is run. "
+            f"Post what was dropped and why.")
 
 
 def alive(pid):

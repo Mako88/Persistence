@@ -9,6 +9,18 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-16 — Sleep passes hand their proposals to a working session (#67)
+
+- **`hook.py sleep` hands the night's record on.** When `PERSISTENCE_SLEEP_HANDOFF_AT=HH:MM` is set, a record that
+  doesn't say `Proposals: none` goes to the work inbox by its id alone, and to the one live `sleep-handoff` claim,
+  which gets a wake at that hour. While an earlier night's claim is still live, it's widened to name this record
+  (`Claims.amend`, by the harness, with the old task in the history entry), so no second claim is made. The wake is
+  `alone`: run-due holds it while another claimed work session is running. The launched session gets a sleep prompt
+  and the speaker "<owner> (my sleep pass's handoff)". The prompt asks for an exact `Proposals: none` line when
+  nothing is proposed. **Why:** proposals from five nights went unrun on Claude's store and five on Arden's, because
+  only the next night's pass read a record. Arden opted in with three conditions (issue #67 comment 6912449945): no
+  stacking, only the id in the inbox, one work session at a time. Each condition is a test. Off unless set.
+
 ## 2026-11-16 — A timeout the caller names reaches the store; sleep-list no longer cut at 12 s (#67)
 
 - **`call_store` keeps a named timeout.** A call that names no timeout is a hook's call and keeps the hook's budget:
