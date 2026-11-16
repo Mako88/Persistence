@@ -9,6 +9,15 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-16 — Concept extractor: `written` records what was passed; a state keeps its date
+
+- **What:** each `written` entry in runs.jsonl now carries the `as_of` and `supersedes` actually passed to
+  `concept add` (null when none). A fact marked both `lasting` and `is_state` now keeps its date: only a lasting
+  fact that isn't a state goes undated.
+- **Why:** Arden's review of #68 (5916452365). #62's adapter already prefers these fields when present, so the swap
+  fix and the lasting rule are read from the record rather than re-derived. The state case was one of two mutations
+  that survived their check: the prompt said a state keeps its date, but the code didn't enforce it.
+
 ## 2026-11-16 — Concept extractor v0 fixes from the judged #62 run
 
 - **What:** the extractor prompt goes to TEMPLATE_VERSION 3, and `write()` gets guards that don't depend on the model

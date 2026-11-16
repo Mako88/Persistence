@@ -306,8 +306,12 @@ class Extractor:
             if f.get("is_state") is True:
                 args.append("--state")
             # A lasting relation or trait has no start worth dating: the day it was said is not when it began (#14625 on #62).
-            if f.get("lasting") is not True and isinstance(f.get("as_of"), str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", f["as_of"]):
-                args += ["--as-of", f["as_of"]]
+            # A state keeps its date even if also marked lasting (Arden, review 5916452365).
+            as_of = f["as_of"] if isinstance(f.get("as_of"), str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", f["as_of"]) else None
+            if f.get("lasting") is True and f.get("is_state") is not True:
+                as_of = None
+            if as_of:
+                args += ["--as-of", as_of]
             if self.kind_of(subject):
                 args += ["--kind", self.kind_of(subject)]
             elif subject.lower() in kinds:
@@ -315,7 +319,9 @@ class Extractor:
             if i in replaces:
                 args += ["--supersedes", str(replaces[i])]
             said = self.store(*args)
-            written.append({"i": i, "subject": subject, "object": obj, "text": text, "said": said.strip()[:300]})
+            # as_of and supersedes as passed, so a reader of runs.jsonl needn't re-derive the lasting rule or the swap (#62's adapter).
+            written.append({"i": i, "subject": subject, "object": obj, "text": text, "as_of": as_of, "supersedes": replaces.get(i),
+                            "said": said.strip()[:300]})
         return written
 
     @property
