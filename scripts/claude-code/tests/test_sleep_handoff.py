@@ -7,6 +7,7 @@ Arden's three conditions (issue #67 comment 6912449945), each pinned here:
 Opt-in per self: with PERSISTENCE_SLEEP_HANDOFF_AT unset, nothing is handed on."""
 import os
 import re
+import unittest
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -266,3 +267,7 @@ class SleepHandoff(Base):
         self.assertNotIn("room session came due", call["prompt"])
         self.assertIn("sleep pass", call["env"]["PERSISTENCE_SPEAKER"])
 
+
+
+if __name__ == "__main__":
+    unittest.main()

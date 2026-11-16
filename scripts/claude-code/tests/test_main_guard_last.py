@@ -30,6 +30,12 @@ class MainGuardLast(unittest.TestCase):
         late = {p.name: after_guard(p.read_text(encoding="utf-8")) for p in sorted(TESTS.glob("test_*.py"))}
         self.assertEqual({name: lines for name, lines in late.items() if lines}, {})
 
+    def test_every_test_file_has_a_main_guard(self):
+        # Without one, running the file as a script runs nothing (Arden's nit on #77: test_sleep_handoff.py).
+        bare = [p.name for p in sorted(TESTS.glob("test_*.py"))
+                if not any(is_main_guard(n) for n in ast.parse(p.read_text(encoding="utf-8")).body)]
+        self.assertEqual(bare, [])
+
     def test_the_check_sees_a_class_below_the_guard(self):
         self.assertEqual(after_guard('if __name__ == "__main__":\n    pass\n\n\nclass Late:\n    pass\n'), [5])
         self.assertEqual(after_guard('class Early:\n    pass\n\n\nif __name__ == "__main__":\n    pass\n'), [])

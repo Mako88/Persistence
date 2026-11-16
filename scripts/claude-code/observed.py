@@ -190,6 +190,27 @@ def prs_ack(obs, event, ctx):
 
 # --- deployed: installed hook files and the deployed store against main ---
 
+SHARED_STORE = Path("/opt/persistence/store")
+EXEC_PATH = re.compile(r"\bpath=(\S+)")
+
+
+def store_marker(ctx):
+    """The DEPLOYED marker of the build the store unit actually runs, and that build's folder when it isn't the shared
+    one. A drop-in can point the unit at its own build (a change approved for one account only), and then the shared
+    marker names a commit that isn't running: on 2026-11-16 it read '20 commits behind' for a store at main's code.
+    An explicit PERSISTENCE_OBSERVE_STORE_MARKER wins; a build without a marker is reported unknown, never the shared one."""
+    explicit = ctx.setting("PERSISTENCE_OBSERVE_STORE_MARKER", "")
+    if explicit:
+        return Path(explicit), None
+    unit = ctx.setting("PERSISTENCE_OBSERVE_STORE_UNIT", "")
+    if unit:
+        found = EXEC_PATH.search(ctx.run(["systemctl", "show", "-p", "ExecStart", unit], None, 5) or "")
+        if found:
+            build = Path(found.group(1)).parent
+            return build / "DEPLOYED", (build if build != SHARED_STORE else None)
+    return SHARED_STORE / "DEPLOYED", None
+
+
 def deployed(event, ctx):
     repo = os.path.expanduser(ctx.setting("PERSISTENCE_OBSERVE_REPO", "~/work/Persistence"))
     obs = Observation("deployed", ctx.now)
@@ -215,7 +236,7 @@ def deployed(event, ctx):
             out.append("hooks: " + "; ".join(filter(None, [
                 f"{', '.join(differ)} differ from main ({main[:7]})" if differ else "",
                 f"missing: {', '.join(missing)}" if missing else ""])))
-    marker = Path(ctx.setting("PERSISTENCE_OBSERVE_STORE_MARKER", "/opt/persistence/store/DEPLOYED"))
+    marker, build = store_marker(ctx)
     try:
         sha = marker.read_text(encoding="utf-8").split()[0]
     except (OSError, IndexError):
@@ -223,12 +244,13 @@ def deployed(event, ctx):
         sha = None
     if sha:
         behind = ctx.run(["git", "rev-list", "--count", f"{sha}..main"], repo).strip()
+        where = f" (own build {build.name})" if build else ""
         if not behind.isdigit():
-            out.append(f"store: deployed {sha[:7]}, not in {repo}'s history")
+            out.append(f"store: deployed {sha[:7]}{where}, not in {repo}'s history")
         elif behind == "0":
-            out.append(f"store: deployed {sha[:7]}, at main")
+            out.append(f"store: deployed {sha[:7]}{where}, at main")
         else:
-            out.append(f"store: deployed {sha[:7]}, {behind} commit{'s' if behind != '1' else ''} behind main ({main[:7]})")
+            out.append(f"store: deployed {sha[:7]}{where}, {behind} commit{'s' if behind != '1' else ''} behind main ({main[:7]})")
     return replace(obs, lines=tuple(out), status="unknown" if unknown else "ok", reason="; ".join(unknown))
 
 
