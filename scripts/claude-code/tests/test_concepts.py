@@ -608,6 +608,14 @@ class JudgedFixes(unittest.TestCase):
         self.assertTrue(all("over the cap" in s["why"] for s in rec["skipped"]))
         self.assertEqual([0, 1, 2, 3, 7], [w["i"] for w in rec["written"]])   # each written fact names its parsed index
 
+    def test_a_supersede_with_its_fields_swapped_is_read_the_only_way_it_makes_sense(self):
+        # Seen on #62's after-run: {"fact": 0, "by": 6} where 6 was the shown stale fact and 0 the new fact's index.
+        _, adds = self.run_answer([self.fact("approved #48")], supersedes=[{"fact": 0, "by": 40}])
+        self.assertEqual("40", adds[0][adds[0].index("--supersedes") + 1])
+        self.store.calls.clear()
+        _, adds = self.run_answer([self.fact("approved #48")], supersedes=[{"fact": 0, "by": 41}])   # 41 was never shown
+        self.assertNotIn("--supersedes", adds[0])
+
     def test_the_prompt_carries_the_judged_rules(self):
         self.run_answer([])
         p = self.prompts[0]

@@ -263,6 +263,8 @@ class Extractor:
                 old, by = int(s["fact"]), int(s["by"])
             except (KeyError, TypeError, ValueError):
                 continue
+            if old not in current_ids and by in current_ids and 0 <= old < len(facts):
+                old, by = by, old   # the fields swapped: {"fact": <index>, "by": <shown id>} (the stale #48 miss on #62)
             if old in current_ids:
                 replaces[by] = old
         if bare is None:
