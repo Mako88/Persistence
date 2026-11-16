@@ -9,6 +9,25 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-16 — Concept extractor v0 fixes from the judged #62 run
+
+- **What:** the extractor prompt goes to TEMPLATE_VERSION 3, and `write()` gets guards that don't depend on the model
+  following it. Each fact now carries `claim` (fact, proposal or instruction) and `lasting`. An `instruction`, meaning
+  a one-off order to a session, is logged in `skipped` and not written. A `proposal` is written only if its text says
+  it is one ("proposed", "asked", "plans", "may" and so on), so "my additions" can't become "Claude added". A
+  `lasting` relation or trait gets no `--as-of`, because the day it was said isn't when it began. The prompt says
+  `as_of` is when a thing became true, never the day it was said, and that a state keeps the date the fragment gives
+  it. It also tells the model to check every state in CURRENT FACTS for one the fragment ends. It defines the store's
+  "red test". At most `MAX_FACTS` (5) facts are written per fragment. A fact that supersedes a shown fact is kept
+  first, the rest go in the model's order, and the facts over the cap are logged in `skipped`. Each `written` entry
+  now names its parsed index `i`.
+- **Why:** Arden scored my blind judging of v0's 35 runs on my snapshot (PR 62 comment 6909448816). Precision failed:
+  16/283 = 5.7% of facts were not in the source or overstated, against a bar of 2%. Review load failed too: median
+  8, and still 7 counting only right facts, so the fix had to be a cap, not just cleanup. There were 6 real validity
+  errors, 11 not-durable one-off instructions from #19196, and the stale "#48 awaits review" was superseded in only
+  2 of 5 runs. Before/after on the same snapshot and harness are in the PR.
+- **Not here:** recall reaching the two split Ember concepts, and moving the "Emma" alias (#60), go in a separate PR.
+
 ## 2026-11-16 — Concept extractor: one name, two concepts (the Ember split, #60)
 
 - **What:** `state/concepts/ambiguous.json` lists a name that means more than one concept, such as Ember the peer self
