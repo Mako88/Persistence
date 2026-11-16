@@ -31,6 +31,7 @@ class HookBlock(unittest.TestCase):
         self.recall_reply = FOUND
         patches = [mock.patch.object(hook, "STATE", Path(self.tmp.name)),
                    mock.patch.object(hook, "store", side_effect=self.fake_store),
+                   mock.patch.object(hook, "call_store", side_effect=self.fake_call_store),
                    mock.patch.object(hook, "project", return_value="work"),
                    mock.patch.object(hook, "keep_soon", return_value=None),
                    mock.patch.object(hook, "cued", return_value=""),
@@ -48,6 +49,14 @@ class HookBlock(unittest.TestCase):
         if args[:2] == ("concept", "touched"):
             return BLOCK
         return self.recall_reply if args and args[0] == "recall" else ""
+
+    def fake_call_store(self, *args, stdin=None, **kw):
+        if "--ambiguous" in args and self.store_knows_ambiguous is not True:
+            self.calls.append((args, stdin))
+            return (1, "", "--ambiguous is not an option of any command.") if self.store_knows_ambiguous is False else (None, "", "")
+        return 0, self.fake_store(*args, stdin=stdin), ""
+
+    store_knows_ambiguous = True
 
     def run_recall(self, prompt=PROMPT):
         out = io.StringIO()
@@ -101,6 +110,27 @@ class HookBlock(unittest.TestCase):
             self.assertIn("\u27e6actions\u27e7", text)
         self.assertNotIn("~~~", shown)
         self.assertIn("\u27e6respond\u27e7hi\u27e6/respond\u27e7", shown)
+
+    def test_ambiguous_names_go_to_the_store_and_an_older_store_is_asked_without_them(self):
+        # #60: "Ember" in a message must reach Ember (peer) and Ember (John's daughter); the store does it with the
+        # names the extractor's ambiguous.json lists. Hook and store deploy separately, so a store that doesn't know
+        # --ambiguous yet (exit 1) still gets the plain question, and the block is not lost.
+        os.environ["PERSISTENCE_CONCEPTS"] = "1"
+        self.addCleanup(os.environ.pop, "PERSISTENCE_CONCEPTS", None)
+        self.assertIn(BLOCK, self.run_recall())
+        self.assertEqual([("concept", "touched", "--text", "-")], [a for a, _ in self.calls if a[:2] == ("concept", "touched")])
+        (Path(self.tmp.name) / "concepts").mkdir()
+        (Path(self.tmp.name) / "concepts" / "ambiguous.json").write_text(json.dumps(EMBERS))
+        for knows, asked, shown in ((True, 1, True), (False, 2, True), (None, 1, False)):
+            with self.subTest(store_knows_ambiguous=knows):
+                self.calls.clear()
+                self.store_knows_ambiguous = knows
+                self.assertEqual(shown, BLOCK in self.run_recall())
+                touched = [a for a, _ in self.calls if a[:2] == ("concept", "touched")]
+                self.assertEqual(asked, len(touched))
+                self.assertEqual(EMBERS, json.loads(touched[0][touched[0].index("--ambiguous") + 1]))
+                if asked == 2:
+                    self.assertNotIn("--ambiguous", touched[1])
 
     def test_a_turn_end_starts_the_extractor_only_when_on(self):
         with mock.patch.object(hook.subprocess, "Popen") as popen, mock.patch.object(hook, "remote", return_value=None):
@@ -411,13 +441,25 @@ class Ambiguous(unittest.TestCase):
         self.assertEqual("Ember (peer)", next(s["name"] for s in json.loads(
             (Path(self.tmp.name) / "concepts" / "runs.jsonl").read_text().splitlines()[0])["shown"] if s["id"] == 90))
 
+    @staticmethod
+    def confirming(answer, readings=None):
+        """`answer` to the extractor's prompt; to a referent check, the referent `readings` gives for the fact's text
+        (a picture is the daughter's, a review the peer's, by default)."""
+        readings = readings or {"picture": "Ember (John's daughter)", "PR #48": "Ember (peer)"}
+        def call(prompt):
+            if "CANDIDATES" not in prompt:
+                return answer
+            fact = prompt.split("THE EXTRACTOR'S FACT: ")[1].split("\n")[0]
+            return json.dumps({"referent": next((r for k, r in readings.items() if k in fact), "unsure"), "why": "the fragment says"})
+        return call
+
     def test_a_fact_under_the_bare_name_is_not_written(self):
         answer = json.dumps({"concepts": [], "facts": [
             {"subject": "Ember", "text": "reviewed PR #48", "object": None},
             {"subject": "John", "text": "was shown a picture", "object": "ember"},
             {"subject": "Ember (peer)", "text": "reviewed PR #48", "object": None},
             {"subject": "Ember (John's daughter)", "text": "drew a picture", "object": None}], "supersedes": []})
-        x = self.extractor(answer)
+        x = self.extractor(self.confirming(answer))
         x.start(0)
         self.assertEqual(["#5: 2 written"], x.catch_up(limit=1))
         self.assertEqual(["Ember (peer)", "Ember (John's daughter)"], [a[2] for a in self.store.adds()])
@@ -488,7 +530,7 @@ class Ambiguous(unittest.TestCase):
             {"subject": "Emma", "text": "drew a picture", "object": None},
             {"subject": "John", "text": "was shown a picture by", "object": "EMMA"},
             {"subject": "Ember (John's daughter)", "text": "drew a picture", "object": None}], "supersedes": []})
-        x = self.extractor(answer)
+        x = self.extractor(self.confirming(answer))
         x.start(0)
         self.assertEqual(["#5: 1 written"], x.catch_up(limit=1))
         self.assertEqual(["Ember (John's daughter)"], [a[2] for a in self.store.adds()])
@@ -550,6 +592,88 @@ class Ambiguous(unittest.TestCase):
             self.assertEqual(0, concepts.main(["split", "Ember", "--runs", "1"], self.tmp.name, self.store))
         self.assertIn("1/1 agree", out.getvalue())
         self.assertEqual(2, concepts.main(["split", "Ember", "--runs", "0"], self.tmp.name, self.store))
+
+    def test_a_fact_under_the_wrong_referent_is_asked_again_blind_and_not_written(self):
+        # Arden's #68 after-run, #14625 rep 2: the daughter's relayed requests filed under the peer. The check is asked
+        # with the bare name where the pick was, so the extractor's choice can't lead it; only the same referent writes.
+        self.store.fragments[0]["content"] = ("John's daughter is Ember. Her minecraft-mods requests went through the relay: "
+                                              "\"the coolest piece of persistence working I've ever seen.\"")
+        answer = json.dumps({"concepts": [], "facts": [
+            {"subject": "John", "text": "said Ember's relayed persistence working was the coolest", "object": "Ember (peer)"},
+            {"subject": "Ember (John's daughter)", "text": "is John's daughter", "object": None},
+            {"subject": "John", "text": "saw persistence working", "object": None}], "supersedes": []})
+        x = self.extractor(self.confirming(answer, {"relayed": "Ember (John's daughter)", "daughter": "Ember (John's daughter)"}))
+        x.start(0)
+        self.assertEqual(["#5: 2 written"], x.catch_up(limit=1))
+        self.assertEqual(["Ember (John's daughter)", "John"], [a[2] for a in self.store.adds()])
+        checks = [p for p in self.prompts if "CANDIDATES" in p]
+        self.assertEqual(2, len(checks))                                                # only facts that name a referent
+        self.assertIn("THE EXTRACTOR'S FACT: John -> Ember: said Ember's relayed", checks[0])   # blind to the pick
+        self.assertNotIn("Ember (peer)", checks[0].split("THE EXTRACTOR'S FACT: ")[1])
+        self.assertIn("FRAGMENT #5:\nJohn's daughter is Ember. Her minecraft-mods requests", checks[0])   # the fragment decides
+        self.assertIn('"my" (my store, my session) are Claude, never Ember', checks[0])   # the owner, not the peer
+        self.assertIn("THE EXTRACTOR'S FACT: Ember -> -: is John's daughter", checks[1])
+        rec = json.loads((Path(self.tmp.name) / "concepts" / "runs.jsonl").read_text().splitlines()[0])
+        self.assertEqual("referent not confirmed: filed under 'Ember (peer)', asked again: Ember (John's daughter) 1", rec["skipped"][0]["why"])
+        self.assertEqual([False, True], [c["confirmed"] for c in rec["referent_checks"]])
+
+    def test_a_referent_is_confirmed_only_when_every_check_names_it(self):
+        answer = json.dumps({"concepts": [], "facts": [{"subject": "Ember (peer)", "text": "reviewed PR #48", "object": None}], "supersedes": []})
+        for votes, written in ((["Ember (peer)"] * 3, 1), (["Ember (peer)", "unsure", "Ember (peer)"], 0),
+                               (["Ember (peer)", "Ember (peer)", "not json"], 0)):
+            with self.subTest(votes=votes):
+                self.store.calls.clear()
+                (Path(self.tmp.name) / "concepts" / "runs.jsonl").unlink(missing_ok=True)
+                it = iter(votes)
+                def call(prompt):
+                    if "CANDIDATES" not in prompt:
+                        return answer
+                    v = next(it)
+                    return v if v == "not json" else json.dumps({"referent": v})
+                x = concepts.Extractor(self.tmp.name, self.store, call=call, owner="Claude", ambiguous=EMBERS, confirm_runs=3)
+                x.start(0)
+                self.assertEqual([f"#5: {written} written"], x.catch_up(limit=1))
+
+    def test_no_referent_check_without_an_ambiguous_name_in_play(self):
+        answer = json.dumps({"concepts": [], "facts": [{"subject": "Ember (peer)", "text": "reviewed PR #48", "object": None}], "supersedes": []})
+        x = self.extractor(answer, ambiguous={})
+        x.start(0)
+        self.assertEqual(["#5: 1 written"], x.catch_up(limit=1))
+        self.assertEqual(1, len(self.prompts))
+        self.assertNotIn("referent_checks", json.loads((Path(self.tmp.name) / "concepts" / "runs.jsonl").read_text().splitlines()[0]))
+
+    def test_split_a_move_the_store_refuses_is_not_recorded_as_proposed(self):
+        # Arden's surviving mutation on #66 (review 5915708277): `proposed = True` whatever the store said. The CLI
+        # answers "" when it refused or could not run; that move must be asked again next time, and say so now.
+        refusing = self.store
+        def store(*args, stdin=None, **kw):
+            return "" if args[:2] == ("concept", "add") else refusing(*args, stdin=stdin, **kw)
+        x = concepts.Extractor(self.tmp.name, store, call=self.split_answer, owner="Claude", ambiguous=EMBERS)
+        done = x.split("Ember")
+        self.assertIn("#1: Ember (John's daughter), but the store refused", done)
+        recs = [json.loads(l) for l in (Path(self.tmp.name) / "concepts" / "splits.jsonl").read_text().splitlines()]
+        self.assertFalse(next(r for r in recs if r["fact"] == 1)["proposed"])
+        again = x.split("Ember")
+        self.assertFalse(any("already" in d for d in again), again)                  # asked again, not passed over
+
+    def test_a_fact_naming_an_alias_of_the_merged_concept_is_not_a_current_fact(self):
+        # Arden's other surviving mutation on #66: the filter on `touched`. A fact on another concept whose object is
+        # 'Emma' (an alias of the merged Ember) would reach CURRENT FACTS, inviting a supersede onto the merged line.
+        merged = self.store.MERGED
+        john = {"id": 4, "name": "John", "kind": "person", "confirmed": True, "spans": 1, "aliases": [], "facts": [
+            {"id": 30, "subject": "John", "object": "Emma", "text": "relayed a request from", "status": "active", "is_state": False, "as_of": None, "sources": [9]},
+            {"id": 31, "subject": "John", "object": None, "text": "dictates his messages", "status": "active", "is_state": False, "as_of": None, "sources": [9]}]}
+        inner = self.store
+        def store(*args, stdin=None, **kw):
+            if args[:2] == ("concept", "touched"):
+                return json.dumps([merged, john])
+            return inner(*args, stdin=stdin, **kw)
+        x = concepts.Extractor(self.tmp.name, store, call=lambda p: self.prompts.append(p) or "{}", owner="Claude", ambiguous=EMBERS)
+        x.start(0)
+        x.catch_up(limit=1)
+        current = self.prompts[0].split("CURRENT FACTS of concepts")[1].split("FRAGMENT #")[0]
+        self.assertIn("31: John -> -: dictates his messages", current)
+        self.assertNotIn("30:", current)
 
     def test_split_needs_the_name_to_be_listed_as_ambiguous(self):
         x = self.extractor(self.split_answer, ambiguous={})

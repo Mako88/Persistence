@@ -175,4 +175,91 @@ public sealed class ConceptRecallTests : IDisposable
         Assert.Contains($"\"sources\":[{source}]", json);
         Assert.Contains("\"name\":\"Ember\"", await store.ConceptListJsonAsync());
     }
+
+    private static readonly IReadOnlyDictionary<string, IReadOnlyList<FragmentStore.Referent>> Embers = FragmentStore.ParseAmbiguous("""
+        {"Ember": [
+          {"name": "Ember (peer)", "kind": "self", "cues": "the AI peer self with its own Persistence store; reviews PRs in the Discord room"},
+          {"name": "Ember (John's daughter)", "kind": "person", "cues": "John's daughter, a child; plays Minecraft and draws"}],
+         "Solo": [{"name": "only one"}]}
+        """);
+
+    /// <summary>The live store after #66's split (#60): the merged Ember, its alias Emma, and the two referents with their facts.</summary>
+    private async Task<(FragmentStore Store, long Peer, long Daughter)> SplitEmbersAsync(bool mergedKeepsAFact)
+    {
+        var store = await OpenAsync();
+        var src = await FragmentAsync(store, "Ember the peer reviewed PR #48. John's daughter Ember drew a picture.");
+        await store.ConceptAsync("Ember", "person");
+        await store.AddAliasAsync("Ember", "Emma", "a dictation mishearing");
+        var peer = await store.AddFactAsync("Ember (peer)", "reviewed PR #48", [src], kind: "self");
+        var daughter = await store.AddFactAsync("Ember (John's daughter)", "drew a picture", [src], kind: "person");
+        if (mergedKeepsAFact)
+        {
+            await store.AddFactAsync("Ember", "was named in the relay", [src]);
+        }
+
+        return (store, peer.Id, daughter.Id);
+    }
+
+    [Fact]
+    public async Task An_ambiguous_name_reaches_each_concept_it_means_ranked_by_the_cues_the_text_uses()
+    {
+        // #60 live check: "John's daughter Ember was playing Minecraft" reached only the merged Ember, whose facts had moved.
+        var (store, peer, daughter) = await SplitEmbersAsync(mergedKeepsAFact: false);
+
+        var block = await store.ConceptBlockAsync("John's daughter Ember was playing Minecraft", ambiguous: Embers);
+        Assert.Contains($"#{daughter} drew a picture", block);
+        Assert.Contains($"#{peer} reviewed PR #48", block);
+        Assert.True(block.IndexOf("Ember (John's daughter) (", StringComparison.Ordinal) < block.IndexOf("Ember (peer) (", StringComparison.Ordinal), block);
+        Assert.Contains("Ember (John's daughter) (kind unconfirmed; 'Ember' may mean this or Ember (peer)): ", block);
+        Assert.DoesNotContain("\n\nEmber (kind", block);                 // the merged concept has nothing left to say
+
+        var other = await store.ConceptBlockAsync("Ember the peer reviewed the PR in the room", ambiguous: Embers);
+        Assert.True(other.IndexOf("Ember (peer) (", StringComparison.Ordinal) < other.IndexOf("Ember (John's daughter) (", StringComparison.Ordinal), other);
+
+        // An alias of the merged concept means the same two.
+        Assert.Contains($"#{daughter} drew a picture", await store.ConceptBlockAsync("Emma drew again", ambiguous: Embers));
+    }
+
+    [Fact]
+    public async Task Without_the_ambiguous_names_recall_is_unchanged()
+    {
+        var (store, _, daughter) = await SplitEmbersAsync(mergedKeepsAFact: true);
+        var block = await store.ConceptBlockAsync("John's daughter Ember was playing Minecraft");
+        Assert.Contains("\n\nEmber (kind unconfirmed; aka Emma): ", block);
+        Assert.DoesNotContain($"#{daughter} ", block);
+        Assert.DoesNotContain("may mean", block);
+    }
+
+    [Fact]
+    public async Task The_merged_concept_follows_its_referents_while_it_still_holds_a_fact()
+    {
+        var (store, _, _) = await SplitEmbersAsync(mergedKeepsAFact: true);
+        var block = await store.ConceptBlockAsync("Ember said hello", ambiguous: Embers);
+        var merged = block.IndexOf("\n\nEmber (kind unconfirmed; aka Emma; names more than one: Ember (peer), Ember (John's daughter)): ", StringComparison.Ordinal);
+        Assert.True(merged > block.IndexOf("Ember (peer) (", StringComparison.Ordinal) && merged > block.IndexOf("Ember (John's daughter) (", StringComparison.Ordinal), block);
+
+        var json = await store.ConceptsTouchedJsonAsync("Ember said hello", Embers);
+        Assert.Contains("\"name\":\"Ember (peer)\",", json);
+        Assert.Contains("\"via\":\"Ember\"", json);
+    }
+
+    [Fact]
+    public async Task A_moved_alias_reaches_only_the_concept_it_now_names()
+    {
+        var (store, peer, daughter) = await SplitEmbersAsync(mergedKeepsAFact: false);
+        await store.MoveAliasAsync("Ember (John's daughter)", "Emma", "Emma is dictation of the daughter's name");
+        var block = await store.ConceptBlockAsync("Emma drew again", ambiguous: Embers);
+        Assert.Contains($"#{daughter} drew a picture", block);
+        Assert.DoesNotContain($"#{peer} ", block);
+        Assert.Contains("Ember (John's daughter) (kind unconfirmed; aka Emma): ", block);   // reached by its own alias, not the ambiguous name
+    }
+
+    [Fact]
+    public void Ambiguous_names_need_two_referents_and_bad_json_is_a_usage_error()
+    {
+        Assert.Equal(["Ember"], Embers.Keys);
+        Assert.Throws<UsageException>(() => FragmentStore.ParseAmbiguous("{not json"));
+        Assert.Throws<UsageException>(() => FragmentStore.ParseAmbiguous("[1]"));
+        Assert.Empty(FragmentStore.ParseAmbiguous(null));
+    }
 }

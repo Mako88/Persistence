@@ -1397,7 +1397,27 @@ def concept_block(raw):
     if rc is not None and hasattr(rc, "recall_query"):
         stripped = rc.recall_query(raw)
         query = stripped if stripped.strip() else query
-    return store("concept", "touched", "--text", "-", stdin=query, cold=False).strip()
+    args = ("concept", "touched", "--text", "-")
+    ambiguous = ambiguous_names()
+    if ambiguous:
+        # A name listed in state/concepts/ambiguous.json reaches each concept it means (#60): "Ember" in a message
+        # never spells "Ember (peer)". A store older than that answers 1 (an option it doesn't know): recall as before.
+        code, out, err = call_store(*args, "--ambiguous", json.dumps(ambiguous), stdin=query, cold=False, quiet=True)
+        if code == 0:
+            return out.strip()
+        if code != 1:
+            if code is not None:
+                print(f"persistence hook: concept touched failed: {err.strip()}", file=sys.stderr)
+            return ""
+    return store(*args, stdin=query, cold=False).strip()
+
+
+def ambiguous_names():
+    """The extractor's state/concepts/ambiguous.json, read as concepts.py reads it: names with two or more referents."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import concepts
+
+    return concepts.load_ambiguous(STATE / "concepts" / "ambiguous.json")
 
 
 def start_concept_catch_up():
