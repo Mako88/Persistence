@@ -57,7 +57,7 @@ public interface IConceptRepository
     /// status: in one transaction, so a fact never stands without its sources.
     /// </summary>
     Task<long> AddFactAsync(long subjectId, long? objectId, string text, bool isState, string? asOfUtc,
-        string extractedBy, IReadOnlyCollection<long> sources, string status, long? supersedes);
+        string extractedBy, IReadOnlyCollection<long> sources, string status, long? supersedes, string? flag = null);
 
     Task<FactRow?> GetFactAsync(long id);
 

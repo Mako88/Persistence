@@ -294,6 +294,7 @@ internal sealed partial class FragmentStore
 
     private async Task<string> ConceptChunkAsync(Touched t, int facts, IReadOnlyDictionary<long, string> names, int snippet)
     {
+        var flags = await OpenFlagsByFactAsync();
         var c = t.Concept;
         var accepted = t.Facts.Count(f => f.Status == "active");
         var proposed = t.Facts.Count(f => f.Status == "proposed");
@@ -308,8 +309,9 @@ internal sealed partial class FragmentStore
         foreach (var f in t.Facts.Take(facts))
         {
             var sources = t.Sources.GetValueOrDefault(f.Id) ?? [];
-            var line = RenderFact(f, c.Id, names, sources);
-            sb.Append("\n  " + (line.Length > 200 ? line[..199] + "…" : line));
+            var open = flags.GetValueOrDefault(f.Id) ?? [];
+            var line = RenderFact(f, c.Id, names, sources, open);
+            sb.Append("\n  " + (line.Length > 200 ? line[..199] + "…" : line) + FlagLines(open));
             // The words in the fragment that back this fact, not its opening line: a fragment's first line is usually
             // its date and who asked (seen on the first live run, 2026-11-16).
             if (sources.Count > 0 && await EvidenceAsync(sources[0], f.Text, snippet) is { } evidence)

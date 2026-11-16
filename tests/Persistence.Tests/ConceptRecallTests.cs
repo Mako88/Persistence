@@ -157,6 +157,7 @@ public sealed class ConceptRecallTests : IDisposable
     [InlineData("list", "--after", "19300", "--limit", "4", "--json")]
     [InlineData("concept", "touched", "--text", "-", "--concepts", "2", "--facts", "1", "--budget", "900")]
     [InlineData("concept", "touched", "--json", "--text", "-")]
+    [InlineData("concept", "add", "Ember (peer)", "--fact", "x", "--source", "1", "--by", "extractor:abc", "--flag", "referent unsure: …")]
     public void The_options_the_extractor_and_the_hook_send_are_known(params string[] args)
     {
         // Every option is checked against CommandLine.Known; one missing there refuses the whole command (2026-11-16).
@@ -252,6 +253,58 @@ public sealed class ConceptRecallTests : IDisposable
         Assert.Contains($"#{daughter} drew a picture", block);
         Assert.DoesNotContain($"#{peer} ", block);
         Assert.Contains("Ember (John's daughter) (kind unconfirmed; aka Emma): ", block);   // reached by its own alias, not the ambiguous name
+    }
+
+    private const string Unsure = "referent unsure: the fragment's reading of 'Ember' was not unanimous (both, both, Ember (John's daughter)); it may mean Ember (John's daughter)";
+
+    [Fact]
+    public async Task A_fact_written_with_a_flag_is_shown_flagged_in_recall_until_the_self_decides()
+    {
+        // Arden's gate on #70 (review 5917252996): a referent fact from a fragment whose reading was not unanimous must
+        // not reach recall looking settled. The flag is written with the fact, in one call, not as a second step.
+        var (store, _, _) = await SplitEmbersAsync(mergedKeepsAFact: false);
+        var src = await FragmentAsync(store, "John relayed Ember's words: that was the coolest piece of persistence working.");
+        var (fact, _, _) = await store.AddFactWhyAsync("John", "said it was the coolest piece of persistence working", [src],
+            "Ember (peer)", extractedBy: "extractor:abc", flag: Unsure);
+
+        var block = await store.ConceptBlockAsync("Ember said hello", ambiguous: Embers);
+        Assert.Contains($"#{fact.Id} [flagged: referent unsure] John → Ember (peer): said it was", block);
+        Assert.Contains($"flagged by extractor:abc: {Unsure}", block);
+        Assert.Contains($"#{fact.Id} [flagged: referent unsure]", await store.ConceptShowAsync("Ember (peer)", false));
+
+        // Review shows flags first, and a flagged proposal once, under the flag.
+        var review = await store.ConceptReviewAsync();
+        Assert.True(review.IndexOf("Flagged (", StringComparison.Ordinal) < review.IndexOf("Proposed (", StringComparison.Ordinal), review);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(review, $@"#{fact.Id} "));
+
+        // The self's decision settles it: accepted, the flag is resolved and recall shows the fact plainly.
+        await store.AcceptFactAsync(fact.Id, "it was the peer after all");
+        Assert.DoesNotContain("[flagged", await store.ConceptBlockAsync("Ember said hello", ambiguous: Embers));
+    }
+
+    [Fact]
+    public async Task A_flagged_add_of_a_standing_proposal_flags_it_once()
+    {
+        var (store, peer, _) = await SplitEmbersAsync(mergedKeepsAFact: false);
+        var src = await FragmentAsync(store, "Ember reviewed PR #48.");
+        var (again, _, stood) = await store.AddFactWhyAsync("Ember (peer)", "reviewed PR #48", [src], extractedBy: "extractor:abc", flag: Unsure);
+        Assert.True(stood);
+        Assert.Equal(peer, again.Id);
+        _ = await store.AddFactWhyAsync("Ember (peer)", "reviewed PR #48", [src], extractedBy: "extractor:def", flag: Unsure);
+
+        var review = await store.ConceptReviewAsync();
+        Assert.Contains("Flagged (1):", review);
+        Assert.Contains($"#{peer} [flagged: referent unsure]", await store.ConceptShowAsync("Ember (peer)", false));
+    }
+
+    [Fact]
+    public async Task A_flagged_add_of_an_accepted_fact_leaves_the_self_s_decision_alone()
+    {
+        var (store, peer, _) = await SplitEmbersAsync(mergedKeepsAFact: false);
+        await store.AcceptFactAsync(peer, null);
+        var src = await FragmentAsync(store, "Ember reviewed PR #48.");
+        _ = await store.AddFactWhyAsync("Ember (peer)", "reviewed PR #48", [src], extractedBy: "extractor:abc", flag: Unsure);
+        Assert.DoesNotContain("Flagged", await store.ConceptReviewAsync());
     }
 
     [Fact]
