@@ -78,6 +78,19 @@ public class ConceptRepository : IConceptRepository
             "SELECT Id, Name, Kind, KindConfirmed, Summary FROM Concepts WHERE KindConfirmed <> 1 ORDER BY Name")).ToList();
     }
 
+    public async Task<IReadOnlyList<ConceptRow>> AllAsync()
+    {
+        await using var c = await SqliteConnectionString.OpenAsync(connectionString);
+        return (await c.QueryAsync<ConceptRow>("SELECT Id, Name, Kind, KindConfirmed, Summary FROM Concepts ORDER BY Name")).ToList();
+    }
+
+    public async Task<IReadOnlyList<(long ConceptId, string Label)>> LabelsAsync()
+    {
+        await using var c = await SqliteConnectionString.OpenAsync(connectionString);
+        return (await c.QueryAsync<(long, string)>(
+            "SELECT Id, Name FROM Concepts UNION ALL SELECT ConceptId, Alias FROM ConceptAliases")).ToList();
+    }
+
     public async Task<long> AddFactAsync(long subjectId, long? objectId, string text, bool isState, string? asOfUtc,
         string extractedBy, IReadOnlyCollection<long> sources, string status, long? supersedes)
     {

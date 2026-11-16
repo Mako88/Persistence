@@ -38,8 +38,9 @@ Claude), PERSISTENCE_STORE_EXE (the published persistence-store), PERSISTENCE_SE
 human's name; PERSISTENCE_SPEAKER, set in the environment of a session started on someone's behalf,
 names who actually typed its prompts instead), PERSISTENCE_CORE_CHARS (what a session start may inject
 of fragments; the rest is named by id), PERSISTENCE_CURATE_AT (tokens, default 500000; set autoCompactWindow above it),
-PERSISTENCE_RECALL_COUNT (default 3, 0 turns recall off), and PERSISTENCE_EMBEDDING_* for recall by
-meaning (without them recall is by exact words only).
+PERSISTENCE_RECALL_COUNT (default 3, 0 turns recall off), PERSISTENCE_EMBEDDING_* for recall by
+meaning (without them recall is by exact words only), and PERSISTENCE_CONCEPTS (off by default: concept-first
+recall v0, concepts.py; on, the concepts a message names come first and the extractor runs after each turn).
 
 Standard library only, Python 3.9+: hooks run under whatever `python` the shell finds.
 """
@@ -479,6 +480,7 @@ def keep(event):
             print(f"persistence hook: keep-conversation {said}", file=sys.stderr)
     if remote():
         pull_backup(remote())
+    start_concept_catch_up()
     return said
 
 
@@ -1379,6 +1381,38 @@ def recall_query(raw):
     return prompt if query == raw or not query.strip() else query
 
 
+def concepts_on():
+    return os.environ.get("PERSISTENCE_CONCEPTS", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def concept_block(raw):
+    """Concept-first recall v0 (scripts/claude-code/concepts.py), behind PERSISTENCE_CONCEPTS: the concepts the message
+    names, each with its current facts and the fragments behind them. Names are matched in the message alone: a room
+    wake is read back to its messages whatever PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE says, since the wrapper names
+    every self in the room (concept-store.md: alias matching never reads the preamble)."""
+    if not concepts_on():
+        return ""
+    query = raw.strip()
+    rc = roomcore()
+    if rc is not None and hasattr(rc, "recall_query"):
+        stripped = rc.recall_query(raw)
+        query = stripped if stripped.strip() else query
+    return store("concept", "touched", "--text", "-", stdin=query, cold=False).strip()
+
+
+def start_concept_catch_up():
+    """After a turn, with the switch on: the extractor reads what was saved since it last ran, detached, so the turn
+    never waits on a model. concepts.py holds a lock, so a turn that ends while one runs starts nothing new."""
+    if not concepts_on():
+        return
+    try:
+        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "concepts", "catch-up"], creationflags=BACKGROUND,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True,
+                         start_new_session=os.name != "nt")
+    except OSError as e:
+        print(f"persistence hook: the concept extractor did not start: {e}", file=sys.stderr)
+
+
 def recall(event):
     keep_soon(event)
     count = int(os.environ.get("PERSISTENCE_RECALL_COUNT", "3"))
@@ -1389,6 +1423,7 @@ def recall(event):
         return  # the harness reporting a background task or a subagent, not the human: nothing of theirs to associate with
     # A short message ("sounds good") matches past acknowledgements, not what it is about: no past utterances for it.
     reminded = cued(event, "prompt", prompt)
+    concepts = concept_block(event.get("prompt") or "")
     already = seen(event)
     query = recall_query(event.get("prompt") or "")
     since = STATE / f"{event.get('session_id', 'unknown')}.since"
@@ -1417,12 +1452,15 @@ def recall(event):
             lines.append(f"Recall found nothing new for this message. {words_only.group(1)}")
         elif words_only:
             lines.append(words_only.group(1))
-        if lines:
-            print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": " ".join(lines)}}))
+        if lines or concepts:
+            text = (concepts + "\n\n" if concepts else "") + " ".join(lines)
+            print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": text.strip()[:CAP]}}))
         return
     seen(event, add=ids)
     record_shown(event, "recall", ids)
-    text = ("Cued by this message (a reminder you set for words like these):\n\n" + reminded + "\n\n" if reminded else "") + (
+    # Concepts first (John, room 1571675418992582787: "concept front and center with fragment evidence"); the block
+    # is bounded by the store (concept-usefulness-contract.md §2), so recall below keeps its own room.
+    text = (concepts + "\n\n" if concepts else "") + ("Cued by this message (a reminder you set for words like these):\n\n" + reminded + "\n\n" if reminded else "") + (
         f"Recalled from your store, by association with this message (`{cli_name()} show <id>` "
         "reads the whole of one):\n\n" + found.strip() if ids else
         # A cue matched but recall found nothing: the words-only notice still goes out, never silent.
@@ -3104,6 +3142,11 @@ def main():
         import claims
 
         sys.exit(claims.main(sys.argv[2:]))
+    if sys.argv[1] == "concepts":  # `concepts start|catch-up|status`: concept-first recall's extractor (concepts.py)
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import concepts
+
+        sys.exit(concepts.main(sys.argv[2:], STATE, store))
     if sys.argv[1] == "run-due":  # a server's timer, every minute: wakes no live session took
         run_due()
         return

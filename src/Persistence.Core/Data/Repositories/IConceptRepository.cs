@@ -43,6 +43,12 @@ public interface IConceptRepository
 
     Task<IReadOnlyList<ConceptRow>> UnconfirmedAsync();
 
+    /// <summary>Every concept, by name.</summary>
+    Task<IReadOnlyList<ConceptRow>> AllAsync();
+
+    /// <summary>Every label a concept answers to: its name and each alias, for matching names in text.</summary>
+    Task<IReadOnlyList<(long ConceptId, string Label)>> LabelsAsync();
+
     /// <summary>
     /// Writes a fact pending, then its sources, then sets its RecordedAt to the latest source's date and its
     /// status: in one transaction, so a fact never stands without its sources.

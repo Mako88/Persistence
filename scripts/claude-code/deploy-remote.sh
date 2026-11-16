@@ -79,7 +79,7 @@ tar -czf "$work/store.tgz" -C "$work/pub" .
 # ~/.claude/persistence. A Codex self (Ember) keeps its hook and state under ~/.codex/persistence and runs no
 # persistence-heartbeat@ unit, so naming one would install files and seed a ledger-since nothing of theirs reads; their
 # files change through them (#14953).
-py=(hook.py coordination.py claims.py cwd_exec.py run_line.py observed.py heartbeat.py)
+py=(hook.py coordination.py claims.py cwd_exec.py run_line.py observed.py heartbeat.py concepts.py)
 # Each run stages in its own new directory (mkdir fails if it exists), so a run refused at the lock can't have
 # overwritten what the running one copied.
 stage=/tmp/persistence-deploy.$claim.$$
