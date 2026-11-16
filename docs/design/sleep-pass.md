@@ -116,3 +116,14 @@ fragments. Both are in the worklist and the prompt.
 - **The first worklist on my store** shows why rule 7 matters. 56 of the 58 fragments in scope were never
   recalled in 30 days, and most of them are in the core, where recall never needs to bring them.
 
+- **Proposals are handed on (issue #67, 2026-11-16).** Five nights of proposals went unrun on Claude's store and
+  five on Arden's, because only the next night's pass read a record. With `PERSISTENCE_SLEEP_HANDOFF_AT=HH:MM` set
+  (env or settings.json; unset, nothing is handed on, so each self opts in), the runner takes the record
+  `sleep-begin` wrote (its id is in begin's reply; `sleep-end` rewrites that same fragment) and, once it is closed
+  and doesn't say `Proposals: none` (the prompt asks for that exact line), hands it on. Not "the newest record
+  after the pass": that is already tonight's from begin, so comparing it with the newest before handed nothing on
+  (Arden's review of #73). The work inbox gets `Sleep record #<id>` (the id only, never
+  the commands), and a claim with subject `sleep-handoff` gets a wake at that hour. Arden's three conditions, each
+  pinned by a test: a night whose earlier handoff is still live joins that claim (`amend`, old task kept in the
+  history), so there's no second one; the inbox holds only the id; and the wake is `alone`, so run-due holds it
+  while any other claimed work session is running.
