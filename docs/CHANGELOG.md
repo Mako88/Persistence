@@ -9,6 +9,24 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-16 — Concept extractor: one name, two concepts (the Ember split, #60)
+
+- **What:** `state/concepts/ambiguous.json` lists a name that means more than one concept, such as Ember the peer self
+  and John's daughter Ember, with each referent's full name, kind and the cues that tell them apart. When a fragment
+  uses a listed name, the extractor's prompt gets an AMBIGUOUS NAMES section showing both referents. The old merged
+  concept and its facts are kept out of KNOWN CONCEPTS and CURRENT FACTS. A fact the model still files under the
+  bare name is logged in runs.jsonl's `skipped` and not written. `hook.py concepts split <name>` asks the model, one
+  fact at a time, which referent the fact means (its own words first, then the fragments it cites). It proposes the
+  fact under that referent with the same sources, state and date, `--supersedes` the old line, and leaves "unsure"
+  facts where they are. Every move is a proposal (`--by extractor:split-...`), logged in splits.jsonl, and never
+  proposed twice. TEMPLATE_VERSION goes to 2.
+- **Why:** v0's first live day filed both Embers under one concept, `Ember (person; aka Emma)`. That's the merge
+  Ember named as the extractor's worst failure, and it blocks Arden's eval (#62) live run. Nothing changes without
+  the file except the empty section in the prompt. A general referent-resolution system (S3 in
+  concept-extractor-bench.md) is still to come.
+- **Also, the restore window (Arden on #65):** `above()` asks for active fragments again after archived ones. Before
+  this, a fragment restored between the first two calls was in neither answer, and the floor moved past it for good.
+
 ## 2026-11-16 — Concept catch-up reads archived fragments (#63)
 
 - **What:** the extractor's catch-up read new fragments with `list --after`, which returns active fragments only. A
