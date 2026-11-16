@@ -211,6 +211,37 @@ internal sealed partial class FragmentStore
         return c;
     }
 
+    /// <summary>
+    /// Moves <paramref name="alias"/> from the concept that holds it to <paramref name="name"/>'s, with why: 'Emma' was
+    /// put on the merged Ember, and is a mishearing of John's daughter's name (#60). An alias is unique, so it can't be
+    /// kept on both; the move is appended to its note instead, as a fact's resolution keeps its history.
+    /// </summary>
+    public async Task<(ConceptRow To, ConceptRow From)> MoveAliasAsync(string name, string alias, string reason)
+    {
+        var to = await concepts.FindAsync(name) ?? throw new RefusedException($"There is no concept '{name}'.");
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            throw new UsageException("concept alias --move needs --reason <why>.");
+        }
+
+        var from = await concepts.FindAsync(alias);
+        if (from is null || string.Equals(from.Name, alias.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            throw new RefusedException(from is null ? $"'{alias}' is not an alias of any concept: `concept alias {name} {alias}` adds it."
+                : $"'{alias}' is a concept's own name, not an alias; only an alias moves.");
+        }
+
+        if (from.Id == to.Id)
+        {
+            throw new RefusedException($"'{alias}' already names {to.Name}.");
+        }
+
+        var note = (await concepts.AliasesAsync(from.Id)).First(a => string.Equals(a.Alias, alias.Trim(), StringComparison.OrdinalIgnoreCase)).Note;
+        var moved = $"moved from {OneLine(from.Name)} {Today()}: {OneLine(reason.Trim())}";
+        await concepts.MoveAliasAsync(from.Id, to.Id, alias, string.IsNullOrWhiteSpace(note) ? moved : $"{note}; {moved}");
+        return (to, from);
+    }
+
     /// <summary>Whether a fact was written by the automatic extractor (<c>--by extractor:...</c>), never by the self.</summary>
     public static bool FromExtractor(string? extractedBy) =>
         extractedBy is not null && extractedBy.StartsWith("extractor", StringComparison.OrdinalIgnoreCase);

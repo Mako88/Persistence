@@ -48,15 +48,77 @@ internal sealed partial class FragmentStore
         return n;
     }
 
-    /// <summary>A concept the text names, with how often (by any of its labels) and its standing facts, newest first.</summary>
+    /// <summary>
+    /// A concept the text names, with how often (by any of its labels) and its standing facts, newest first.
+    /// <paramref name="Via"/> is the ambiguous name it was reached through (one of the concepts that name means), and
+    /// <paramref name="Others"/> the other concepts it may mean; for the merged concept still named that way, Via is its
+    /// own name and Others every referent.
+    /// </summary>
     public sealed record Touched(ConceptRow Concept, int Spans, IReadOnlyList<string> Aliases, IReadOnlyList<FactRow> Facts,
-        IReadOnlyDictionary<long, IReadOnlyList<long>> Sources);
+        IReadOnlyDictionary<long, IReadOnlyList<long>> Sources, string? Via = null, IReadOnlyList<string>? Others = null, int Cues = 0);
+
+    /// <summary>One concept an ambiguous name may mean, and the words that tell it apart (the hook's ambiguous.json, #60).</summary>
+    public sealed record Referent(string Name, string? Cues);
+
+    /// <summary>
+    /// <c>{"Ember": [{"name": "Ember (peer)", "cues": "..."}, ...]}</c>, as the hook's state/concepts/ambiguous.json holds
+    /// it. Only a name with two or more referents counts, as concepts.load_ambiguous reads it.
+    /// </summary>
+    public static IReadOnlyDictionary<string, IReadOnlyList<Referent>> ParseAmbiguous(string? json)
+    {
+        var result = new Dictionary<string, IReadOnlyList<Referent>>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return result;
+        }
+
+        JsonDocument doc;
+        try
+        {
+            doc = JsonDocument.Parse(json);
+        }
+        catch (JsonException e)
+        {
+            throw new UsageException($"--ambiguous is not JSON: {e.Message}");
+        }
+
+        using var _ = doc;
+        if (doc.RootElement.ValueKind != JsonValueKind.Object)
+        {
+            throw new UsageException("--ambiguous takes a JSON object: {\"<name>\": [{\"name\": ..., \"cues\": ...}, ...]}.");
+        }
+
+        foreach (var label in doc.RootElement.EnumerateObject())
+        {
+            if (label.Value.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            var refs = label.Value.EnumerateArray()
+                .Where(r => r.ValueKind == JsonValueKind.Object && r.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String && n.GetString()!.Trim().Length > 0)
+                .Select(r => new Referent(r.GetProperty("name").GetString()!.Trim(),
+                    r.TryGetProperty("cues", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() : null))
+                .ToList();
+            if (refs.Count >= 2)
+            {
+                result[label.Name.Trim()] = refs;
+            }
+        }
+
+        return result;
+    }
 
     /// <summary>
     /// The concepts <paramref name="text"/> names, ranked by matched spans, then by when their newest standing fact
     /// was known, then by id, so the order is total (concept-usefulness-contract.md §2).
+    /// A name listed in <paramref name="ambiguous"/> means more than one concept (Ember the peer self; John's daughter
+    /// Ember: #60), and ordinary text says only the name, never "Ember (peer)". So each of its referents that exists is
+    /// reached with the name's spans (the name itself, and any alias the merged concept of that name still holds), ranked
+    /// among themselves by how many of their cue words the text uses: model-free, and both shown. The merged concept of
+    /// that name comes after them, and only while it still holds a standing fact.
     /// </summary>
-    public async Task<IReadOnlyList<Touched>> ConceptsTouchedAsync(string text)
+    public async Task<IReadOnlyList<Touched>> ConceptsTouchedAsync(string text, IReadOnlyDictionary<string, IReadOnlyList<Referent>>? ambiguous = null)
     {
         var words = WordSequence(text);
         var spans = new Dictionary<long, int>();
@@ -66,6 +128,36 @@ internal sealed partial class FragmentStore
             if (n > 0)
             {
                 spans[id] = spans.GetValueOrDefault(id) + n;
+            }
+        }
+
+        var via = new Dictionary<long, (string Label, IReadOnlyList<string> Others, int Cues)>();
+        var mergedOf = new Dictionary<long, (string Label, IReadOnlyList<string> Referents)>();
+        foreach (var (label, refs) in ambiguous ?? new Dictionary<string, IReadOnlyList<Referent>>())
+        {
+            var merged = await concepts.FindAsync(label) is { } m && string.Equals(m.Name, label, StringComparison.OrdinalIgnoreCase) ? m : null;
+            var n = merged is not null ? spans.GetValueOrDefault(merged.Id) : Occurrences(words, label);
+            if (n == 0)
+            {
+                continue;
+            }
+
+            var named = WordSequence(label).ToHashSet();
+            var said = words.Where(w => w.Length > 3 && !named.Contains(w)).ToHashSet();
+            foreach (var r in refs)
+            {
+                if (await concepts.FindAsync(r.Name) is not { } c || !string.Equals(c.Name, r.Name, StringComparison.OrdinalIgnoreCase) || c.Id == merged?.Id)
+                {
+                    continue;
+                }
+
+                spans[c.Id] = spans.GetValueOrDefault(c.Id) + n;
+                via[c.Id] = (label, refs.Where(o => o != r).Select(o => o.Name).ToList(), WordSequence(r.Cues ?? "").Where(said.Contains).Distinct().Count());
+            }
+
+            if (merged is not null)
+            {
+                mergedOf[merged.Id] = (merged.Name, refs.Select(r => r.Name).ToList());
             }
         }
 
@@ -80,12 +172,30 @@ internal sealed partial class FragmentStore
             // Accepted facts before proposals, each newest-known first: the self's word outranks the extractor's.
             var facts = (await concepts.FactsOfAsync(id, history: false))
                 .OrderBy(f => f.Status == "active" ? 0 : 1).ThenByDescending(f => f.RecordedAtUtc).ThenByDescending(f => f.Id).ToList();
-            touched.Add(new Touched(c, n, (await concepts.AliasesAsync(id)).Select(a => a.Alias).ToList(), facts,
-                await concepts.SourcesAsync(facts.Select(f => f.Id).ToList())));
+            var aliases = (await concepts.AliasesAsync(id)).Select(a => a.Alias).ToList();
+            var sources = await concepts.SourcesAsync(facts.Select(f => f.Id).ToList());
+            if (mergedOf.TryGetValue(id, out var m))
+            {
+                // Its facts are the ones split left on it (unsure, or about both); with none, its name says nothing.
+                if (facts.Count > 0)
+                {
+                    touched.Add(new Touched(c, n, aliases, facts, sources, m.Label, m.Referents));
+                }
+            }
+            else if (via.TryGetValue(id, out var v))
+            {
+                touched.Add(new Touched(c, n, aliases, facts, sources, v.Label, v.Others, v.Cues));
+            }
+            else
+            {
+                touched.Add(new Touched(c, n, aliases, facts, sources));
+            }
         }
 
         return touched
             .OrderByDescending(t => t.Spans)
+            .ThenBy(t => mergedOf.ContainsKey(t.Concept.Id) ? 1 : 0)
+            .ThenByDescending(t => t.Cues)
             .ThenByDescending(t => t.Facts.Select(f => f.RecordedAtUtc).Max() ?? "")
             .ThenBy(t => t.Concept.Id)
             .ToList();
@@ -98,9 +208,10 @@ internal sealed partial class FragmentStore
     /// fragment, not something the self has accepted (Ember's first danger: extraction shown as truth). Empty when the
     /// text names no concept.
     /// </summary>
-    public async Task<string> ConceptBlockAsync(string text, int maxConcepts = 5, int factsEach = 3, int budget = ConceptBudget, int snippet = 140)
+    public async Task<string> ConceptBlockAsync(string text, int maxConcepts = 5, int factsEach = 3, int budget = ConceptBudget, int snippet = 140,
+        IReadOnlyDictionary<string, IReadOnlyList<Referent>>? ambiguous = null)
     {
-        var touched = await ConceptsTouchedAsync(text);
+        var touched = await ConceptsTouchedAsync(text, ambiguous);
         if (touched.Count == 0)
         {
             return "";
@@ -188,7 +299,11 @@ internal sealed partial class FragmentStore
         var proposed = t.Facts.Count(f => f.Status == "proposed");
         var fragments = t.Sources.Values.SelectMany(s => s).Distinct().Count();
         var kind = c.Confirmed ? c.Kind : "kind unconfirmed";
-        var sb = new StringBuilder($"\n\n{OneLine(c.Name)} ({kind}{(t.Aliases.Count > 0 ? "; aka " + string.Join(", ", t.Aliases.Select(OneLine)) : "")}): ");
+        var ambiguity = t.Via is null || t.Others is null ? ""
+            : string.Equals(t.Via, c.Name, StringComparison.OrdinalIgnoreCase)
+                ? $"; names more than one: {string.Join(", ", t.Others.Select(OneLine))}"
+                : $"; '{OneLine(t.Via)}' may mean this or {string.Join(" or ", t.Others.Select(OneLine))}";
+        var sb = new StringBuilder($"\n\n{OneLine(c.Name)} ({kind}{(t.Aliases.Count > 0 ? "; aka " + string.Join(", ", t.Aliases.Select(OneLine)) : "")}{ambiguity}): ");
         sb.Append(t.Facts.Count == 0 ? "no facts yet" : $"{accepted} accepted, {proposed} proposed, from {fragments} fragment{(fragments == 1 ? "" : "s")}");
         foreach (var f in t.Facts.Take(facts))
         {
@@ -270,13 +385,13 @@ internal sealed partial class FragmentStore
     }
 
     /// <summary>The concepts a text names and their standing facts, as JSON for the extractor's CURRENT FACTS.</summary>
-    public async Task<string> ConceptsTouchedJsonAsync(string text)
+    public async Task<string> ConceptsTouchedJsonAsync(string text, IReadOnlyDictionary<string, IReadOnlyList<Referent>>? ambiguous = null)
     {
         var names = new Dictionary<long, string>();
         async Task<string> Name(long id) =>
             names.TryGetValue(id, out var n) ? n : names[id] = (await concepts.GetAsync(id))?.Name ?? $"concept {id}";
         var result = new List<object>();
-        foreach (var t in await ConceptsTouchedAsync(text))
+        foreach (var t in await ConceptsTouchedAsync(text, ambiguous))
         {
             var facts = new List<object>();
             foreach (var f in t.Facts)
@@ -289,7 +404,7 @@ internal sealed partial class FragmentStore
                 });
             }
 
-            result.Add(new { id = t.Concept.Id, name = t.Concept.Name, kind = t.Concept.Kind, confirmed = t.Concept.Confirmed, spans = t.Spans, aliases = t.Aliases, facts });
+            result.Add(new { id = t.Concept.Id, name = t.Concept.Name, kind = t.Concept.Kind, confirmed = t.Concept.Confirmed, spans = t.Spans, aliases = t.Aliases, via = t.Via, facts });
         }
 
         return JsonSerializer.Serialize(result);

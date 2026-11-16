@@ -41,6 +41,9 @@ public interface IConceptRepository
 
     Task<IReadOnlyList<(string Alias, string? Note)>> AliasesAsync(long conceptId);
 
+    /// <summary>Moves an alias from one concept to another, its note replaced by <paramref name="note"/> (which carries the move).</summary>
+    Task MoveAliasAsync(long fromConceptId, long toConceptId, string alias, string note);
+
     Task<IReadOnlyList<ConceptRow>> UnconfirmedAsync();
 
     /// <summary>Every concept, by name.</summary>

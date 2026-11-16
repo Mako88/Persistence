@@ -9,6 +9,32 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-16 — Split Embers reach recall; alias --move; the extractor checks a referent before filing under it (#60)
+
+- **Recall reaches each referent:** `concept touched --ambiguous <json>` (the extractor's state/concepts/ambiguous.json,
+  which the hook now passes). A name listed there reaches each concept it means, with the name's spans (its own and any
+  alias the merged concept still holds), ranked by how many of the referent's cue words the text uses, both shown and
+  each labelled "'Ember' may mean this or …". The merged concept of that name comes after them, and only while it still
+  holds a standing fact. **Why:** after #66's split, "Ember" in a message reached only the merged `Ember`, whose facts
+  had moved (issue #60 comment 6909105090). Hook and store deploy separately: a store that doesn't know `--ambiguous`
+  (exit 1) is asked again without it, so the block isn't lost in between.
+- **`concept alias <name> <alias> --move --reason <why>`** moves an alias from the concept holding it; the move is
+  appended to the alias's note (an alias is unique, so it can't stay on both). **Why:** 'Emma' is dictation of John's
+  daughter's name and sat on the merged Ember, and nothing could move it.
+- **The extractor checks a referent before filing under it.** When a fragment uses an ambiguous name and a fact is filed
+  under one of its referents, the fragment is first read as a whole (READ_PROMPT, 3 times): if every answer names one
+  referent, facts under it stand and facts under the other are dropped. Otherwise each fact is asked (CHECK_PROMPT),
+  blind to the pick, with the fragment deciding and "my" read as the owner; it's written only if every answer agrees.
+  Drops are logged in `skipped`; `referent_reading` and `referent_checks` go in runs.jsonl. **Why:** Arden's #68
+  after-run filed #14625's daughter under the peer, and gated rollout beyond Claude's account on #14625 ×20 with zero
+  severe. Measured (#62 harness at 5fd6a77, snapshot 0c157a74, store d44a423, Haiku, #14625 ×20 per arm): runs
+  with a fact filed under the peer: template 2 alone 1/20, template 3 alone **8/20**; with the check, 0/20 on both.
+  Two earlier versions of the check each let one through (1/20): split's prompt (the fact's words first), then a
+  per-fact prompt without the whole-fragment reading. The reading came out unanimous in only 1 of 40 runs ("both" is
+  common), so in most runs the per-fact check did the work. The margin behind "0 of 40" is thin.
+- **Tests for Arden's two surviving #66 mutations:** a split move the store refuses is not recorded as proposed (it is
+  asked again), and a fact naming an alias of the merged concept doesn't reach CURRENT FACTS.
+
 ## 2026-11-16 — Concept extractor: `written` records what was passed; a state keeps its date
 
 - **What:** each `written` entry in runs.jsonl now carries the `as_of` and `supersedes` actually passed to

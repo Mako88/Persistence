@@ -25,6 +25,10 @@ concept, a fact it still files under the bare name or such an alias (the store r
 the merged 'Ember': Arden, review 5915601823) is logged and not written, and `split <name>` asks the model, per fact of
 the old merged concept and --runs times over, which referent it means; only a unanimous answer is proposed, under that
 referent, superseding the old line on accept. Anything else stays put, listed as unsure or disagreed with the votes.
+A fact the extractor files under one of those referents, from a fragment that uses the name, is asked again (CHECK_PROMPT),
+blind to the pick (the bare name in its place) and with the fragment as evidence; it is written only if every
+answer names the same referent (#14625 on Arden's #68 run: the daughter's relay filed under the peer). The hook passes
+the same file to `concept touched --ambiguous`, so a message saying "Ember" reaches both referents.
 """
 import fcntl
 import hashlib
@@ -97,6 +101,35 @@ CITED FRAGMENTS:
 
 Answer with JSON only, no prose: {{"referent": "<one candidate's exact name, or unsure>", "why": "<one short sentence from the fragments>"}}"""
 
+# The extractor's referent check (#60): unlike split's question, the fact here is the extractor's fresh reading, the
+# thing being checked, so the fragment decides; and "my" in a fragment is its owner, not whoever is named near it
+# ("my store's message" read as the peer's store let #14625's daughter through on the first gate run).
+CHECK_PROMPT = """A self's memory store uses the name "{label}" for more than one concept. An extractor read the fragment below and wrote a fact that names "{label}". Decide from the fragment which concept "{label}" means in the part of the fragment the fact comes from. The fragment decides: the fact is the extractor's reading and may be wrong. The store's owner is "{owner}": in the fragment, "I", "me", "my" (my store, my session) are {owner}, never {label}. If the fragment does not settle which one, or the fact mixes both, answer unsure.
+
+CANDIDATES (name | kind | cues):
+{candidates}
+
+FRAGMENT #{fragment}:
+{content}
+
+THE EXTRACTOR'S FACT: {subject} -> {object}: {text}
+
+Answer with JSON only, no prose: {{"referent": "<one candidate's exact name, or unsure>", "why": "<one short sentence from the fragment>"}}"""
+
+# Asked first, about the whole fragment: most fragments use the name for one referent only, and that is an easier
+# question than one fact's, whose wording (the extractor's) can lead the answer (the second gate run, #14625).
+READ_PROMPT = """A self's memory store uses the name "{label}" for more than one concept. Read the fragment and say which concept "{label}" means in it. The store's owner is "{owner}": in the fragment, "I", "me", "my" (my store, my session) are {owner}, never {label}. Answer one candidate's exact name only if every use of "{label}" in the fragment means that one; "both" if it is used for more than one of them; "unsure" if the fragment does not settle it.
+
+CANDIDATES (name | kind | cues):
+{candidates}
+
+FRAGMENT #{fragment}:
+{content}
+
+Answer with JSON only, no prose: {{"referent": "<one candidate's exact name, both, or unsure>", "why": "<one short sentence from the fragment>"}}"""
+
+CHECK_SHA = hashlib.sha256((CHECK_PROMPT + READ_PROMPT).encode("utf-8")).hexdigest()
+
 
 def on():
     return os.environ.get("PERSISTENCE_CONCEPTS", "").strip().lower() in ("1", "true", "yes", "on")
@@ -106,13 +139,15 @@ class Extractor:
     """One self's extractor. `store` runs a store CLI command and returns its output (hook.store); `call` sends a
     prompt to the model and returns its text. Both are passed in so a test never starts a model or a store."""
 
-    def __init__(self, state_dir, store, call=None, owner=None, ambiguous=None, split_runs=3):
+    def __init__(self, state_dir, store, call=None, owner=None, ambiguous=None, split_runs=3, confirm_runs=1, read_runs=3):
         self.dir = Path(state_dir) / "concepts"
         self.store = store
         self.call = call or call_haiku
         self.owner = owner or os.environ.get("PERSISTENCE_PEER_NAME") or "Claude"
         self.ambiguous = load_ambiguous(self.dir / "ambiguous.json") if ambiguous is None else ambiguous
         self.split_runs = split_runs
+        self.confirm_runs = confirm_runs
+        self.read_runs = read_runs
 
     @property
     def floor_file(self):
@@ -207,7 +242,7 @@ class Extractor:
                               for t in touched for f in t["facts"]) or "(none)",
             id=frag["id"], type=frag.get("type"), date=(frag.get("created") or "")[:10], content=content)
         rec = {"run": run, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "fragment": frag["id"],
-               "model": MODEL, "template_version": TEMPLATE_VERSION, "template_sha256": TEMPLATE_SHA,
+               "model": MODEL, "template_version": TEMPLATE_VERSION, "template_sha256": TEMPLATE_SHA, "check_sha256": CHECK_SHA,
                "shown": [{"id": c["id"], "name": c["name"]} for c in shown], "written": []}
         t0 = time.time()
         try:
@@ -218,10 +253,74 @@ class Extractor:
             rec["error"] = f"{type(e).__name__}: {e}"
             rec["seconds"] = round(time.time() - t0, 1)
             return rec
-        rec["seconds"] = round(time.time() - t0, 1)
         rec["skipped"] = []
-        rec["written"] = self.write(frag["id"], rec["parsed"], run, {f["id"] for t in touched for f in t["facts"]}, rec["skipped"], bare)
+        # A fact filed under one referent of a name the fragment uses ambiguously is asked again, blind to that pick:
+        # #14625 rep 2 on Arden's #68 run filed the daughter's relay under the peer (#60).
+        referents = {r["name"].lower(): label for label in named for r in self.ambiguous[label]}
+        confirm = None
+        if referents:
+            rec["referent_checks"], rec["referent_reading"] = [], {}
+            confirm = lambda subject, obj, text: self.confirm_referent(subject, obj, text, referents, frag["id"], content,
+                                                                       rec["referent_checks"], rec["referent_reading"])
+        rec["written"] = self.write(frag["id"], rec["parsed"], run, {f["id"] for t in touched for f in t["facts"]}, rec["skipped"], bare, confirm)
+        rec["seconds"] = round(time.time() - t0, 1)
         return rec
+
+    def votes(self, prompt, refs, runs, extra=()):
+        """`runs` answers to `prompt`, each a candidate's exact name, one of `extra`, 'unsure' or 'error', with the whys."""
+        votes, whys = [], []
+        for _ in range(max(1, int(runs))):
+            try:
+                got = parse(self.call(prompt))
+                said = str(got.get("referent") or "").strip().lower()
+                votes.append(next((r["name"] for r in refs if r["name"].lower() == said), said if said in extra else "unsure"))
+                whys.append(one_line(str(got.get("why") or "")))
+            except Exception as e:
+                votes.append("error")
+                whys.append(f"{type(e).__name__}: {e}")
+        return votes, whys
+
+    def reading(self, label, fragment, content, readings):
+        """The one referent the fragment uses `label` for, when `read_runs` answers all name it; else None. Asked once
+        per fragment and label, kept in `readings` (runs.jsonl's referent_reading)."""
+        if label not in readings:
+            refs = self.ambiguous[label]
+            prompt = READ_PROMPT.format(label=label, owner=self.owner, fragment=fragment, content=content[:6000],
+                                        candidates="\n".join(f"{r['name']} | {r.get('kind', '?')} | {r.get('cues', '')}" for r in refs))
+            votes, whys = self.votes(prompt, refs, self.read_runs, extra=("both",))
+            one = votes[0] if len(set(votes)) == 1 and any(r["name"] == votes[0] for r in refs) else None
+            readings[label] = {"votes": votes, "whys": whys, "referent": one}
+        return readings[label]["referent"]
+
+    def confirm_referent(self, subject, obj, text, referents, fragment, content, checks, readings=None):
+        """None when the fact names no referent of an ambiguous name the fragment uses, or when every such referent is
+        confirmed; otherwise why it is not. Each referent in the fact is asked about `confirm_runs` times (CHECK_PROMPT),
+        the fact shown with the bare name in that place so the extractor's pick can't lead the answer, and the
+        fragment as its evidence. Only an answer naming the same referent every time confirms it: a different referent,
+        unsure or an error leaves the fact unwritten and logged, since a fact under the wrong person is the severe miss.
+        Before any of that, the fragment as a whole is asked which referent it means (READ_PROMPT): when every answer
+        names one, a fact under it stands and a fact under another is dropped with no per-fact question."""
+        readings = {} if readings is None else readings
+        for name in dict.fromkeys(n for n in (subject, obj) if n and n.lower() in referents):
+            label = referents[name.lower()]
+            refs = self.ambiguous[label]
+            whole = self.reading(label, fragment, content, readings)
+            if whole is not None:
+                if whole.lower() != name.lower():
+                    return f"referent not confirmed: filed under {name!r}, but the fragment means {whole!r} by {label!r}"
+                continue
+            prompt = CHECK_PROMPT.format(
+                label=label, owner=self.owner, candidates="\n".join(f"{r['name']} | {r.get('kind', '?')} | {r.get('cues', '')}" for r in refs),
+                subject=label if subject == name else subject, object=label if obj == name else (obj or "-"), text=text,
+                fragment=fragment, content=content[:6000])
+            check = {"subject": subject, "object": obj, "text": text, "referent": name}
+            check["votes"], check["whys"] = self.votes(prompt, refs, self.confirm_runs)
+            check["confirmed"] = all(v.lower() == name.lower() for v in check["votes"])
+            checks.append(check)
+            if not check["confirmed"]:
+                tally = ", ".join(f"{v} {check['votes'].count(v)}" for v in dict.fromkeys(check["votes"]))
+                return f"referent not confirmed: filed under {name!r}, asked again: {tally}"
+        return None
 
     def bare(self, known=None):
         """{lowercased name: its listed label} for every name that would file a fact on an ambiguous name's merged
@@ -250,7 +349,7 @@ class Extractor:
     def kind_of(self, name):
         return next((r.get("kind") for rs in self.ambiguous.values() for r in rs if r["name"].lower() == name.lower()), None)
 
-    def write(self, fragment, got, run, current_ids, skipped=None, bare=None):
+    def write(self, fragment, got, run, current_ids, skipped=None, bare=None, confirm=None):
         kinds = {}
         for c in got.get("concepts") or []:
             name = clean(c.get("name"))
@@ -291,6 +390,10 @@ class Extractor:
                 continue
             if claim == "proposal" and not PROPOSAL.search(text):   # 'my additions' as 'Claude added' (#19324 on #62)
                 log(subject, obj, text, "a proposal whose text states it as done")
+                continue
+            why = confirm(subject, obj, text) if confirm else None
+            if why:
+                log(subject, obj, text, why)
                 continue
             keep.append((i, f, subject, obj, text))
         # The cap (plan §4.4, review load median <= 5): a fact that supersedes one shown goes first, since a stale fact

@@ -64,6 +64,13 @@ public class ConceptRepository : IConceptRepository
             new { conceptId, alias = alias.Trim(), note });
     }
 
+    public async Task MoveAliasAsync(long fromConceptId, long toConceptId, string alias, string note)
+    {
+        await using var c = await SqliteConnectionString.OpenAsync(connectionString);
+        await c.ExecuteAsync("UPDATE ConceptAliases SET ConceptId = @toConceptId, Note = @note WHERE ConceptId = @fromConceptId AND Alias = @alias COLLATE NOCASE",
+            new { fromConceptId, toConceptId, alias = alias.Trim(), note });
+    }
+
     public async Task<IReadOnlyList<(string Alias, string? Note)>> AliasesAsync(long conceptId)
     {
         await using var c = await SqliteConnectionString.OpenAsync(connectionString);
