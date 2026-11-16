@@ -15,7 +15,8 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
   events later) against gold labels kept as ids, with bench plan revision 3's bars and counting rules: per store,
   exact counts, not measured never passes. Why: John asked us to build first, so the bench stopped being a gate and
   became the test (docs/design/concept-eval.md). On the six trial lines it catches the live Ember merge (3 of 3
-  severe) and a review load over the bar (median 7.5).
+  severe) and a review load over the bar (median 7.5). `run` finds gold fragments through v0's own
+  `Extractor.above()` and `replaced()` (#63), so it reads archived fragments as catch-up does.
 
 ## 2026-11-16 — Concept catch-up reads archived fragments (#63)
 

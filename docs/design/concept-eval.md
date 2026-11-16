@@ -83,11 +83,11 @@ peer as a second mention on #7148 ("Computer Ember") and #14754 (both Embers).
 - **Development:** the three trial fragments where Ember the peer is meant (#19161, #19182, #19324). They are
   development because I've seen their output.
 - **Held out, case G:** the stale "PR #48 awaiting review" state from #19182, which #19196 (Arden approved #48)
-  should supersede. Claude filled it in. #19196 and #14754 are **archived** inbox fragments, which `list` doesn't
-  return, so v0's catch-up never sees them and `run` can't either: both fail "every held-out instance ran", and
-  nothing in Claude's store would ever supersede the stale state. That is a v0 bug (Claude's issue/PR decides
-  whether archived inbox notes should be extracted at all); if the answer is no, these cases move to fragments v0
-  reads.
+  should supersede. Claude filled it in. #19196 and #14754 are **archived** inbox fragments. Before #64, v0's
+  catch-up read active fragments only, so it never saw them, and nothing in Claude's store could ever supersede the
+  stale state (#63). Since #64/#65, catch-up reads archived fragments too, except ones a later fragment replaced.
+  `run` finds each gold fragment through v0's own `Extractor.above()` and `replaced()`, never a copy of that logic, so
+  the eval reads exactly what v0 reads. A gold fragment v0 wouldn't read still fails "every held-out instance ran".
 
 A correction to revision 3: case A's example made "Emma" a mishearing of Computer Ember. Per #933 it was the
 daughter's name that was misheard.

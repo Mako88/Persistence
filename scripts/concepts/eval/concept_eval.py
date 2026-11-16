@@ -515,10 +515,12 @@ def sha256(path):
     return h.hexdigest()
 
 
-def fetch(store, fid):
-    """Fragment `fid` as v0's catch-up sees it (`list`), or None when `list` doesn't return it."""
-    listed = json.loads(store("list", "--after", str(fid - 1), "--limit", "1", "--json") or "[]")
-    return listed[0] if listed and listed[0]["id"] == fid else None
+def fetch(x, replaced, fid):
+    """Fragment `fid` as v0's catch-up reads it, through its own `Extractor.above()` and `replaced()`: active or archived,
+    unless a later fragment replaced it (#63). None when catch-up wouldn't read it. Never a copy of v0's listing, so the
+    eval can't drift from what v0 sees (the old copy here was active-only and missed #14754/#19196)."""
+    listed = x.above(fid - 1, 1)
+    return listed[0] if listed and listed[0]["id"] == fid and not replaced(listed[0]) else None
 
 
 FACT_ID = re.compile(r"(?:\): |Added: |nothing added: )#(\d+) ")
@@ -577,12 +579,13 @@ def run(gold, snapshot, exe, out, repeats, owner, call=None, store_for=None):
                     src.close()
                     store = (store_for or (lambda d: cli(exe, d)))(db)
                     x = concepts.Extractor(os.path.join(work, "state"), store, call=call, owner=owner)
-                    listed = fetch(store, fid)
+                    listed = fetch(x, concepts.replaced, fid)
                     if listed is None:
-                        print(f"{inst['id']}: fragment #{fid} not found in the snapshot (or not a type `list` returns)", file=sys.stderr)
+                        print(f"{inst['id']}: v0's catch-up wouldn't read fragment #{fid} (not in the snapshot, not a curated type, "
+                              "forgotten, or replaced by a later fragment)", file=sys.stderr)
                         break
                     # `given`: fragments extracted first on this same copy, so the instance sees their facts as current.
-                    given = [x.extract(g) for g in (fetch(store, int(gid)) for gid in inst.get("given") or []) if g]
+                    given = [x.extract(g) for g in (fetch(x, concepts.replaced, int(gid)) for gid in inst.get("given") or []) if g]
                     dates[str(fid)] = (listed.get("created") or "")[:10]
                     rec = x.extract(listed)
                     if inst.get("stale_fact"):

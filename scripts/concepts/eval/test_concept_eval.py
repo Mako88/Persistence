@@ -255,6 +255,42 @@ class Run(unittest.TestCase):
             self.assertTrue(ce.supersedes(bare, stale)["missed"])
             self.assertEqual(ce.supersedes(bare, stale)["found"], [])
 
+    def test_reads_what_v0_catch_up_reads_archived_too_but_not_replaced(self):
+        # #63/#64: v0 reads archived fragments (an inbox message is archived once shown) unless a later one replaced
+        # them; the eval has to see the same, or #14754/#19196 never run. The fake lists as the store does: one status.
+        frags = [{"id": 5, "content": "given", "type": "Personal", "status": "Archived", "supersededBy": None, "created": "2026-11-15T15:24:00Z"},
+                 {"id": 7, "content": "old view", "type": "Personal", "status": "Archived", "supersededBy": 8, "created": "2026-11-15T15:25:00Z"},
+                 {"id": 9, "content": "inbox", "type": "Personal", "status": "Archived", "supersededBy": None, "created": "2026-11-15T15:30:00Z"}]
+        prompts = []
+
+        def store_for(db):
+            def store(*args, stdin=None, **_):
+                if args[0] == "list":
+                    after, limit = int(args[args.index("--after") + 1]), int(args[args.index("--limit") + 1])
+                    wanted = "Archived" if "--archived" in args else "Active"
+                    return json.dumps([f for f in frags if f["id"] > after and f["status"] == wanted][:limit])
+                if args[:2] in (("concept", "list"), ("concept", "touched")):
+                    return "[]"
+                if args[:2] == ("concept", "add"):
+                    return "Proposed, waiting for `concept review`"
+                return ""
+            return store
+
+        def call(prompt):
+            prompts.append(prompt)
+            return json.dumps({"concepts": [], "facts": [{"subject": "A", "text": "t", "is_state": False, "as_of": None}]})
+
+        with tempfile.TemporaryDirectory() as d:
+            snap = os.path.join(d, "snap.db")
+            sqlite3.connect(snap).execute("create table t(x)").connection.commit()
+            g = gold({"id": "archived", "fragment": 9, "split": "held-out", "given": [5]},
+                     {"id": "replaced", "fragment": 7, "split": "held-out"})
+            out = os.path.join(d, "runs.jsonl")
+            ce.run(g, snap, "unused", out, 1, "Claude", call=call, store_for=store_for)
+            self.assertEqual([r["fragment"] for r in ce.records(out)], [9])   # the replaced #7 never runs
+            self.assertEqual(2, len(prompts))                                 # given #5, then #9
+            self.assertTrue(any("given" in p for p in prompts))
+
     def test_stale_fact_matching_needs_subject_phrase_and_state(self):
         said = "Proposed, waiting for `concept review` (a state): #77 PR #48: awaits review [#5]"
         given = [{"fragment": 5, "parsed": {"facts": [{"text": "awaits review", "is_state": True}]},
