@@ -175,7 +175,7 @@ class Extractor:
                 replaces[by] = old
         written = []
         for i, f in enumerate(facts):
-            subject, text = clean(f.get("subject")), (f.get("text") or "").strip()
+            subject, text = clean(f.get("subject")), one_line(f.get("text") or "") if isinstance(f.get("text"), str) else ""
             if not subject or not text:
                 continue
             obj = clean(f.get("object"))
@@ -204,11 +204,18 @@ class Extractor:
         return "\n".join(lines)
 
 
+def one_line(text):
+    """Every run of whitespace, line breaks and Unicode line separators included, as one space: a fact or a name with a
+    line break could otherwise start its own line in the hook's context, shaped like a frame heading (Arden's F1 on #58).
+    The store flattens again when it renders; this keeps what is written, and runs.jsonl's `written`, on one line too."""
+    return " ".join(text.split())
+
+
 def clean(name):
-    """A concept name the model gave, or None when it is empty, a pronoun, or 'null'."""
+    """A concept name the model gave, on one line, or None when it is empty, a pronoun, or 'null'."""
     if not isinstance(name, str):
         return None
-    name = name.strip()
+    name = one_line(name)
     return None if not name or name.lower() in PRONOUNS or name.lower() == "null" or len(name) > 80 else name
 
 

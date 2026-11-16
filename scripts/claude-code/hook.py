@@ -1454,7 +1454,7 @@ def recall(event):
             lines.append(words_only.group(1))
         if lines or concepts:
             text = (concepts + "\n\n" if concepts else "") + " ".join(lines)
-            print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": text.strip()[:CAP]}}))
+            print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": defuse(text.strip())[:CAP]}}))
         return
     seen(event, add=ids)
     record_shown(event, "recall", ids)
@@ -1465,7 +1465,8 @@ def recall(event):
         "reads the whole of one):\n\n" + found.strip() if ids else
         # A cue matched but recall found nothing: the words-only notice still goes out, never silent.
         f"Recall found nothing new for this message. {words_only.group(1)}" if words_only else "")
-    print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": text[:CAP]}}))
+    # Concepts and recall alike are defused (Arden's F1 on #58): a fact or a fragment can hold an action tag or a fence.
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": defuse(text)[:CAP]}}))
 
 
 def subagent_start(event):
@@ -2487,9 +2488,14 @@ def quoted(m):
         text = text[:HANDOFF_CLIP] + f"… (`room read {m['id']}` shows it whole)"
     author = " ".join(str(m.get("author") or "?").split())[:60]
     when = datetime.fromtimestamp(float(m["ts"]), timezone.utc).strftime("%H:%MZ") if m.get("ts") else "?"
-    line = f"> [{when}] {author} ({m['id']}): {text}"
-    line = ACTION_TAGS.sub(lambda t: "⟦" + t.group()[1:-1].strip() + "⟧", line)
-    return line.replace("```", "`·`·`").replace("~~~", "~·~·~")  # visibly broken, never a look-alike (#1396)
+    return defuse(f"> [{when}] {author} ({m['id']}): {text}")
+
+
+def defuse(text):
+    """Text from the store or the room, made inert as context: action tags shown as ⟦tag⟧ and fences visibly broken,
+    never a look-alike (#1396). Every line a hook puts in additionalContext from what was kept goes through here."""
+    text = ACTION_TAGS.sub(lambda t: "⟦" + t.group()[1:-1].strip() + "⟧", text)
+    return text.replace("```", "`·`·`").replace("~~~", "~·~·~")
 
 
 def evidence_block(record):

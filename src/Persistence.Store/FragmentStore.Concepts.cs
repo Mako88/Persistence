@@ -1,6 +1,7 @@
 using Persistence.Data.Entities;
 using Persistence.Data.Repositories;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Persistence.Store;
 
@@ -239,15 +240,15 @@ internal sealed partial class FragmentStore
         var sources = await concepts.SourcesAsync(facts.Select(f => f.Id).ToList());
         var names = await NamesAsync(facts);
         var sb = new StringBuilder();
-        sb.Append($"{c.Name} ({(c.Confirmed ? c.Kind : c.KindSaid ? $"{c.Kind}, kind unconfirmed: counts as a person" : "no kind said: counts as a person")})");
+        sb.Append($"{OneLine(c.Name)} ({(c.Confirmed ? c.Kind : c.KindSaid ? $"{c.Kind}, kind unconfirmed: counts as a person" : "no kind said: counts as a person")})");
         if (aliases.Count > 0)
         {
-            sb.Append(" aka " + string.Join(", ", aliases.Select(a => a.Note is null ? a.Alias : $"{a.Alias} ({a.Note})")));
+            sb.Append(" aka " + string.Join(", ", aliases.Select(a => OneLine(a.Note is null ? a.Alias : $"{a.Alias} ({a.Note})"))));
         }
 
         if (c.Summary is not null)
         {
-            sb.Append($"\n  {c.Summary}");
+            sb.Append($"\n  {OneLine(c.Summary)}");
         }
 
         foreach (var f in facts)
@@ -297,7 +298,7 @@ internal sealed partial class FragmentStore
             foreach (var flag in flags)
             {
                 var f = flagged.First(x => x.Id == flag.FactId);
-                sb.Append($"\n  {RenderFact(f, null, names, sources.GetValueOrDefault(f.Id) ?? [])}\n    flagged by {flag.FlaggedBy}, {flag.CreatedUtc[..10]}: {flag.Reason}");
+                sb.Append($"\n  {RenderFact(f, null, names, sources.GetValueOrDefault(f.Id) ?? [])}\n    flagged by {OneLine(flag.FlaggedBy)}, {flag.CreatedUtc[..10]}: {OneLine(flag.Reason)}");
             }
         }
 
@@ -324,14 +325,23 @@ internal sealed partial class FragmentStore
         return names;
     }
 
+    private static readonly Regex Whitespace = new(@"[\s\u0085\u2028\u2029]+", RegexOptions.Compiled);
+
+    /// <summary>
+    /// <paramref name="text"/> with every run of whitespace, line breaks and Unicode line/paragraph separators included,
+    /// as one space: a fact or a name is stored as given, and one with a line break could otherwise start a line of its
+    /// own in a hook's context, shaped like a frame heading (Arden's F1 on #58, the #547 class).
+    /// </summary>
+    public static string OneLine(string text) => Whitespace.Replace(text, " ").Trim();
+
     /// <summary>
     /// One fact as a line: <c>#12 [Ember →] John's daughter [#7153, #14625] (proposed)</c>. A state fact always shows
     /// when it was known, so a stale belief looks stale (Arden); an event shows when it happened when the text says.
     /// </summary>
     public static string RenderFact(FactRow f, long? about, IReadOnlyDictionary<long, string> names, IReadOnlyList<long> sources)
     {
-        var who = names.GetValueOrDefault(f.SubjectId, $"concept {f.SubjectId}");
-        var link = f.ObjectId is { } o ? $"{who} → {names.GetValueOrDefault(o, $"concept {o}")}: " : about == f.SubjectId ? "" : $"{who}: ";
+        var who = OneLine(names.GetValueOrDefault(f.SubjectId, $"concept {f.SubjectId}"));
+        var link = f.ObjectId is { } o ? $"{who} → {OneLine(names.GetValueOrDefault(o, $"concept {o}"))}: " : about == f.SubjectId ? "" : $"{who}: ";
         var dates = new List<string>();
         if (f.State)
         {
@@ -345,7 +355,7 @@ internal sealed partial class FragmentStore
 
         var status = f.SupersededById is { } by ? $"superseded by #{by}" : f.Status == "active" ? null : f.Status;
         var tail = string.Join("; ", dates.Concat(status is null ? [] : [status]).Concat(f.Supersedes is { } s && f.Status == "proposed" ? [$"would replace #{s}"] : []));
-        return $"#{f.Id} {link}{f.Text} [{string.Join(", ", sources.Select(s => $"#{s}"))}]" + (tail.Length > 0 ? $" ({tail})" : "");
+        return $"#{f.Id} {link}{OneLine(f.Text)} [{string.Join(", ", sources.Select(s => $"#{s}"))}]" + (tail.Length > 0 ? $" ({tail})" : "");
     }
 
     /// <summary>One fact as <see cref="RenderFact"/> shows it, its names and sources looked up.</summary>
