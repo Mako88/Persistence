@@ -294,7 +294,7 @@ def verified(where):
     return True
 
 
-def store(*args, timeout=60, stdin=None, serve=True, cold=True, quiet=False):
+def store(*args, timeout=None, stdin=None, serve=True, cold=True, quiet=False):
     """The CLI's output, or "" if it could not run: a hook must never break the session it serves.
     Asked of the served store when one is up; otherwise one is started and this call runs the CLI,
     unless `cold` is False: a cold CLI's recall took 38 s (2026-11-08), past the harness's 20 s, so the
@@ -303,14 +303,24 @@ def store(*args, timeout=60, stdin=None, serve=True, cold=True, quiet=False):
     return out if code == 0 else ""
 
 
-def call_store(*args, timeout=60, stdin=None, serve=True, cold=True, quiet=False):
+HOOK_SERVED_TIMEOUT = 12  # a served call inside the harness's 20 s for an HTTP hook
+COLD_TIMEOUT = 60
+
+
+def call_store(*args, timeout=None, stdin=None, serve=True, cold=True, quiet=False):
     """`store`, with how it went: (exit code, output, error). The code is None when no store answered or the
     CLI could not run; 1 is a usage error (an option this store does not know), 2 a refusal. `quiet`: a refusal
-    the caller expects (a tag nothing has used yet) is not logged as a failure."""
+    the caller expects (a tag nothing has used yet) is not logged as a failure.
+    `timeout`: a caller that names one gets it. One that names none is a hook's call and gets the hook's budget,
+    HOOK_SERVED_TIMEOUT served or COLD_TIMEOUT cold. The cap used to apply to named timeouts too, so the nightly
+    sleep pass's sleep-list (timeout=300, ~18 s on my store) was skipped and its worklist empty (issue #67)."""
     exe = os.environ.get("PERSISTENCE_STORE_EXE", "persistence-store")
+    named = timeout is not None
+    served_timeout = timeout if named else (COLD_TIMEOUT if args[:1] == ("keep-conversation",) else HOOK_SERVED_TIMEOUT)
+    timeout = timeout if named else COLD_TIMEOUT
     where = remote()
     if where:
-        reply = served_remote(where, args, stdin, timeout if args[:1] == ("keep-conversation",) else min(timeout, 12))
+        reply = served_remote(where, args, stdin, served_timeout)
         if reply is None or reply is BUSY:
             print(f"persistence hook: {args[0]} skipped: the store on {where['host']} did not answer", file=sys.stderr)
             return None, "", ""
@@ -319,7 +329,7 @@ def call_store(*args, timeout=60, stdin=None, serve=True, cold=True, quiet=False
             print(f"persistence hook: {args[0]} failed: {err.strip()}", file=sys.stderr)
         return code, out, err
     if serve:
-        reply = served(args, stdin, min(timeout, 12))  # inside the harness's 20 s for an HTTP hook
+        reply = served(args, stdin, served_timeout)
         if reply is BUSY:
             print(f"persistence hook: {args[0]} skipped: the store server is busy", file=sys.stderr)
             return None, "", ""
