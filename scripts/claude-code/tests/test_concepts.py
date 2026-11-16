@@ -597,6 +597,15 @@ class JudgedFixes(unittest.TestCase):
         self.assertEqual("2026-11-15", adds[1][adds[1].index("--as-of") + 1])
         self.assertIn("--state", adds[1])
 
+    def test_a_state_marked_lasting_keeps_its_date(self):
+        _, adds = self.run_answer([self.fact("PR #48 awaits review", is_state=True, lasting=True, as_of="2026-11-15")])
+        self.assertEqual("2026-11-15", adds[0][adds[0].index("--as-of") + 1])
+
+    def test_written_records_the_as_of_and_supersedes_passed(self):
+        rec, _ = self.run_answer([self.fact("is John's daughter", lasting=True, as_of="2026-11-09"),
+                                  self.fact("approved #48", as_of="2026-11-15")], supersedes=[{"fact": 1, "by": 40}])   # swapped
+        self.assertEqual([(None, None), ("2026-11-15", 40)], [(w["as_of"], w["supersedes"]) for w in rec["written"]])
+
     def test_at_most_max_facts_are_written_and_a_superseding_fact_is_never_the_one_cut(self):
         facts = [self.fact(f"fact {i}") for i in range(8)]
         rec, adds = self.run_answer(facts, supersedes=[{"fact": 40, "by": 7}])   # 40 is a CURRENT FACT the store showed
