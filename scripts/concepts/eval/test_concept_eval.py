@@ -143,6 +143,12 @@ class Bars(unittest.TestCase):
         self.assertEqual(find(r, "gold: zero severe")["result"], "FAIL")
         self.assertEqual(find(r, "gold: referent coverage")["count"], "0/1")
 
+    def test_a_held_out_instance_that_never_ran_fails(self):
+        g = gold({"id": "a", "fragment": 1, "split": "held-out", "mentions": [{"label": "Computer Ember", "referent": "peer"}]},
+                 {"id": "b", "fragment": 2, "split": "held-out", "mentions": [{"label": "Computer Ember", "referent": "peer"}]})
+        r = ce.score_store("s", [ce.from_v0(line(1, [fact("Computer Ember")]))], g, None, {})
+        self.assertEqual(find(r, "gold: every held-out instance ran")["result"], "FAIL")
+
     def test_development_instances_are_not_the_result(self):
         g = gold({"id": "i", "fragment": 1, "split": "development", "mentions": [{"label": "Ember", "referent": "kid"}]})
         recs = [ce.from_v0(line(1, [fact("Ember")]))]
@@ -205,6 +211,59 @@ class Run(unittest.TestCase):
             self.assertEqual(len(writes), 2)
             self.assertTrue(all(os.path.dirname(db) != d for db in seen_dbs))
             self.assertEqual(json.loads(Path(out + ".dates.json").read_text()), {"7": "2026-11-15"})
+
+    def test_given_is_extracted_first_and_the_stale_fact_id_reaches_the_score(self):
+        frags = {5: {"id": 5, "content": "old", "type": "Personal", "created": "2026-11-15T15:24:00Z"},
+                 9: {"id": 9, "content": "new", "type": "Personal", "created": "2026-11-15T15:30:00Z"}}
+        answers = {"old": {"facts": [{"subject": "PR #48", "text": "awaiting review", "is_state": True, "as_of": None}]},
+                   "new": {"facts": [{"subject": "PR #48", "text": "approved", "is_state": True, "as_of": None}],
+                           "supersedes": [{"fact": 41, "by": 0}]}}
+
+        def store_for(db):
+            facts = []  # this copy's facts: the given fragment's write must be visible to the instance's extraction
+
+            def store(*args, stdin=None, **_):
+                if args[0] == "list":
+                    f = frags.get(int(args[2]) + 1)
+                    return json.dumps([f] if f else [])
+                if args[:2] == ("concept", "list"):
+                    return "[]"
+                if args[:2] == ("concept", "touched"):
+                    return json.dumps([{"id": 1, "name": "PR #48", "facts": facts}] if facts else [])
+                if args[:2] == ("concept", "add"):
+                    fid = 41 + len(facts)
+                    facts.append({"id": fid, "subject": args[2], "object": None, "text": args[4]})
+                    return f"Proposed, waiting for `concept review` (a state): #{fid} PR #48: {args[4]} [#{args[6]}]"
+                return ""
+            return store
+
+        with tempfile.TemporaryDirectory() as d:
+            snap = os.path.join(d, "snap.db")
+            sqlite3.connect(snap).execute("create table t(x)").connection.commit()
+            stale = {"id": "g", "fragment": 9, "split": "held-out", "given": [5], "supersede": [{"fact": None, "kind": "change"}],
+                     "stale_fact": {"fragment": 5, "subject": "PR #48", "is_state": True, "text_has": "awaiting review"}}
+            out = os.path.join(d, "runs.jsonl")
+            ce.run(gold(stale), snap, "unused", out, 1, "Claude",
+                   call=lambda prompt, order=iter(["old", "new"]): json.dumps(answers[next(order)]),  # given first
+                   store_for=store_for)
+            recs = ce.records(out)
+            self.assertEqual([r["fragment"] for r in recs], [9])  # the given fragment is not a scored record
+            self.assertEqual(recs[0]["stale_supersede"], [{"fact": 41, "kind": "change"}])
+            self.assertEqual(ce.supersedes(recs[0], stale)["found"], [41])
+            # The same instance with no stale id on the record (not run with `given`): missed, never found.
+            bare = ce.from_v0(line(9, [fact("PR #48")], supersedes=[{"fact": 41, "by": 0}]))
+            self.assertTrue(ce.supersedes(bare, stale)["missed"])
+            self.assertEqual(ce.supersedes(bare, stale)["found"], [])
+
+    def test_stale_fact_matching_needs_subject_phrase_and_state(self):
+        said = "Proposed, waiting for `concept review` (a state): #77 PR #48: awaits review [#5]"
+        given = [{"fragment": 5, "parsed": {"facts": [{"text": "awaits review", "is_state": True}]},
+                  "written": [{"subject": "PR #48", "text": "awaits review", "said": said}]}]
+        want = {"fragment": 5, "subject": "PR #48", "is_state": True, "text_has": "awaiting review"}
+        self.assertIsNone(ce.stale_fact_id(given, want))
+        self.assertEqual(ce.stale_fact_id(given, {**want, "text_has": ["awaiting review", "awaits review"]}), 77)
+        self.assertIsNone(ce.stale_fact_id(given, {**want, "text_has": "awaits review", "is_state": False}))
+        self.assertIsNone(ce.stale_fact_id(given, {**want, "text_has": "awaits review", "subject": "PR #47"}))
 
     def test_refuses_the_live_store(self):
         with tempfile.TemporaryDirectory() as d:

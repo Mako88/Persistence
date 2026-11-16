@@ -91,7 +91,7 @@ def from_v0(line):
             "model": line.get("model"), "template_sha256": line.get("template_sha256"), "seconds": line.get("seconds"),
             "error": line.get("error"), "shown": [s.get("name") for s in line.get("shown") or []],
             "concepts": concepts, "facts": facts, "unresolved": [], "aliases_written": [],
-            "has_refs": False, "has_supersede_kind": False}
+            "has_refs": False, "has_supersede_kind": False, "stale_supersede": line.get("eval_stale_supersede")}
 
 
 def status_from_said(said):
@@ -293,6 +293,13 @@ def supersedes(rec, inst):
     if exp is None:
         return None
     got = {old for f in rec["facts"] for old in f["supersedes"]}
+    if exp != "none" and any(e.get("fact") is None for e in exp):
+        # The stale fact's id exists only in the run's own copy (`given`, `stale_fact`): `run` puts it on the record.
+        # No id there (not run that way, or the given fragment produced no matching fact) = the supersede is missed.
+        exp = [e for e in exp if e.get("fact") is not None] + (rec.get("stale_supersede") or [])
+        if not exp:
+            return {"found": [], "missed": ["stale fact: no id (given fragment not extracted, or no matching fact)"],
+                    "unexpected": sorted(got), "kind_right": None}
     want = {} if exp == "none" else {int(e["fact"]): e.get("kind") for e in exp}
     kinds_right = sum(1 for f in rec["facts"] for old in f["supersedes"]
                       if old in want and f["supersede_kind"] is not None and f["supersede_kind"] == want[old])
@@ -364,6 +371,8 @@ def score_store(store, recs, gold, judged, dates, split="held-out"):
     bars.append(bar_zero("gold: zero severe referent errors (wrong pick, merge, hidden uncertainty)", severe, len(with_mentions)))
     inv = sum(1 for _, cs in ran if any(c["invalid"] for c in cs))
     bars.append(bar_zero("gold: zero invalid output (§4.2)", inv, len(ran)))
+    # An instance that never ran can't pass: v0 never saw that fragment (e.g. `list` doesn't return it).
+    bars.append(bar_zero("gold: every held-out instance ran", sum(1 for _, cs in per if not cs), len(per)))
     # Coverage (§4.1 S3, 75%): resolvable mentions resolved right in every run.
     resolvable = [(i, m) for i, cs in ran for m in i.get("mentions") or [] if m.get("referent") in gold.concepts]
     cov = 0
@@ -506,6 +515,41 @@ def sha256(path):
     return h.hexdigest()
 
 
+def fetch(store, fid):
+    """Fragment `fid` as v0's catch-up sees it (`list`), or None when `list` doesn't return it."""
+    listed = json.loads(store("list", "--after", str(fid - 1), "--limit", "1", "--json") or "[]")
+    return listed[0] if listed and listed[0]["id"] == fid else None
+
+
+FACT_ID = re.compile(r"(?:\): |Added: |nothing added: )#(\d+) ")
+
+
+def stale_fact_id(given, want):
+    """The store id of the fact a `given` extraction wrote that matches the gold's `stale_fact`: from that fragment,
+    subject named in its subject or text, every `text_has` phrase (str or list of alternatives) in its text, and
+    is_state as labelled. None when nothing matches."""
+    subj = norm(want.get("subject") or "")
+    alts = want.get("text_has") or []
+    alts = [alts] if isinstance(alts, str) else alts
+    for rec in given:
+        if want.get("fragment") is not None and rec.get("fragment") != int(want["fragment"]):
+            continue
+        parsed = (rec.get("parsed") or {}).get("facts") or []
+        for w in rec.get("written") or []:
+            f = next((p for p in parsed if isinstance(p, dict) and (p.get("text") or "").strip() == w.get("text")), {})
+            text = (w.get("text") or "").casefold()
+            if subj and subj not in norm(w.get("subject") or "") and subj not in text:
+                continue
+            if alts and not any(a.casefold() in text for a in alts):
+                continue
+            if want.get("is_state") is not None and bool(f.get("is_state")) != bool(want["is_state"]):
+                continue
+            m = FACT_ID.search(w.get("said") or "")
+            if m:
+                return int(m.group(1))
+    return None
+
+
 def run(gold, snapshot, exe, out, repeats, owner, call=None, store_for=None):
     """Each gold fragment, `repeats` times, each on a fresh private copy of the snapshot, through concepts.Extractor.
     The snapshot is never written: its hash is checked at the end."""
@@ -532,13 +576,19 @@ def run(gold, snapshot, exe, out, repeats, owner, call=None, store_for=None):
                     dst.close()
                     src.close()
                     store = (store_for or (lambda d: cli(exe, d)))(db)
-                    listed = json.loads(store("list", "--after", str(fid - 1), "--limit", "1", "--json") or "[]")
-                    if not listed or listed[0]["id"] != fid:
+                    x = concepts.Extractor(os.path.join(work, "state"), store, call=call, owner=owner)
+                    listed = fetch(store, fid)
+                    if listed is None:
                         print(f"{inst['id']}: fragment #{fid} not found in the snapshot (or not a type `list` returns)", file=sys.stderr)
                         break
-                    dates[str(fid)] = (listed[0].get("created") or "")[:10]
-                    x = concepts.Extractor(os.path.join(work, "state"), store, call=call, owner=owner)
-                    rec = x.extract(listed[0])
+                    # `given`: fragments extracted first on this same copy, so the instance sees their facts as current.
+                    given = [x.extract(g) for g in (fetch(store, int(gid)) for gid in inst.get("given") or []) if g]
+                    dates[str(fid)] = (listed.get("created") or "")[:10]
+                    rec = x.extract(listed)
+                    if inst.get("stale_fact"):
+                        sid = stale_fact_id(given, inst["stale_fact"])
+                        kind = next((e.get("kind") for e in inst.get("supersede") or [] if e.get("fact") is None), None)
+                        rec["eval_stale_supersede"] = [{"fact": sid, "kind": kind}] if sid is not None else None
                     rec["eval_repeat"] = k
                     rec["eval_instance"] = inst["id"]
                     f.write(json.dumps(rec) + "\n")

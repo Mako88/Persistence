@@ -65,16 +65,29 @@ JSON per store, with ids, labels and expected outputs only and no fragment text.
 - `instances`: each has `id`, `case` (A–N), `fragment`, `split`, `synthetic`, and optional `status: "pending"`
   (not scored yet). The expectations are `mentions` (`label`, `referent`: a key, `unsure`, `new` or `absent`),
   `validity.text_dates`, `durable`, and `supersede` (`"none"` or a list of `{fact, kind}`).
+- A supersede whose old fact only exists after extraction (`fact: null`) names `given` (fragment ids `run`
+  extracts first, on the same throwaway copy) and `stale_fact` (`fragment`, `subject`, `is_state`, `text_has`: a
+  phrase or a list of alternatives). `run` finds that fact's id among the given writes and puts it on the record;
+  without one the supersede counts as missed.
+- A held-out instance that never ran fails `gold: every held-out instance ran`: if v0 can't see the fragment
+  (`list` doesn't return it), that is a result, not a gap in the denominator.
 
 ## 4. The live gold, and the first numbers
 
-`gold/claude-live.json` is labelled by me for Claude's store, so Claude confirms or corrects it.
+`gold/claude-live.json` was labelled by me for Claude's store; Claude confirmed it on 2026-11-16 and added the
+peer as a second mention on #7148 ("Computer Ember") and #14754 (both Embers).
 
-- **Held out:** the Ember merge from Claude's first block (#7148, #14625, #14754: the daughter). Each has
+- **Held out:** the Ember merge from Claude's first block (#7148, #14625, #14754: the daughter; #7148 and
+  #14754 name the peer too). Each has
   `Ember` as a shared label and `Emma` as a mishearing of the daughter (#933, #4468).
 - **Development:** the three trial fragments where Ember the peer is meant (#19161, #19182, #19324). They are
   development because I've seen their output.
-- **Pending:** the stale "PR #48 awaiting review" case. Claude fills in the later fragment and the fact id.
+- **Held out, case G:** the stale "PR #48 awaiting review" state from #19182, which #19196 (Arden approved #48)
+  should supersede. Claude filled it in. #19196 and #14754 are **archived** inbox fragments, which `list` doesn't
+  return, so v0's catch-up never sees them and `run` can't either: both fail "every held-out instance ran", and
+  nothing in Claude's store would ever supersede the stale state. That is a v0 bug (Claude's issue/PR decides
+  whether archived inbox notes should be extracted at all); if the answer is no, these cases move to fragments v0
+  reads.
 
 A correction to revision 3: case A's example made "Emma" a mishearing of Computer Ember. Per #933 it was the
 daughter's name that was misheard.
@@ -93,7 +106,8 @@ The judged sample and the validity bar are not measured yet: there is no judged 
 
 ## 5. What's next
 
-1. Claude: confirm or fix the live gold, fill in the stale-#48 instance, and add the real cases v0 meets
+1. Done 2026-11-16: Claude confirmed the live gold and filled in the stale-#48 instance. Still open: the real
+   cases v0 meets
    (issue #60's Ember split will need held-out Ember cases it hasn't seen).
 2. Once the Ember split lands: `run --repeats 5` on a snapshot of Claude's store, `sheet`, Claude judges,
    `score`. That is the first held-out result.
