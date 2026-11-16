@@ -557,5 +557,68 @@ class Ambiguous(unittest.TestCase):
         self.assertEqual([], self.store.adds())
 
 
+
+class JudgedFixes(unittest.TestCase):
+    """The v0 fixes from the judged #62 run (Arden's score, PR 62 comment 6909448816): what a fragment proposes is
+    not written as done, a one-off instruction is not a fact, a lasting relation is not dated by when it was said,
+    and no fragment proposes more than MAX_FACTS facts, a superseding one first."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.store = FakeStore([{"id": 5, "type": "Personal", "content": "x", "created": "2026-11-16T00:00:00Z"}])
+        self.prompts = []
+
+    def run_answer(self, facts, supersedes=()):
+        answer = json.dumps({"concepts": [], "facts": facts, "supersedes": list(supersedes)})
+        x = concepts.Extractor(self.tmp.name, self.store, call=lambda p: (self.prompts.append(p), answer)[1], owner="Claude")
+        rec = x.extract(self.store.fragments[0])
+        return rec, self.store.adds()
+
+    @staticmethod
+    def fact(text, **kw):
+        return {"subject": "Arden", "text": text, "object": None, "claim": "fact", "is_state": False, "lasting": False, "as_of": None, **kw}
+
+    def test_a_one_off_instruction_is_logged_not_written(self):
+        rec, adds = self.run_answer([self.fact("merge #48 if the head is still 7db543b", claim="instruction"), self.fact("approved #48")])
+        self.assertEqual(["approved #48"], [a[a.index("--fact") + 1] for a in adds])
+        self.assertEqual(["a one-off instruction, not a fact"], [s["why"] for s in rec["skipped"]])
+
+    def test_a_proposal_stated_as_done_is_logged_not_written(self):
+        rec, adds = self.run_answer([self.fact("added a review wait of two hours", claim="proposal"),
+                                     self.fact("proposed a review wait of two hours", claim="proposal")])
+        self.assertEqual(["proposed a review wait of two hours"], [a[a.index("--fact") + 1] for a in adds])
+        self.assertEqual(["a proposal whose text states it as done"], [s["why"] for s in rec["skipped"]])
+
+    def test_a_lasting_relation_is_not_dated_but_a_state_keeps_its_date(self):
+        _, adds = self.run_answer([self.fact("is John's daughter", lasting=True, as_of="2026-11-09"),
+                                   self.fact("PR #48 awaits review", is_state=True, as_of="2026-11-15")])
+        self.assertNotIn("--as-of", adds[0])
+        self.assertEqual("2026-11-15", adds[1][adds[1].index("--as-of") + 1])
+        self.assertIn("--state", adds[1])
+
+    def test_at_most_max_facts_are_written_and_a_superseding_fact_is_never_the_one_cut(self):
+        facts = [self.fact(f"fact {i}") for i in range(8)]
+        rec, adds = self.run_answer(facts, supersedes=[{"fact": 40, "by": 7}])   # 40 is a CURRENT FACT the store showed
+        self.assertEqual(concepts.MAX_FACTS, len(adds))
+        texts = [a[a.index("--fact") + 1] for a in adds]
+        self.assertEqual(["fact 0", "fact 1", "fact 2", "fact 3", "fact 7"], texts)   # model order kept, the supersede in
+        self.assertEqual("40", adds[-1][adds[-1].index("--supersedes") + 1])
+        self.assertEqual(["fact 4", "fact 5", "fact 6"], [s["text"] for s in rec["skipped"]])
+        self.assertTrue(all("over the cap" in s["why"] for s in rec["skipped"]))
+        self.assertEqual([0, 1, 2, 3, 7], [w["i"] for w in rec["written"]])   # each written fact names its parsed index
+
+    def test_the_prompt_carries_the_judged_rules(self):
+        self.run_answer([])
+        p = self.prompts[0]
+        self.assertIn(f"At most {concepts.MAX_FACTS} facts", p)
+        self.assertIn('"instruction": a one-off order', p)
+        self.assertIn("Never state it as done", p)
+        self.assertIn("NOT the date someone said", p)
+        self.assertIn("never drop it", p)                     # a state keeps its date (#19182's '#48 awaits review')
+        self.assertIn("Check every state in CURRENT FACTS", p)   # the stale #48 miss
+        self.assertIn('a "red test" is a test written to fail until the fix lands', p)
+        self.assertEqual(3, concepts.TEMPLATE_VERSION)
+
 if __name__ == "__main__":
     unittest.main()

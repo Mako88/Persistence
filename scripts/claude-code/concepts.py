@@ -39,8 +39,12 @@ import uuid
 from pathlib import Path
 
 MODEL = "claude-haiku-5-5"
-TEMPLATE_VERSION = 2   # 2: the AMBIGUOUS NAMES section (#60)
+TEMPLATE_VERSION = 3   # 2: the AMBIGUOUS NAMES section (#60). 3: claim, lasting, the cap, supersede and as_of rules (#62 judged)
+MAX_FACTS = 5          # review load: median <= 5 facts per fragment (plan §4.4); the store's self reviews every one
 KINDS = ("thing", "person", "self", "value")
+# A proposal's text must say it is one; any of these will do. Without one it reads as done, and is not written.
+PROPOSAL = re.compile(r"\b(propos\w*|suggest\w*|ask(s|ed|ing)?|offer\w*|plan(s|ned|ning)?|would|will|may|might|could|should|"
+                      r"wants?|wanted|intends?|hopes?|to be|not yet|pending|request\w*|idea|recommend\w*|consider\w*)\b", re.I)
 PRONOUNS = {"i", "me", "my", "you", "he", "she", "they", "them", "we", "us", "it", "this store", "the self", "the store",
             "this fragment", "the fragment", "the user"}
 
@@ -52,11 +56,17 @@ Rules:
 - A concept is a named person, self (an AI peer with its own store), value, or thing (a project, piece of code, machine, place, event, tool). Only concepts with a proper name or a stable label someone would type again; not every noun. Reuse a name from KNOWN CONCEPTS exactly when the fragment means the same one; never mint a variant ("John" and "John Doe"). One name can be two concepts: AMBIGUOUS NAMES lists them. Never use such a name bare as a subject or object; use the full name of the referent the fragment means, by the cues, and if you cannot tell which one it means, leave that fact out.
 - kind is one of: thing, person, self, value.
 - aliases: other proper names the fragment uses for the same concept, including a known mishearing (note it). Never a pronoun or a description; an empty list is normal.
-- A fact is ONE plain sentence the fragment states, about a subject concept, optionally linking an object concept. Only what the fragment says, never an inference, and no stronger than the fragment says it: keep "may", "planned", "proposed", "I think". Prefer facts that would help later: who someone is, what something is for, what was decided and why, what depends on what, what state something is in.
-- is_state: true when the fact describes a condition that can stop being true (running, deployed, waiting, open, merged); false for an event or a lasting trait.
-- as_of: the date the text gives for when it happened (YYYY-MM-DD), else null. Never today's date or the fragment's date.
-- supersedes: ids from CURRENT FACTS that this fragment shows are no longer true, each with the index of the new fact in your facts list that replaces it.
-- 2 to 10 facts for a long fragment, fewer for a short one, none if it states nothing durable. No facts about the fragment itself.
+- A fact is ONE plain sentence the fragment states, about a subject concept, optionally linking an object concept. Only what the fragment says, never an inference, and no stronger than the fragment says it: keep "may", "planned", "proposed", "I think".
+- claim says what kind of statement the fragment makes:
+  "fact": something the fragment says is so, or happened.
+  "proposal": a proposal, suggestion, offer, request or plan that the fragment does not say was carried out. Its text must say so ("Arden proposed...", "John asked for...", "Claude plans to..."). Never state it as done, built, decided or as a rule: "my additions" are proposed additions, not things added; an issue someone asks to have a correction added to does not "have" that correction.
+  "instruction": a one-off order or step for one session or one run ("merge #48 if the head is still 7db543b", "post the numbers when done", "restart the service"). Leave them out; one listed anyway is dropped.
+- is_state: true when the fact describes a condition that can stop being true (running, deployed, waiting, open, awaiting review); false for an event or a lasting trait.
+- lasting: true for a relation or trait that holds for life or has no start worth dating (who someone is, whose child someone is, what something is). Its as_of is null.
+- as_of: the date it became true or happened (YYYY-MM-DD), when the fragment gives it, in its text or because it reports the thing as happening when it was written. NOT the date someone said or wrote down something already true: "Ember is John's daughter", told on 2026-11-09, has as_of null. A state keeps the date the fragment gives for it (the day it was seen waiting, open, running): never drop it. Never today's date. Null when unsure.
+- supersedes: ids from CURRENT FACTS that this fragment shows are no longer true, each with the index of the new fact in your facts list that replaces it. Check every state in CURRENT FACTS: if the fragment shows it ended (a PR awaiting review was approved or merged, something open was closed, a plan was done or dropped), write the new fact and supersede the old one. This is the most important kind of fact to get right.
+- Terms as used in this store: a "red test" is a test written to fail until the fix lands (test-first), not a test failing on a PR; "green" is passing.
+- At most {max_facts} facts, the most useful first: who someone is, what was decided and why, what depends on what, what state something is in, and any fact that supersedes a CURRENT FACT. Fewer for a short fragment, none if it states nothing durable. Leave out passing detail, one-off steps, and facts about the fragment itself.
 
 AMBIGUOUS NAMES (each names more than one concept; name | kind | cues):
 {ambiguous}
@@ -71,7 +81,7 @@ FRAGMENT #{id} ({type}, written {date}):
 {content}
 
 Answer with JSON only, no prose, in this shape:
-{{"concepts": [{{"name": "...", "kind": "thing|person|self|value", "aliases": [{{"alias": "...", "note": "..."}}]}}], "facts": [{{"subject": "...", "text": "...", "object": "... or null", "is_state": false, "as_of": "YYYY-MM-DD or null"}}], "supersedes": [{{"fact": 0, "by": 0}}]}}"""
+{{"concepts": [{{"name": "...", "kind": "thing|person|self|value", "aliases": [{{"alias": "...", "note": "..."}}]}}], "facts": [{{"subject": "...", "text": "...", "object": "... or null", "claim": "fact|proposal|instruction", "is_state": false, "lasting": false, "as_of": "YYYY-MM-DD or null"}}], "supersedes": [{{"fact": 0, "by": 0}}]}}"""
 
 TEMPLATE_SHA = hashlib.sha256(PROMPT.encode("utf-8")).hexdigest()
 
@@ -188,7 +198,7 @@ class Extractor:
         referents = {r["name"].lower() for label in named for r in self.ambiguous[label]}
         shown = nearest(known, touched + [c for c in known if c["name"].lower() in referents])
         prompt = PROMPT.format(
-            owner=self.owner,
+            owner=self.owner, max_facts=MAX_FACTS,
             ambiguous="\n".join(f'"{label}" names more than one concept: ' + "; ".join(
                 f"{r['name']} | {r.get('kind', '?')} | {r.get('cues', '')}" for r in self.ambiguous[label]) for label in named) or "(none)",
             known="\n".join(f"{c['name']} | {c['kind']}{'' if c.get('confirmed') else '?'} | " + ", ".join(c.get("aliases") or [])
@@ -257,26 +267,44 @@ class Extractor:
                 replaces[by] = old
         if bare is None:
             bare = self.bare()
-        written = []
+        log = (lambda subject, obj, text, why: skipped.append({"subject": subject, "object": obj, "text": text, "why": why})) \
+            if skipped is not None else (lambda *_: None)
+        keep = []
         for i, f in enumerate(facts):
+            if not isinstance(f, dict):
+                continue
             subject, text = clean(f.get("subject")), one_line(f.get("text") or "") if isinstance(f.get("text"), str) else ""
             if not subject or not text:
                 continue
             obj = clean(f.get("object"))
             hit = next((n for n in (subject, obj) if n and n.lower() in bare), None)
             if hit:   # filed under the bare name would merge its referents again (#60): logged, not written
-                if skipped is not None:
-                    label = bare[hit.lower()]
-                    why = f"ambiguous name {hit!r}: names more than one concept" if hit.lower() == label.lower() else \
-                        f"ambiguous name {hit!r}: an alias of {label!r}, which names more than one concept"
-                    skipped.append({"subject": subject, "object": obj, "text": text, "why": why})
+                label = bare[hit.lower()]
+                log(subject, obj, text, f"ambiguous name {hit!r}: names more than one concept" if hit.lower() == label.lower() else
+                    f"ambiguous name {hit!r}: an alias of {label!r}, which names more than one concept")
                 continue
+            claim = f.get("claim")
+            if claim == "instruction":   # a one-off order to a session is not a fact about anything (#19196 on #62)
+                log(subject, obj, text, "a one-off instruction, not a fact")
+                continue
+            if claim == "proposal" and not PROPOSAL.search(text):   # 'my additions' as 'Claude added' (#19324 on #62)
+                log(subject, obj, text, "a proposal whose text states it as done")
+                continue
+            keep.append((i, f, subject, obj, text))
+        # The cap (plan §4.4, review load median <= 5): a fact that supersedes one shown goes first, since a stale fact
+        # left standing is worse than a new one missed; the rest in the model's order, which the prompt asks be most useful first.
+        ranked = sorted(keep, key=lambda k: (k[0] not in replaces, k[0]))
+        for i, f, subject, obj, text in ranked[MAX_FACTS:]:
+            log(subject, obj, text, f"over the cap of {MAX_FACTS} facts per fragment")
+        written = []
+        for i, f, subject, obj, text in sorted(ranked[:MAX_FACTS]):
             args = ["concept", "add", subject, "--fact", text, "--source", str(fragment), "--by", run]
             if obj and obj.lower() != subject.lower():
                 args += ["--object", obj]
             if f.get("is_state") is True:
                 args.append("--state")
-            if isinstance(f.get("as_of"), str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", f["as_of"]):
+            # A lasting relation or trait has no start worth dating: the day it was said is not when it began (#14625 on #62).
+            if f.get("lasting") is not True and isinstance(f.get("as_of"), str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", f["as_of"]):
                 args += ["--as-of", f["as_of"]]
             if self.kind_of(subject):
                 args += ["--kind", self.kind_of(subject)]
@@ -285,7 +313,7 @@ class Extractor:
             if i in replaces:
                 args += ["--supersedes", str(replaces[i])]
             said = self.store(*args)
-            written.append({"subject": subject, "object": obj, "text": text, "said": said.strip()[:300]})
+            written.append({"i": i, "subject": subject, "object": obj, "text": text, "said": said.strip()[:300]})
         return written
 
     @property
