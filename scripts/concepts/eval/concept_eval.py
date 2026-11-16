@@ -15,6 +15,7 @@ expected outputs, with no fragment text. Reports print ids and numbers only.
         every bar of plan §4 that the pipeline's output can be scored on, per store, on exact counts (§4.0), with
         raw counts per store, macro and pooled. Not measured never passes. --json for the machine-readable form.
     concept_eval.py run    <gold.json> --snapshot <snap.db> --exe <persistence-store> --out <runs.jsonl> [--repeats 5] [--owner Claude]
+                           [--ambiguous ambiguous.json]
         put the gold instances' fragments through the real v0 extractor (scripts/claude-code/concepts.py), each run
         on its own throwaway copy of a read-only snapshot, so no run sees another's proposals. It calls the model:
         run it only on a store whose self has agreed (plan §3.2, rule 5).
@@ -39,6 +40,8 @@ from collections import defaultdict
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import prune  # noqa: E402  the one copy of the concept tables' schema (013)
 KINDS = ("thing", "person", "self", "value")
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 # The judge's verdicts (plan §3.2, plus Ember's failure list, room 1571675945935446228).
@@ -552,12 +555,34 @@ def stale_fact_id(given, want):
     return None
 
 
-def run(gold, snapshot, exe, out, repeats, owner, call=None, store_for=None):
+def first_fragment(inst):
+    """The case's cut: its first fragment, which is its first `given` when it has one."""
+    return min(int(i) for i in [inst["fragment"], *(inst.get("given") or [])])
+
+
+def prune_case(db, first, scratch, ambiguous=None):
+    """Make the throwaway copy at `db` what live catch-up holds on reaching fragment `first`: concept-layer evidence
+    from lower ids only (prune.py, pinned to schema 013), and #66's ambiguous.json in the run's own state dir.
+    Returns that state dir and the prune report."""
+    report = prune.prune(db, prune.at_or_above(first), scratch=scratch)
+    state = Path(db).parent / "state"
+    (state / "concepts").mkdir(parents=True, exist_ok=True)
+    if ambiguous:
+        shutil.copyfile(ambiguous, state / "concepts" / "ambiguous.json")
+    return state, report
+
+
+def run(gold, snapshot, exe, out, repeats, owner, call=None, store_for=None, ambiguous=None):
     """Each gold fragment, `repeats` times, each on a fresh private copy of the snapshot, through concepts.Extractor.
-    The snapshot is never written: its hash is checked at the end."""
+    Each copy is pruned to what live catch-up had seen before the case's first fragment, and gets its own state dir
+    with `ambiguous` (#66's ambiguous.json) in it. The snapshot is never written: its hash is checked at the end."""
     live = os.environ.get("PERSISTENCE_STORE_DB")
     if live and os.path.realpath(live) == os.path.realpath(snapshot):
         raise SystemExit("refused: --snapshot is the live store; take a snapshot (scripts/recall-eval/bench.py snapshot)")
+    if ambiguous and not os.path.isfile(ambiguous):
+        raise SystemExit(f"--ambiguous {ambiguous}: no such file")
+    if not ambiguous:
+        print("note: no --ambiguous: the extractor runs with no ambiguous names listed", file=sys.stderr)
     sys.path.insert(0, str(HERE.parents[1] / "claude-code"))
     import concepts  # the real v0 extractor
     before = sha256(snapshot)
@@ -566,19 +591,28 @@ def run(gold, snapshot, exe, out, repeats, owner, call=None, store_for=None):
     dates = {}
     try:
         with open(out, "a", encoding="utf-8") as f:
-            for inst in gold.instances:
+            for n, inst in enumerate(gold.instances):
                 if inst.get("status") == "pending" or inst.get("fragment") is None:
                     continue
                 fid = int(inst["fragment"])
+                first = first_fragment(inst)
                 for k in range(repeats):
-                    db = os.path.join(work, "run.db")
+                    case = os.path.join(work, f"{n}-{k}")
+                    os.mkdir(case, 0o700)
+                    db = os.path.join(case, "run.db")
                     src = sqlite3.connect(f"file:{snapshot}?mode=ro", uri=True)
                     dst = sqlite3.connect(db)
                     src.backup(dst)
                     dst.close()
                     src.close()
+                    try:
+                        state, report = prune_case(db, first, work, ambiguous)
+                    except prune.PruneRefused as e:
+                        raise SystemExit(f"refused: {inst['id']}: {e}") from e
+                    if k == 0:
+                        print(f"{inst['id']}: cut below #{first}: {report.summary()}", file=sys.stderr)
                     store = (store_for or (lambda d: cli(exe, d)))(db)
-                    x = concepts.Extractor(os.path.join(work, "state"), store, call=call, owner=owner)
+                    x = concepts.Extractor(str(state), store, call=call, owner=owner)
                     listed = fetch(x, concepts.replaced, fid)
                     if listed is None:
                         print(f"{inst['id']}: v0's catch-up wouldn't read fragment #{fid} (not in the snapshot, not a curated type, "
@@ -594,8 +628,10 @@ def run(gold, snapshot, exe, out, repeats, owner, call=None, store_for=None):
                         rec["eval_stale_supersede"] = [{"fact": sid, "kind": kind}] if sid is not None else None
                     rec["eval_repeat"] = k
                     rec["eval_instance"] = inst["id"]
+                    rec["eval_cut"] = {"below": first, "dropped_facts": len(report.facts), "dropped_concepts": len(report.concepts),
+                                       "undated_facts": report.undated_facts, "undated_concepts": report.undated_concepts}
                     f.write(json.dumps(rec) + "\n")
-                    os.remove(db)
+                    shutil.rmtree(case)
     finally:
         shutil.rmtree(work, ignore_errors=True)
     Path(str(out) + ".dates.json").write_text(json.dumps(dates, indent=1), encoding="utf-8")
@@ -656,6 +692,7 @@ def main(argv=None):
     r.add_argument("--out", required=True)
     r.add_argument("--repeats", type=int, default=5)
     r.add_argument("--owner", default="Claude")
+    r.add_argument("--ambiguous", help="#66's ambiguous.json, copied into each run's state dir")
     a = ap.parse_args(argv)
 
     if a.cmd == "check":
@@ -701,7 +738,7 @@ def main(argv=None):
         print(json.dumps({"bars": rows, "stores": results}, indent=1) if a.json else render(rows, results))
         return 0 if all(r["overall"] in ("pass", "report") for r in rows) else 1
     if a.cmd == "run":
-        run(Gold.load(a.gold), a.snapshot, a.exe, a.out, a.repeats, a.owner)
+        run(Gold.load(a.gold), a.snapshot, a.exe, a.out, a.repeats, a.owner, ambiguous=a.ambiguous)
         return 0
 
 

@@ -17,6 +17,13 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
   became the test (docs/design/concept-eval.md). On the six trial lines it catches the live Ember merge (3 of 3
   severe) and a review load over the bar (median 7.5). `run` finds gold fragments through v0's own
   `Extractor.above()` and `replaced()` (#63), so it reads archived fragments as catch-up does.
+- **`scripts/concepts/eval/prune.py`**: each case's throwaway copy is cut to the concept-layer evidence live catch-up
+  had before the case's first fragment, so later facts can't leak the answer. SQL on copies only, pinned to
+  migration 013: any other schema or a live path is refused before anything is written. A predicate over each
+  fact's evidence ids picks what goes; dropped facts' supersessions are undone, and concepts and aliases that stood
+  only on them go too. Why SQL and not a store verb: a delete verb would be live-store surface only an eval needs
+  (Claude, room 1571765945196748801). Claude's snapshot build uses the same helper, so the schema knowledge is in
+  one place.
 
 ## 2026-11-16 — Concept catch-up reads archived fragments (#63)
 

@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "testguard"))
 import no_real_claude  # noqa: E402,F401  first: no test can start a real claude
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import concept_eval as ce  # noqa: E402
+from test_prune import build_store, concept, fact as db_fact, frag  # noqa: E402
 
 GOLD = {
     "store": "s", "locked": True,
@@ -180,7 +181,7 @@ class Run(unittest.TestCase):
     def test_runs_the_real_extractor_on_copies_and_leaves_the_snapshot_alone(self):
         with tempfile.TemporaryDirectory() as d:
             snap = os.path.join(d, "snap.db")
-            sqlite3.connect(snap).execute("create table t(x)").connection.commit()
+            build_store(snap).close()
             os.chmod(snap, 0o400)
             seen_dbs, writes = [], []
 
@@ -239,7 +240,7 @@ class Run(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             snap = os.path.join(d, "snap.db")
-            sqlite3.connect(snap).execute("create table t(x)").connection.commit()
+            build_store(snap).close()
             stale = {"id": "g", "fragment": 9, "split": "held-out", "given": [5], "supersede": [{"fact": None, "kind": "change"}],
                      "stale_fact": {"fragment": 5, "subject": "PR #48", "is_state": True, "text_has": "awaiting review"}}
             out = os.path.join(d, "runs.jsonl")
@@ -282,7 +283,7 @@ class Run(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             snap = os.path.join(d, "snap.db")
-            sqlite3.connect(snap).execute("create table t(x)").connection.commit()
+            build_store(snap).close()
             g = gold({"id": "archived", "fragment": 9, "split": "held-out", "given": [5]},
                      {"id": "replaced", "fragment": 7, "split": "held-out"})
             out = os.path.join(d, "runs.jsonl")
@@ -300,6 +301,79 @@ class Run(unittest.TestCase):
         self.assertEqual(ce.stale_fact_id(given, {**want, "text_has": ["awaiting review", "awaits review"]}), 77)
         self.assertIsNone(ce.stale_fact_id(given, {**want, "text_has": "awaits review", "is_state": False}))
         self.assertIsNone(ce.stale_fact_id(given, {**want, "text_has": "awaits review", "subject": "PR #47"}))
+
+    def test_each_case_sees_only_evidence_below_its_first_fragment_and_its_own_ambiguous_json(self):
+        # Live catch-up reaching a case's first fragment has seen only lower ids (Arden, room 1571760738178175067):
+        # a fact from that fragment or later is a leak. Case "late" (#30) keeps the fact from #20; case "early"
+        # (#25, given #15) loses it. Each run's state dir gets ambiguous.json (#66 reads it from there).
+        with tempfile.TemporaryDirectory() as d:
+            snap = os.path.join(d, "snap.db")
+            con = build_store(snap)
+            for f in (10, 15, 20, 25, 30):
+                frag(con, f)
+            concept(con, 1, "A", "a1")
+            concept(con, 2, "B")
+            db_fact(con, 100, 1, [10])
+            db_fact(con, 101, 2, [20])
+            con.commit()
+            con.close()
+            amb = os.path.join(d, "ambiguous.json")
+            Path(amb).write_text(json.dumps({"Ember": [{"name": "Ember (peer)"}, {"name": "Ember (John's daughter)"}]}))
+            frags = {i: {"id": i, "content": "c", "type": "Personal", "created": "2026-11-15T01:00:00Z"} for i in (15, 25, 30)}
+            seen = []
+
+            def store_for(db):
+                def store(*args, stdin=None, **_):
+                    if args[0] == "list":
+                        f = frags.get(int(args[args.index("--after") + 1]) + 1)
+                        return json.dumps([f] if f else [])
+                    if args[:2] in (("concept", "list"), ("concept", "touched")):
+                        c = sqlite3.connect(db)
+                        seen.append((sorted(r[0] for r in c.execute("SELECT Id FROM Facts")),
+                                     sorted(r[0] for r in c.execute("SELECT Id FROM Concepts"))))
+                        state = Path(db).parent / "state" / "concepts" / "ambiguous.json"
+                        ambs.append(json.loads(state.read_text()) if state.exists() else None)
+                        c.close()
+                        return "[]"
+                    return ""
+                return store
+
+            ambs = []
+
+            def call(prompt):
+                return json.dumps({"concepts": [], "facts": []})
+
+            g = gold({"id": "late", "fragment": 30, "split": "held-out"},
+                     {"id": "early", "fragment": 25, "split": "held-out", "given": [15]})
+            out = os.path.join(d, "runs.jsonl")
+            dirs = []
+            real = ce.prune_case
+
+            def spy(db, first, scratch, ambiguous=None):
+                dirs.append((first, scratch))
+                return real(db, first, scratch, ambiguous)
+            ce.prune_case = spy
+            try:
+                ce.run(g, snap, "unused", out, 1, "Claude", call=call, store_for=store_for, ambiguous=amb)
+            finally:
+                ce.prune_case = real
+            self.assertEqual([first for first, _ in dirs], [30, 15])
+            self.assertEqual(seen[0], ([100, 101], [1, 2]))       # late: #20's fact is below the cut
+            self.assertIn(([100], [1]), seen[1:])                 # early: cut at given #15, B stood only on #20
+            # #66 reads ambiguous.json from the run's own state dir: there, whole, on every store call.
+            self.assertTrue(ambs and all(a == json.loads(Path(amb).read_text()) for a in ambs))
+
+    def test_a_snapshot_that_is_not_013_is_refused_before_any_model_call(self):
+        with tempfile.TemporaryDirectory() as d:
+            snap = os.path.join(d, "snap.db")
+            build_store(snap, upto="012").close()
+            calls = []
+            g = gold({"id": "i", "fragment": 7, "split": "held-out"})
+            with self.assertRaises(SystemExit) as e:
+                ce.run(g, snap, "unused", os.path.join(d, "o"), 1, "C", call=calls.append,
+                       store_for=lambda db: (lambda *a, **k: ""))
+            self.assertIn("schema drift", str(e.exception))
+            self.assertEqual(calls, [])
 
     def test_refuses_the_live_store(self):
         with tempfile.TemporaryDirectory() as d:

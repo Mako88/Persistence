@@ -24,6 +24,18 @@ The eval never changes the pipeline. `run` feeds gold fragments through the real
 its own throwaway copy of a read-only snapshot (whose hash is checked at the end), so each gold case gets the
 five repeats §4.5 asks for. It calls the model, so it runs only on a store whose self agreed (plan §3.2).
 
+**Per-case cut (`prune.py`).** Live catch-up reads in id order, so when it reaches a case's first fragment (its
+first `given`, if it has one) the concept layer holds only evidence from lower ids. A fact citing that fragment or a
+later one is a leak: it can restate the answer or settle a referent. So each case's copy is pruned before the run
+to facts whose sources are all below the cut. A kept fact that a dropped one replaced stands again. A concept that
+stood only on dropped facts goes, with its aliases. A concept with no facts, and every alias of a kept concept, are
+kept and reported as undated: 013 gives them no source column. The store has no verb to remove these, and `reject`
+can't stand in (a rejected text is never proposed again), so `prune.py` is SQL on copies, pinned to migration 013:
+it refuses any other schema (latest migration and the concept tables' exact columns) and any path outside the
+run's scratch directory or under a store directory. It is the one copy of that schema knowledge: Claude's
+snapshot build calls it with `cites_any(gold ∪ given)`; the eval uses `at_or_above(first)`. Each run also gets
+its own state dir, with `--ambiguous` (#66's `ambiguous.json`) copied in.
+
 ## 2. What carries over from revision 3, and what can't be measured yet
 
 | Plan | In the eval | On v0 |
