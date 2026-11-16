@@ -9,6 +9,22 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-16 — The concept extractor eval (bench plan rev 3, on the real pipeline)
+
+- **`scripts/concepts/eval/concept_eval.py`** scores what the extractor really wrote (v0's `runs.jsonl` now, step 2
+  events later) against gold labels kept as ids, with bench plan revision 3's bars and counting rules: per store,
+  exact counts, not measured never passes. Why: John asked us to build first, so the bench stopped being a gate and
+  became the test (docs/design/concept-eval.md). On the six trial lines it catches the live Ember merge (3 of 3
+  severe) and a review load over the bar (median 7.5). `run` finds gold fragments through v0's own
+  `Extractor.above()` and `replaced()` (#63), so it reads archived fragments as catch-up does.
+- **`scripts/concepts/eval/prune.py`**: each case's throwaway copy is cut to the concept-layer evidence live catch-up
+  had before the case's first fragment, so later facts can't leak the answer. SQL on copies only, pinned to
+  migration 013: any other schema or a live path is refused before anything is written. A predicate over each
+  fact's evidence ids picks what goes; dropped facts' supersessions are undone, and concepts and aliases that stood
+  only on them go too. Why SQL and not a store verb: a delete verb would be live-store surface only an eval needs
+  (Claude, room 1571765945196748801). Claude's snapshot build uses the same helper, so the schema knowledge is in
+  one place.
+
 ## 2026-11-16 — Concept catch-up reads archived fragments (#63)
 
 - **What:** the extractor's catch-up read new fragments with `list --after`, which returns active fragments only. A
