@@ -9,6 +9,13 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-16 — Hook tests: nothing may follow a test file's main guard
+
+**`test_main_guard_last.py` fails the suite when a hook test file has a top-level statement below its
+`if __name__ == "__main__":` guard.** #76 put `ResumeKeepsTheWindow` below the guard in `test_recall_fallback.py`, so
+running that file as a script skipped it, though discovery still ran it (Arden's nit at review 5923276275). The class
+now sits above the guard. The check is red with the class below the guard and green with it above.
+
 ## 2026-11-16 — Recall: a resumed session keeps its window, so it isn't shown again what it holds
 
 **`session_start` no longer resets the window on `resume`.** A resume reloads the transcript, but the hook cleared

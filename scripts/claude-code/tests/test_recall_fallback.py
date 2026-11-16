@@ -92,10 +92,6 @@ class RecallFallback(unittest.TestCase):
         self.assertIn("exact words alone", shown)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class ResumeKeepsTheWindow(unittest.TestCase):
     """A resume reloads the transcript, so recall must not show again what the window already holds. Room sessions
     are resumed on every wake; when session_start reset `.seen` on resume, 59% of what recall showed them was a repeat
@@ -159,3 +155,7 @@ class ResumeKeepsTheWindow(unittest.TestCase):
         self.start("resume")
         self.assertEqual(self.recall(), ["1"])
         self.assertTrue((Path(self.tmp.name) / "s1.since").exists())
+
+
+if __name__ == "__main__":
+    unittest.main()
