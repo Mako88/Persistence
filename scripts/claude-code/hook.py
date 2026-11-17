@@ -1800,6 +1800,20 @@ def observe_hook(event):
     acknowledge_observed(event, pending, len(head), text)
 
 
+def code_stamp(folder):
+    """The mtime of every .py beside the hook, which the server compares after each request to know it must re-exec.
+    It watched only hook.py, so a deploy that changed only a module it imports kept the old one in memory: #78 replaced
+    observed.py alone on 2026-11-16, and every prompt's status line went on reading the shared store build for hours
+    while SessionStart, run fresh, read the right one (found by sleep pass #19923)."""
+    stamp = {}
+    for path in sorted(Path(folder).glob("*.py")):
+        try:
+            stamp[path.name] = path.stat().st_mtime
+        except OSError:
+            stamp[path.name] = None
+    return stamp
+
+
 TIMES = STATE.parent / "hook-times.log"  # one line per per-message hook answered by `serve`: path, seconds, bytes
 def setting(name, default):
     """A PERSISTENCE_* value from the environment, else from Claude Code's own settings.json env block: a
@@ -3066,7 +3080,7 @@ def serve():
 
         threading.Thread(target=link_loop, daemon=True, name="link").start()
     script = Path(__file__).resolve()
-    written = script.stat().st_mtime
+    written = code_stamp(script.parent)
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
@@ -3088,7 +3102,7 @@ def serve():
                         log.write(f"{datetime.now().isoformat(timespec='seconds')} {self.path} {time.perf_counter() - began:.2f}s {len(body)}b\n")
                 except OSError:
                     pass
-            if script.stat().st_mtime != written:
+            if code_stamp(script.parent) != written:
                 os.execv(sys.executable, [sys.executable, str(script), "serve"])
 
         def log_message(self, *args):
