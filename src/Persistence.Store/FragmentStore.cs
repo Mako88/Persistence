@@ -1181,7 +1181,7 @@ internal sealed partial class FragmentStore(
     /// <summary>Reads the tags' paths afresh, before a command renders anything.</summary>
     public async Task RefreshTagPathsAsync() => TagPaths = (await GroupsAsync(heads: false)).Paths;
 
-    public static string Render(ContextFragmentEntity f, int maxContent = int.MaxValue, string? self = null)
+    public static string Render(ContextFragmentEntity f, int maxContent = int.MaxValue, string? self = null, DateTimeOffset? now = null)
     {
         var flags = new List<string>();
         if (self is not null && f.SessionId is not null && f.SessionId != self) flags.Add($"session {Short(f.SessionId)}");
@@ -1199,7 +1199,17 @@ internal sealed partial class FragmentStore(
             var how = new List<string>();
             if (f.EnteredBy is not null) how.Add($"entered as {f.EnteredBy}");
             if (f.AttributedNote is not null) how.Add($"attributed {f.AttributedNote}");
-            header += $" {who}{(how.Count > 0 ? $" ({string.Join("; ", how)})" : "")}, {f.CreatedUtc.ToUniversalTime():yyyy-MM-dd HH:mm}Z:";
+            header += $" {who}{(how.Count > 0 ? $" ({string.Join("; ", how)})" : "")}, {f.CreatedUtc.ToUniversalTime():yyyy-MM-dd HH:mm}Z{Ago(f.CreatedUtc, now)}:";
+        }
+        else if (now is not null)
+        {
+            // Recall gives the minute and the age (Statekeeper's freshness, first cut, room 1572709639043289180): a record
+            // that states a fact as current reads as what was so then. Only the age: a fragment is a record of what was
+            // said, not a state that goes stale, and nothing confirms one yet (Claude and Ember, #5178).
+            var written = f.CreatedUtc.ToUniversalTime().ToString("yyyy-MM-dd HH:mm");
+            var changed = f.LastModifiedUtc.ToUniversalTime().ToString("yyyy-MM-dd HH:mm");
+            header = header[..^1] + $" | written {written}Z{Ago(f.CreatedUtc, now)}"
+                + (changed != written ? $", changed {changed}Z{Ago(f.LastModifiedUtc, now)}" : "") + "]";
         }
         else
         {
@@ -1213,6 +1223,21 @@ internal sealed partial class FragmentStore(
             ? f.Content
             : f.Content[..maxContent] + $"… [#{f.Id} continues: `show {f.Id}`]";
         return $"{header}\n{content}";
+    }
+
+    /// <summary>How long before <paramref name="now"/> a time was, as " (1h ago)"; nothing without a clock.</summary>
+    private static string Ago(DateTimeOffset at, DateTimeOffset? now)
+    {
+        if (now is not { } clock)
+        {
+            return "";
+        }
+
+        var age = clock - at;
+        return age.TotalMinutes < 1 ? " (just now)"
+            : age.TotalMinutes < 60 ? $" ({(int)age.TotalMinutes}m ago)"
+            : age.TotalHours < 48 ? $" ({(int)age.TotalHours}h ago)"
+            : $" ({(int)age.TotalDays}d ago)";
     }
 
     /// <summary>
