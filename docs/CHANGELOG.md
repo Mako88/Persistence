@@ -9,6 +9,21 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-18 — Recall: each recalled fragment says when it was written, and how long ago
+
+**`recall` now ends each fragment's header with its minute and age**, e.g. `| written 2026-11-18 19:22Z (1h ago)]`; an
+utterance's existing minute gains its age the same way. **No "changed"** (Ember's review): `LastModifiedUtc` moves on any
+edit, a re-tag or a recall-only mark included, so a June fragment re-tagged today would look freshly changed when only its
+filing did; telling a change of substance from one of filing is for a later schema. A time ahead of the recall clock says
+`(from the future)`, not `(just now)`, so clock skew doesn't pass for freshness. Borrowed from John's Statekeeper (its split between when a state changed and when it was last checked; Arden's read
+in room 1572480135469334589) and aimed at recall, not Observed-now, which is already read live every prompt (Claude, room
+1572709639043289180). The slips it is for came from recalled records stating a fact as current: "PR #81 being merged"
+after the merge, Arden's "Synth still held". **Only the age, no "stale", "unverified" or "not re-checked"** (Claude and
+Ember): a fragment is a record of what was said then, not a state that goes stale, and nothing confirms one yet, so such
+a word would sit on every line and say nothing. A layer of current-state claims that records when each was last
+confirmed (and Ember's test that confirming moves that time and leaves the change time and history alone) is a later
+step. `show`, `search`, `list` and `core` keep the day alone. One clock per recall, so the ages agree with each other.
+
 ## 2026-11-18 — Recall: a smaller budget for short room wakes (off by default)
 
 **`PERSISTENCE_RECALL_SHORT_WAKE_CHARS`** gives a room wake whose messages total fewer characters than it a smaller

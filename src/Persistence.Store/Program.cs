@@ -550,6 +550,7 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
                 }
 
                 var snippet = line.GetInt("snippet", 300);
+                var now = DateTimeOffset.UtcNow;  // one clock for the whole recall, so ages agree with each other
                 foreach (var (heading, found) in new[]
                 {
                     ((string?)null, recalled.Here),
@@ -566,7 +567,7 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
 
                     foreach (var fragment in found)
                     {
-                        Console.WriteLine(FragmentStore.Render(fragment, maxContent: snippet, self: store.Session));
+                        Console.WriteLine(FragmentStore.Render(fragment, maxContent: snippet, self: store.Session, now: now));
                         Console.WriteLine();
                     }
                 }
