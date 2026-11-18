@@ -77,6 +77,17 @@ What the per-message hooks bring, each only when it has something:
 - `stop-cue`: `cue/stop/<name>` cues matched against the turn's last message; the turn is held once
   when one matches (a promise of work with nothing started).
 
+Two recall settings for room wakes depend on the room bridge's `roomcore.py`, which reads a wake back
+to its messages: `PERSISTENCE_RECALL_SHORT_WAKE_CHARS` (less recall for a wake whose messages are
+short) and `PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE` (recall asked with the messages, not the preamble).
+The installed hooks in `~/.claude/persistence` don't include `roomcore.py`, so when you turn either one
+on, also set `PERSISTENCE_ROOMCORE` to its path (`<repo>/scripts/room/roomcore.py`) in the
+settings.json "env", then restart `hook.py serve`, because it keeps the environment it started with.
+If roomcore is missing, or can't read a prompt (today, a "fresh room session" or "last wake in this
+session" prompt), both settings do nothing and recall runs as if they were off.
+`STRIP_ROOM_PREAMBLE` writes a warning to stderr when roomcore is missing; the short-wake setting gives
+no sign, so a missing roomcore looks the same as a wake too long to cut.
+
 
 The flow: at 500k tokens the Stop hook holds the turn open once for a curation pass; at 600k
 compaction runs, the summariser writes only a short hand-over, and SessionStart puts the core and
