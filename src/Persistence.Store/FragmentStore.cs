@@ -1205,11 +1205,10 @@ internal sealed partial class FragmentStore(
         {
             // Recall gives the minute and the age (Statekeeper's freshness, first cut, room 1572709639043289180): a record
             // that states a fact as current reads as what was so then. Only the age: a fragment is a record of what was
-            // said, not a state that goes stale, and nothing confirms one yet (Claude and Ember, #5178).
-            var written = f.CreatedUtc.ToUniversalTime().ToString("yyyy-MM-dd HH:mm");
-            var changed = f.LastModifiedUtc.ToUniversalTime().ToString("yyyy-MM-dd HH:mm");
-            header = header[..^1] + $" | written {written}Z{Ago(f.CreatedUtc, now)}"
-                + (changed != written ? $", changed {changed}Z{Ago(f.LastModifiedUtc, now)}" : "") + "]";
+            // said, not a state that goes stale, and nothing confirms one yet (Claude and Ember, #5178). No "changed":
+            // LastModifiedUtc moves on any edit, a re-tag or a recall-only mark included, so it would make an old claim
+            // look freshly changed when only its filing did (Ember, room 1572712681214050409).
+            header = header[..^1] + $" | written {f.CreatedUtc.ToUniversalTime():yyyy-MM-dd HH:mm}Z{Ago(f.CreatedUtc, now)}]";
         }
         else
         {
@@ -1225,7 +1224,7 @@ internal sealed partial class FragmentStore(
         return $"{header}\n{content}";
     }
 
-    /// <summary>How long before <paramref name="now"/> a time was, as " (1h ago)"; nothing without a clock.</summary>
+    /// <summary>How long before <paramref name="now"/> a time was, as " (1h ago)", or " (from the future)" if after it; nothing without a clock.</summary>
     private static string Ago(DateTimeOffset at, DateTimeOffset? now)
     {
         if (now is not { } clock)
@@ -1234,7 +1233,9 @@ internal sealed partial class FragmentStore(
         }
 
         var age = clock - at;
-        return age.TotalMinutes < 1 ? " (just now)"
+        // A time ahead of the clock is skew between clocks, not freshness: say so rather than fold it into "just now".
+        return age < TimeSpan.Zero ? " (from the future)"
+            : age.TotalMinutes < 1 ? " (just now)"
             : age.TotalMinutes < 60 ? $" ({(int)age.TotalMinutes}m ago)"
             : age.TotalHours < 48 ? $" ({(int)age.TotalHours}h ago)"
             : $" ({(int)age.TotalDays}d ago)";

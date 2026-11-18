@@ -1044,8 +1044,9 @@ public sealed class FragmentStoreTests : IDisposable
         Assert.EndsWith("| written 2026-11-18 19:22Z (1h ago)]", FragmentStore.Render(view, now: now).Split('\n')[0]);
         Assert.DoesNotMatch("(?i)stale|unverified|re-checked|confirmed", FragmentStore.Render(view, now: now));
 
+        // A later edit doesn't show: the time it reads moves on any edit, a re-tag included (Ember, room 1572712681214050409).
         view.LastModifiedUtc = DateTimeOffset.Parse("2026-11-18T20:10:00Z");
-        Assert.EndsWith("| written 2026-11-18 19:22Z (1h ago), changed 2026-11-18 20:10Z (17m ago)]", FragmentStore.Render(view, now: now).Split('\n')[0]);
+        Assert.EndsWith("| written 2026-11-18 19:22Z (1h ago)]", FragmentStore.Render(view, now: now).Split('\n')[0]);
 
         view.CreatedUtc = view.LastModifiedUtc = DateTimeOffset.Parse("2026-06-11T09:00:00Z");
         Assert.EndsWith("| written 2026-06-11 09:00Z (160d ago)]", FragmentStore.Render(view, now: now).Split('\n')[0]);
@@ -1053,6 +1054,12 @@ public sealed class FragmentStoreTests : IDisposable
         Assert.EndsWith("| written 2026-11-17 08:00Z (36h ago)]", FragmentStore.Render(view, now: now).Split('\n')[0]);
         view.CreatedUtc = view.LastModifiedUtc = now.AddSeconds(-20);
         Assert.EndsWith("| written 2026-11-18 20:26Z (just now)]", FragmentStore.Render(view, now: now).Split('\n')[0]);
+
+        // A time ahead of the recall clock is clock skew, not freshness: it says so rather than "just now" (Ember).
+        view.CreatedUtc = view.LastModifiedUtc = now.AddMinutes(5);
+        Assert.EndsWith("| written 2026-11-18 20:32Z (from the future)]", FragmentStore.Render(view, now: now).Split('\n')[0]);
+        view.CreatedUtc = view.LastModifiedUtc = now.AddSeconds(5);
+        Assert.EndsWith("| written 2026-11-18 20:27Z (from the future)]", FragmentStore.Render(view, now: now).Split('\n')[0]);
 
         // Without a clock (show, search, core) the header is as it was: the day alone.
         Assert.EndsWith("| 2026-11-18]", FragmentStore.Render(view).Split('\n')[0]);
@@ -1071,6 +1078,35 @@ public sealed class FragmentStoreTests : IDisposable
         };
         Assert.EndsWith("Arden, 2026-11-18 18:27Z (2h ago):", FragmentStore.Render(said, now: now).Split('\n')[0]);
         Assert.EndsWith("Arden, 2026-11-18 18:27Z:", FragmentStore.Render(said).Split('\n')[0]);
+    }
+
+    [Fact]
+    public async Task A_tag_only_edit_leaves_a_recalled_fragment_saying_when_it_was_written()
+    {
+        // Ember's review of #82 (room 1572712681214050409): an edit moves LastModifiedUtc even when only the filing
+        // changed, so a June fragment re-tagged today must not read as if its substance changed today.
+        var store = await OpenAsync();
+        var june = await store.AddAsync("Personal", "The glider's wing is aluminium tube and fabric.", null, 0.5f, null, ["glider"], false);
+        var written = DateTimeOffset.Parse("2026-06-11T09:00:00Z");
+        using (var raw = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={db};Pooling=False"))
+        {
+            raw.Open();
+            using var cmd = raw.CreateCommand();
+            cmd.CommandText = "UPDATE ContextFragments SET CreatedUtc = $at, LastModifiedUtc = $at WHERE Id = $id";
+            cmd.Parameters.AddWithValue("$at", written);
+            cmd.Parameters.AddWithValue("$id", june.Id);
+            Assert.Equal(1, cmd.ExecuteNonQuery());
+        }
+
+        await store.EditAsync(june.Id, null, null, null, null, null, ["project/eg300"]);
+        var retagged = await store.GetAsync(june.Id);
+        Assert.Equal(written, retagged.CreatedUtc);
+        Assert.True(retagged.LastModifiedUtc > written.AddDays(1));  // the edit did move it: the case is real
+
+        var now = DateTimeOffset.Parse("2026-11-18T20:27:00Z");
+        var header = FragmentStore.Render(retagged, now: now).Split('\n')[0];
+        Assert.EndsWith("| written 2026-06-11 09:00Z (160d ago)]", header);
+        Assert.DoesNotMatch("(?i)changed|edited|modified", header);
     }
 
     [Fact]

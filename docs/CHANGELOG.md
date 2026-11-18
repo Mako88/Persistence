@@ -11,9 +11,11 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
 
 ## 2026-11-18 — Recall: each recalled fragment says when it was written, and how long ago
 
-**`recall` now ends each fragment's header with its minute and age**, e.g. `| written 2026-11-18 19:22Z (1h ago)]`, plus
-`, changed 2026-11-18 20:10Z (17m ago)` when it was edited later; an utterance's existing minute gains its age the same
-way. Borrowed from John's Statekeeper (its split between when a state changed and when it was last checked; Arden's read
+**`recall` now ends each fragment's header with its minute and age**, e.g. `| written 2026-11-18 19:22Z (1h ago)]`; an
+utterance's existing minute gains its age the same way. **No "changed"** (Ember's review): `LastModifiedUtc` moves on any
+edit, a re-tag or a recall-only mark included, so a June fragment re-tagged today would look freshly changed when only its
+filing did; telling a change of substance from one of filing is for a later schema. A time ahead of the recall clock says
+`(from the future)`, not `(just now)`, so clock skew doesn't pass for freshness. Borrowed from John's Statekeeper (its split between when a state changed and when it was last checked; Arden's read
 in room 1572480135469334589) and aimed at recall, not Observed-now, which is already read live every prompt (Claude, room
 1572709639043289180). The slips it is for came from recalled records stating a fact as current: "PR #81 being merged"
 after the merge, Arden's "Synth still held". **Only the age, no "stale", "unverified" or "not re-checked"** (Claude and
