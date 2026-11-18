@@ -9,6 +9,15 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-18 — Recall: a smaller budget for short room wakes (off by default)
+
+**`PERSISTENCE_RECALL_SHORT_WAKE_CHARS`** gives a room wake whose messages total fewer characters than it a smaller
+recall budget: `PERSISTENCE_RECALL_SHORT_WAKE_COUNT` fragments (default 1), with no wander or past utterances, and one
+line saying so. It is decided from the messages as roomcore reads them back, never from the prompt: the preamble
+keeps every wake long, and only 2 of 966 recall showings to 2026-11-18 came from typed prompts under 120 characters.
+Room wakes under 200 characters of messages had 81 showings and none was ever named or read (5% for longer wakes).
+A prompt that isn't a whole wake is left alone. Off until it is turned on and measured.
+
 ## 2026-11-16 — Observed-now reads the store build the unit actually runs; every hook test file has a main guard
 
 **The `store: deployed` line now follows the store unit's `ExecStart` to the build it runs and reads that build's
