@@ -1451,6 +1451,37 @@ def start_concept_catch_up():
         print(f"persistence hook: the concept extractor did not start: {e}", file=sys.stderr)
 
 
+def room_message_chars(raw):
+    """How many characters a room wake's messages hold, read back by the room's own templates, or None when the prompt
+    isn't a whole wake (then nothing is cut: fail closed) or roomcore can't be found."""
+    rc = roomcore()
+    sections = rc.wake_sections(raw) if rc is not None and hasattr(rc, "wake_sections") else None
+    if sections is None:
+        return None
+    return sum(len(text) for _, runs in sections for _, msgs in runs for _, text in msgs)
+
+
+def short_wake_budget(raw, count):
+    """The recall budget for a room wake whose messages are short, or None to leave recall as it is. Off unless
+    PERSISTENCE_RECALL_SHORT_WAKE_CHARS is set. Decided from the messages, not the prompt: the preamble keeps every
+    wake long, so a prompt-length test never fires (2 of 966 recall showings to 2026-11-18 were on typed prompts under
+    120 characters). Room wakes under 200 characters of messages had 81 showings and none was ever named or read,
+    against 5% for longer wakes. A resumed window still holds the turn being answered (#76), so a short yes keeps its
+    context; only what this message adds is cut, to PERSISTENCE_RECALL_SHORT_WAKE_COUNT (default 1), without wander
+    or past utterances."""
+    try:
+        limit = int(os.environ.get("PERSISTENCE_RECALL_SHORT_WAKE_CHARS", "0") or 0)
+        cut = max(1, int(os.environ.get("PERSISTENCE_RECALL_SHORT_WAKE_COUNT", "1") or 1))
+    except ValueError:
+        return None
+    if limit <= 0:
+        return None
+    chars = room_message_chars(raw)
+    if chars is None or chars >= limit or cut >= count:
+        return None
+    return cut, chars
+
+
 def recall(event):
     keep_soon(event)
     count = int(os.environ.get("PERSISTENCE_RECALL_COUNT", "3"))
@@ -1465,9 +1496,14 @@ def recall(event):
     already = seen(event)
     query = recall_query(event.get("prompt") or "")
     since = STATE / f"{event.get('session_id', 'unknown')}.since"
+    short = short_wake_budget(event.get("prompt") or "", count)
+    budget = (f"(Recall: a short wake, {short[1]} characters of messages, so {short[0]} fragment"
+              f"{'' if short[0] == 1 else 's'} instead of {count}, no wander or past utterances.)") if short else ""
+    if short:
+        count = short[0]
     found = store("recall", "--text", "-", *session_args(event), "--limit", str(count), "--snippet", "300", "--project", project(event),
-                  "--wander", os.environ.get("PERSISTENCE_RECALL_WANDER", "1"),
-                  "--said", os.environ.get("PERSISTENCE_RECALL_SAID", "3") if len(query) >= 40 else "0",
+                  "--wander", "0" if short else os.environ.get("PERSISTENCE_RECALL_WANDER", "1"),
+                  "--said", "0" if short else os.environ.get("PERSISTENCE_RECALL_SAID", "3") if len(query) >= 40 else "0",
                   *(["--before", since.read_text().strip()] if since.exists() else []),
                   # A cue's text joins what is looked for: "receiving" also finds what was said about receipting.
                   *(["--exclude", ",".join(already)] if already else []), stdin=query + ("\n\n" + reminded if reminded else ""), cold=False)
@@ -1490,6 +1526,8 @@ def recall(event):
             lines.append(f"Recall found nothing new for this message. {words_only.group(1)}")
         elif words_only:
             lines.append(words_only.group(1))
+        if budget:
+            lines.append(budget)  # a cut is said even when it is all there is to say (Ember's CHANGES on #80)
         if lines or concepts:
             text = (concepts + "\n\n" if concepts else "") + " ".join(lines)
             print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": defuse(text.strip())[:CAP]}}))
@@ -1503,6 +1541,9 @@ def recall(event):
         "reads the whole of one):\n\n" + found.strip() if ids else
         # A cue matched but recall found nothing: the words-only notice still goes out, never silent.
         f"Recall found nothing new for this message. {words_only.group(1)}" if words_only else "")
+    # A cut is said whatever came back, a cue alone included (Ember's CHANGES on #80, 1572688728097431615).
+    if budget:
+        text = (text.rstrip() + "\n\n" + budget).lstrip()
     # Concepts and recall alike are defused (Arden's F1 on #58): a fact or a fragment can hold an action tag or a fence.
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": defuse(text)[:CAP]}}))
 
