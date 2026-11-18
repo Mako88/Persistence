@@ -13,7 +13,7 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
 
 **`PERSISTENCE_RECALL_SHORT_WAKE_CHARS`** gives a room wake whose messages total fewer characters than it a smaller
 recall budget: `PERSISTENCE_RECALL_SHORT_WAKE_COUNT` fragments (default 1), with no wander or past utterances, and one
-line saying so. It is decided from the messages as roomcore reads them back, never from the prompt: the preamble
+line saying so, even when nothing else comes back (Ember's review). It is decided from the messages as roomcore reads them back, never from the prompt: the preamble
 keeps every wake long, and only 2 of 966 recall showings to 2026-11-18 came from typed prompts under 120 characters.
 Room wakes under 200 characters of messages had 81 showings and none was ever named or read (5% for longer wakes).
 A prompt that isn't a whole wake is left alone. Off until it is turned on and measured.

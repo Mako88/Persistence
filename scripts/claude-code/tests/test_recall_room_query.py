@@ -122,10 +122,12 @@ class ShortWakeBudget(unittest.TestCase):
             self.addCleanup(p.stop)
         self.addCleanup(self.tmp.cleanup)
 
+    found = FOUND
+
     def fake_store(self, *args, stdin=None, **kw):
         if args and args[0] == "recall":
             self.asked.append(args)
-        return FOUND
+        return self.found
 
     def recall(self, prompt):
         out = io.StringIO()
@@ -167,6 +169,30 @@ class ShortWakeBudget(unittest.TestCase):
         self.assertEqual(self.recall(self.wake(self.ACK))[0][0], "2")
         os.environ["PERSISTENCE_RECALL_SHORT_WAKE_COUNT"] = "5"
         self.assertEqual(self.recall(self.wake(self.ACK))[0][0], "3")
+
+    def test_a_cut_that_finds_nothing_still_says_so(self):
+        # Ember's CHANGES on #80 (1572688728097431615): the line went out only when a fragment did, so a cut that found
+        # nothing, no cue and no concept, left recall reduced and silent about it. The line is then the whole context.
+        os.environ["PERSISTENCE_RECALL_SHORT_WAKE_CHARS"] = "200"
+        self.found = ""
+        _, text = self.recall(self.wake(self.ACK))
+        self.assertEqual(text, f"(Recall: a short wake, {len(self.ACK['text'])} characters of messages, so 1 fragment "
+                               "instead of 3, no wander or past utterances.)")
+
+    def test_a_cue_without_a_fragment_keeps_the_line(self):
+        os.environ["PERSISTENCE_RECALL_SHORT_WAKE_CHARS"] = "200"
+        self.found = ""
+        with mock.patch.object(hook, "cued", return_value="[#9 | Personal] a reminder"):
+            _, text = self.recall(self.wake(self.ACK))
+        self.assertIn("a reminder", text)
+        self.assertTrue(text.endswith("instead of 3, no wander or past utterances.)"), text)
+
+    def test_nothing_found_without_a_cut_stays_silent(self):
+        self.found = ""
+        out = io.StringIO()
+        with redirect_stdout(out):
+            hook.recall({"prompt": self.wake(self.ACK), "session_id": "s1", "transcript_path": ""})
+        self.assertEqual(out.getvalue(), "")
 
     def test_a_bad_setting_leaves_recall_alone(self):
         os.environ["PERSISTENCE_RECALL_SHORT_WAKE_CHARS"] = "lots"

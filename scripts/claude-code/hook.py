@@ -1526,6 +1526,8 @@ def recall(event):
             lines.append(f"Recall found nothing new for this message. {words_only.group(1)}")
         elif words_only:
             lines.append(words_only.group(1))
+        if budget:
+            lines.append(budget)  # a cut is said even when it is all there is to say (Ember's CHANGES on #80)
         if lines or concepts:
             text = (concepts + "\n\n" if concepts else "") + " ".join(lines)
             print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": defuse(text.strip())[:CAP]}}))
@@ -1536,9 +1538,12 @@ def recall(event):
     # is bounded by the store (concept-usefulness-contract.md §2), so recall below keeps its own room.
     text = (concepts + "\n\n" if concepts else "") + ("Cued by this message (a reminder you set for words like these):\n\n" + reminded + "\n\n" if reminded else "") + (
         f"Recalled from your store, by association with this message (`{cli_name()} show <id>` "
-        "reads the whole of one):\n\n" + found.strip() + ("\n\n" + budget if budget else "") if ids else
+        "reads the whole of one):\n\n" + found.strip() if ids else
         # A cue matched but recall found nothing: the words-only notice still goes out, never silent.
         f"Recall found nothing new for this message. {words_only.group(1)}" if words_only else "")
+    # A cut is said whatever came back, a cue alone included (Ember's CHANGES on #80, 1572688728097431615).
+    if budget:
+        text = (text.rstrip() + "\n\n" + budget).lstrip()
     # Concepts and recall alike are defused (Arden's F1 on #58): a fact or a fragment can hold an action tag or a fence.
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": defuse(text)[:CAP]}}))
 
