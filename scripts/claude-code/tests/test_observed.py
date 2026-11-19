@@ -103,8 +103,26 @@ class Render(unittest.TestCase):
 
     def test_stale_data_carries_its_age(self):
         out = self.text(OBS("prs", NOW, lines=("PR #1",), freshness=NOW - timedelta(minutes=10), reason="GitHub: URLError; cached"))
-        self.assertEqual(out, ["- prs: as of 10m ago (GitHub: URLError; cached)", "- PR #1"])
+        self.assertEqual(out, ["- prs: as of 10m ago (GitHub: URLError; cached)", "- (as of 10m ago) PR #1"])
         self.assertEqual(self.text(OBS("prs", NOW, lines=("PR #1",), freshness=NOW - timedelta(seconds=30))), ["- PR #1"])
+
+    def test_every_stale_line_carries_its_own_age(self):
+        # 2026-11-19 (room 1572859130241351712): Claude's block said "- prs: as of 5.0h ago (GitHub: HTTPError; cached)"
+        # and the "- PR #62 ..." line under it had no age, so read alone it looked current. Each line says its age.
+        out = self.text(OBS("prs", NOW, lines=("PR #62 x (head abc1234): no reviews", "PR #63 y (head def5678): no reviews"),
+                            freshness=NOW - timedelta(hours=5), reason="GitHub: HTTPError; cached", truncated=2))
+        self.assertEqual(out, ["- prs: as of 5.0h ago (GitHub: HTTPError; cached)",
+                               "- (as of 5.0h ago) PR #62 x (head abc1234): no reviews",
+                               "- (as of 5.0h ago) PR #63 y (head def5678): no reviews",
+                               "- (as of 5.0h ago) prs: 2 more not shown"])
+
+    def test_a_long_stale_line_keeps_its_age(self):
+        out = self.text(OBS("prs", NOW, lines=("y" * 500,), freshness=NOW - timedelta(hours=5)))
+        self.assertTrue(out[1].startswith("- (as of 5.0h ago) y"), out[1])
+
+    def test_stale_lines_of_an_unknown_source_carry_their_age_too(self):
+        out = self.text(OBS("d", NOW, status="unknown", reason="no marker", lines=("hooks: match",), freshness=NOW - timedelta(hours=2)))
+        self.assertEqual(out, ["- d: unknown (no marker)", "- (as of 2.0h ago) hooks: match"])
 
     def test_bounded_lines_and_truncation(self):
         out = self.text(OBS("x", NOW, lines=tuple(f"l{i}" for i in range(9)) + ("y" * 500,), truncated=2))
@@ -137,6 +155,9 @@ class Acknowledge(unittest.TestCase):
 class Hook(unittest.TestCase):
     """hook.observe carries the rendered sources; observe_hook acks only after printing, and only what was sent."""
 
+    def setUp(self):  # the hook renders against the real clock, so its observations are made now, not at NOW
+        self.now = datetime.now(timezone.utc)
+
     def patches(self, tmp, inbox=""):
         return [mock.patch.object(hook, "note_line", return_value=None), mock.patch.object(hook, "room_freshness", return_value=None),
                 mock.patch.object(hook, "linux_processes", return_value="[]"), mock.patch.object(hook, "own_services", return_value=[]),
@@ -163,7 +184,7 @@ class Hook(unittest.TestCase):
     def test_rendered_then_acked_after_print(self):
         printed = __import__("io").StringIO()
         ack = lambda events: lambda obs, e, c: events.append((obs.source, printed.getvalue()))
-        text, events = self.run_hook([OBS("prs", NOW, lines=("SOURCELINE",), ack="x")], ack, printed)
+        text, events = self.run_hook([OBS("prs", self.now, lines=("SOURCELINE",), ack="x")], ack, printed)
         self.assertIn("- SOURCELINE", text)
         self.assertEqual(len(events), 1)
         self.assertIn("SOURCELINE", events[0][1], "the ack ran after the block was written")
@@ -176,7 +197,7 @@ class Hook(unittest.TestCase):
                 p.start()
             try:
                 ack = lambda obs, e, c: events.append((obs.source, printed.getvalue()))
-                with mock.patch.object(observed, "observe", return_value=[OBS("prs", NOW, lines=("SOURCELINE",), ack="x")]), \
+                with mock.patch.object(observed, "observe", return_value=[OBS("prs", self.now, lines=("SOURCELINE",), ack="x")]), \
                         mock.patch.dict(observed.SOURCES, {"prs": src(None, ack)}, clear=True), mock.patch("sys.stdout", printed):
                     hook.subagent_start({"session_id": "s-1", "cwd": tmp})
             finally:
@@ -198,7 +219,7 @@ class Hook(unittest.TestCase):
 
     def test_an_observation_cut_by_cap_is_not_acked(self):
         long = tuple("z" * 190 + str(i) for i in range(observed.MAX_LINES))
-        many = [OBS(f"s{i}", NOW, lines=long, ack="x") for i in range(12)]  # ~13.8k chars, over CAP
+        many = [OBS(f"s{i}", self.now, lines=long, ack="x") for i in range(12)]  # ~13.8k chars, over CAP
         text, events = self.run_hook(many, lambda events: lambda obs, e, c: events.append(obs.source))
         self.assertTrue(0 < len(events) < 12, events)
         self.assertNotIn("s11", events, "its lines were cut by CAP, so it wasn't handed over")
@@ -207,25 +228,25 @@ class Hook(unittest.TestCase):
         """Ember on 5d07630: delivery was decided by `line in sent`, so a block cut by CAP whose lines also occur earlier
         in Observed now counted as handed over. Delivery is now which complete rendered blocks survived the cap."""
         shared = tuple("d" * 190 + str(i) for i in range(observed.MAX_LINES - 1))
-        many = [OBS(f"s{i}", NOW, lines=(f"HEAD-{i:02d}",) + shared, ack="x") for i in range(12)]
+        many = [OBS(f"s{i}", self.now, lines=(f"HEAD-{i:02d}",) + shared, ack="x") for i in range(12)]
         text, events = self.run_hook(many, lambda events: lambda obs, e, c: events.append(obs.source))
         sent = json.loads(text)["hookSpecificOutput"]["additionalContext"]
-        blocks = {o.source: "\n".join(said) for o, said in observed.render(many, NOW)}
+        blocks = {o.source: "\n".join(said) for o, said in observed.render(many, self.now)}
         whole = [s for s, block in blocks.items() if block in sent]
         cut = [s for s, block in blocks.items() if f"HEAD-{s[1:]:0>2}" in sent and block not in sent]
         self.assertEqual(len(cut), 1, "the cap falls inside one block, whose lines all appear earlier")
         self.assertEqual(events, whole)
 
     def test_what_comes_before_the_observed_block_moves_where_the_cap_falls(self):
-        many = [OBS(f"s{i}", NOW, lines=(f"HEAD-{i:02d}",) + tuple("e" * 190 + str(j) for j in range(5)), ack="x") for i in range(12)]
+        many = [OBS(f"s{i}", self.now, lines=(f"HEAD-{i:02d}",) + tuple("e" * 190 + str(j) for j in range(5)), ack="x") for i in range(12)]
         text, events = self.run_hook(many, lambda events: lambda obs, e, c: events.append(obs.source), inbox="I" * 3000 + "\n\n")
         sent = json.loads(text)["hookSpecificOutput"]["additionalContext"]
-        blocks = {o.source: "\n".join(said) for o, said in observed.render(many, NOW)}
+        blocks = {o.source: "\n".join(said) for o, said in observed.render(many, self.now)}
         self.assertEqual(events, [s for s, block in blocks.items() if block in sent])
         self.assertLess(len(events), 8, "the inbox took room the blocks would otherwise have had")
 
     def test_each_placement_is_exactly_its_rendered_block(self):
-        many = [OBS("a", NOW, lines=("one", "two")), OBS("b", NOW), OBS("c", NOW, status="unknown", reason="r", lines=("three",))]
+        many = [OBS("a", self.now, lines=("one", "two")), OBS("b", self.now), OBS("c", self.now, status="unknown", reason="r", lines=("three",))]
         with tempfile.TemporaryDirectory() as tmp:
             ps = self.patches(tmp)
             for p in ps:
@@ -376,7 +397,7 @@ class Prs(unittest.TestCase):
             obs = observed.prs({}, ctx(self.tmp, self.values, now=NOW + timedelta(minutes=10)))
         self.assertEqual((obs.status, obs.freshness, obs.ack), ("ok", NOW, None))
         text = "\n".join(l for _, said in observed.render([obs]) for l in said)
-        self.assertIn("as of 10m ago (GitHub: OSError; cached)", text); self.assertIn("#20", text)
+        self.assertIn("as of 10m ago (GitHub: OSError; cached)", text); self.assertIn("- (as of 10m ago) PR #20", text)
         self.assertNotIn("tok123", text, "an exception's text never reaches the block")
 
     def test_offline_with_no_cache_is_unknown(self):
