@@ -19,7 +19,11 @@ included. The short-wake budget (#80) and STRIP_ROOM_PREAMBLE never applied to t
 the preamble match. The last-wake wording from before 30f2618 is matched too, because stored wakes use it. Anything
 else ahead of a wake still leaves the prompt unchanged, including two notes, a note alone, or a note followed by
 other text. This reverses one test from Ember's fail-closed review (PR #19, c13054e): a bridge note used to leave the
-wake unchanged. Re-run on the same window: unparsed 10 → 0.
+wake unchanged. Re-run on the same window: unparsed 10 → 0. After Ember's review of a1e1c09: the pre-30f2618 wording is
+typed out literally (in code and test), not derived from today's template, so a template edit can't silently move both;
+each field matches only what the bridge writes there (a context is digits or `None`, a session id is a uuid, an aside is
+`session.json.corrupt-<stamp>`), so a note saying "banana tokens" leaves the wake unchanged; and a test drives
+`Bridge.run_wake` for each note and checks the prompt it really sends parses.
 
 ## 2026-11-18 — Recall: each recalled fragment says when it was written, and how long ago
 

@@ -137,5 +137,38 @@ class RolloverWiring(unittest.TestCase):
         self.assertIn("rollover check failed: disk full", [t.get("said") for t in timings if t.get("what") == "rollover"])
 
 
+class RolloverNoteParses(unittest.TestCase):
+    """Ember's review of a1e1c09, point 2: the prompt Bridge.run_wake really sends, rollover note and all, is read by
+    wake_sections as the wake under it, for each note the bridge picks. That seam is what PR #84 is for."""
+    def setUp(self):
+        saved = br.STATE
+        self.addCleanup(setattr, br, "STATE", saved)
+
+    def assert_read_as_the_wake(self, prompt, opener):
+        self.assertTrue(prompt.startswith(opener), prompt[:120])
+        self.assertIsNotNone(rc.wake_sections(prompt))
+        q = rc.recall_query(prompt)
+        self.assertNotIn(opener, q)
+        self.assertNotEqual(q, prompt)
+
+    def test_the_last_wake_prompt_parses(self):
+        prompt, _, _, _ = run({"id": "0b8e2f4a-1c3d-4e5f-8a9b-7c6d5e4f3a2b", "created": True, "last": True,
+                               "context": 151_000}, usage_log(152_000))
+        self.assert_read_as_the_wake(prompt, "This is the last wake in this session")
+
+    def test_the_fresh_session_prompt_parses(self):
+        for context in (152_000, None):
+            prompt, _, _, _ = run({"id": "0b8e2f4a-1c3d-4e5f-8a9b-7c6d5e4f3a2b", "created": True, "rotate": True,
+                                   "context": context}, usage_log(1_000))
+            self.assert_read_as_the_wake(prompt, "This is a fresh room session: the previous one")
+
+    def test_the_moved_aside_prompt_parses(self):
+        def corrupt(b, store):
+            (store.dir / "session.json").write_text('{"id": "abc", "crea', encoding="utf-8")
+
+        prompt, _, _, _ = run({"id": "old", "created": True}, usage_log(1_000), rig={"setup": corrupt})
+        self.assert_read_as_the_wake(prompt, "This is a fresh room session: the room's session record")
+
+
 if __name__ == "__main__":
     unittest.main()

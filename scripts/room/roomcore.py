@@ -1162,11 +1162,21 @@ def _note_re(text, **fields):
 
 
 _CTX, _SID, _ASIDE = "\x01ctx\x01", "\x01sid\x01", "\x01aside\x01"
-_LAST = last_wake_note({"last": True, "context": _CTX})
+# Each field matched to the values the bridge writes there, not to any word (Ember's review of a1e1c09): a context is
+# after_wake's token count (or None when session.json never had one), a session id is wake_argv's uuid4, and an aside
+# is set_aside_session's session.json.corrupt-<UTC stamp>[-n].
+_CTX_RE, _SID_RE = r"(?:\d+|None)", r"[0-9a-f]+(?:-[0-9a-f]+)*"
+_ASIDE_RE = r"session\.json\.corrupt-\d{8}T\d{6}Z(?:-\d+)?"
+# The last-wake note before 30f2618 (2026-11-12), kept literally rather than derived from today's template, so editing
+# the template can't silently change it too: stored wakes open with it.
+_LAST_WAKE_BEFORE_30F2618 = (
+    "This is the last wake in this session: it has grown to \x01ctx\x01 tokens, and a fresh room session takes over "
+    "after this wake ends. Before anything else, update your working note (`note`) so the fresh session starts from "
+    "where things stand; then answer the room as usual.\n\n")
 # The line the bridge may put ahead of a wake (at most one: bridge.py picks one of the three), so wake_sections reads
-# last and fresh wakes too. The last-wake wording before 30f2618 (2026-11-12) stays: stored wakes open with it.
-_ROLLOVER_NOTES = [_note_re(_LAST, **{_CTX: r"\w+"}),
-                   _note_re(_LAST.replace('`pstore note --content "<text>"`', "`note`"), **{_CTX: r"\w+"}),
+# last and fresh wakes too.
+_ROLLOVER_NOTES = [_note_re(last_wake_note({"last": True, "context": _CTX}), **{_CTX: _CTX_RE}),
+                   _note_re(_LAST_WAKE_BEFORE_30F2618, **{_CTX: _CTX_RE}),
                    _note_re(fresh_session_note({"rotate": True, "id": _SID, "context": _CTX}),
-                            **{_CTX: r"\w+", _SID: r"[^\s()]+"}),
-                   _note_re(moved_aside_note(SimpleNamespace(name=_ASIDE)), **{_ASIDE: r"\S+"})]
+                            **{_CTX: _CTX_RE, _SID: _SID_RE}),
+                   _note_re(moved_aside_note(SimpleNamespace(name=_ASIDE)), **{_ASIDE: _ASIDE_RE})]
