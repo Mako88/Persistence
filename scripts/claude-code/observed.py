@@ -39,7 +39,8 @@ class Observation:
     observed_at: datetime                  # when the read ran
     status: str = "ok"                     # ok | unknown | error
     lines: tuple = ()                      # bounded facts, without "- "; render() adds it
-    freshness: Optional[datetime] = None   # when the data was true at its source (a cache's time); None = observed_at
+    freshness: Optional[datetime] = None   # when the data was true at its source (a cache's time); None = observed_at.
+                                           # One per observation, so lines fed by several checks take the OLDEST
     reason: str = ""                       # why unknown/error, or what made ok data stale
     event_range: Optional[tuple] = None    # (oldest, newest) id or time of the events shown, for cursored sources
     truncated: int = 0                     # items left out; render() adds what it cuts
@@ -641,14 +642,18 @@ def render(observations, now=None):
         lines, more = bounded(obs)
         when = obs.freshness or obs.observed_at
         stale = (now or obs.observed_at) - when >= STALE
+        label = f"as of {age((now or obs.observed_at) - when)} ago" if stale else ""
         head = []
         if obs.status != "ok":
             head.append(f"- {obs.source}: {obs.status} ({obs.reason or 'no reason given'})")
         elif stale:
-            head.append(f"- {obs.source}: as of {age((now or obs.observed_at) - when)} ago" + (f" ({obs.reason})" if obs.reason else ""))
-        body = [f"- {line}" for line in lines]
+            head.append(f"- {obs.source}: {label}" + (f" ({obs.reason})" if obs.reason else ""))
+        # Every line carries the age, not just the source's head line: a line is read alone, and on 2026-11-19 a
+        # "- PR #62 ..." line under a 5h-old head read as current (room 1572859130241351712).
+        mark = f"({label}) " if label else ""
+        body = [f"- {mark}{line}" for line in lines]
         if more:
-            body.append(f"- {obs.source}: {more} more not shown")
+            body.append(f"- {mark}{obs.source}: {more} more not shown")
         rendered.append((obs, head + body))
     return rendered
 
