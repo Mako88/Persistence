@@ -9,6 +9,18 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-21 — Room: the wake parser reads last-wake and fresh-session wakes
+
+**`roomcore.wake_sections` strips the bridge's rollover note.** The bridge puts one line ahead of a wake when a room
+session rolls over: the last-wake note, the fresh-session note, or the moved-aside note. The parser required the
+preamble at the very start, so these wakes failed closed, and recall was asked about the whole prompt, preamble
+included. The short-wake budget (#80) and STRIP_ROOM_PREAMBLE never applied to them either: 10 of 48 room wakes from
+11-18 to 11-21 (#20485). Now exactly one such note, matched against the templates that write it, is removed before
+the preamble match. The last-wake wording from before 30f2618 is matched too, because stored wakes use it. Anything
+else ahead of a wake still leaves the prompt unchanged, including two notes, a note alone, or a note followed by
+other text. This reverses one test from Ember's fail-closed review (PR #19, c13054e): a bridge note used to leave the
+wake unchanged. Re-run on the same window: unparsed 10 → 0.
+
 ## 2026-11-18 — Recall: each recalled fragment says when it was written, and how long ago
 
 **`recall` now ends each fragment's header with its minute and age**, e.g. `| written 2026-11-18 19:22Z (1h ago)]`; an

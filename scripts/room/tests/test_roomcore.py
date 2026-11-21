@@ -1050,6 +1050,28 @@ class RecallQuery(unittest.TestCase):
         text = "look at this one:\n" + self.wake()
         self.assertEqual(text, rc.recall_query(text))
 
+    def rollover_notes(self):
+        last = rc.last_wake_note({"last": True, "context": 152000})
+        return [last, last.replace('`pstore note --content "<text>"`', "`note`"),   # stored wakes before 30f2618
+                rc.fresh_session_note({"rotate": True, "id": "3f2a-b7", "context": 151000}),
+                rc.fresh_session_note({"rotate": True, "id": "old", "context": None}),
+                rc.moved_aside_note(Path("/x/session.json.corrupt-20261121T0600Z"))]
+
+    def test_a_wake_behind_a_rollover_note_is_read_without_it(self):
+        # The bridge puts one of these ahead of the preamble; 10 of 48 short wakes fell back to the whole prompt
+        # for want of this (2026-11-21, #20485).
+        for note in self.rollover_notes():
+            self.assertTrue(note)
+            q = rc.recall_query(note + self.wake())
+            self.assert_no_wrapper(q)
+            self.assertNotIn("fresh room session", q); self.assertNotIn("last wake", q)
+            self.assertIn("what did the chunking bench show?", q)
+
+    def test_two_notes_or_a_note_alone_is_not_a_wake(self):
+        notes = self.rollover_notes()
+        for text in (notes[0] + notes[2] + self.wake(), notes[0], notes[2] + "look at this:\n" + self.wake()):
+            self.assertEqual(text, rc.recall_query(text))
+
     def test_a_message_quoting_the_scaffolding_keeps_it(self):
         tr = {"id": "12", "channel_id": "c1", "author": "John", "text": "the header says Addressed to you (2): and -- in x --"}
         q = rc.recall_query(rc.build_prompt([tr], [tr], "Claude", ME))
@@ -1146,12 +1168,14 @@ class RecallQuerySections(unittest.TestCase):
             self.assertIsNotNone(rc.wake_sections(stored))
             self.assertEqual(rc.recall_query(w), rc.recall_query(stored))
 
-    def test_a_bridge_note_ahead_of_the_wake_leaves_it_unchanged(self):
+    def test_a_bridge_note_ahead_of_the_wake_is_read_as_the_wake(self):
+        # Was "leaves it unchanged" (c13054e, PR #19). Now the bridge's own notes, matched exactly, are stripped;
+        # any other text ahead of a wake still leaves it unchanged (RecallQuery.test_two_notes_or_a_note_alone_is_not_a_wake).
         w = self.wake()
         for note in (rc.fresh_session_note({"rotate": True, "id": "abc", "context": 126891}),
                      rc.last_wake_note({"last": True, "context": 150000})):
             self.assertTrue(note)
-            self.assertEqual(note + w, rc.recall_query(note + w))
+            self.assertEqual(rc.recall_query(w), rc.recall_query(note + w))
 
 
 if __name__ == "__main__":

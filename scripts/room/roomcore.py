@@ -12,6 +12,7 @@ import stat
 import time
 import uuid
 from collections import deque
+from types import SimpleNamespace
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
@@ -625,6 +626,9 @@ def wake_sections(prompt):
     with the line break build_prompt ends on (a wake cut mid-message doesn't), hold only the shapes build_prompt
     writes in the order it writes them, end with an 'Addressed to you' section, and every section must hold exactly
     as many messages as its heading declares. Anything short of that is a wake recall shouldn't be asked about in part."""
+    note = next((m for m in (n.match(prompt) for n in _ROLLOVER_NOTES) if m), None)
+    if note:
+        prompt = prompt[note.end():]          # the bridge's rollover line: transport, not the conversation
     head = next((m for m in (p.match(prompt) for p in _PREAMBLES) if m), None)
     if not head or not prompt.endswith("\n"):
         return None
@@ -1147,3 +1151,22 @@ def fresh_session_note(saved):
         return (f"This is a fresh room session: the previous one ({saved['id']}) had grown to {saved.get('context')} "
                 "tokens. Your core above carries your note and recent conversation; `room read` shows the room.\n\n")
     return ""
+
+
+def _note_re(text, **fields):
+    """A rollover note, made with sentinel values, read back: its text escaped, each sentinel replaced by its pattern."""
+    out = re.escape(text)
+    for sentinel, pattern in fields.items():
+        out = out.replace(re.escape(sentinel), pattern)
+    return re.compile(r"\A" + out)
+
+
+_CTX, _SID, _ASIDE = "\x01ctx\x01", "\x01sid\x01", "\x01aside\x01"
+_LAST = last_wake_note({"last": True, "context": _CTX})
+# The line the bridge may put ahead of a wake (at most one: bridge.py picks one of the three), so wake_sections reads
+# last and fresh wakes too. The last-wake wording before 30f2618 (2026-11-12) stays: stored wakes open with it.
+_ROLLOVER_NOTES = [_note_re(_LAST, **{_CTX: r"\w+"}),
+                   _note_re(_LAST.replace('`pstore note --content "<text>"`', "`note`"), **{_CTX: r"\w+"}),
+                   _note_re(fresh_session_note({"rotate": True, "id": _SID, "context": _CTX}),
+                            **{_CTX: r"\w+", _SID: r"[^\s()]+"}),
+                   _note_re(moved_aside_note(SimpleNamespace(name=_ASIDE)), **{_ASIDE: r"\S+"})]
