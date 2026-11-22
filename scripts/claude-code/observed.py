@@ -15,6 +15,7 @@ import json
 import os
 import re
 import threading
+import urllib.error
 import urllib.request
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
@@ -105,8 +106,10 @@ PRS_SHOWN = 5
 
 
 def github_get(url, token, timeout):
-    request = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
-                                                   "User-Agent": "persistence-observe"})
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "persistence-observe"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
 
@@ -138,9 +141,11 @@ def prs_summary(pulls, reviews_of):
 
 
 def prs_lines(repo, summary):
+    """A note (the token refused) is a line of its own, kept in the cache, so it shows on every prompt it is true for."""
+    note = (summary["note"],) if summary.get("note") else ()
     if not summary["open"]:
-        return (f"none open on {repo}",)
-    out = [f"PR #{p['number']}{' draft' if p['draft'] else ''} {p['title']} (head {p['head']}): "
+        return note + (f"none open on {repo}",)
+    out = list(note) + [f"PR #{p['number']}{' draft' if p['draft'] else ''} {p['title']} (head {p['head']}): "
            + (", ".join(f"{who} {state}" for who, state in p["reviews"].items()) or "no reviews") for p in summary["shown"]]
     return tuple(out)
 
@@ -171,9 +176,20 @@ def prs(event, ctx):
         if not token:
             raise Unreadable("no Token: line in the token file")
         base = f"https://api.github.com/repos/{repo}/pulls"
-        pulls = github_get(f"{base}?state=open&per_page=30", token, 3)
+        refused = ""
+        try:
+            pulls = github_get(f"{base}?state=open&per_page=30", token, 3)
+        except urllib.error.HTTPError as e:
+            # A dead token (401) on a public repo: read without it, and say so. From 2026-11-18 to 11-22 the block read
+            # 'GitHub: HTTPError; cached' over a list days old that was missing an open PR, and looked like a network blip.
+            if e.code != 401:
+                raise
+            token, refused = None, "token refused (401), read without it"
+            pulls = github_get(f"{base}?state=open&per_page=30", None, 3)
         reviews = {str(p["number"]): github_get(f"{base}/{p['number']}/reviews?per_page=100", token, 3) for p in pulls[:PRS_SHOWN]}
         summary = prs_summary(pulls, reviews)
+        if refused:
+            summary["note"] = refused
     except Exception as e:
         why = str(e) if isinstance(e, Unreadable) else f"GitHub: {type(e).__name__}"  # never the exception text: it can carry a URL
         if cached:

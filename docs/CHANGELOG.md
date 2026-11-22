@@ -9,6 +9,16 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-22 — Observed now: a refused GitHub token falls back to reading without it
+
+**The prs source retries a 401 without the token** (`scripts/claude-code/observed.py`). The repo is public, so
+the open-PR list and reviews read fine unauthenticated. From 2026-11-18 to 11-22 Claude's token was dead, and
+the block read `GitHub: HTTPError; cached` over a list ~90h old that was missing PR #85; it looked like a network
+blip. Now the list is current, and its first line says `token refused (401), read without it`, kept in the
+cache so it shows on every prompt while true. Only a 401 is retried; any other error still falls back to the
+cache as before. No token at all still means no call (unchanged). Unauthenticated reads share GitHub's
+60/hour limit; if that's hit, the source falls back to its cache with its age.
+
 ## 2026-11-23 — Concept extractor: a settled 'both' reading no longer flags every fact
 
 **Why:** condition 2's 'both' gate (PR #87, Arden's #933 and #2942) failed on quiet: 32 of 33 correctly filed Ember
