@@ -9,6 +9,14 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-22 — Observed now: age labels stay inside the line width; "oldest check" is a helper
+
+**Follow-up to #83 (Claude's non-blocking review points).** A stale line's `(as of <age> ago)` label now counts
+toward the 200-character line width; before, a labelled line could reach ~218. "Lines fed by several checks take the
+oldest" was a comment only; it is now `observed.oldest(...)`, which a source that combines checks uses for its
+freshness. A hook-level test carries the 2026-11-19 case (a 5h-old cached PR read) through to the session text, so
+every PR line is checked to arrive with its age.
+
 ## 2026-11-21 — Room: the wake parser reads last-wake and fresh-session wakes
 
 **`roomcore.wake_sections` strips the bridge's rollover note.** The bridge puts one line ahead of a wake when a room

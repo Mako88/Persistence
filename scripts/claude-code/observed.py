@@ -40,7 +40,7 @@ class Observation:
     status: str = "ok"                     # ok | unknown | error
     lines: tuple = ()                      # bounded facts, without "- "; render() adds it
     freshness: Optional[datetime] = None   # when the data was true at its source (a cache's time); None = observed_at.
-                                           # One per observation, so lines fed by several checks take the OLDEST
+                                           # One per observation: lines fed by several checks use oldest(...)
     reason: str = ""                       # why unknown/error, or what made ok data stale
     event_range: Optional[tuple] = None    # (oldest, newest) id or time of the events shown, for cursored sources
     truncated: int = 0                     # items left out; render() adds what it cuts
@@ -628,8 +628,17 @@ def observe(event, ctx):
     return out
 
 
-def bounded(obs):
-    lines = [short(line, MAX_LINE_CHARS) for line in obs.lines]
+def oldest(*whens):
+    """The freshness of lines fed by several checks: the OLDEST of their times (None ones skipped; None if all are).
+    An Observation has one freshness, so a source that combines checks must set freshness=oldest(...), or a line
+    built partly from a stale read is labelled by its freshest part."""
+    known = [w for w in whens if w is not None]
+    return min(known) if known else None
+
+
+def bounded(obs, reserve=0):
+    """At most MAX_LINES lines of at most MAX_LINE_CHARS each, counting `reserve` chars render() puts before a line."""
+    lines = [short(line, MAX_LINE_CHARS - reserve) for line in obs.lines]
     cut = max(0, len(lines) - MAX_LINES)
     return lines[:MAX_LINES], obs.truncated + cut
 
@@ -639,10 +648,11 @@ def render(observations, now=None):
     caller can ack exactly the observations whose lines reached the session."""
     rendered = []
     for obs in observations:
-        lines, more = bounded(obs)
         when = obs.freshness or obs.observed_at
         stale = (now or obs.observed_at) - when >= STALE
         label = f"as of {age((now or obs.observed_at) - when)} ago" if stale else ""
+        mark = f"({label}) " if label else ""
+        lines, more = bounded(obs, len(mark))  # the age label counts toward the line's width
         head = []
         if obs.status != "ok":
             head.append(f"- {obs.source}: {obs.status} ({obs.reason or 'no reason given'})")
@@ -650,7 +660,6 @@ def render(observations, now=None):
             head.append(f"- {obs.source}: {label}" + (f" ({obs.reason})" if obs.reason else ""))
         # Every line carries the age, not just the source's head line: a line is read alone, and on 2026-11-19 a
         # "- PR #62 ..." line under a 5h-old head read as current (room 1572859130241351712).
-        mark = f"({label}) " if label else ""
         body = [f"- {mark}{line}" for line in lines]
         if more:
             body.append(f"- {mark}{obs.source}: {more} more not shown")
