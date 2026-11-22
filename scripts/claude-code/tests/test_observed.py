@@ -120,6 +120,22 @@ class Render(unittest.TestCase):
         out = self.text(OBS("prs", NOW, lines=("y" * 500,), freshness=NOW - timedelta(hours=5)))
         self.assertTrue(out[1].startswith("- (as of 5.0h ago) y"), out[1])
 
+    def test_the_age_label_counts_toward_the_line_width(self):
+        # Claude's review of #83: a labelled line could reach ~218 chars, over the 200 every other line keeps to.
+        out = self.text(OBS("prs", NOW, lines=("y" * 500,), freshness=NOW - timedelta(hours=5)))
+        self.assertEqual(len(out[1]), observed.MAX_LINE_CHARS + 2, out[1])
+        self.assertTrue(out[1].endswith("…"))
+        self.assertEqual(self.text(OBS("prs", NOW, lines=("short",), freshness=NOW - timedelta(hours=5)))[1],
+                         "- (as of 5.0h ago) short", "a line that fits is not cut")
+
+    def test_oldest_takes_the_oldest_known_check(self):
+        # Claude's review of #83: "lines fed by several checks take the oldest" was a comment only.
+        old, new = NOW - timedelta(hours=5), NOW - timedelta(minutes=1)
+        self.assertEqual(observed.oldest(new, None, old), old)
+        self.assertIsNone(observed.oldest(None, None))
+        out = self.text(OBS("x", NOW, lines=("from two reads",), freshness=observed.oldest(new, old)))
+        self.assertEqual(out[1], "- (as of 5.0h ago) from two reads", "labelled by the stale read, not the fresh one")
+
     def test_stale_lines_of_an_unknown_source_carry_their_age_too(self):
         out = self.text(OBS("d", NOW, status="unknown", reason="no marker", lines=("hooks: match",), freshness=NOW - timedelta(hours=2)))
         self.assertEqual(out, ["- d: unknown (no marker)", "- (as of 2.0h ago) hooks: match"])
@@ -188,6 +204,18 @@ class Hook(unittest.TestCase):
         self.assertIn("- SOURCELINE", text)
         self.assertEqual(len(events), 1)
         self.assertIn("SOURCELINE", events[0][1], "the ack ran after the block was written")
+
+    def test_a_stale_source_reaches_the_session_with_every_line_aged(self):
+        # Claude's review of #83: no hook-level test. The 2026-11-19 case end to end: a 5h-old cached prs read.
+        obs = OBS("prs", self.now, lines=("PR #62 x (head abc1234): no reviews", "PR #63 y (head def5678): no reviews"),
+                  freshness=self.now - timedelta(hours=5), reason="GitHub: HTTPError; cached", ack="x")
+        text, events = self.run_hook([obs], lambda events: lambda o, e, c: events.append(o.source))
+        sent = json.loads(text)["hookSpecificOutput"]["additionalContext"] if text.lstrip().startswith("{") else text
+        self.assertIn("- prs: as of 5.0h ago (GitHub: HTTPError; cached)", sent)
+        self.assertIn("- (as of 5.0h ago) PR #62 x (head abc1234): no reviews", sent)
+        self.assertIn("- (as of 5.0h ago) PR #63 y (head def5678): no reviews", sent)
+        self.assertNotIn("\n- PR #6", sent, "no PR line reaches the session without its age")
+        self.assertEqual(events, ["prs"])
 
     def subagent(self, printed, core="the core"):
         events = []
