@@ -9,6 +9,20 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-23 — Concept eval: gate_c2 shows what its names don't cover (#87 follow-up)
+
+**Why:** Claude's re-review of #87 at 8d9025a (room 1574390288632254548) found two non-blocking holes, both probed:
+a fact can sit where no bar sees it.
+- **other_names facts go to the judge:** a fact under a fragment's `other_names` concept (#1395's 'Ember
+  store-request boundary') was only counted, so 'Ember store-request boundary' -> 'is four years old' passed unseen.
+  Now it goes on the sheet with the name unmasked. The judge writes `other` if the fact is about that thing: it is then
+  printed with its text in the score and counted in no bar. If the judge names a referent instead, it is misfiled, so
+  unflagged it fails *fire*. Left unjudged, it voids the score like any unlabelled fact.
+- **`gate_c2.py endpoints`, also printed under `score`:** report only. It lists every distinct endpoint per
+  fragment that no listed name, mishearing, other name or bare label covers, with how many stored facts use it. A
+  peer fact filed under "John's daughter" in #924 has no ember/emma in its name, so it was neither counted nor
+  voided. This list is where a reader catches it.
+
 ## 2026-11-23 — Concept eval: the referent gates for condition 2 (peer-only and both)
 
 **Why:** Arden's bar for concept recall on their store (review 5918124562) has three conditions; condition 2 is the

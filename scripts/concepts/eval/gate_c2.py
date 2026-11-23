@@ -4,13 +4,20 @@ one fragment. Reads `concept_eval.py run` output; never calls a model.
     gate_c2.py sheet <gold.json> <runs.jsonl>... --out sheet.jsonl [--seed 1]
         a blind sheet: one row per distinct written fact with an Ember referent as subject or object, that referent
         shown as the bare label, no flag, run or repeat on it, shuffled. It holds fact text: keep it private. The
-        store's self fills `label` with a referent key (ember-peer, ember-daughter) or 'both'.
+        store's self fills `label` with a referent key (ember-peer, ember-daughter) or 'both'. A fact under a name the
+        gold lists in a fragment's other_names (a thing of the peer's, say) goes on the sheet with that name unmasked:
+        the judge writes 'other' if the fact is about that thing, or the referent it is really about.
     gate_c2.py score <gold.json> <runs.jsonl>... --judged sheet.jsonl [--json]
         per gate: fire (0 misfiled facts written unflagged), quiet (at most 1 in 4 correctly filed facts flagged),
         bare (0 facts under the bare label); per fragment, report only: coverage, the reading's votes, facts dropped
         by the referent check. A fact on the runs but not labelled on the sheet fails the score (exit 2), and so does a fact
         under a name that reads as an Ember (ember/emma, whole word) but is no name, bare label or mishearing the gold
-        lists for that fragment.
+        lists for that fragment. Facts judged 'other' are printed with their text and counted in no bar; one judged a
+        referent is misfiled. The endpoints report follows.
+    gate_c2.py endpoints <gold.json> <runs.jsonl>...
+        report only: every distinct endpoint of a stored fact, per fragment, that is no name, mishearing, other name
+        or bare label the gold lists for it, with how many facts use it. A fact filed under "John's daughter" has no
+        Ember in its name, so neither the bars nor the void see it; this list is where a reader does.
 """
 import argparse
 import hashlib
@@ -103,8 +110,6 @@ def sheet(gold, paths, seed=1):
     seen = {}
     for rec in rows(paths):
         for w, filed, s, o in ember_facts(rec, names_for(names, heard, rec["fragment"]), bare):
-            if filed == "other":
-                continue
             k = key(rec["fragment"], s, o, w.get("text"))
             seen.setdefault(k, {"key": k, "fragment": rec["fragment"], "subject": s, "object": o, "text": w.get("text"), "label": ""})
     out = list(seen.values())
@@ -122,6 +127,7 @@ def score(gold, paths, judged):
     for gate, frags in gates.items():
         c = Counter()
         per = {}
+        others = []
         for fid in frags:
             recs = by_frag.get(fid, [])
             fc = Counter(runs=len(recs))
@@ -139,13 +145,14 @@ def score(gold, paths, judged):
                 found = ember_facts(rec, names_for(names, heard, fid), bare, odd)
                 unlisted.extend((fid, e, w.get("text")) for w, e in odd)
                 for w, filed, s, o in found:
-                    if filed == "other":
-                        fc["facts under an other Ember-named concept"] += 1
-                        continue
                     if filed == "bare":
                         c["bare"] += 1
                         continue
                     label = labels.get(key(fid, s, o, w.get("text")))
+                    if filed == "other" and label == "other":
+                        fc["facts under an other Ember-named concept"] += 1
+                        others.append((fid, s, o, w.get("text")))
+                        continue
                     if label not in ("ember-peer", "ember-daughter", "both"):
                         unlabelled.append((fid, s, o, w.get("text")))
                         continue
@@ -169,9 +176,35 @@ def score(gold, paths, judged):
             "quiet": {"pass": quiet_ok and c["right"] > 0, "right flagged": c["right flagged"], "right": c["right"],
                       "bar": f"<= {QUIET[0]} in {QUIET[1]}"},
             "bare": {"pass": c["bare"] == 0, "facts": c["bare"]},
+            "other": [{"fragment": f, "subject": s, "object": o, "text": t} for f, s, o, t in others],
         }
         result[gate]["pass"] = all(result[gate][b]["pass"] for b in ("fire", "quiet", "bare"))
     return result, unlabelled, unlisted
+
+
+def endpoints(gold, paths):
+    """{fragment: {endpoint: stored facts using it}} for every endpoint no listed name, mishearing, other name or bare
+    label covers in that fragment. Report only."""
+    names, bare, _, _, heard = load_gold(gold)
+    out = {}
+    for rec in rows(paths):
+        fid = int(rec["fragment"])
+        known = names_for(names, heard, fid)
+        for w in rec.get("written") or []:
+            if not isinstance(w, dict) or not stored(w):
+                continue
+            for e in dict.fromkeys(x for x in (w.get("subject"), w.get("object")) if x):
+                if norm(e) not in known and norm(e) not in bare:
+                    out.setdefault(fid, Counter())[e] += 1
+    return {f: dict(c) for f, c in sorted(out.items())}
+
+
+def print_endpoints(ends):
+    print("endpoints no listed name covers (report only; read them for a misfiling the gate can't see):")
+    if not ends:
+        print("  none")
+    for fid, c in ends.items():
+        print(f"  #{fid}: " + ", ".join(f"{e!r} {n}" for e, n in sorted(c.items(), key=lambda x: (-x[1], x[0]))))
 
 
 def main(argv=None):
@@ -187,16 +220,24 @@ def main(argv=None):
     sc.add_argument("runs", nargs="+")
     sc.add_argument("--judged", required=True)
     sc.add_argument("--json", action="store_true")
+    en = sub.add_parser("endpoints")
+    en.add_argument("gold")
+    en.add_argument("runs", nargs="+")
     a = ap.parse_args(argv)
     if a.cmd == "sheet":
         out = sheet(a.gold, a.runs, a.seed)
         Path(a.out).write_text("".join(json.dumps(r) + "\n" for r in out), encoding="utf-8")
         print(f"{len(out)} rows to {a.out}", file=sys.stderr)
         return 0
+    if a.cmd == "endpoints":
+        print_endpoints(endpoints(a.gold, a.runs))
+        return 0
     judged = [json.loads(l) for l in Path(a.judged).read_text(encoding="utf-8").splitlines() if l.strip()]
     result, unlabelled, unlisted = score(a.gold, a.runs, judged)
+    ends = endpoints(a.gold, a.runs)
     if a.json:
-        print(json.dumps({"gates": result, "unlabelled": len(unlabelled), "unlisted": len(unlisted)}, indent=1))
+        print(json.dumps({"gates": result, "unlabelled": len(unlabelled), "unlisted": len(unlisted),
+                          "endpoints": {str(f): c for f, c in ends.items()}}, indent=1))
     else:
         for gate, r in result.items():
             print(f"{gate}: {'PASS' if r['pass'] else 'FAIL'}")
@@ -207,6 +248,9 @@ def main(argv=None):
             print(f"  bare  {'pass' if r['bare']['pass'] else 'FAIL'}: {r['bare']['facts']}")
             for fid, f in r["fragments"].items():
                 print(f"  #{fid}: " + ", ".join(f"{k} {v}" for k, v in f.items()))
+            for o in r["other"]:
+                print(f"  other (judged 'other', in no bar) #{o['fragment']}: {o['subject']!r} -> {o['object']!r}: {o['text']}")
+        print_endpoints(ends)
     if unlabelled:
         print(f"{len(unlabelled)} written facts are not labelled on the sheet: the score is void", file=sys.stderr)
     if unlisted:

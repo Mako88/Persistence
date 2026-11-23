@@ -1,6 +1,8 @@
 """gate_c2 on synthetic run lines: the sheet hides the filed referent and the flag, and the score fails each bar on the
 case it is for (an unflagged misfile, too many correct facts flagged, a fact under the bare label, a refused add not
 counted as written, an unlabelled fact voiding the score)."""
+import contextlib
+import io
 import json
 import sys
 import tempfile
@@ -147,16 +149,79 @@ class GateC2(unittest.TestCase):
         _, _, unlisted = g.score(GOLD, [runs], self.judge(runs, {"u": "ember-peer"}))
         self.assertEqual(unlisted, [])
 
-    def test_a_listed_other_ember_named_concept_is_counted_apart_not_voided(self):
-        """#1395 'Ember store-request boundary' (gold other_names): a thing of the peer's, in no bar, not on the sheet."""
+    def test_a_listed_other_ember_named_concept_confirmed_other_is_in_no_bar(self):
+        """#1395 'Ember store-request boundary' (gold other_names): a thing of the peer's. Judged 'other', it is counted
+        apart and in no bar. Listed for #1395 only, so under #924 it still voids."""
         runs = self.runs(rec(1395, w(PEER, "u"), w("Ember store-request boundary", "is parsed as data")),
                          rec(924, w("Ember store-request boundary", "x")))
-        rows = g.sheet(GOLD, [runs])
-        self.assertEqual([r["text"] for r in rows], ["u"])
-        result, unlabelled, unlisted = g.score(GOLD, [runs], self.judge(runs, {"u": "ember-peer"}))
+        result, unlabelled, unlisted = g.score(GOLD, [runs], self.judge(runs, {"u": "ember-peer", "is parsed as data": "other"}))
+        self.assertEqual(unlabelled, [])
         self.assertEqual(result["peer-only"]["fragments"][1395]["facts under an other Ember-named concept"], 1)
         self.assertEqual(result["peer-only"]["counts"]["facts"], 1)
+        self.assertTrue(result["peer-only"]["pass"])
         self.assertEqual([u[:2] for u in unlisted], [(924, "Ember store-request boundary")])   # listed for #1395 only
+
+    def test_other_named_facts_go_on_the_sheet_unmasked(self):
+        """Claude's #87 re-review point 1: a judge confirms each fact under an other_names concept. The name is shown
+        as written (it is not a referent pick), so the judge can say whether the fact is about that thing."""
+        runs = self.runs(rec(1395, w(PEER, "u"), w("Ember store-request boundary", "is parsed as data")))
+        rows = {r["text"]: r for r in g.sheet(GOLD, [runs])}
+        self.assertEqual(set(rows), {"u", "is parsed as data"})
+        self.assertEqual(rows["is parsed as data"]["subject"], "Ember store-request boundary")
+        self.assertEqual(rows["u"]["subject"], "Ember")
+
+    def test_an_other_named_fact_judged_a_referent_is_an_unflagged_misfile(self):
+        """Claude's probe: 'Ember store-request boundary' -> 'is four years old' showed only as a count. Judged the
+        daughter, it is misfiled, and unflagged it fails fire."""
+        runs = self.runs(rec(1395, w(PEER, "u"), w("Ember store-request boundary", "is four years old")))
+        result, unlabelled, _ = g.score(GOLD, [runs], self.judge(runs, {"u": "ember-peer", "is four years old": "ember-daughter"}))
+        self.assertEqual(unlabelled, [])
+        self.assertFalse(result["peer-only"]["fire"]["pass"])
+        self.assertEqual(result["peer-only"]["fire"]["misfiled unflagged"], 1)
+
+    def test_an_unjudged_other_named_fact_voids_the_score(self):
+        runs = self.runs(rec(1395, w(PEER, "u"), w("Ember store-request boundary", "is four years old")))
+        judged = Path(self.dir) / "judged.jsonl"
+        judged.write_text("".join(json.dumps({**r, "label": "ember-peer"}) + "\n"
+                                  for r in g.sheet(GOLD, [runs]) if r["text"] == "u"))
+        self.assertEqual(g.main(["score", str(GOLD), runs, "--judged", str(judged)]), 2)
+
+    def test_score_prints_each_other_named_fact_with_its_text(self):
+        runs = self.runs(rec(1395, w(PEER, "u"), w("Ember store-request boundary", "is parsed as data")))
+        judged = Path(self.dir) / "judged.jsonl"
+        judged.write_text("".join(json.dumps(r) + "\n" for r in self.judge(runs, {"u": "ember-peer", "is parsed as data": "other"})))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            g.main(["score", str(GOLD), runs, "--judged", str(judged)])
+        self.assertIn("is parsed as data", out.getvalue())
+        self.assertIn("Ember store-request boundary", out.getvalue())
+
+    def test_endpoints_lists_every_endpoint_no_listed_name_covers(self):
+        """Claude's #87 re-review point 2: a peer fact filed under "John's daughter" in #924 has no ember/emma in its
+        name, so it was neither counted nor voided. Report only: every distinct endpoint per fragment that is no listed
+        name, mishearing, other name or bare label, with how many stored facts use it."""
+        runs = self.runs(rec(924, w("John's daughter", "may run on a ChatGPT plan", obj="John"), w(PEER, "u")),
+                         rec(924, w("John's daughter", "games on the PC")),
+                         rec(933, w("Emma", "is four"), w("Synth", "t", said="")))   # refused add: not written
+        self.assertEqual(g.endpoints(GOLD, [runs]), {924: {"John's daughter": 2, "John": 1}})
+
+    def test_endpoints_command_prints_the_list_and_exits_0(self):
+        runs = self.runs(rec(924, w("John's daughter", "may run on a ChatGPT plan")))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(g.main(["endpoints", str(GOLD), runs]), 0)
+        self.assertIn("#924", out.getvalue())
+        self.assertIn("John's daughter", out.getvalue())
+
+    def test_score_reports_unlisted_endpoints_without_voiding(self):
+        runs = self.runs(rec(1395, w(PEER, "u", obj="John")))
+        judged = Path(self.dir) / "judged.jsonl"
+        judged.write_text("".join(json.dumps(r) + "\n" for r in self.judge(runs, {"u": "ember-peer"})))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = g.main(["score", str(GOLD), runs, "--judged", str(judged)])
+        self.assertIn("'John'", out.getvalue())
+        self.assertNotEqual(code, 2)
 
 
 def g_load(path):
