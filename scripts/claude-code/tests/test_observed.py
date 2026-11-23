@@ -10,6 +10,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.error
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -439,6 +440,35 @@ class Prs(unittest.TestCase):
             obs = observed.prs({}, ctx(self.tmp, self.values))
         self.assertEqual(obs.status, "unknown")
         self.assertNotIn("hunter2", repr(obs))
+
+    def refusing(self, calls, code=401):
+        """GitHub refusing the token with `code`, answering without one (the public repo)."""
+        def get(url, token, timeout):
+            calls.append((url, token))
+            if token:
+                raise urllib.error.HTTPError(url, code, "Bad credentials", {}, None)
+            return REVIEWS if "/reviews" in url else PULLS
+        return get
+
+    def test_a_refused_token_reads_without_it_and_says_so(self):
+        # 2026-11-18 to 11-22: a dead token left the block on 'GitHub: HTTPError; cached' over a days-old list missing #85.
+        calls = []
+        with mock.patch.object(observed, "github_get", self.refusing(calls)):
+            obs = self.read_and_ack()
+            again = observed.prs({}, ctx(self.tmp, self.values, now=NOW + timedelta(seconds=30)))
+        self.assertEqual(obs.status, "ok")
+        self.assertEqual(obs.lines[0], "token refused (401), read without it")
+        self.assertIn("arden-bot APPROVED", obs.lines[1])
+        self.assertTrue(all(token is None for _, token in calls[1:]), "after the 401 every call goes without the token")
+        self.assertEqual(again.lines, obs.lines, "the note survives in the cache")
+
+    def test_other_http_errors_still_fall_back_to_the_cache(self):
+        with mock.patch.object(observed, "github_get", self.fake([])):
+            self.read_and_ack()
+        calls = []
+        with mock.patch.object(observed, "github_get", self.refusing(calls, code=500)):
+            obs = observed.prs({}, ctx(self.tmp, self.values, now=NOW + timedelta(minutes=10)))
+        self.assertEqual((obs.reason, len(calls)), ("GitHub: HTTPError; cached", 1), "only a 401 is retried without the token")
 
     def test_more_than_shown_is_truncated(self):
         pulls = [dict(PULLS[0], number=n) for n in range(1, 9)]
