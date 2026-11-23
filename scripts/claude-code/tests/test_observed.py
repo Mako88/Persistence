@@ -462,6 +462,36 @@ class Prs(unittest.TestCase):
         self.assertTrue(all(token is None for _, token in calls[1:]), "after the 401 every call goes without the token")
         self.assertEqual(again.lines, obs.lines, "the note survives in the cache")
 
+    # Arden's point on #90 (msg 1574517695586766918): with a dead token every 120s refresh spent a refused call and then
+    # 1+N unauthenticated ones, against GitHub's 60/h limit per IP. The refusal is remembered (a hash of the token, never
+    # the token) and the list refreshed at most every PRS_TTL_REFUSED, without trying the token again until it changes.
+    def test_a_refused_token_is_not_retried_and_the_list_refreshes_slower(self):
+        calls = []
+        with mock.patch.object(observed, "github_get", self.refusing(calls)):
+            self.read_and_ack()
+            n = len(calls)
+            between = observed.prs({}, ctx(self.tmp, self.values, now=NOW + timedelta(minutes=5)))
+            self.assertEqual(len(calls), n, "inside PRS_TTL_REFUSED the cache is served, no call at all")
+            later = observed.prs({}, ctx(self.tmp, self.values, now=NOW + timedelta(seconds=observed.PRS_TTL_REFUSED + 1)))
+        self.assertEqual(between.freshness, NOW, "the cached list says how old it is")
+        self.assertEqual(between.lines[0], "token refused (401), read without it")
+        self.assertGreater(len(calls), n, "after PRS_TTL_REFUSED the list is read again")
+        self.assertTrue(all(token is None for _, token in calls[n:]), "the refused token isn't sent again")
+        self.assertEqual(later.lines[0], "token refused (401), read without it", "the note stays while it's true")
+        self.assertEqual(later.ack["refused"], observed.token_mark("tok123"), "the refusal is carried into the new cache")
+        self.assertNotIn("tok123", json.dumps(later.ack))
+
+    def test_a_new_token_is_tried_at_the_normal_ttl(self):
+        with mock.patch.object(observed, "github_get", self.refusing([])):
+            self.read_and_ack()
+        self.secrets.write_text("Token: tok456\n")
+        calls = []
+        with mock.patch.object(observed, "github_get", self.fake(calls)):
+            obs = observed.prs({}, ctx(self.tmp, self.values, now=NOW + timedelta(seconds=observed.PRS_TTL + 1)))
+        self.assertTrue(calls and all(token == "tok456" for _, token in calls), "a changed token is tried at once")
+        self.assertNotIn("token refused (401), read without it", obs.lines)
+        self.assertNotIn("refused", obs.ack)
+
     def test_other_http_errors_still_fall_back_to_the_cache(self):
         with mock.patch.object(observed, "github_get", self.fake([])):
             self.read_and_ack()

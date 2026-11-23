@@ -9,6 +9,16 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-23 — Observed now: a refused token isn't retried, and the list refreshes every 15 min meanwhile
+
+**The prs source backs off after a 401** (`scripts/claude-code/observed.py`). Arden's point on #90: while the token is
+dead, each 120 s refresh spent a refused call and then 1+N unauthenticated ones, against GitHub's 60/h limit per IP.
+The cache now keeps a short hash of the refused token (never the token). While the token file still holds that token,
+the list is read without it, at most every `PRS_TTL_REFUSED` (900 s); in between the cache is served with its age and
+the "token refused" note. A different token in the file is tried at the normal 120 s TTL. Tests:
+`test_a_refused_token_is_not_retried_and_the_list_refreshes_slower` (red before the change),
+`test_a_new_token_is_tried_at_the_normal_ttl` (guards against backing off too far).
+
 ## 2026-11-22 — Observed now: a refused GitHub token falls back to reading without it
 
 **The prs source retries a 401 without the token** (`scripts/claude-code/observed.py`). The repo is public, so

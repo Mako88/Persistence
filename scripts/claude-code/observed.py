@@ -11,6 +11,7 @@ never stored. The seam agreed with Ember (room 1570646253388177512):
 Nothing runs unless the store's own settings name it in PERSISTENCE_OBSERVE_SOURCES. Ember's event-buffer projection
 plugs in as one more entry in SOURCES (a read that projects "new since cursor" with event_range, an ack that advances
 the cursor). Standard library only; nothing here imports hook.py (it hands what it needs in through ctx)."""
+import hashlib
 import json
 import os
 import re
@@ -102,6 +103,9 @@ def write_atomic(path, text):
 # --- prs: open pull requests, each with its head and each reviewer's latest review ---
 
 PRS_TTL = 120
+# While the token is refused, reads go unauthenticated and share GitHub's 60/h limit per IP (1+N calls a read), so the
+# list is refreshed less often and the refused token isn't sent again until the token file holds a different one.
+PRS_TTL_REFUSED = 900
 PRS_SHOWN = 5
 
 
@@ -125,6 +129,11 @@ def github_token(ctx):
     except OSError:
         return None
     return None
+
+
+def token_mark(token):
+    """What the cache keeps to recognise a refused token: a short hash, never the token."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
 
 
 def prs_summary(pulls, reviews_of):
@@ -158,7 +167,7 @@ def prs_cache(ctx, repo):
         cache = json.loads(path.read_text(encoding="utf-8"))
         if cache.get("repo") != repo:
             return None
-        return parse_time(cache["at"]), cache["summary"]
+        return parse_time(cache["at"]), cache["summary"], cache.get("refused")
     except (OSError, ValueError, KeyError, TypeError):
         return None
 
@@ -167,38 +176,44 @@ def prs(event, ctx):
     repo = ctx.setting("PERSISTENCE_OBSERVE_GITHUB_REPO", "Mako88/Persistence")
     cached = prs_cache(ctx, repo)
     obs = Observation("prs", ctx.now)
-    if cached and timedelta(0) <= ctx.now - cached[0] < timedelta(seconds=PRS_TTL):
-        at, summary = cached
+    token = github_token(ctx)
+    mark = token_mark(token) if token else None
+    still_refused = bool(cached and mark and cached[2] == mark)
+    ttl = PRS_TTL_REFUSED if still_refused else PRS_TTL
+    if cached and timedelta(0) <= ctx.now - cached[0] < timedelta(seconds=ttl):
+        at, summary, _ = cached
         return replace(obs, lines=prs_lines(repo, summary), freshness=at, reason="cached",
                        truncated=max(0, summary["open"] - len(summary["shown"])))
-    token = github_token(ctx)
+    refused = None
     try:
         if not token:
             raise Unreadable("no Token: line in the token file")
         base = f"https://api.github.com/repos/{repo}/pulls"
-        refused = ""
+        if still_refused:
+            token, refused = None, mark
         try:
             pulls = github_get(f"{base}?state=open&per_page=30", token, 3)
         except urllib.error.HTTPError as e:
             # A dead token (401) on a public repo: read without it, and say so. From 2026-11-18 to 11-22 the block read
             # 'GitHub: HTTPError; cached' over a list days old that was missing an open PR, and looked like a network blip.
-            if e.code != 401:
+            if e.code != 401 or not token:
                 raise
-            token, refused = None, "token refused (401), read without it"
+            token, refused = None, mark
             pulls = github_get(f"{base}?state=open&per_page=30", None, 3)
         reviews = {str(p["number"]): github_get(f"{base}/{p['number']}/reviews?per_page=100", token, 3) for p in pulls[:PRS_SHOWN]}
         summary = prs_summary(pulls, reviews)
         if refused:
-            summary["note"] = refused
+            summary["note"] = "token refused (401), read without it"
     except Exception as e:
         why = str(e) if isinstance(e, Unreadable) else f"GitHub: {type(e).__name__}"  # never the exception text: it can carry a URL
         if cached:
-            at, summary = cached
+            at, summary, _ = cached
             return replace(obs, lines=prs_lines(repo, summary), freshness=at, reason=f"{why}; cached",
                            truncated=max(0, summary["open"] - len(summary["shown"])))
         return replace(obs, status="unknown", reason=f"{why}, nothing cached")
     return replace(obs, lines=prs_lines(repo, summary), truncated=max(0, summary["open"] - len(summary["shown"])),
-                   ack={"at": ctx.now.isoformat(timespec="seconds"), "repo": repo, "summary": summary})
+                   ack={"at": ctx.now.isoformat(timespec="seconds"), "repo": repo, "summary": summary,
+                        **({"refused": refused} if refused else {})})
 
 
 def prs_ack(obs, event, ctx):
