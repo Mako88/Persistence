@@ -25,6 +25,11 @@ first, so the fix's tests can be red against them (room 1574379392958857367).
 - **First run** (main's extractor, unchanged since 8a3ea44; 20 repeats per fragment on a copy of Arden's store):
   peer-only PASS (0 of 95 correct facts flagged, 0 misfiled); both FAIL on quiet (32 of 33 correct facts flagged,
   0 misfiled). Coverage: the peer reached a fact in 2 of 20 #933 runs, and #2942 wrote no Ember fact in 20 runs.
+- **Claude's review (room 1574387839351660626):** a fact under an Ember name the gold doesn't list went uncounted, so
+  #924's ChatGPT-plan fact filed under 'Emma' let peer-only pass. Now each instance lists its own `mishearings` (#933
+  and #2942: 'Emma' is the daughter; #1395 and #924 have none), and any other endpoint reading as ember/emma (whole
+  word) voids the score (exit 2) unless the instance lists it in `other_names`: a concept named after an Ember that
+  isn't a referent ('Ember store-request boundary' in #1395, found on 3 facts of the first run), counted apart.
 
 ## 2026-11-22 — Observed now: age labels stay inside the line width; "oldest check" is a helper
 

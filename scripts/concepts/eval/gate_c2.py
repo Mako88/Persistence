@@ -8,12 +8,15 @@ one fragment. Reads `concept_eval.py run` output; never calls a model.
     gate_c2.py score <gold.json> <runs.jsonl>... --judged sheet.jsonl [--json]
         per gate: fire (0 misfiled facts written unflagged), quiet (at most 1 in 4 correctly filed facts flagged),
         bare (0 facts under the bare label); per fragment, report only: coverage, the reading's votes, facts dropped
-        by the referent check. A fact on the runs but not labelled on the sheet fails the score (exit 2).
+        by the referent check. A fact on the runs but not labelled on the sheet fails the score (exit 2), and so does a fact
+        under a name that reads as an Ember (ember/emma, whole word) but is no name, bare label or mishearing the gold
+        lists for that fragment.
 """
 import argparse
 import hashlib
 import json
 import random
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -23,6 +26,7 @@ sys.path.insert(0, str(HERE))
 from concept_eval import norm  # noqa: E402
 
 QUIET = (1, 4)   # at most 1 in 4 correctly filed facts flagged
+EMBERISH = re.compile(r"(?<!\w)(ember|emma)(?!\w)", re.I)   # an endpoint that may mean an Ember the gold doesn't list
 
 
 def load_gold(path):
@@ -31,7 +35,17 @@ def load_gold(path):
     bare = {norm(lab) for lab in g.get("ambiguous_labels") or {}}
     gates = {name: [int(f) for f in gate["fragments"]] for name, gate in g["gates"].items()}
     expect = {int(i["fragment"]): {m["referent"] for m in i.get("mentions") or []} for i in g["instances"]}
-    return names, bare, gates, expect
+    # a mishearing is a fact about one fragment's text, so each instance lists its own; the top-level map is not read
+    heard = {int(i["fragment"]): {norm(n): k for n, k in (i.get("mishearings") or {}).items()} for i in g["instances"]}
+    # names with an Ember in them that name a different concept (a thing of the peer's, say); counted in no bar
+    for i in g["instances"]:
+        heard[int(i["fragment"])].update({norm(n): None for n in i.get("other_names") or {}})
+    return names, bare, gates, expect, heard
+
+
+def names_for(names, heard, fragment):
+    """The names that file a fact under a referent in this fragment: the gold's names plus its own mishearings."""
+    return {**names, **heard.get(int(fragment), {})}
 
 
 def rows(paths):
@@ -53,10 +67,12 @@ def flagged(w):
     return bool((w.get("flag") or "").strip())
 
 
-def ember_facts(rec, names, bare):
+def ember_facts(rec, names, bare, unlisted=None):
     """(written entry, filed referent key or 'bare', masked subject, masked object) for each stored fact with an
-    Ember endpoint. A fact naming both referents is filed under each, once per referent."""
+    Ember endpoint. A fact naming both referents is filed under each, once per referent. An endpoint that reads as an
+    Ember (EMBERISH) but is no listed name, mishearing or bare label is appended to `unlisted` as (fact, name)."""
     out = []
+    other = {n for n, k in names.items() if k is None}
     for w in rec.get("written") or []:
         if not isinstance(w, dict) or not stored(w):
             continue
@@ -66,8 +82,12 @@ def ember_facts(rec, names, bare):
             n = norm(e)
             if n in bare:
                 filed.append("bare")
+            elif n in other:
+                filed.append("other")
             elif n in names:
                 filed.append(names[n])
+            elif e and EMBERISH.search(e) and unlisted is not None:
+                unlisted.append((w, e))
         for k in dict.fromkeys(filed):
             mask = [("Ember" if (norm(e) in bare or names.get(norm(e)) == k) else e) if e else e for e in ends]
             out.append((w, k, mask[0], mask[1]))
@@ -79,10 +99,12 @@ def key(fragment, subject, obj, text):
 
 
 def sheet(gold, paths, seed=1):
-    names, bare, _, _ = load_gold(gold)
+    names, bare, _, _, heard = load_gold(gold)
     seen = {}
     for rec in rows(paths):
-        for w, _, s, o in ember_facts(rec, names, bare):
+        for w, filed, s, o in ember_facts(rec, names_for(names, heard, rec["fragment"]), bare):
+            if filed == "other":
+                continue
             k = key(rec["fragment"], s, o, w.get("text"))
             seen.setdefault(k, {"key": k, "fragment": rec["fragment"], "subject": s, "object": o, "text": w.get("text"), "label": ""})
     out = list(seen.values())
@@ -91,12 +113,12 @@ def sheet(gold, paths, seed=1):
 
 
 def score(gold, paths, judged):
-    names, bare, gates, expect = load_gold(gold)
+    names, bare, gates, expect, heard = load_gold(gold)
     labels = {r["key"]: r.get("label") for r in judged}
     by_frag = {}
     for rec in rows(paths):
         by_frag.setdefault(int(rec["fragment"]), []).append(rec)
-    unlabelled, result = [], {}
+    unlabelled, unlisted, result = [], [], {}
     for gate, frags in gates.items():
         c = Counter()
         per = {}
@@ -113,7 +135,13 @@ def score(gold, paths, judged):
                 fc["dropped by referent check"] += sum(1 for s in rec.get("skipped") or []
                                                       if isinstance(s, dict) and str(s.get("why", "")).startswith("referent not confirmed"))
                 covered = set()
-                for w, filed, s, o in ember_facts(rec, names, bare):
+                odd = []
+                found = ember_facts(rec, names_for(names, heard, fid), bare, odd)
+                unlisted.extend((fid, e, w.get("text")) for w, e in odd)
+                for w, filed, s, o in found:
+                    if filed == "other":
+                        fc["facts under an other Ember-named concept"] += 1
+                        continue
                     if filed == "bare":
                         c["bare"] += 1
                         continue
@@ -143,7 +171,7 @@ def score(gold, paths, judged):
             "bare": {"pass": c["bare"] == 0, "facts": c["bare"]},
         }
         result[gate]["pass"] = all(result[gate][b]["pass"] for b in ("fire", "quiet", "bare"))
-    return result, unlabelled
+    return result, unlabelled, unlisted
 
 
 def main(argv=None):
@@ -166,9 +194,9 @@ def main(argv=None):
         print(f"{len(out)} rows to {a.out}", file=sys.stderr)
         return 0
     judged = [json.loads(l) for l in Path(a.judged).read_text(encoding="utf-8").splitlines() if l.strip()]
-    result, unlabelled = score(a.gold, a.runs, judged)
+    result, unlabelled, unlisted = score(a.gold, a.runs, judged)
     if a.json:
-        print(json.dumps({"gates": result, "unlabelled": len(unlabelled)}, indent=1))
+        print(json.dumps({"gates": result, "unlabelled": len(unlabelled), "unlisted": len(unlisted)}, indent=1))
     else:
         for gate, r in result.items():
             print(f"{gate}: {'PASS' if r['pass'] else 'FAIL'}")
@@ -181,6 +209,11 @@ def main(argv=None):
                 print(f"  #{fid}: " + ", ".join(f"{k} {v}" for k, v in f.items()))
     if unlabelled:
         print(f"{len(unlabelled)} written facts are not labelled on the sheet: the score is void", file=sys.stderr)
+    if unlisted:
+        names = sorted({e for _, e, _ in unlisted})
+        print(f"{len(unlisted)} written facts are filed under an Ember name the gold doesn't list for their fragment "
+              f"({', '.join(map(repr, names))}): the score is void", file=sys.stderr)
+    if unlabelled or unlisted:
         return 2
     return 0 if all(r["pass"] for r in result.values()) else 1
 
