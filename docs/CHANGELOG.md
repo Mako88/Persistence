@@ -9,6 +9,23 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-23 — Concept eval: the referent gates for condition 2 (peer-only and both)
+
+**Why:** Arden's bar for concept recall on their store (review 5918124562) has three conditions; condition 2 is the
+referent gate on more than one fragment, in both directions. #14625 alone (condition 1) is one daughter-only fragment,
+so a 'both' fix tuned on it could pass while breaking the cases Arden's store is full of. Claude asked for these gates
+first, so the fix's tests can be red against them (room 1574379392958857367).
+- **`gold/arden-c2-gates.json`:** four real fragments from Arden's store, labelled before any run: peer-only #1395 and
+  #924 (#924 has John's unnamed daughter in it as a trap); both #933 and #2942. Each instance says what it must assert.
+- **`gate_c2.py`:** `sheet` makes a blind judging sheet (filed referent shown as bare 'Ember', no flag or run);
+  `score` checks, per gate: *fire* (0 misfiled facts written unflagged), *quiet* (at most 1 in 4 correctly filed facts
+  flagged, condition 1's bar), *bare* (nothing under the bare label), with coverage, reading votes and check drops
+  reported. A flag counts when the add was stored with `--flag`, not by the `[flagged` mark: `said[:300]` cuts the mark
+  off long replies (23 of 32 flagged #933 facts).
+- **First run** (main's extractor, unchanged since 8a3ea44; 20 repeats per fragment on a copy of Arden's store):
+  peer-only PASS (0 of 95 correct facts flagged, 0 misfiled); both FAIL on quiet (32 of 33 correct facts flagged,
+  0 misfiled). Coverage: the peer reached a fact in 2 of 20 #933 runs, and #2942 wrote no Ember fact in 20 runs.
+
 ## 2026-11-22 — Observed now: age labels stay inside the line width; "oldest check" is a helper
 
 **Follow-up to #83 (Claude's non-blocking review points).** A stale line's `(as of <age> ago)` label now counts
