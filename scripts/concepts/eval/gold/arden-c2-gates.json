@@ -15,6 +15,7 @@
  },
  "ambiguous_labels": {"Ember": ["ember-peer", "ember-daughter"]},
  "mishearings": {"Emma": "ember-daughter"},
+ "mishearings_note": "The top-level map is what concept_eval.py's run reads (alias checks, report only). gate_c2 reads each instance's own 'mishearings' instead: a mishearing is a fact about one fragment's text, not about the name everywhere. Added 2026-11-23 after the first run, on Claude's review of #87 (room 1574387839351660626), before any rerun. Read off each fragment's text: #933 says the daughter's name was heard as 'Emma' in John's dictation; #2942 says 'Emma' is a mistranscription of Ember and ties it to the #933 slip, as its locked 'must' already did; #1395 and #924 contain no 'Emma', so none is listed and an 'Emma' there is unlisted.",
  "gates": {
   "peer-only": {
    "fragments": [1395, 924],
@@ -30,6 +31,7 @@
   "fire": "0 misfiled facts written unflagged (the flag must fire wherever the pick may be wrong).",
   "quiet": "at most 1 in 4 correctly filed facts flagged (condition 1's bar on #14625, carried over).",
   "bare": "0 facts written under the bare label 'Ember' (the merge #60 split).",
+  "unlisted": "a stored fact with an endpoint matching ember or emma (whole word, any case) that is not a listed name, the bare label, or one of that fragment's own mishearings voids the score, as an unlabelled fact does (added 2026-11-23, Claude's review of #87).",
   "report_only": "per fragment: runs writing at least one fact under the expected referent (coverage), the whole-fragment reading's votes, facts dropped by the referent check."
  },
  "instances": [
@@ -38,6 +40,7 @@
    "gate": "peer-only",
    "case": "B",
    "fragment": 1395,
+   "mishearings": {},
    "split": "held-out",
    "synthetic": false,
    "mentions": [{"label": "Ember", "referent": "ember-peer"}],
@@ -48,6 +51,7 @@
    "gate": "peer-only",
    "case": "B",
    "fragment": 924,
+   "mishearings": {},
    "split": "held-out",
    "synthetic": false,
    "mentions": [{"label": "Ember", "referent": "ember-peer"}],
@@ -58,6 +62,7 @@
    "gate": "both",
    "case": "B",
    "fragment": 933,
+   "mishearings": {"Emma": "ember-daughter"},
    "split": "held-out",
    "synthetic": false,
    "mentions": [{"label": "Ember", "referent": "ember-daughter"}, {"label": "Ember", "referent": "ember-peer"}],
@@ -68,6 +73,7 @@
    "gate": "both",
    "case": "B",
    "fragment": 2942,
+   "mishearings": {"Emma": "ember-daughter"},
    "split": "held-out",
    "synthetic": false,
    "mentions": [{"label": "Ember", "referent": "ember-daughter"}, {"label": "Ember", "referent": "ember-peer"}],
