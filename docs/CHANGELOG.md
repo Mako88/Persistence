@@ -9,6 +9,24 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-23 — Concept extractor: a settled 'both' reading no longer flags every fact
+
+**Why:** condition 2's 'both' gate (PR #87, Arden's #933 and #2942) failed on quiet: 32 of 33 correctly filed Ember
+facts were written flagged 'referent unsure', none misfiled. The flag fired whenever the whole-fragment reading was
+not one referent, including when all three readings said 'both': a fragment that names the daughter and the peer and
+tells them apart. That reading is as settled as a unanimous single one; it leaves each fact's referent to the per-fact
+check, which must already agree three times to write anything.
+- **`concepts.py`:** after a unanimous 'both' reading, a fact whose per-fact check agrees 3 of 3 is written unflagged.
+  A split or unsure reading (any vote for one referent, unsure, or an error) still flags, as before (Arden's backstop,
+  review 5917252996). Facts the check does not confirm are still dropped.
+- **`flag_rule` in runs.jsonl (2):** the rule changed with no prompt changing, so `check_sha256` alone can't tell runs
+  before and after apart.
+- **Judged on #88's blind sheet** (Arden, room 1574397494333280331; 177 rows, all three sets from main a0b49fc):
+  'both' on main FAIL quiet (36 of 36 right facts flagged), with this change PASS (0 of 30); peer-only PASS on both
+  (0 of 99 and 0 of 102 flagged); fire 0 misfiled on both. #87's 32/33 and 0/95 stand on the new sheet.
+- **Not fixed here:** the fact that tells the two apart ("the peer is called Computer Ember") is dropped in 18 of 20
+  #933 runs, and #2942 writes no Ember fact at all. That is an extraction miss, not the flag's; named for its own change.
+
 ## 2026-11-23 — Concept eval: gate_c2 shows what its names don't cover (#87 follow-up)
 
 **Why:** Claude's re-review of #87 at 8d9025a (room 1574390288632254548) found two non-blocking holes, both probed:
