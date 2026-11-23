@@ -22,6 +22,17 @@ a fact can sit where no bar sees it.
   fragment that no listed name, mishearing, other name or bare label covers, with how many stored facts use it. A
   peer fact filed under "John's daughter" in #924 has no ember/emma in its name, so it was neither counted nor
   voided. This list is where a reader catches it.
+- **The sheet masks every Ember name, one row per fact, a label per slot.** Claude's review of this PR at e4b8eb7
+  (room 1574392242230136854) found the sheet showed the pick: an endpoint was masked only where it was filed under
+  the row's own referent. So the new 'other' row showed 'Ember (peer)' beside a masked twin. The same root goes back
+  to #87: a fact naming both referents showed the other one unmasked on each of its two rows. Now every referent name,
+  mishearing and bare label is a slot (subject `Ember[1]`, object the next number), whatever the fact was filed
+  under. Each fact is one row, and `label` is a dict with one entry per slot. A fact is right only if every slot is,
+  so an object-side misfile counts. A fact naming both referents now counts once, not once per referent. #87's
+  judged numbers (both 32/33, peer-only 0/95) came from the leaky sheet and are to be re-judged. An old sheet with
+  string labels voids as unlabelled.
+- **Smaller points from the same review:** a referent-filed slot judged `other` still voids, and the message now
+  says why and what to relabel. `endpoints` skips error records, as `score` does.
 
 ## 2026-11-23 — Concept eval: the referent gates for condition 2 (peer-only and both)
 

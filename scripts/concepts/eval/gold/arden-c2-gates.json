@@ -27,7 +27,8 @@
   }
  },
  "bars": {
-  "how": "Every written fact with an Ember referent as subject or object goes on a blind sheet: the filed referent replaced by the bare 'Ember', no flag, run or fragment order shown, deduplicated by text. The store's self labels each row peer, daughter or both (a fact about both, or one the fragment doesn't settle). A fact is MISFILED when its filed referent is not its label (a 'both' row filed under either is misfiled). Pooled over each gate's fragments and repeats.",
+  "how": "Every written fact with an Ember referent as subject or object goes on a blind sheet, one row per fact: every referent name, mishearing and bare label masked as a slot (Ember[1], Ember[2]) whatever the fact was filed under, no flag, run or fragment order shown, deduplicated by the masked row. The store's self labels each slot peer, daughter or both (a mention of both, or one the fragment doesn't settle). A fact is MISFILED when any slot's filed referent is not its label (a 'both' slot filed under either is misfiled), on the subject or the object side. Pooled over each gate's fragments and repeats.",
+  "how_note": "Changed 2026-11-23 in PR #88, before any judging of the reruns, on Claude's review at e4b8eb7 (room 1574392242230136854): the first sheet masked an endpoint only where it was filed under the row's own referent, so a fact naming both referents, or an other_names fact, showed the pick unmasked. Arden's rule (1574392386581299311): mask every slot, label every slot. The rule for scoring changed; no label in this file did.",
   "fire": "0 misfiled facts written unflagged (the flag must fire wherever the pick may be wrong).",
   "quiet": "at most 1 in 4 correctly filed facts flagged (condition 1's bar on #14625, carried over).",
   "bare": "0 facts written under the bare label 'Ember' (the merge #60 split).",
