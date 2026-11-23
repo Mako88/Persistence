@@ -1,6 +1,8 @@
 """gate_c2 on synthetic run lines: the sheet hides the filed referent and the flag, and the score fails each bar on the
 case it is for (an unflagged misfile, too many correct facts flagged, a fact under the bare label, a refused add not
 counted as written, an unlabelled fact voiding the score)."""
+import contextlib
+import io
 import json
 import sys
 import tempfile
@@ -35,14 +37,18 @@ class GateC2(unittest.TestCase):
         return str(p)
 
     def judge(self, runs, labels):
-        """Label the sheet by text: {text: label}."""
-        return [{**r, "label": labels[r["text"]]} for r in g.sheet(GOLD, [runs])]
+        """Label the sheet by text: {text: label}. A string labels every slot on the row; a dict labels slot by slot."""
+        out = []
+        for r in g.sheet(GOLD, [runs]):
+            lab = labels.get(r["text"], "")
+            out.append({**r, "label": lab if isinstance(lab, dict) else {sl: lab for sl in r["label"]}})
+        return out
 
     def test_sheet_is_blind_to_the_pick_and_the_flag(self):
         runs = self.runs(rec(933, w(PEER, "is called Computer Ember", flag="referent unsure: x"),
                              w(DAUGHTER, "is four", obj="John")))
         rows = g.sheet(GOLD, [runs])
-        self.assertEqual({r["subject"] for r in rows}, {"Ember"})
+        self.assertEqual({r["subject"] for r in rows}, {"Ember[1]"})
         self.assertEqual({r["object"] for r in rows}, {None, "John"})
         for r in rows:
             self.assertNotIn("flag", r)
@@ -58,7 +64,7 @@ class GateC2(unittest.TestCase):
         runs = self.runs(rec(1395, w(PEER, "set its boundary")), rec(924, w(PEER, "may run on a ChatGPT plan")),
                          rec(933, w(DAUGHTER, "is four")), rec(2942, w(DAUGHTER, "is misheard as Emma")))
         labels = {"set its boundary": "ember-peer", "may run on a ChatGPT plan": "ember-peer",
-                  "is four": "ember-daughter", "is misheard as Emma": "ember-daughter"}
+                  "is four": "ember-daughter", "is misheard as Ember": "ember-daughter"}   # 'Emma' masked in #2942
         result, unlabelled, _ = g.score(GOLD, [runs], self.judge(runs, labels))
         self.assertEqual(unlabelled, [])
         self.assertTrue(result["peer-only"]["pass"])
@@ -137,7 +143,7 @@ class GateC2(unittest.TestCase):
         """In #933 'Emma' is the daughter heard wrong: filed under ember-daughter, shown on the sheet as bare 'Ember'."""
         runs = self.runs(rec(933, w("Emma", "is four")))
         rows = g.sheet(GOLD, [runs])
-        self.assertEqual([r["subject"] for r in rows], ["Ember"])
+        self.assertEqual([r["subject"] for r in rows], ["Ember[1]"])
         result, unlabelled, unlisted = g.score(GOLD, [runs], self.judge(runs, {"is four": "ember-daughter"}))
         self.assertEqual((unlabelled, unlisted), ([], []))
         self.assertEqual(result["both"]["counts"]["right"], 1)
@@ -147,16 +153,201 @@ class GateC2(unittest.TestCase):
         _, _, unlisted = g.score(GOLD, [runs], self.judge(runs, {"u": "ember-peer"}))
         self.assertEqual(unlisted, [])
 
-    def test_a_listed_other_ember_named_concept_is_counted_apart_not_voided(self):
-        """#1395 'Ember store-request boundary' (gold other_names): a thing of the peer's, in no bar, not on the sheet."""
+    def test_a_listed_other_ember_named_concept_confirmed_other_is_in_no_bar(self):
+        """#1395 'Ember store-request boundary' (gold other_names): a thing of the peer's. Judged 'other', it is counted
+        apart and in no bar. Listed for #1395 only, so under #924 it still voids."""
         runs = self.runs(rec(1395, w(PEER, "u"), w("Ember store-request boundary", "is parsed as data")),
                          rec(924, w("Ember store-request boundary", "x")))
-        rows = g.sheet(GOLD, [runs])
-        self.assertEqual([r["text"] for r in rows], ["u"])
-        result, unlabelled, unlisted = g.score(GOLD, [runs], self.judge(runs, {"u": "ember-peer"}))
+        result, unlabelled, unlisted = g.score(GOLD, [runs], self.judge(runs, {"u": "ember-peer", "is parsed as data": "other"}))
+        self.assertEqual(unlabelled, [])
         self.assertEqual(result["peer-only"]["fragments"][1395]["facts under an other Ember-named concept"], 1)
         self.assertEqual(result["peer-only"]["counts"]["facts"], 1)
+        self.assertTrue(result["peer-only"]["pass"])
         self.assertEqual([u[:2] for u in unlisted], [(924, "Ember store-request boundary")])   # listed for #1395 only
+
+    def test_other_named_facts_go_on_the_sheet_unmasked(self):
+        """Claude's #87 re-review point 1: a judge confirms each fact under an other_names concept. The name is shown
+        as written (it is not a referent pick), so the judge can say whether the fact is about that thing."""
+        runs = self.runs(rec(1395, w(PEER, "u"), w("Ember store-request boundary", "is parsed as data")))
+        rows = {r["text"]: r for r in g.sheet(GOLD, [runs])}
+        self.assertEqual(set(rows), {"u", "is parsed as data"})
+        self.assertEqual(rows["is parsed as data"]["subject"], "Ember store-request boundary")
+        self.assertEqual(rows["u"]["subject"], "Ember[1]")
+
+    def test_an_other_named_fact_judged_a_referent_is_an_unflagged_misfile(self):
+        """Claude's probe: 'Ember store-request boundary' -> 'is four years old' showed only as a count. Judged the
+        daughter, it is misfiled, and unflagged it fails fire."""
+        runs = self.runs(rec(1395, w(PEER, "u"), w("Ember store-request boundary", "is four years old")))
+        result, unlabelled, _ = g.score(GOLD, [runs], self.judge(runs, {"u": "ember-peer", "is four years old": "ember-daughter"}))
+        self.assertEqual(unlabelled, [])
+        self.assertFalse(result["peer-only"]["fire"]["pass"])
+        self.assertEqual(result["peer-only"]["fire"]["misfiled unflagged"], 1)
+
+    def test_an_unjudged_other_named_fact_voids_the_score(self):
+        runs = self.runs(rec(1395, w(PEER, "u"), w("Ember store-request boundary", "is four years old")))
+        judged = Path(self.dir) / "judged.jsonl"
+        judged.write_text("".join(json.dumps({**r, "label": {"Ember[1]": "ember-peer"}}) + "\n"
+                                  for r in g.sheet(GOLD, [runs]) if r["text"] == "u"))
+        self.assertEqual(g.main(["score", str(GOLD), runs, "--judged", str(judged)]), 2)
+
+    def test_score_prints_each_other_named_fact_with_its_text(self):
+        runs = self.runs(rec(1395, w(PEER, "u"), w("Ember store-request boundary", "is parsed as data")))
+        judged = Path(self.dir) / "judged.jsonl"
+        judged.write_text("".join(json.dumps(r) + "\n" for r in self.judge(runs, {"u": "ember-peer", "is parsed as data": "other"})))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            g.main(["score", str(GOLD), runs, "--judged", str(judged)])
+        self.assertIn("is parsed as data", out.getvalue())
+        self.assertIn("Ember store-request boundary", out.getvalue())
+
+    def test_endpoints_lists_every_endpoint_no_listed_name_covers(self):
+        """Claude's #87 re-review point 2: a peer fact filed under "John's daughter" in #924 has no ember/emma in its
+        name, so it was neither counted nor voided. Report only: every distinct endpoint per fragment that is no listed
+        name, mishearing, other name or bare label, with how many stored facts use it."""
+        runs = self.runs(rec(924, w("John's daughter", "may run on a ChatGPT plan", obj="John"), w(PEER, "u")),
+                         rec(924, w("John's daughter", "games on the PC")),
+                         rec(933, w("Emma", "is four"), w("Synth", "t", said="")))   # refused add: not written
+        self.assertEqual(g.endpoints(GOLD, [runs]), {924: {"John's daughter": 2, "John": 1}})
+
+    def test_endpoints_command_prints_the_list_and_exits_0(self):
+        runs = self.runs(rec(924, w("John's daughter", "may run on a ChatGPT plan")))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(g.main(["endpoints", str(GOLD), runs]), 0)
+        self.assertIn("#924", out.getvalue())
+        self.assertIn("John's daughter", out.getvalue())
+
+    def test_score_reports_unlisted_endpoints_without_voiding(self):
+        runs = self.runs(rec(1395, w(PEER, "u", obj="John")))
+        judged = Path(self.dir) / "judged.jsonl"
+        judged.write_text("".join(json.dumps(r) + "\n" for r in self.judge(runs, {"u": "ember-peer"})))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = g.main(["score", str(GOLD), runs, "--judged", str(judged)])
+        self.assertIn("'John'", out.getvalue())
+        self.assertNotEqual(code, 2)
+
+    # PR #88 at e4b8eb7, Claude's review (room 1574392242230136854): the sheet masked an endpoint only where it was
+    # filed under the row's own referent, so the 'other' row and both-referent facts showed the pick. Arden's rule
+    # (1574392386581299311): every referent name, mishearing and bare label is a masked slot, whatever the filing; one
+    # row per fact; a label per slot; a fact is right only if every slot is.
+
+    def assert_blind(self, rows):
+        names = [n for c in json.loads(GOLD.read_text())["concepts"].values() for n in c["names"]]
+        for r in rows:
+            shown = json.dumps([r["subject"], r["object"], r["text"]])
+            for n in names + ["PEER", "DAUGHTER", "peer", "daughter", "Emma"]:
+                self.assertNotIn(n, shown, r)
+
+    def test_no_row_shows_a_referent_name_or_mishearing_whatever_it_is_filed_under(self):
+        runs = self.runs(rec(1395, w(PEER, "is parsed as data", obj="Ember store-request boundary"),
+                             w("Ember store-request boundary", "binds", obj=PEER)),
+                         rec(933, w(DAUGHTER, "is not", obj=PEER), w("Emma", "games", obj="Computer Ember"),
+                             w("Ember", "is", obj="Ember (daughter)")),
+                         rec(2942, w("Ember (AI peer)", "x", obj="John's daughter Ember")))
+        rows = g.sheet(GOLD, [runs])
+        self.assertEqual(len(rows), 6)
+        self.assert_blind(rows)
+
+    def test_claudes_1395_probe_gives_one_row(self):
+        """'Ember (peer)' -> 'Ember store-request boundary' was two rows, 'Ember (peer) -> ...' and 'Ember -> ...'."""
+        runs = self.runs(rec(1395, w(PEER, "is parsed as data", obj="Ember store-request boundary")))
+        rows = g.sheet(GOLD, [runs])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]["subject"], rows[0]["object"]), ("Ember[1]", "Ember store-request boundary"))
+        self.assertEqual(set(rows[0]["label"]), {"Ember[1]", "Ember store-request boundary"})
+        self.assert_blind(rows)
+
+    def test_a_both_referent_fact_is_one_row_with_two_slots(self):
+        runs = self.runs(rec(933, w(DAUGHTER, "is not", obj=PEER)))
+        rows = g.sheet(GOLD, [runs])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]["subject"], rows[0]["object"]), ("Ember[1]", "Ember[2]"))
+        self.assertEqual(rows[0]["label"], {"Ember[1]": "", "Ember[2]": ""})
+
+    def test_a_both_referent_fact_is_right_only_if_every_slot_is(self):
+        runs = self.runs(rec(933, w(DAUGHTER, "is not", obj=PEER)), rec(2942, w(DAUGHTER, "is four")))
+        good = {"is not": {"Ember[1]": "ember-daughter", "Ember[2]": "ember-peer"}, "is four": "ember-daughter"}
+        result, unlabelled, _ = g.score(GOLD, [runs], self.judge(runs, good))
+        self.assertEqual(unlabelled, [])
+        self.assertEqual((result["both"]["counts"]["facts"], result["both"]["counts"]["right"]), (2, 2))
+        self.assertTrue(result["both"]["pass"])
+        for wrong in ({"Ember[1]": "ember-daughter", "Ember[2]": "ember-daughter"},     # object side wrong
+                      {"Ember[1]": "ember-peer", "Ember[2]": "ember-peer"}):            # subject side wrong
+            result, _, _ = g.score(GOLD, [runs], self.judge(runs, {**good, "is not": wrong}))
+            self.assertEqual(result["both"]["counts"]["facts"], 2)
+            self.assertEqual(result["both"]["fire"]["misfiled unflagged"], 1, wrong)
+            self.assertFalse(result["both"]["fire"]["pass"])
+
+    def test_the_same_fact_filed_differently_across_runs_is_one_row(self):
+        """The judge must not see that two runs disagreed: one row, and each run is scored against its label."""
+        runs = self.runs(rec(933, w(DAUGHTER, "is four")), rec(933, w(PEER, "is four")))
+        rows = g.sheet(GOLD, [runs])
+        self.assertEqual(len(rows), 1)
+        result, _, _ = g.score(GOLD, [runs], self.judge(runs, {"is four": "ember-daughter"}))
+        self.assertEqual((result["both"]["counts"]["right"], result["both"]["counts"]["misfiled"]), (1, 1))
+
+    def test_a_half_labelled_row_voids_the_score(self):
+        runs = self.runs(rec(933, w(DAUGHTER, "is not", obj=PEER)))
+        _, unlabelled, _ = g.score(GOLD, [runs], self.judge(runs, {"is not": {"Ember[1]": "ember-daughter"}}))
+        self.assertEqual(len(unlabelled), 1)
+
+    def test_a_referent_filed_slot_judged_other_voids_and_says_why(self):
+        runs = self.runs(rec(1395, w(PEER, "u")))
+        judged = Path(self.dir) / "judged.jsonl"
+        judged.write_text("".join(json.dumps(r) + "\n" for r in self.judge(runs, {"u": "other"})))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(g.main(["score", str(GOLD), runs, "--judged", str(judged)]), 2)
+        self.assertIn("judged 'other'", err.getvalue())
+        self.assertIn("filed under a referent", err.getvalue())
+        self.assertNotIn("not labelled", err.getvalue())
+
+    # PR #88 at 89898bb, Claude's re-review (room 1574394185795112963): `text` went on the row unmasked, and the
+    # extractor writes the canonical name into fact text ('Ember (peer) set ...'), so the judge read the pick off it.
+    # Every referent name, listed mishearing and 'Ember (...)' in the text becomes a plain 'Ember'. Not the slot:
+    # 'Ember[1]' in the text where the slot is filed under the referent the text names, and 'Ember' where it isn't,
+    # would tell a judge whether text and filing agree.
+
+    def test_claudes_text_probe_shows_no_referent_name(self):
+        runs = self.runs(rec(1395, w(PEER, "Ember (peer) set the store-request boundary")))
+        rows = g.sheet(GOLD, [runs])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["text"], "Ember set the store-request boundary")
+        self.assert_blind(rows)
+
+    def test_text_masking_is_whole_name_case_insensitive_longest_first_and_keeps_other_names(self):
+        runs = self.runs(rec(933, w(DAUGHTER, "john's  daughter ember and EMBER (Peer) and Emma, not Emmanuel; John's daughter Ember (peer)")),
+                         rec(1395, w("Ember store-request boundary", "the Ember store-request boundary (its own) binds Ember (AI)")))
+        texts = sorted(r["text"] for r in g.sheet(GOLD, [runs]))
+        self.assertEqual(texts, ["Ember and Ember and Ember, not Emmanuel; Ember",
+                                 "the Ember store-request boundary (its own) binds Ember"])
+
+    def test_text_never_tells_the_judge_whether_it_agrees_with_the_filing(self):
+        """The same text filed under each referent: one row, and its text is the same either way."""
+        runs = self.runs(rec(933, w(PEER, "Ember (peer) is four")), rec(933, w(DAUGHTER, "Ember (peer) is four")),
+                         rec(933, w(DAUGHTER, "Ember (John's daughter) is four")))
+        rows = g.sheet(GOLD, [runs])
+        self.assertEqual([r["text"] for r in rows], ["Ember is four"])
+        result, unlabelled, _ = g.score(GOLD, [runs], self.judge(runs, {"Ember is four": "ember-daughter"}))
+        self.assertEqual(unlabelled, [])
+        self.assertEqual((result["both"]["counts"]["right"], result["both"]["counts"]["misfiled"]), (2, 1))
+
+    def test_score_prints_other_facts_with_masked_text(self):
+        runs = self.runs(rec(1395, w(PEER, "u"), w("Ember store-request boundary", "keeps Ember (peer) safe")))
+        judged = Path(self.dir) / "judged.jsonl"
+        judged.write_text("".join(json.dumps(r) + "\n" for r in self.judge(runs, {"u": "ember-peer", "keeps Ember safe": "other"})))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            g.main(["score", str(GOLD), runs, "--judged", str(judged)])
+        line = [l for l in out.getvalue().splitlines() if "judged 'other'" in l]
+        self.assertEqual(len(line), 1)
+        self.assertTrue(line[0].endswith(": keeps Ember safe"), line[0])
+
+    def test_endpoints_skips_error_records_as_score_does(self):
+        runs = self.runs({**rec(924, w("John's daughter", "games on the PC")), "error": "timeout"},
+                         rec(924, w(PEER, "u")))
+        self.assertEqual(g.endpoints(GOLD, [runs]), {})
 
 
 def g_load(path):

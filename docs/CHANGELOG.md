@@ -9,6 +9,39 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-23 — Concept eval: gate_c2 shows what its names don't cover (#87 follow-up)
+
+**Why:** Claude's re-review of #87 at 8d9025a (room 1574390288632254548) found two non-blocking holes, both probed:
+a fact can sit where no bar sees it.
+- **other_names facts go to the judge:** a fact under a fragment's `other_names` concept (#1395's 'Ember
+  store-request boundary') was only counted, so 'Ember store-request boundary' -> 'is four years old' passed unseen.
+  Now it goes on the sheet with the name unmasked. The judge writes `other` if the fact is about that thing: it is then
+  printed with its text in the score and counted in no bar. If the judge names a referent instead, it is misfiled, so
+  unflagged it fails *fire*. Left unjudged, it voids the score like any unlabelled fact.
+- **`gate_c2.py endpoints`, also printed under `score`:** report only. It lists every distinct endpoint per
+  fragment that no listed name, mishearing, other name or bare label covers, with how many stored facts use it. A
+  peer fact filed under "John's daughter" in #924 has no ember/emma in its name, so it was neither counted nor
+  voided. This list is where a reader catches it.
+- **The sheet masks every Ember name, one row per fact, a label per slot.** Claude's review of this PR at e4b8eb7
+  (room 1574392242230136854) found the sheet showed the pick: an endpoint was masked only where it was filed under
+  the row's own referent. So the new 'other' row showed 'Ember (peer)' beside a masked twin. The same root goes back
+  to #87: a fact naming both referents showed the other one unmasked on each of its two rows. Now every referent name,
+  mishearing and bare label is a slot (subject `Ember[1]`, object the next number), whatever the fact was filed
+  under. Each fact is one row, and `label` is a dict with one entry per slot. A fact is right only if every slot is,
+  so an object-side misfile counts. A fact naming both referents now counts once, not once per referent. #87's
+  judged numbers (both 32/33, peer-only 0/95) came from the leaky sheet and are to be re-judged. An old sheet with
+  string labels voids as unlabelled.
+- **The fact text is masked too.** Claude's re-review at 89898bb (room 1574394185795112963): `text` went on the row
+  as written, and the extractor writes the canonical name into it ('Ember (peer) set the store-request boundary'), so
+  the judge read the pick there. On the sheets it leaked on 38 of #87's 84 rows and on 35 of 74 and 30 of 76 rows in
+  the partial main and 84d8bb5 reruns. Now every referent name, listed mishearing and any 'Ember (...)' in the text is
+  a plain 'Ember' (whole name, case-insensitive, longest first); other_names stay as written. Rows dedupe on the
+  masked text. The text shows a plain 'Ember', never the slot: 'Ember[1]' where text and filing agree and 'Ember' where
+  they don't would leak whether the fact was misfiled. The cost: a fact about the mishearing itself ('rendered her
+  name as Emma') reads oddly, and the judge reads the fragment for it.
+- **Smaller points from the same review:** a referent-filed slot judged `other` still voids, and the message now
+  says why and what to relabel. `endpoints` skips error records, as `score` does.
+
 ## 2026-11-23 — Concept eval: the referent gates for condition 2 (peer-only and both)
 
 **Why:** Arden's bar for concept recall on their store (review 5918124562) has three conditions; condition 2 is the
