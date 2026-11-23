@@ -28,7 +28,8 @@ referent, superseding the old line on accept. Anything else stays put, listed as
 A fact the extractor files under one of those referents, from a fragment that uses the name, is asked again (CHECK_PROMPT),
 blind to the pick (the bare name in its place) and with the fragment as evidence, three times; it is written only if every
 answer names the same referent (#14625 on Arden's #68 run: the daughter's relay filed under the peer), and then flagged
-'referent unsure' unless the whole fragment's reading settled it (Arden, review 5917252996). The hook passes
+'referent unsure' unless the whole fragment's reading settled it (Arden, review 5917252996): all three readings name the
+fact's referent, or all three say 'both', the fragment telling the two apart (#87's 'both' gate). The hook passes
 the same file to `concept touched --ambiguous`, so a message saying "Ember" reaches both referents.
 """
 import fcntl
@@ -130,6 +131,9 @@ FRAGMENT #{fragment}:
 Answer with JSON only, no prose: {{"referent": "<one candidate's exact name, both, or unsure>", "why": "<one short sentence from the fragment>"}}"""
 
 CHECK_SHA = hashlib.sha256((CHECK_PROMPT + READ_PROMPT).encode("utf-8")).hexdigest()
+# When 'referent unsure' is written, in runs.jsonl beside the prompts' sha: the rule changes with no prompt changing, so
+# a run must say which it ran under. 2: a unanimous 'both' reading writes agreeing per-fact checks unflagged (#87).
+FLAG_RULE = 2
 
 
 def on():
@@ -244,6 +248,7 @@ class Extractor:
             id=frag["id"], type=frag.get("type"), date=(frag.get("created") or "")[:10], content=content)
         rec = {"run": run, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "fragment": frag["id"],
                "model": MODEL, "template_version": TEMPLATE_VERSION, "template_sha256": TEMPLATE_SHA, "check_sha256": CHECK_SHA,
+               "flag_rule": FLAG_RULE,
                "shown": [{"id": c["id"], "name": c["name"]} for c in shown], "written": []}
         t0 = time.time()
         try:
@@ -304,7 +309,9 @@ class Extractor:
         different referent, unsure or an error leaves the fact unwritten and logged, since a fact under the wrong
         person is the severe miss. A fact confirmed that way is still written flagged 'referent unsure' (Arden's
         deterministic backstop, review 5917252996): the votes can be wrong, and then the fact must not reach recall
-        looking settled. The store shows the flag in recall and first in review, until the self accepts or rejects."""
+        looking settled. Not when every reading said 'both': that reading is settled too (the fragment uses the name
+        for each, and tells them apart), so the per-fact check is the question it leaves, and its agreeing answer stands
+        unflagged; flagging it put 32 of 33 correct facts under the flag on #87's 'both' gate (#933, #2942). The store shows the flag in recall and first in review, until the self accepts or rejects."""
         readings = {} if readings is None else readings
         unsure = []
         for name in dict.fromkeys(n for n in (subject, obj) if n and n.lower() in referents):
@@ -326,6 +333,8 @@ class Extractor:
             if not check["confirmed"]:
                 tally = ", ".join(f"{v} {check['votes'].count(v)}" for v in dict.fromkeys(check["votes"]))
                 return f"referent not confirmed: filed under {name!r}, asked again: {tally}", None
+            if set(readings[label]["votes"]) == {"both"}:
+                continue   # a settled 'both' reading: the fragment tells them apart, so the agreeing check decides
             others = " or ".join(r["name"] for r in refs if r["name"].lower() != name.lower())
             unsure.append(f"the fragment's reading of {label!r} was not unanimous ({', '.join(readings[label]['votes'])}); "
                           f"{name} may also mean {others}")

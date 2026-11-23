@@ -719,6 +719,34 @@ class Ambiguous(unittest.TestCase):
                 if flagged[1]:
                     self.assertIn("may also mean Ember (peer)", daughter[daughter.index("--flag") + 1])
 
+    def test_a_fragment_read_unanimously_as_both_writes_its_confirmed_facts_unflagged(self):
+        # Condition 2's 'both' gate (PR #87, Arden's #933 and #2942): a fragment that names the daughter and the peer
+        # is read 'both' every time, and that reading is settled, not split. Each fact's referent is then the per-fact
+        # check's to decide, and three agreeing answers write it plain: flagging it anyway put 32 of 33 correct facts
+        # under the flag. A reading with any vote for one referent, or unsure, stays flagged (the test above).
+        answer = json.dumps({"concepts": [], "facts": [
+            {"subject": "Ember (peer)", "text": "reviewed PR #48", "object": None},
+            {"subject": "Ember (John's daughter)", "text": "drew a picture", "object": None}], "supersedes": []})
+        for whole, flagged in ((["both"] * 3, False), (["both", "both", "unsure"], True), (["both", "both", "error"], True)):
+            with self.subTest(whole=whole):
+                self.prompts.clear()
+                self.store.calls.clear()
+                (Path(self.tmp.name) / "concepts" / "runs.jsonl").unlink(missing_ok=True)
+                call = self.confirming(answer, whole=tuple(whole))
+                def answering(prompt):                 # an 'error' reading is a reply that is not JSON
+                    got = call(prompt)
+                    return "not json" if '"referent": "error"' in got else got
+                x = self.extractor(answering)
+                x.start(0)
+                self.assertEqual(["#5: 2 written"], x.catch_up(limit=1))
+                adds = self.store.adds()
+                self.assertEqual(2, len(adds))
+                for a in adds:
+                    self.assertEqual(flagged, "--flag" in a, a)
+                rec = json.loads((Path(self.tmp.name) / "concepts" / "runs.jsonl").read_text().splitlines()[0])
+                self.assertEqual([flagged] * 2, [bool(w["flag"]) for w in rec["written"]])
+                self.assertEqual(2, rec["flag_rule"])
+
     def test_no_referent_check_without_an_ambiguous_name_in_play(self):
         answer = json.dumps({"concepts": [], "facts": [{"subject": "Ember (peer)", "text": "reviewed PR #48", "object": None}], "supersedes": []})
         x = self.extractor(answer, ambiguous={})
