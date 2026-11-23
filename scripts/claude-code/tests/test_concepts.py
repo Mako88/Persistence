@@ -747,6 +747,36 @@ class Ambiguous(unittest.TestCase):
                 self.assertEqual([flagged] * 2, [bool(w["flag"]) for w in rec["written"]])
                 self.assertEqual(2, rec["flag_rule"])
 
+    def test_a_settled_both_reading_still_checks_every_referent_a_fact_names(self):
+        # A 'both' fragment is where one fact names both (the peer built a mod for the daughter). The settled reading
+        # unflags a fact only after each of its referents is confirmed: a rejected object still drops it. Found staging
+        # 8a9adc1 for Ember's review: ending the loop at the first confirmed referent passed every other test.
+        answer = json.dumps({"concepts": [], "facts": [
+            {"subject": "Ember (peer)", "text": "reviewed PR #48 and drew a picture", "object": "Ember (John's daughter)"}], "supersedes": []})
+        for object_says, written in (("Ember (John's daughter)", 1), ("Ember (peer)", 0)):
+            with self.subTest(object_says=object_says):
+                self.prompts.clear()
+                self.store.calls.clear()
+                (Path(self.tmp.name) / "concepts" / "runs.jsonl").unlink(missing_ok=True)
+                def call(prompt):
+                    if "CANDIDATES" not in prompt:
+                        return answer
+                    if "THE EXTRACTOR'S FACT" not in prompt:
+                        return json.dumps({"referent": "both"})
+                    asked = "Ember (peer)" if "Ember -> Ember (John's daughter)" in prompt else object_says
+                    return json.dumps({"referent": asked})
+                x = self.extractor(call)
+                x.start(0)
+                self.assertEqual([f"#5: {written} written"], x.catch_up(limit=1))
+                rec = json.loads((Path(self.tmp.name) / "concepts" / "runs.jsonl").read_text().splitlines()[0])
+                self.assertEqual(["Ember (peer)", "Ember (John's daughter)"], [c["referent"] for c in rec["referent_checks"]])
+                self.assertEqual(6, sum("THE EXTRACTOR'S FACT" in p for p in self.prompts))
+                if written:
+                    self.assertNotIn("--flag", self.store.adds()[0])
+                else:
+                    self.assertEqual([], self.store.adds())
+                    self.assertIn("filed under \"Ember (John's daughter)\", asked again: Ember (peer) 3", rec["skipped"][0]["why"])
+
     def test_no_referent_check_without_an_ambiguous_name_in_play(self):
         answer = json.dumps({"concepts": [], "facts": [{"subject": "Ember (peer)", "text": "reviewed PR #48", "object": None}], "supersedes": []})
         x = self.extractor(answer, ambiguous={})
