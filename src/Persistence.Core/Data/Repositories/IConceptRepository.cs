@@ -41,6 +41,9 @@ public interface IConceptRepository
 
     Task<IReadOnlyList<(string Alias, string? Note)>> AliasesAsync(long conceptId);
 
+    /// <summary>Moves an alias from one concept to another, its note replaced by <paramref name="note"/> (which carries the move).</summary>
+    Task MoveAliasAsync(long fromConceptId, long toConceptId, string alias, string note);
+
     Task<IReadOnlyList<ConceptRow>> UnconfirmedAsync();
 
     /// <summary>Every concept, by name.</summary>
@@ -54,7 +57,7 @@ public interface IConceptRepository
     /// status: in one transaction, so a fact never stands without its sources.
     /// </summary>
     Task<long> AddFactAsync(long subjectId, long? objectId, string text, bool isState, string? asOfUtc,
-        string extractedBy, IReadOnlyCollection<long> sources, string status, long? supersedes);
+        string extractedBy, IReadOnlyCollection<long> sources, string status, long? supersedes, string? flag = null);
 
     Task<FactRow?> GetFactAsync(long id);
 

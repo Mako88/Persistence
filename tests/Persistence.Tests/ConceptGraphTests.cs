@@ -162,6 +162,30 @@ public sealed class ConceptGraphTests : IDisposable
     }
 
     [Fact]
+    public async Task An_alias_moves_to_another_concept_with_its_history_kept_in_its_note()
+    {
+        // #60: 'Emma' went on the merged Ember; it is a mishearing of John's daughter's name, so it belongs on her.
+        var store = await OpenAsync();
+        await store.ConceptAsync("Ember", "person");
+        await store.ConceptAsync("Ember (John's daughter)", "person");
+        await store.AddAliasAsync("Ember", "Emma", "a dictation mishearing");
+
+        await Assert.ThrowsAsync<UsageException>(() => store.MoveAliasAsync("Ember (John's daughter)", "Emma", " "));
+        var (to, from) = await store.MoveAliasAsync("Ember (John's daughter)", "emma", "Emma is dictation of the daughter's name");
+
+        Assert.Equal("Ember (John's daughter)", to.Name);
+        Assert.Equal("Ember", from.Name);
+        Assert.StartsWith("Ember (John's daughter) (person", await store.ConceptShowAsync("Emma", false));
+        Assert.Matches(@"Emma \(a dictation mishearing; moved from Ember \d{4}-\d{2}-\d{2}: Emma is dictation of the daughter's name\)",
+            await store.ConceptShowAsync("Ember (John's daughter)", false));
+        Assert.DoesNotContain("Emma", await store.ConceptShowAsync("Ember", false));
+        await Assert.ThrowsAsync<RefusedException>(() => store.MoveAliasAsync("Ember (John's daughter)", "Emma", "again"));   // already hers
+        await Assert.ThrowsAsync<RefusedException>(() => store.MoveAliasAsync("Ember (John's daughter)", "Ember", "a name"));  // a name isn't an alias
+        await Assert.ThrowsAsync<RefusedException>(() => store.MoveAliasAsync("Ember (John's daughter)", "Em", "unknown"));
+        await Assert.ThrowsAsync<RefusedException>(() => store.MoveAliasAsync("Nobody", "Emma", "no such concept"));
+    }
+
+    [Fact]
     public async Task Anyone_may_flag_and_judging_is_refused_in_a_sleep_pass()
     {
         var store = await OpenAsync();

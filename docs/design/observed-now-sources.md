@@ -23,9 +23,12 @@ of them says when it stopped being true.
    (what the source's ack would commit; never rendered). A source that raises `observed.Unreadable` is
    `unknown` with its reason; any other exception is `error` with the exception's type only (never its
    text, which can carry a URL); a read that returns anything but an Observation is `error`.
-   `observed.render()` is the one place an Observation becomes text: ok is its lines (with "as of <age>
-   ago" when the data is over 60 s old); unknown and error are `- <source>: <status> (<reason>)` followed by
-   whatever was read; at most 6 lines of 200 characters each, then `- <source>: N more not shown`. So
+   `observed.render()` is the one place an Observation becomes text: ok is its lines (when the data is over 60 s
+   old, a `- <source>: as of <age> ago (<reason>)` head line, and every line under it prefixed `(as of <age>
+   ago)`, since a line is read alone; `freshness` is the oldest check behind the lines, `observed.oldest(...)`
+   when a source combines several); unknown and error are `- <source>: <status> (<reason>)` followed by
+   whatever was read; at most 6 lines of 200 characters each, the age label included, then
+   `- <source>: N more not shown`. So
    "couldn't read" is a status, never a line a source writes. `ctx` carries `state`, `setting`, `run`,
    `now`, so `observed.py` imports nothing from hook.py. Ember's event-buffer projection plugs in as one
    more `Source`: a read projecting "new since cursor" with `event_range`, an ack advancing the cursor.

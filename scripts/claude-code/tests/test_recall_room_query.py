@@ -97,5 +97,107 @@ class RoomRecallQuery(unittest.TestCase):
             self.assertEqual([WAKE.strip()], self.asked, off)
 
 
+
+
+class ShortWakeBudget(unittest.TestCase):
+    """A room wake whose messages are short gets a smaller recall budget, decided from the messages, never the prompt
+    (the preamble keeps every wake long). Off unless PERSISTENCE_RECALL_SHORT_WAKE_CHARS is set; anything that isn't a
+    whole wake is left alone; a cut is said in one line."""
+
+    ACK = {"id": "13", "channel_id": "c1", "channel_name": "general", "author": "John", "text": "Perfect! Thanks Claude!", "ts": 3.0}
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.asked = []
+        env = {k: v for k, v in os.environ.items() if not k.startswith("PERSISTENCE_")}
+        patches = [mock.patch.object(hook, "STATE", Path(self.tmp.name)),
+                   mock.patch.object(hook, "store", side_effect=self.fake_store),
+                   mock.patch.object(hook, "project", return_value="work"),
+                   mock.patch.object(hook, "keep_soon", return_value=None),
+                   mock.patch.object(hook, "cued", return_value=""),
+                   mock.patch.object(hook, "record_shown", return_value=None),
+                   mock.patch.dict(os.environ, {**env, "PERSISTENCE_RECALL_COUNT": "3"}, clear=True)]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.addCleanup(self.tmp.cleanup)
+
+    found = FOUND
+
+    def fake_store(self, *args, stdin=None, **kw):
+        if args and args[0] == "recall":
+            self.asked.append(args)
+        return self.found
+
+    def recall(self, prompt):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            hook.recall({"prompt": prompt, "session_id": "s1", "transcript_path": ""})
+        args = self.asked[-1]
+        flag = lambda name: args[args.index(name) + 1]
+        return (flag("--limit"), flag("--wander"), flag("--said")), json.loads(out.getvalue())["hookSpecificOutput"]["additionalContext"]
+
+    def wake(self, msg):
+        return rc.build_prompt([msg], [msg], "Claude", "1569591751579013200")
+
+    def test_off_by_default(self):
+        (limit, wander, said), text = self.recall(self.wake(self.ACK))
+        self.assertEqual(limit, "3")
+        self.assertNotIn("short wake", text)
+
+    def test_a_short_wake_gets_the_smaller_budget_and_says_so(self):
+        os.environ["PERSISTENCE_RECALL_SHORT_WAKE_CHARS"] = "200"
+        (limit, wander, said), text = self.recall(self.wake(self.ACK))
+        self.assertEqual((limit, wander, said), ("1", "0", "0"))
+        self.assertIn(f"a short wake, {len(self.ACK['text'])} characters of messages, so 1 fragment instead of 3", text)
+
+    def test_a_long_wake_keeps_its_budget(self):
+        os.environ["PERSISTENCE_RECALL_SHORT_WAKE_CHARS"] = "200"
+        long = dict(self.ACK, text="Claude, what did the chunking bench show for the mean arm and the max arm? " * 4)
+        (limit, _, _), text = self.recall(self.wake(long))
+        self.assertEqual(limit, "3")
+        self.assertNotIn("short wake", text)
+
+    def test_a_short_prompt_that_isnt_a_wake_is_left_alone(self):
+        os.environ["PERSISTENCE_RECALL_SHORT_WAKE_CHARS"] = "200"
+        (limit, _, _), text = self.recall("yes, merge it please")
+        self.assertEqual(limit, "3")
+        self.assertNotIn("short wake", text)
+
+    def test_the_count_can_be_set_and_never_raises_the_budget(self):
+        os.environ.update({"PERSISTENCE_RECALL_SHORT_WAKE_CHARS": "200", "PERSISTENCE_RECALL_SHORT_WAKE_COUNT": "2"})
+        self.assertEqual(self.recall(self.wake(self.ACK))[0][0], "2")
+        os.environ["PERSISTENCE_RECALL_SHORT_WAKE_COUNT"] = "5"
+        self.assertEqual(self.recall(self.wake(self.ACK))[0][0], "3")
+
+    def test_a_cut_that_finds_nothing_still_says_so(self):
+        # Ember's CHANGES on #80 (1572688728097431615): the line went out only when a fragment did, so a cut that found
+        # nothing, no cue and no concept, left recall reduced and silent about it. The line is then the whole context.
+        os.environ["PERSISTENCE_RECALL_SHORT_WAKE_CHARS"] = "200"
+        self.found = ""
+        _, text = self.recall(self.wake(self.ACK))
+        self.assertEqual(text, f"(Recall: a short wake, {len(self.ACK['text'])} characters of messages, so 1 fragment "
+                               "instead of 3, no wander or past utterances.)")
+
+    def test_a_cue_without_a_fragment_keeps_the_line(self):
+        os.environ["PERSISTENCE_RECALL_SHORT_WAKE_CHARS"] = "200"
+        self.found = ""
+        with mock.patch.object(hook, "cued", return_value="[#9 | Personal] a reminder"):
+            _, text = self.recall(self.wake(self.ACK))
+        self.assertIn("a reminder", text)
+        self.assertTrue(text.endswith("instead of 3, no wander or past utterances.)"), text)
+
+    def test_nothing_found_without_a_cut_stays_silent(self):
+        self.found = ""
+        out = io.StringIO()
+        with redirect_stdout(out):
+            hook.recall({"prompt": self.wake(self.ACK), "session_id": "s1", "transcript_path": ""})
+        self.assertEqual(out.getvalue(), "")
+
+    def test_a_bad_setting_leaves_recall_alone(self):
+        os.environ["PERSISTENCE_RECALL_SHORT_WAKE_CHARS"] = "lots"
+        self.assertEqual(self.recall(self.wake(self.ACK))[0][0], "3")
+
+
 if __name__ == "__main__":
     unittest.main()

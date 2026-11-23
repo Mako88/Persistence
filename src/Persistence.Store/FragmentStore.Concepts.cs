@@ -55,9 +55,11 @@ internal sealed partial class FragmentStore
         (await AddFactWhyAsync(subject, text, sources, @object, isState, asOf, extractedBy, supersedes, kind)).Fact;
 
     /// <summary><see cref="AddFactAsync"/>, with why it is a proposal (null when it stands), and whether it already stood:
-    /// then nothing was added and the fact returned is the one standing.</summary>
+    /// then nothing was added and the fact returned is the one standing. A <paramref name="flag"/> is written with the
+    /// fact, by whoever added it, in the same transaction (the extractor's 'referent unsure', Arden's gate on #70); on a
+    /// standing proposal it flags that one, once per reason. A fact the self has accepted is left alone.</summary>
     public async Task<(FactRow Fact, string? WhyProposed, bool AlreadyStood)> AddFactWhyAsync(string subject, string text, IReadOnlyCollection<long> sources, string? @object = null,
-        bool isState = false, string? asOf = null, string? extractedBy = null, long? supersedes = null, string? kind = null)
+        bool isState = false, string? asOf = null, string? extractedBy = null, long? supersedes = null, string? kind = null, string? flag = null)
     {
         if (string.IsNullOrWhiteSpace(text))
         {
@@ -100,6 +102,12 @@ internal sealed partial class FragmentStore
             && f.SubjectId == subj.Id && f.ObjectId == obj?.Id && Normal(f.Text) == normal);
         if (standing is not null && supersedes is null)
         {
+            if (!string.IsNullOrWhiteSpace(flag) && standing.Status == "proposed"
+                && !(await concepts.OpenFlagsAsync()).Any(x => x.FactId == standing.Id && x.Reason == flag.Trim()))
+            {
+                await concepts.FlagAsync(standing.Id, extractedBy ?? "by hand", flag.Trim());
+            }
+
             return (standing, null, true);
         }
 
@@ -119,7 +127,7 @@ internal sealed partial class FragmentStore
             .Where(x => x is not null).ToList();
         var proposal = whys.Count > 0;
         var id = await concepts.AddFactAsync(subj.Id, obj?.Id, text, isState, asOf, extractedBy ?? "by hand",
-            sources, proposal ? "proposed" : "active", replaced?.Id);
+            sources, proposal ? "proposed" : "active", replaced?.Id, flag);
         if (!proposal && replaced is not null)
         {
             await concepts.SupersedeFactAsync(replaced.Id, id, $"superseded by #{id}");
@@ -211,6 +219,37 @@ internal sealed partial class FragmentStore
         return c;
     }
 
+    /// <summary>
+    /// Moves <paramref name="alias"/> from the concept that holds it to <paramref name="name"/>'s, with why: 'Emma' was
+    /// put on the merged Ember, and is a mishearing of John's daughter's name (#60). An alias is unique, so it can't be
+    /// kept on both; the move is appended to its note instead, as a fact's resolution keeps its history.
+    /// </summary>
+    public async Task<(ConceptRow To, ConceptRow From)> MoveAliasAsync(string name, string alias, string reason)
+    {
+        var to = await concepts.FindAsync(name) ?? throw new RefusedException($"There is no concept '{name}'.");
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            throw new UsageException("concept alias --move needs --reason <why>.");
+        }
+
+        var from = await concepts.FindAsync(alias);
+        if (from is null || string.Equals(from.Name, alias.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            throw new RefusedException(from is null ? $"'{alias}' is not an alias of any concept: `concept alias {name} {alias}` adds it."
+                : $"'{alias}' is a concept's own name, not an alias; only an alias moves.");
+        }
+
+        if (from.Id == to.Id)
+        {
+            throw new RefusedException($"'{alias}' already names {to.Name}.");
+        }
+
+        var note = (await concepts.AliasesAsync(from.Id)).First(a => string.Equals(a.Alias, alias.Trim(), StringComparison.OrdinalIgnoreCase)).Note;
+        var moved = $"moved from {OneLine(from.Name)} {Today()}: {OneLine(reason.Trim())}";
+        await concepts.MoveAliasAsync(from.Id, to.Id, alias, string.IsNullOrWhiteSpace(note) ? moved : $"{note}; {moved}");
+        return (to, from);
+    }
+
     /// <summary>Whether a fact was written by the automatic extractor (<c>--by extractor:...</c>), never by the self.</summary>
     public static bool FromExtractor(string? extractedBy) =>
         extractedBy is not null && extractedBy.StartsWith("extractor", StringComparison.OrdinalIgnoreCase);
@@ -251,9 +290,11 @@ internal sealed partial class FragmentStore
             sb.Append($"\n  {OneLine(c.Summary)}");
         }
 
+        var flags = await OpenFlagsByFactAsync();
         foreach (var f in facts)
         {
-            sb.Append("\n  " + RenderFact(f, c.Id, names, sources.GetValueOrDefault(f.Id) ?? []));
+            var open = flags.GetValueOrDefault(f.Id) ?? [];
+            sb.Append("\n  " + RenderFact(f, c.Id, names, sources.GetValueOrDefault(f.Id) ?? [], open) + FlagLines(open));
         }
 
         if (facts.Count == 0)
@@ -282,23 +323,27 @@ internal sealed partial class FragmentStore
         var all = proposed.Concat(flagged).ToList();
         var sources = await concepts.SourcesAsync(all.Select(f => f.Id).Distinct().ToList());
         var names = await NamesAsync(all);
+        var byFact = flags.GroupBy(x => x.FactId).ToDictionary(g => g.Key, g => (IReadOnlyList<FactFlagRow>)g.ToList());
         var sb = new StringBuilder();
-        if (proposed.Count > 0)
+        // Flags first: a flagged fact may be wrong in a way the extractor could tell (Arden's gate on #70). A flagged
+        // proposal is listed once, under its flags, not again among the proposals.
+        if (flags.Count > 0)
         {
-            sb.Append($"Proposed ({proposed.Count}): `concept accept <id>` or `concept reject <id> --reason` (`concept reopen <id>` takes a rejection back)");
-            foreach (var f in proposed)
+            sb.Append($"Flagged ({flags.Count}): `concept accept <id>` or `concept reject <id> --reason` settles a fact and its flags");
+            foreach (var f in flagged)
             {
-                sb.Append("\n  " + RenderFact(f, null, names, sources.GetValueOrDefault(f.Id) ?? []));
+                sb.Append($"\n  {RenderFact(f, null, names, sources.GetValueOrDefault(f.Id) ?? [], byFact[f.Id])}"
+                    + string.Concat(byFact[f.Id].Select(flag => $"\n    flagged by {OneLine(flag.FlaggedBy)}, {flag.CreatedUtc[..10]}: {OneLine(flag.Reason)}")));
             }
         }
 
-        if (flags.Count > 0)
+        var unflagged = proposed.Where(f => !byFact.ContainsKey(f.Id)).ToList();
+        if (unflagged.Count > 0)
         {
-            sb.Append((sb.Length > 0 ? "\n\n" : "") + $"Flagged ({flags.Count}):");
-            foreach (var flag in flags)
+            sb.Append((sb.Length > 0 ? "\n\n" : "") + $"Proposed ({unflagged.Count}): `concept accept <id>` or `concept reject <id> --reason` (`concept reopen <id>` takes a rejection back)");
+            foreach (var f in unflagged)
             {
-                var f = flagged.First(x => x.Id == flag.FactId);
-                sb.Append($"\n  {RenderFact(f, null, names, sources.GetValueOrDefault(f.Id) ?? [])}\n    flagged by {OneLine(flag.FlaggedBy)}, {flag.CreatedUtc[..10]}: {OneLine(flag.Reason)}");
+                sb.Append("\n  " + RenderFact(f, null, names, sources.GetValueOrDefault(f.Id) ?? []));
             }
         }
 
@@ -338,7 +383,8 @@ internal sealed partial class FragmentStore
     /// One fact as a line: <c>#12 [Ember →] John's daughter [#7153, #14625] (proposed)</c>. A state fact always shows
     /// when it was known, so a stale belief looks stale (Arden); an event shows when it happened when the text says.
     /// </summary>
-    public static string RenderFact(FactRow f, long? about, IReadOnlyDictionary<long, string> names, IReadOnlyList<long> sources)
+    public static string RenderFact(FactRow f, long? about, IReadOnlyDictionary<long, string> names, IReadOnlyList<long> sources,
+        IReadOnlyList<FactFlagRow>? flags = null)
     {
         var who = OneLine(names.GetValueOrDefault(f.SubjectId, $"concept {f.SubjectId}"));
         var link = f.ObjectId is { } o ? $"{who} → {OneLine(names.GetValueOrDefault(o, $"concept {o}"))}: " : about == f.SubjectId ? "" : $"{who}: ";
@@ -355,12 +401,37 @@ internal sealed partial class FragmentStore
 
         var status = f.SupersededById is { } by ? $"superseded by #{by}" : f.Status == "active" ? null : f.Status;
         var tail = string.Join("; ", dates.Concat(status is null ? [] : [status]).Concat(f.Supersedes is { } s && f.Status == "proposed" ? [$"would replace #{s}"] : []));
-        return $"#{f.Id} {link}{OneLine(f.Text)} [{string.Join(", ", sources.Select(s => $"#{s}"))}]" + (tail.Length > 0 ? $" ({tail})" : "");
+        return $"#{f.Id} {FlagMark(flags)}{link}{OneLine(f.Text)} [{string.Join(", ", sources.Select(s => $"#{s}"))}]" + (tail.Length > 0 ? $" ({tail})" : "");
     }
 
-    /// <summary>One fact as <see cref="RenderFact"/> shows it, its names and sources looked up.</summary>
+    /// <summary><c>[flagged: referent unsure] </c>, right after the id so a line cut for length keeps it: the flag's
+    /// kind is its reason up to the first colon, when that is short; <c>[flagged] </c> otherwise. Nothing when unflagged.</summary>
+    private static string FlagMark(IReadOnlyList<FactFlagRow>? flags)
+    {
+        if (flags is not { Count: > 0 })
+        {
+            return "";
+        }
+
+        var kinds = flags.Select(x => OneLine(x.Reason)).Select(r => r.IndexOf(':') is var i and > 0 and <= 40 ? r[..i].Trim() : null)
+            .OfType<string>().Distinct().ToList();
+        return kinds.Count > 0 ? $"[flagged: {string.Join(", ", kinds)}] " : "[flagged] ";
+    }
+
+    /// <summary>Each open flag on its own indented line under the fact, its reason cut at 200 characters.</summary>
+    internal static string FlagLines(IReadOnlyList<FactFlagRow> flags) =>
+        string.Concat(flags.Select(x => $"\n    flagged by {OneLine(x.FlaggedBy)}: {Cut(OneLine(x.Reason), 200)}"));
+
+    private static string Cut(string s, int n) => s.Length > n ? s[..(n - 1)] + "…" : s;
+
+    /// <summary>The open flags, by the fact they are on.</summary>
+    internal async Task<IReadOnlyDictionary<long, IReadOnlyList<FactFlagRow>>> OpenFlagsByFactAsync() =>
+        (await concepts.OpenFlagsAsync()).GroupBy(x => x.FactId).ToDictionary(g => g.Key, g => (IReadOnlyList<FactFlagRow>)g.ToList());
+
+    /// <summary>One fact as <see cref="RenderFact"/> shows it, its names, sources and open flags looked up.</summary>
     public async Task<string> RenderFactAsync(FactRow f) =>
-        RenderFact(f, null, await NamesAsync([f]), (await concepts.SourcesAsync([f.Id])).GetValueOrDefault(f.Id) ?? []);
+        RenderFact(f, null, await NamesAsync([f]), (await concepts.SourcesAsync([f.Id])).GetValueOrDefault(f.Id) ?? [],
+            (await OpenFlagsByFactAsync()).GetValueOrDefault(f.Id));
 
     private static string Day(string? utc) => string.IsNullOrEmpty(utc) ? "?" : utc.Length >= 10 ? utc[..10] : utc;
 

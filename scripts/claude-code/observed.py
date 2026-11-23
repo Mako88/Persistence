@@ -39,7 +39,8 @@ class Observation:
     observed_at: datetime                  # when the read ran
     status: str = "ok"                     # ok | unknown | error
     lines: tuple = ()                      # bounded facts, without "- "; render() adds it
-    freshness: Optional[datetime] = None   # when the data was true at its source (a cache's time); None = observed_at
+    freshness: Optional[datetime] = None   # when the data was true at its source (a cache's time); None = observed_at.
+                                           # One per observation: lines fed by several checks use oldest(...)
     reason: str = ""                       # why unknown/error, or what made ok data stale
     event_range: Optional[tuple] = None    # (oldest, newest) id or time of the events shown, for cursored sources
     truncated: int = 0                     # items left out; render() adds what it cuts
@@ -190,6 +191,32 @@ def prs_ack(obs, event, ctx):
 
 # --- deployed: installed hook files and the deployed store against main ---
 
+SHARED_STORE = Path("/opt/persistence/store")
+EXEC_PATH = re.compile(r"\bpath=(\S+)")
+
+
+def store_marker(ctx):
+    """The DEPLOYED marker of the build the store unit actually runs, that build's folder when it isn't the shared one,
+    and why it couldn't be found (marker None). A drop-in can point the unit at its own build (a change approved for one
+    account only), and then the shared marker names a commit that isn't running: on 2026-11-16 it read '20 commits
+    behind' for a store at main's code. An explicit PERSISTENCE_OBSERVE_STORE_MARKER wins; the shared marker is read only
+    when no unit is set. A unit whose ExecStart can't be read (systemctl timed out or failed, a misspelled unit), or a
+    build without a marker, is reported unknown, never the shared one.
+    ExecStart is the unit's loaded definition, not the running process: after a daemon-reload without a restart they can
+    differ. /proc/<MainPID>/exe would be the ground truth but needs the store's uid; the unit is what can be read."""
+    explicit = ctx.setting("PERSISTENCE_OBSERVE_STORE_MARKER", "")
+    if explicit:
+        return Path(explicit), None, ""
+    unit = ctx.setting("PERSISTENCE_OBSERVE_STORE_UNIT", "")
+    if not unit:
+        return SHARED_STORE / "DEPLOYED", None, ""
+    found = EXEC_PATH.search(ctx.run(["systemctl", "show", "-p", "ExecStart", unit], None, 5) or "")
+    if not found:
+        return None, None, f"store unit {unit}: systemctl show gave no ExecStart path"
+    build = Path(found.group(1)).parent
+    return build / "DEPLOYED", (build if build.resolve() != SHARED_STORE.resolve() else None), ""
+
+
 def deployed(event, ctx):
     repo = os.path.expanduser(ctx.setting("PERSISTENCE_OBSERVE_REPO", "~/work/Persistence"))
     obs = Observation("deployed", ctx.now)
@@ -215,20 +242,24 @@ def deployed(event, ctx):
             out.append("hooks: " + "; ".join(filter(None, [
                 f"{', '.join(differ)} differ from main ({main[:7]})" if differ else "",
                 f"missing: {', '.join(missing)}" if missing else ""])))
-    marker = Path(ctx.setting("PERSISTENCE_OBSERVE_STORE_MARKER", "/opt/persistence/store/DEPLOYED"))
-    try:
-        sha = marker.read_text(encoding="utf-8").split()[0]
-    except (OSError, IndexError):
-        unknown.append(f"store: which commit is deployed (no {marker})")
-        sha = None
+    marker, build, why = store_marker(ctx)
+    sha = None
+    if marker is None:
+        unknown.append(f"store: which commit is deployed ({why})")
+    else:
+        try:
+            sha = marker.read_text(encoding="utf-8").split()[0]
+        except (OSError, IndexError):
+            unknown.append(f"store: which commit is deployed (no {marker})")
     if sha:
         behind = ctx.run(["git", "rev-list", "--count", f"{sha}..main"], repo).strip()
+        where = f" (own build {build.name})" if build else ""
         if not behind.isdigit():
-            out.append(f"store: deployed {sha[:7]}, not in {repo}'s history")
+            out.append(f"store: deployed {sha[:7]}{where}, not in {repo}'s history")
         elif behind == "0":
-            out.append(f"store: deployed {sha[:7]}, at main")
+            out.append(f"store: deployed {sha[:7]}{where}, at main")
         else:
-            out.append(f"store: deployed {sha[:7]}, {behind} commit{'s' if behind != '1' else ''} behind main ({main[:7]})")
+            out.append(f"store: deployed {sha[:7]}{where}, {behind} commit{'s' if behind != '1' else ''} behind main ({main[:7]})")
     return replace(obs, lines=tuple(out), status="unknown" if unknown else "ok", reason="; ".join(unknown))
 
 
@@ -597,8 +628,17 @@ def observe(event, ctx):
     return out
 
 
-def bounded(obs):
-    lines = [short(line, MAX_LINE_CHARS) for line in obs.lines]
+def oldest(*whens):
+    """The freshness of lines fed by several checks: the OLDEST of their times (None ones skipped; None if all are).
+    An Observation has one freshness, so a source that combines checks must set freshness=oldest(...), or a line
+    built partly from a stale read is labelled by its freshest part."""
+    known = [w for w in whens if w is not None]
+    return min(known) if known else None
+
+
+def bounded(obs, reserve=0):
+    """At most MAX_LINES lines of at most MAX_LINE_CHARS each, counting `reserve` chars render() puts before a line."""
+    lines = [short(line, MAX_LINE_CHARS - reserve) for line in obs.lines]
     cut = max(0, len(lines) - MAX_LINES)
     return lines[:MAX_LINES], obs.truncated + cut
 
@@ -608,17 +648,21 @@ def render(observations, now=None):
     caller can ack exactly the observations whose lines reached the session."""
     rendered = []
     for obs in observations:
-        lines, more = bounded(obs)
         when = obs.freshness or obs.observed_at
         stale = (now or obs.observed_at) - when >= STALE
+        label = f"as of {age((now or obs.observed_at) - when)} ago" if stale else ""
+        mark = f"({label}) " if label else ""
+        lines, more = bounded(obs, len(mark))  # the age label counts toward the line's width
         head = []
         if obs.status != "ok":
             head.append(f"- {obs.source}: {obs.status} ({obs.reason or 'no reason given'})")
         elif stale:
-            head.append(f"- {obs.source}: as of {age((now or obs.observed_at) - when)} ago" + (f" ({obs.reason})" if obs.reason else ""))
-        body = [f"- {line}" for line in lines]
+            head.append(f"- {obs.source}: {label}" + (f" ({obs.reason})" if obs.reason else ""))
+        # Every line carries the age, not just the source's head line: a line is read alone, and on 2026-11-19 a
+        # "- PR #62 ..." line under a 5h-old head read as current (room 1572859130241351712).
+        body = [f"- {mark}{line}" for line in lines]
         if more:
-            body.append(f"- {obs.source}: {more} more not shown")
+            body.append(f"- {mark}{obs.source}: {more} more not shown")
         rendered.append((obs, head + body))
     return rendered
 

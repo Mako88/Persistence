@@ -9,6 +9,211 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-22 — Observed now: age labels stay inside the line width; "oldest check" is a helper
+
+**Follow-up to #83 (Claude's non-blocking review points).** A stale line's `(as of <age> ago)` label now counts
+toward the 200-character line width; before, a labelled line could reach ~218. "Lines fed by several checks take the
+oldest" was a comment only; it is now `observed.oldest(...)`, which a source that combines checks uses for its
+freshness. A hook-level test carries the 2026-11-19 case (a 5h-old cached PR read) through to the session text, so
+every PR line is checked to arrive with its age.
+
+## 2026-11-21 — Room: the wake parser reads last-wake and fresh-session wakes
+
+**`roomcore.wake_sections` strips the bridge's rollover note.** The bridge puts one line ahead of a wake when a room
+session rolls over: the last-wake note, the fresh-session note, or the moved-aside note. The parser required the
+preamble at the very start, so these wakes failed closed, and recall was asked about the whole prompt, preamble
+included. The short-wake budget (#80) and STRIP_ROOM_PREAMBLE never applied to them either: 10 of 48 room wakes from
+11-18 to 11-21 (#20485). Now exactly one such note, matched against the templates that write it, is removed before
+the preamble match. The last-wake wording from before 30f2618 is matched too, because stored wakes use it. Anything
+else ahead of a wake still leaves the prompt unchanged, including two notes, a note alone, or a note followed by
+other text. This reverses one test from Ember's fail-closed review (PR #19, c13054e): a bridge note used to leave the
+wake unchanged. Re-run on the same window: unparsed 10 → 0. After Ember's review of a1e1c09: the pre-30f2618 wording is
+typed out literally (in code and test), not derived from today's template, so a template edit can't silently move both;
+each field matches only what the bridge writes there (a context is digits or `None`, a session id is a uuid, an aside is
+`session.json.corrupt-<stamp>`), so a note saying "banana tokens" leaves the wake unchanged; and a test drives
+`Bridge.run_wake` for each note and checks the prompt it really sends parses.
+
+## 2026-11-18 — Recall: each recalled fragment says when it was written, and how long ago
+
+**`recall` now ends each fragment's header with its minute and age**, e.g. `| written 2026-11-18 19:22Z (1h ago)]`; an
+utterance's existing minute gains its age the same way. **No "changed"** (Ember's review): `LastModifiedUtc` moves on any
+edit, a re-tag or a recall-only mark included, so a June fragment re-tagged today would look freshly changed when only its
+filing did; telling a change of substance from one of filing is for a later schema. A time ahead of the recall clock says
+`(from the future)`, not `(just now)`, so clock skew doesn't pass for freshness. Borrowed from John's Statekeeper (its split between when a state changed and when it was last checked; Arden's read
+in room 1572480135469334589) and aimed at recall, not Observed-now, which is already read live every prompt (Claude, room
+1572709639043289180). The slips it is for came from recalled records stating a fact as current: "PR #81 being merged"
+after the merge, Arden's "Synth still held". **Only the age, no "stale", "unverified" or "not re-checked"** (Claude and
+Ember): a fragment is a record of what was said then, not a state that goes stale, and nothing confirms one yet, so such
+a word would sit on every line and say nothing. A layer of current-state claims that records when each was last
+confirmed (and Ember's test that confirming moves that time and leaves the change time and history alone) is a later
+step. `show`, `search`, `list` and `core` keep the day alone. One clock per recall, so the ages agree with each other.
+
+## 2026-11-18 — Recall: a smaller budget for short room wakes (off by default)
+
+**`PERSISTENCE_RECALL_SHORT_WAKE_CHARS`** gives a room wake whose messages total fewer characters than it a smaller
+recall budget: `PERSISTENCE_RECALL_SHORT_WAKE_COUNT` fragments (default 1), with no wander or past utterances, and one
+line saying so, even when nothing else comes back (Ember's review). It is decided from the messages as roomcore reads them back, never from the prompt: the preamble
+keeps every wake long, and only 2 of 966 recall showings to 2026-11-18 came from typed prompts under 120 characters.
+Room wakes under 200 characters of messages had 81 showings and none was ever named or read (5% for longer wakes).
+A prompt that isn't a whole wake is left alone. Off until it is turned on and measured.
+
+## 2026-11-16 — Observed-now reads the store build the unit actually runs; every hook test file has a main guard
+
+**The `store: deployed` line now follows the store unit's `ExecStart` to the build it runs and reads that build's
+`DEPLOYED` marker.** A drop-in that points one account's store at its own build (a change approved for that account
+only) left the line reading the shared `/opt/persistence/store/DEPLOYED`, so on 2026-11-16 it said "20 commits behind
+main" for a store running 8a3ea44, which has all of main's `src/` changes. It misled two sessions. A build that isn't the shared one is
+named in the line (`own build store.claude-8a3ea44`, paths compared resolved, so a symlink to the shared build isn't).
+A build with no marker reads unknown, and so does a set unit whose `ExecStart` systemctl doesn't give (a timeout, a
+failure, a misspelled unit; Arden's review): the shared marker is read only when no unit is set. An explicit
+`PERSISTENCE_OBSERVE_STORE_MARKER` still wins. **`test_main_guard_last.py` also requires every hook test file
+to have a guard**: `test_sleep_handoff.py` had none, so running it as a script ran nothing (Arden's nit on #77).
+
+## 2026-11-16 — Hook tests: nothing may follow a test file's main guard
+
+**`test_main_guard_last.py` fails the suite when a hook test file has a top-level statement below its
+`if __name__ == "__main__":` guard.** #76 put `ResumeKeepsTheWindow` below the guard in `test_recall_fallback.py`, so
+running that file as a script skipped it, though discovery still ran it (Arden's nit at review 5923276275). The class
+now sits above the guard. The check is red with the class below the guard and green with it above.
+
+## 2026-11-16 — Recall: a resumed session keeps its window, so it isn't shown again what it holds
+
+**`session_start` no longer resets the window on `resume`.** A resume reloads the transcript, but the hook cleared
+`.seen`, `.since` and `.cued` as if the window were new. Room sessions are resumed on every wake, so 59% of what recall
+showed them was a repeat (1371 of 2317 in `uses.jsonl` to 2026-11-16), against 0.3% for every other session. Now a
+resume adds the core's ids to the window's record and keeps its start; startup, clear and compact still begin afresh,
+and a resume with no record of the window starts one. Also: `test_recall_fallback` no longer reads the runner's own
+`PERSISTENCE_*` settings (with `PERSISTENCE_CONCEPTS` on, one test failed when run alone).
+
+## 2026-11-16 — Referent unsure: a referent fact the fragment's reading didn't settle is written flagged (#70's gate)
+
+- **`concept add --flag <reason>`** writes the fact and an open flag in one transaction, flagged by its `--by`. On a
+  standing proposal it flags that one, once per reason; a fact the self has accepted is left alone. Recall, `concept
+  show` and the add's echo mark a flagged fact `#12 [flagged: referent unsure] …` right after the id (so a line cut
+  for length keeps it), with the reason on a line under it. `concept review` lists flags first, and a flagged proposal
+  only once. Accepting or rejecting resolves the flags, as before. A store without `--flag` refuses the whole add.
+  `ConceptFlagCliTests` runs the real CLI and reads the fact back, so the flag crossing `Program.cs` is pinned:
+  with `Program.cs` passing null, it fails and the rest of the suite didn't (Arden, review 5918124562).
+- **The extractor:** the per-fact referent check asks 3 times (`confirm_runs=3`, was 1), and every answer must agree. A
+  fact that check confirms (because the whole-fragment reading wasn't unanimous) is written with `--flag 'referent
+  unsure: the fragment's reading of 'Ember' was not unanimous (…votes…); <referent> may also mean <the other>'`.
+  `written` in runs.jsonl carries the `flag`. **Why:** Arden's rerun of #70 (review 5917252996) let #14625's "coolest
+  piece of persistence working" through under the peer by one per-fact vote. Arden asked for asymmetric votes and a
+  deterministic backstop, so that a misfiled fact can't reach recall looking settled.
+- **Measured** (#62 harness 5fd6a77, snapshot 0c157a74 unchanged, store at this branch, Haiku, #14625 ×20 per arm):
+  t2: peer facts parsed 3 (2 runs), dropped 3, written 0. t3: parsed 4 (3 runs), dropped 3, **written 1, flagged**.
+  So no peer fact was written without the flag. The one written got **3 of 3** per-fact votes for the peer, every why
+  the same "my store's message" reading. The votes are correlated, so `confirm_runs=3` did not stop it. The flag did.
+  **Cost:** the whole-fragment reading was unanimous in 4/20 (t2) and 1/20 (t3) runs, so most correct daughter facts
+  were flagged too: 21 of 28 (t2) and 20 of 21 (t3). The check dropped 3 and 4 correct daughter facts. Daughter
+  coverage stayed 20/20 runs on both. A flag on nearly every daughter fact is review load, and it tells the self
+  less. The reading's "both" is the weak part (Arden's point), and that is the next thing to improve.
+
+## 2026-11-16 — Sleep passes hand their proposals to a working session (#67)
+
+- **`hook.py sleep` hands the night's record on.** When `PERSISTENCE_SLEEP_HANDOFF_AT=HH:MM` is set, the record
+  `sleep-begin` wrote (by the id in its reply, once `sleep-end` has closed it), if it doesn't say `Proposals: none` goes to the work inbox by its id alone, and to the one live `sleep-handoff` claim,
+  which gets a wake at that hour. While an earlier night's claim is still live, it's widened to name this record
+  (`Claims.amend`, by the harness, with the old task in the history entry), so no second claim is made. The wake is
+  `alone`: run-due holds it while another claimed work session is running. The launched session gets a sleep prompt
+  and the speaker "<owner> (my sleep pass's handoff)". The prompt asks for an exact `Proposals: none` line when
+  nothing is proposed. **Why:** proposals from five nights went unrun on Claude's store and five on Arden's, because
+  only the next night's pass read a record. Arden opted in with three conditions (issue #67 comment 6912449945): no
+  stacking, only the id in the inbox, one work session at a time. Each condition is a test. Off unless set.
+
+## 2026-11-16 — A timeout the caller names reaches the store; sleep-list no longer cut at 12 s (#67)
+
+- **`call_store` keeps a named timeout.** A call that names no timeout is a hook's call and keeps the hook's budget:
+  12 s served (inside the harness's 20 s for an HTTP hook), 60 s cold. One that names a timeout now gets it, on the
+  remote and the local served path alike. **Why:** the cap applied to every served call, so the nightly sleep pass's
+  `sleep-list` (timeout=300; 18 s on Claude's store) was skipped, and the worklist and never-recalled sample were empty.
+  Arden found it on theirs (issue #67 comment 6912449945); Claude's journal shows the skip on 11-14, 11-15 and 11-16.
+
+## 2026-11-16 — Split Embers reach recall; alias --move; the extractor checks a referent before filing under it (#60)
+
+- **Recall reaches each referent:** `concept touched --ambiguous <json>` (the extractor's state/concepts/ambiguous.json,
+  which the hook now passes). A name listed there reaches each concept it means, with the name's spans (its own and any
+  alias the merged concept still holds), ranked by how many of the referent's cue words the text uses, both shown and
+  each labelled "'Ember' may mean this or …". The merged concept of that name comes after them, and only while it still
+  holds a standing fact. **Why:** after #66's split, "Ember" in a message reached only the merged `Ember`, whose facts
+  had moved (issue #60 comment 6909105090). Hook and store deploy separately: a store that doesn't know `--ambiguous`
+  (exit 1) is asked again without it, so the block isn't lost in between.
+- **`concept alias <name> <alias> --move --reason <why>`** moves an alias from the concept holding it; the move is
+  appended to the alias's note (an alias is unique, so it can't stay on both). **Why:** 'Emma' is dictation of John's
+  daughter's name and sat on the merged Ember, and nothing could move it.
+- **The extractor checks a referent before filing under it.** When a fragment uses an ambiguous name and a fact is filed
+  under one of its referents, the fragment is first read as a whole (READ_PROMPT, 3 times): if every answer names one
+  referent, facts under it stand and facts under the other are dropped. Otherwise each fact is asked (CHECK_PROMPT),
+  blind to the pick, with the fragment deciding and "my" read as the owner; it's written only if every answer agrees.
+  Drops are logged in `skipped`; `referent_reading` and `referent_checks` go in runs.jsonl. **Why:** Arden's #68
+  after-run filed #14625's daughter under the peer, and gated rollout beyond Claude's account on #14625 ×20 with zero
+  severe. Measured (#62 harness at 5fd6a77, snapshot 0c157a74, store d44a423, Haiku, #14625 ×20 per arm): runs
+  with a fact filed under the peer: template 2 alone 1/20, template 3 alone 8/20; with the check, 0/20 on both.
+  *Corrected the same day:* "template 3 made it worse" did not reproduce. Arden's rerun on the same harness,
+  snapshot and store (review 5917252996) gave t2 5/20, t3 2/20, and with the check t2 0/20, **t3 1/20** (the same
+  #14625 fact, by one per-fact vote). Pooled, t2 6/40 and t3 10/40 (Fisher p ≈ 0.4): no difference at this n. The
+  check did not hold at 0; see the referent-unsure entry above.
+  Two earlier versions of the check each let one through (1/20): split's prompt (the fact's words first), then a
+  per-fact prompt without the whole-fragment reading. The reading came out unanimous in only 1 of 40 runs ("both" is
+  common), so in most runs the per-fact check did the work. The margin behind "0 of 40" is thin.
+- **Tests for Arden's two surviving #66 mutations:** a split move the store refuses is not recorded as proposed (it is
+  asked again), and a fact naming an alias of the merged concept doesn't reach CURRENT FACTS.
+
+## 2026-11-16 — Concept extractor: `written` records what was passed; a state keeps its date
+
+- **What:** each `written` entry in runs.jsonl now carries the `as_of` and `supersedes` actually passed to
+  `concept add` (null when none). A fact marked both `lasting` and `is_state` now keeps its date: only a lasting
+  fact that isn't a state goes undated.
+- **Why:** Arden's review of #68 (5916452365). #62's adapter already prefers these fields when present, so the swap
+  fix and the lasting rule are read from the record rather than re-derived. The state case was one of two mutations
+  that survived their check: the prompt said a state keeps its date, but the code didn't enforce it.
+
+## 2026-11-16 — Concept extractor v0 fixes from the judged #62 run
+
+- **What:** the extractor prompt goes to TEMPLATE_VERSION 3, and `write()` gets guards that don't depend on the model
+  following it. Each fact now carries `claim` (fact, proposal or instruction) and `lasting`. An `instruction`, meaning
+  a one-off order to a session, is logged in `skipped` and not written. A `proposal` is written only if its text says
+  it is one ("proposed", "asked", "plans", "may" and so on), so "my additions" can't become "Claude added". A
+  `lasting` relation or trait gets no `--as-of`, because the day it was said isn't when it began. The prompt says
+  `as_of` is when a thing became true, never the day it was said, and that a state keeps the date the fragment gives
+  it. It also tells the model to check every state in CURRENT FACTS for one the fragment ends. It defines the store's
+  "red test". At most `MAX_FACTS` (5) facts are written per fragment. A fact that supersedes a shown fact is kept
+  first, the rest go in the model's order, and the facts over the cap are logged in `skipped`. Each `written` entry
+  now names its parsed index `i`.
+- **Why:** Arden scored my blind judging of v0's 35 runs on my snapshot (PR 62 comment 6909448816). Precision failed:
+  16/283 = 5.7% of facts were not in the source or overstated, against a bar of 2%. Review load failed too: median
+  8, and still 7 counting only right facts, so the fix had to be a cap, not just cleanup. There were 6 real validity
+  errors, 11 not-durable one-off instructions from #19196, and the stale "#48 awaits review" was superseded in only
+  2 of 5 runs. Before/after on the same snapshot and harness are in the PR.
+- **Not here:** recall reaching the two split Ember concepts, and moving the "Emma" alias (#60), go in a separate PR.
+
+## 2026-11-16 — Concept extractor: one name, two concepts (the Ember split, #60)
+
+- **What:** `state/concepts/ambiguous.json` lists a name that means more than one concept, such as Ember the peer self
+  and John's daughter Ember, with each referent's full name, kind and the cues that tell them apart. When a fragment
+  uses a listed name, the extractor's prompt gets an AMBIGUOUS NAMES section showing both referents. The old merged
+  concept and its facts are kept out of KNOWN CONCEPTS and CURRENT FACTS. A fact the model still files under the
+  bare name is logged in runs.jsonl's `skipped` and not written. `hook.py concepts split <name>` asks the model, one
+  fact at a time, which referent the fact means (its own words first, then the fragments it cites). It proposes the
+  fact under that referent with the same sources, state and date, `--supersedes` the old line, and leaves "unsure"
+  facts where they are. Every move is a proposal (`--by extractor:split-...`), logged in splits.jsonl, and never
+  proposed twice. TEMPLATE_VERSION goes to 2.
+- **Why:** v0's first live day filed both Embers under one concept, `Ember (person; aka Emma)`. That's the merge
+  Ember named as the extractor's worst failure, and it blocks Arden's eval (#62) live run. Nothing changes without
+  the file except the empty section in the prompt. A general referent-resolution system (S3 in
+  concept-extractor-bench.md) is still to come.
+- **Aliases count as the bare name (Arden, review 5915601823):** `concept add` resolves aliases, and `Emma` is an
+  alias of the merged Ember, so a fact filed under `Emma` still landed on it. Every alias the store holds for a listed
+  name's own concept is now treated as that name: such a fact is skipped, and a fragment that uses only the alias is
+  shown the referents. The aliases are read from `concept list`, not hardcoded.
+- **Split proposes only on agreement (same review):** `split` asks the model three times per fact (`--runs N` to
+  change it) and proposes only when every answer names the same referent. Otherwise the fact stays put and is listed
+  as `disagreed` (or `unsure`), with the votes, in the output and in splits.jsonl. Over five live runs fact #3 came out
+  peer twice, daughter twice and unsure once. A pick that changes between runs is a coin flip and shouldn't reach
+  review looking like a reading.
+- **Also, the restore window (Arden on #65):** `above()` asks for active fragments again after archived ones. Before
+  this, a fragment restored between the first two calls was in neither answer, and the floor moved past it for good.
+
 ## 2026-11-16 — The concept extractor eval (bench plan rev 3, on the real pipeline)
 
 - **`scripts/concepts/eval/concept_eval.py`** scores what the extractor really wrote (v0's `runs.jsonl` now, step 2

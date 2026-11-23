@@ -36,10 +36,10 @@ const string Usage = """
                                             stop (my last message as a turn ends). --content adds a fragment to it;
                                             `edit <id> --tag cue/<moment>/<name>` puts an existing one on it
       concept [review] | show <name> [--history] | add <subject> --fact <text> --source <id>[,<id>]... [--object <name>]
-              [--state] [--as-of <date>] [--supersedes <fact id>] [--kind <thing|person|self|value>] [--by <extractor>]
+              [--state] [--as-of <date>] [--supersedes <fact id>] [--kind <thing|person|self|value>] [--by <extractor>] [--flag <reason>]
               | accept <fact id> [--reason] | reject <fact id> --reason | reopen <fact id> --reason | flag <fact id> --reason [--by]
-              | kind <name> <thing|person|self|value> | alias <name> <alias> [--note]
-              | touched --text <text|-> [--json] [--concepts 5] [--facts 3] [--budget 3300] | list
+              | kind <name> <thing|person|self|value> | alias <name> <alias> [--note] [--move --reason <why>]
+              | touched --text <text|-> [--json] [--concepts 5] [--facts 3] [--budget 3300] [--ambiguous <json>] | list
                                             the concept graph (docs/design/concept-graph.md): facts about concepts,
                                             each citing its fragments. A fact about a person, a self or a value (or
                                             from an Identity/Relational fragment) is a proposal only the owner
@@ -48,7 +48,11 @@ const string Usage = """
                                             reopened; adding a fact that already stands adds nothing. A fact
                                             --by extractor:... is always a proposal. `touched` shows the concepts a
                                             text names (exact name or alias), with facts and their fragments, the
-                                            block concept-first recall puts first; `list` is every concept as JSON
+                                            block concept-first recall puts first (--ambiguous: names that mean more
+                                            than one concept reach each of them, #60); `list` is every concept as JSON.
+                                            `alias --move` moves an alias another concept holds, its history kept in
+                                            the alias's note. `add --flag` writes the fact flagged in the same step;
+                                            recall shows a flagged fact so, and review lists flags first
       nearest <words...> [--text <text|->] [--limit 3]
                                             the authored fragments nearest a text, with their scores: what `add`
                                             checks for a view written twice (it names a near one after saving)
@@ -398,7 +402,7 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
                             line.GetAll("source").SelectMany(v => v.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
                                 .Select(v => long.TryParse(v.TrimStart('#'), out var id) ? id : throw new UsageException($"'{v}' is not a fragment id.")).ToList(),
                             line.Get("object"), line.Has("state"), line.Get("as-of"), line.Get("by"),
-                            line.Get("supersedes") is { } sup ? long.Parse(sup.TrimStart('#')) : null, line.Get("kind"));
+                            line.Get("supersedes") is { } sup ? long.Parse(sup.TrimStart('#')) : null, line.Get("kind"), line.Get("flag"));
                         Console.WriteLine((stood ? $"Already {(fact.Status == "proposed" ? "proposed" : "stands")}, nothing added: "
                                 : why is not null ? $"Proposed, waiting for `concept review` ({why}): " : "Added: ")
                             + await store.RenderFactAsync(fact));
@@ -425,16 +429,26 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
                         Console.WriteLine($"{kinded.Name} is a {kinded.Kind}, confirmed.");
                         break;
                     case "alias":
-                        var aliased = await store.AddAliasAsync(Arg(1, "<name>"), Arg(2, "<alias>"), line.Get("note"));
-                        Console.WriteLine($"'{line.Positional[2]}' now names {aliased.Name}.");
+                        if (line.Has("move"))
+                        {
+                            var (to, from) = await store.MoveAliasAsync(Arg(1, "<name>"), Arg(2, "<alias>"),
+                                line.Get("reason") ?? throw new UsageException("concept alias --move needs --reason <why>: the move is kept in the alias's history."));
+                            Console.WriteLine($"'{line.Positional[2]}' now names {to.Name}, no longer {from.Name}.");
+                        }
+                        else
+                        {
+                            var aliased = await store.AddAliasAsync(Arg(1, "<name>"), Arg(2, "<alias>"), line.Get("note"));
+                            Console.WriteLine($"'{line.Positional[2]}' now names {aliased.Name}.");
+                        }
                         break;
                     case "review":
                         Console.WriteLine(await store.ConceptReviewAsync());
                         break;
                     case "touched":
                         var said = line.Text("text") ?? throw new UsageException("concept touched needs --text <text> (or - for stdin).");
-                        Console.WriteLine(line.Has("json") ? await store.ConceptsTouchedJsonAsync(said)
-                            : await store.ConceptBlockAsync(said, line.GetInt("concepts", 5), line.GetInt("facts", 3), line.GetInt("budget", FragmentStore.ConceptBudget)));
+                        var ambiguous = FragmentStore.ParseAmbiguous(line.Get("ambiguous"));
+                        Console.WriteLine(line.Has("json") ? await store.ConceptsTouchedJsonAsync(said, ambiguous)
+                            : await store.ConceptBlockAsync(said, line.GetInt("concepts", 5), line.GetInt("facts", 3), line.GetInt("budget", FragmentStore.ConceptBudget), ambiguous: ambiguous));
                         break;
                     case "list":
                         Console.WriteLine(await store.ConceptListJsonAsync());
@@ -536,6 +550,7 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
                 }
 
                 var snippet = line.GetInt("snippet", 300);
+                var now = DateTimeOffset.UtcNow;  // one clock for the whole recall, so ages agree with each other
                 foreach (var (heading, found) in new[]
                 {
                     ((string?)null, recalled.Here),
@@ -552,7 +567,7 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
 
                     foreach (var fragment in found)
                     {
-                        Console.WriteLine(FragmentStore.Render(fragment, maxContent: snippet, self: store.Session));
+                        Console.WriteLine(FragmentStore.Render(fragment, maxContent: snippet, self: store.Session, now: now));
                         Console.WriteLine();
                     }
                 }

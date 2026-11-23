@@ -63,6 +63,25 @@ public sealed class RecallStderrTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task Recall_shows_each_fragments_age_and_show_does_not()
+    {
+        // The age is wired into the recall command the hook calls, not only into Render (room 1572709639043289180).
+        // Words alone (no embedder), so the hit doesn't hang on the fake's per-process string hashes; `add` tags the
+        // fragment with the working directory's project, and the hook names it on recall the same way.
+        var nowhere = $"http://127.0.0.1:{FreePort()}/v1";
+        Assert.Equal(0, (await CliAsync(nowhere, "add", "Personal", "--content", "The wombat harvest runs at dawn.")).Code);
+
+        var recalled = await CliAsync(nowhere, "recall", "the wombat harvest runs at dawn", "--project", Path.GetFileName(dir));
+        Assert.Equal(0, recalled.Code);
+        Assert.Contains("[#1 |", recalled.Out);
+        Assert.Matches(@"\| written \d{4}-\d\d-\d\d \d\d:\d\dZ \(just now\)\]", recalled.Out);
+
+        var shown = await CliAsync(nowhere, "show", "1");
+        Assert.Equal(0, shown.Code);
+        Assert.DoesNotContain("written", shown.Out);
+    }
+
     private async Task<(int Code, string Out, string Err)> CliAsync(string embeddingUrl, params string[] args)
     {
         var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")

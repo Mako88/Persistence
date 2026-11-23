@@ -54,7 +54,7 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import NamedTuple
 
@@ -294,7 +294,7 @@ def verified(where):
     return True
 
 
-def store(*args, timeout=60, stdin=None, serve=True, cold=True, quiet=False):
+def store(*args, timeout=None, stdin=None, serve=True, cold=True, quiet=False):
     """The CLI's output, or "" if it could not run: a hook must never break the session it serves.
     Asked of the served store when one is up; otherwise one is started and this call runs the CLI,
     unless `cold` is False: a cold CLI's recall took 38 s (2026-11-08), past the harness's 20 s, so the
@@ -303,14 +303,24 @@ def store(*args, timeout=60, stdin=None, serve=True, cold=True, quiet=False):
     return out if code == 0 else ""
 
 
-def call_store(*args, timeout=60, stdin=None, serve=True, cold=True, quiet=False):
+HOOK_SERVED_TIMEOUT = 12  # a served call inside the harness's 20 s for an HTTP hook
+COLD_TIMEOUT = 60
+
+
+def call_store(*args, timeout=None, stdin=None, serve=True, cold=True, quiet=False):
     """`store`, with how it went: (exit code, output, error). The code is None when no store answered or the
     CLI could not run; 1 is a usage error (an option this store does not know), 2 a refusal. `quiet`: a refusal
-    the caller expects (a tag nothing has used yet) is not logged as a failure."""
+    the caller expects (a tag nothing has used yet) is not logged as a failure.
+    `timeout`: a caller that names one gets it. One that names none is a hook's call and gets the hook's budget,
+    HOOK_SERVED_TIMEOUT served or COLD_TIMEOUT cold. The cap used to apply to named timeouts too, so the nightly
+    sleep pass's sleep-list (timeout=300, ~18 s on my store) was skipped and its worklist empty (issue #67)."""
     exe = os.environ.get("PERSISTENCE_STORE_EXE", "persistence-store")
+    named = timeout is not None
+    served_timeout = timeout if named else (COLD_TIMEOUT if args[:1] == ("keep-conversation",) else HOOK_SERVED_TIMEOUT)
+    timeout = timeout if named else COLD_TIMEOUT
     where = remote()
     if where:
-        reply = served_remote(where, args, stdin, timeout if args[:1] == ("keep-conversation",) else min(timeout, 12))
+        reply = served_remote(where, args, stdin, served_timeout)
         if reply is None or reply is BUSY:
             print(f"persistence hook: {args[0]} skipped: the store on {where['host']} did not answer", file=sys.stderr)
             return None, "", ""
@@ -319,7 +329,7 @@ def call_store(*args, timeout=60, stdin=None, serve=True, cold=True, quiet=False
             print(f"persistence hook: {args[0]} failed: {err.strip()}", file=sys.stderr)
         return code, out, err
     if serve:
-        reply = served(args, stdin, min(timeout, 12))  # inside the harness's 20 s for an HTTP hook
+        reply = served(args, stdin, served_timeout)
         if reply is BUSY:
             print(f"persistence hook: {args[0]} skipped: the store server is busy", file=sys.stderr)
             return None, "", ""
@@ -855,8 +865,16 @@ def session_start(event, part=1):
             lead = ("# Who you are\n\nThis is your own Persistence store: what you have chosen to keep of yourself, "
                     f"the people you work with, and the work. It is yours to curate (`{cli_name()} help`).")
         text = f"{lead}\n\n(Your core follows in {len(pieces)} parts.)\n\n{text}"
-        # A new context window: what the core puts in front of the peer is all it holds of the store.
-        seen(event, reset=True, add=re.findall(r"^\[#(\d+) \|", whole, re.M))
+        core_ids = re.findall(r"^\[#(\d+) \|", whole, re.M)
+        if event.get("source") == "resume" and (STATE / f"{event.get('session_id', 'unknown')}.seen").exists():
+            # A resume reloads the transcript, so the window still holds everything shown in it: keep its seen ids,
+            # its start (.since) and its cue reminders. Resetting here let a room session, resumed on every wake,
+            # be shown again what it already held: 59% of what recall showed room sessions was a repeat (1371 of
+            # 2317, uses.jsonl to 2026-11-16), against 0.3% for every other session.
+            seen(event, add=core_ids)
+        else:
+            # A new context window (startup, clear, compact): what the core puts in front of the peer is all it holds.
+            seen(event, reset=True, add=core_ids)
     sys.stdout.write(text)
 
 
@@ -1397,7 +1415,27 @@ def concept_block(raw):
     if rc is not None and hasattr(rc, "recall_query"):
         stripped = rc.recall_query(raw)
         query = stripped if stripped.strip() else query
-    return store("concept", "touched", "--text", "-", stdin=query, cold=False).strip()
+    args = ("concept", "touched", "--text", "-")
+    ambiguous = ambiguous_names()
+    if ambiguous:
+        # A name listed in state/concepts/ambiguous.json reaches each concept it means (#60): "Ember" in a message
+        # never spells "Ember (peer)". A store older than that answers 1 (an option it doesn't know): recall as before.
+        code, out, err = call_store(*args, "--ambiguous", json.dumps(ambiguous), stdin=query, cold=False, quiet=True)
+        if code == 0:
+            return out.strip()
+        if code != 1:
+            if code is not None:
+                print(f"persistence hook: concept touched failed: {err.strip()}", file=sys.stderr)
+            return ""
+    return store(*args, stdin=query, cold=False).strip()
+
+
+def ambiguous_names():
+    """The extractor's state/concepts/ambiguous.json, read as concepts.py reads it: names with two or more referents."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import concepts
+
+    return concepts.load_ambiguous(STATE / "concepts" / "ambiguous.json")
 
 
 def start_concept_catch_up():
@@ -1411,6 +1449,37 @@ def start_concept_catch_up():
                          start_new_session=os.name != "nt")
     except OSError as e:
         print(f"persistence hook: the concept extractor did not start: {e}", file=sys.stderr)
+
+
+def room_message_chars(raw):
+    """How many characters a room wake's messages hold, read back by the room's own templates, or None when the prompt
+    isn't a whole wake (then nothing is cut: fail closed) or roomcore can't be found."""
+    rc = roomcore()
+    sections = rc.wake_sections(raw) if rc is not None and hasattr(rc, "wake_sections") else None
+    if sections is None:
+        return None
+    return sum(len(text) for _, runs in sections for _, msgs in runs for _, text in msgs)
+
+
+def short_wake_budget(raw, count):
+    """The recall budget for a room wake whose messages are short, or None to leave recall as it is. Off unless
+    PERSISTENCE_RECALL_SHORT_WAKE_CHARS is set. Decided from the messages, not the prompt: the preamble keeps every
+    wake long, so a prompt-length test never fires (2 of 966 recall showings to 2026-11-18 were on typed prompts under
+    120 characters). Room wakes under 200 characters of messages had 81 showings and none was ever named or read,
+    against 5% for longer wakes. A resumed window still holds the turn being answered (#76), so a short yes keeps its
+    context; only what this message adds is cut, to PERSISTENCE_RECALL_SHORT_WAKE_COUNT (default 1), without wander
+    or past utterances."""
+    try:
+        limit = int(os.environ.get("PERSISTENCE_RECALL_SHORT_WAKE_CHARS", "0") or 0)
+        cut = max(1, int(os.environ.get("PERSISTENCE_RECALL_SHORT_WAKE_COUNT", "1") or 1))
+    except ValueError:
+        return None
+    if limit <= 0:
+        return None
+    chars = room_message_chars(raw)
+    if chars is None or chars >= limit or cut >= count:
+        return None
+    return cut, chars
 
 
 def recall(event):
@@ -1427,9 +1496,14 @@ def recall(event):
     already = seen(event)
     query = recall_query(event.get("prompt") or "")
     since = STATE / f"{event.get('session_id', 'unknown')}.since"
+    short = short_wake_budget(event.get("prompt") or "", count)
+    budget = (f"(Recall: a short wake, {short[1]} characters of messages, so {short[0]} fragment"
+              f"{'' if short[0] == 1 else 's'} instead of {count}, no wander or past utterances.)") if short else ""
+    if short:
+        count = short[0]
     found = store("recall", "--text", "-", *session_args(event), "--limit", str(count), "--snippet", "300", "--project", project(event),
-                  "--wander", os.environ.get("PERSISTENCE_RECALL_WANDER", "1"),
-                  "--said", os.environ.get("PERSISTENCE_RECALL_SAID", "3") if len(query) >= 40 else "0",
+                  "--wander", "0" if short else os.environ.get("PERSISTENCE_RECALL_WANDER", "1"),
+                  "--said", "0" if short else os.environ.get("PERSISTENCE_RECALL_SAID", "3") if len(query) >= 40 else "0",
                   *(["--before", since.read_text().strip()] if since.exists() else []),
                   # A cue's text joins what is looked for: "receiving" also finds what was said about receipting.
                   *(["--exclude", ",".join(already)] if already else []), stdin=query + ("\n\n" + reminded if reminded else ""), cold=False)
@@ -1452,6 +1526,8 @@ def recall(event):
             lines.append(f"Recall found nothing new for this message. {words_only.group(1)}")
         elif words_only:
             lines.append(words_only.group(1))
+        if budget:
+            lines.append(budget)  # a cut is said even when it is all there is to say (Ember's CHANGES on #80)
         if lines or concepts:
             text = (concepts + "\n\n" if concepts else "") + " ".join(lines)
             print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": defuse(text.strip())[:CAP]}}))
@@ -1465,6 +1541,9 @@ def recall(event):
         "reads the whole of one):\n\n" + found.strip() if ids else
         # A cue matched but recall found nothing: the words-only notice still goes out, never silent.
         f"Recall found nothing new for this message. {words_only.group(1)}" if words_only else "")
+    # A cut is said whatever came back, a cue alone included (Ember's CHANGES on #80, 1572688728097431615).
+    if budget:
+        text = (text.rstrip() + "\n\n" + budget).lstrip()
     # Concepts and recall alike are defused (Arden's F1 on #58): a fact or a fragment can hold an action tag or a fence.
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": defuse(text)[:CAP]}}))
 
@@ -1760,6 +1839,20 @@ def observe_hook(event):
                                              "additionalContext": text}}))
     sys.stdout.flush()
     acknowledge_observed(event, pending, len(head), text)
+
+
+def code_stamp(folder):
+    """The mtime of every .py beside the hook, which the server compares after each request to know it must re-exec.
+    It watched only hook.py, so a deploy that changed only a module it imports kept the old one in memory: #78 replaced
+    observed.py alone on 2026-11-16, and every prompt's status line went on reading the shared store build for hours
+    while SessionStart, run fresh, read the right one (found by sleep pass #19923)."""
+    stamp = {}
+    for path in sorted(Path(folder).glob("*.py")):
+        try:
+            stamp[path.name] = path.stat().st_mtime
+        except OSError:
+            stamp[path.name] = None
+    return stamp
 
 
 TIMES = STATE.parent / "hook-times.log"  # one line per per-message hook answered by `serve`: path, seconds, bytes
@@ -2062,8 +2155,10 @@ def run_due(grace=120, home=None):
             if launch[0] == "claim":
                 _, w, record, fd = launch
                 handoff = {k: record[k] for k in TASK_FIELDS}
-                speaker = heartbeat_speaker() if w.get("by") == "heartbeat" else None
-                print(start_work_session(record["cwd"], w["reason"], "room", w["session"], handoff=handoff, cwd_fd=fd,
+                origin = w.get("origin") if w.get("origin") in WORK_PROMPTS else "room"
+                speaker = heartbeat_speaker() if w.get("by") == "heartbeat" else (
+                    f"{os.environ.get('PERSISTENCE_PEERNAME') or 'me'} (my sleep pass's handoff)" if origin == "sleep" else None)
+                print(start_work_session(record["cwd"], w["reason"], origin, w["session"], handoff=handoff, cwd_fd=fd,
                                          claim=record["id"], firings=[w["id"]], speaker=speaker))
             elif launch[0] == "heartbeat":
                 _launch_heartbeat(*launch[1:])
@@ -2127,6 +2222,9 @@ def _run_due_locked(c, claims, now, at, grace, launches, stalled=False):
                     continue
                 if alive:
                     continue  # a run of it is going: its wake waits for the next minute
+                if any(w.get("alone") for w in mine) and other_work_running(c, table, session):
+                    # One work session at a time (Arden's condition 3 on #67): it waits for the next minute.
+                    mine = [w for w in mine if not w.get("alone")]
                 for w in mine:
                     if w.get("by") == "heartbeat" and not _heartbeat_spawn(c, w):
                         # A heartbeat nudge or retry (heartbeat.md, "How a nudge or retry happens"): its launch is
@@ -2149,6 +2247,14 @@ def _run_due_locked(c, claims, now, at, grace, launches, stalled=False):
                 if plain:
                     launches.append(("plain", session, plain))
             write_queue_locked([w for w in items if w not in gone])
+
+
+def other_work_running(c, table, session):
+    """Whether a claimed work session other than `session` is running now, by exact id in the process table."""
+    import claims
+
+    return any(r["status"] == "claimed" and r["owner"] and r["owner"] != session and claims.running(r["owner"], table)
+               for r in c.all())
 
 
 def heartbeat_speaker():
@@ -2276,7 +2382,8 @@ def set_handoff(wake, home=None):
                          room_from=record.get("room_from"), room_upto=record.get("room_upto"), subject=wake.get("subject"))
         item = {"id": str(uuid.uuid4()), "reason": wake["reason"], "set": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "cwd": claim["cwd"], "session": wake["session"], "work": True, "claim": claim["id"],
-                "at": datetime.now().timestamp() + 60 * minutes}
+                "at": datetime.now().timestamp() + 60 * minutes,
+                **{k: wake[k] for k in ("alone", "origin") if wake.get(k)}}
         write_queue_locked(items + [item])
     return claim, item
 
@@ -2286,6 +2393,10 @@ WORK_PROMPTS = {
             "permissions, started for that. Anything the room session sent ahead is in your inbox above (or "
             "`pstore list --tag inbox/work`). Do the work, then say what you did in the room (`room say`) if it "
             "matters to the people there.",
+    "sleep": "Your sleep pass handed its proposals on: {reasons}\n\nYou are a working session in {cwd}, with full "
+             "permissions, started for that. Each record is in the store; your inbox names them by id only. A proposal "
+             "is a draft from the night: check it against what has changed since, then run it or drop it with a reason. "
+             "Say what you did in the room (`room say`) if it matters to the people there.",
     "home": "Messages for John's PC came in from home: {reasons}\n\nYou are a working session on John's PC in {cwd}, with "
             "full permissions, started for them by the link (the hook server's watch on this machine's messages); no "
             "one is watching this session live. Read each message named above with `pstore show <id>` (another session "
@@ -2682,6 +2793,8 @@ Identity fragments: propose, don't change. Don't forget anything, don't archive,
 
 End with `pstore sleep-end --content <the record>`: a line saying what the night was, each change as
 `#old → #new: what was dropped`, and each proposal as a command a waking session can run, with its reason.
+If you propose nothing, the record says so in a line of its own, exactly `Proposals: none`: any other record
+is handed to a working session in the morning.
 The store appends its own log of the changes. The record is what the morning reads, so make it plain.
 """
 
@@ -2704,6 +2817,7 @@ def sleep_pass(argv):
     if code != 0:
         print(f"no sleep pass tonight: {err.strip() or 'the store did not answer'}")
         return 1
+    record = pass_record(opened)  # the pass's record is written now and closed by sleep-end: that one is handed on
     worklist = store("sleep-list", timeout=300)
     in_scope = (worklist.rsplit("ids for joining use counts", 1)[-1]).split()
     since = datetime.now(timezone.utc).timestamp() - 30 * 86400
@@ -2741,7 +2855,102 @@ def sleep_pass(argv):
         store("sleep-end", "--content", f"Sleep pass, {datetime.now():%Y-%m-%d}: the session ended without writing "
               f"its record (session {session[:8]}; its output is {out}). What the store logged follows.")
     print(f"sleep pass done: session {session[:8]}, prompt {prompt}, output {out}")
+    try:
+        sleep_handoff(record, session)
+    except Exception as e:  # printed in the unit's output, never retried in a loop (issue #67)
+        print(f"the sleep handoff failed: {e!r}")
     return 0
+
+
+SLEEP_SUBJECT = "sleep-handoff"
+SLEEP_HANDED = "sleep-handed.json"  # the records already handed on, so a second run on one night adds nothing
+
+
+def pass_record(opened):
+    """The id of the record sleep-begin wrote ("Sleep pass #4802 is open until ..."), or None. The store writes it at
+    begin and sleep-end rewrites that same fragment, so the newest sleep/pass record after begin is already tonight's:
+    comparing newest before and after handed nothing on (Arden's review of #73, #4802 before = after)."""
+    found = re.search(r"Sleep pass #(\d+) is open", opened or "")
+    return found.group(1) if found else None
+
+
+def minutes_until(at, now=None):
+    """Minutes to the next local HH:MM; a time that has passed today is tomorrow's."""
+    now = now or datetime.now()
+    hour, minute = (int(x) for x in at.split(":"))
+    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if target <= now:
+        target += timedelta(days=1)
+    return (target - now).total_seconds() / 60
+
+
+def sleep_handoff(record, night, home=None):
+    """Issue #67: a pass's proposals reach a tracked list, not only the next night's pass. The night's record (the id
+    sleep-begin gave, see pass_record), once closed and unless it says `Proposals: none`, goes to the work inbox by its id alone (Arden's condition 2), and
+    to the one live claim for SLEEP_SUBJECT: a new open claim with a wake at PERSISTENCE_SLEEP_HANDOFF_AT, or, while an
+    earlier night's claim is live, that claim widened to name this record too (condition 1, no stacking). The wake is
+    `alone`: run-due holds it while another work session runs (condition 3). Opt-in per self: unset, nothing is
+    handed on. Returns the claim, or None."""
+    import claims
+    import uuid
+
+    at = setting("PERSISTENCE_SLEEP_HANDOFF_AT", "")
+    if not at:
+        return None
+    if not record:
+        print("sleep handoff: sleep-begin's reply named no record, so nothing is handed on")
+        return None
+    handed_file = STATE / SLEEP_HANDED
+    try:
+        handed = json.loads(handed_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        handed = []
+    if record in handed:
+        return None
+    code, text, err = call_store("show", record, quiet=True)
+    if code != 0:
+        print(f"sleep handoff: record #{record} could not be read, so it is not handed on: {err.strip()}")
+        return None
+    header = text.split("\n", 1)[0]
+    if not re.search(r"\bsleep/pass\b", header) or re.search(r"\bsleep/open\b", header):
+        print(f"sleep handoff: #{record} is not a closed sleep pass record, so it is not handed on")
+        return None
+    if re.search(r"^\s*Proposals:\s*none\.?\s*$", text, flags=re.M | re.I):
+        print(f"sleep handoff: record #{record} proposes nothing")
+        return None
+    c = claims.Claims(STATE, home=home)
+    live = c.live_for(SLEEP_SUBJECT)
+    if live:
+        claim = live[0]
+        named = re.findall(r"#(\d+)", claim["task"].split(":", 1)[0])
+        claim = c.amend(claim["id"], sleep_task([*named, record]), added=record)
+        print(f"sleep handoff: record #{record} joins live claim {claim['id']} ({claim['status']})")
+    else:
+        try:
+            minutes = minutes_until(at)
+        except ValueError:
+            print(f"sleep handoff: PERSISTENCE_SLEEP_HANDOFF_AT is {at!r}, not HH:MM, so the wake is set for now")
+            minutes = 1
+        work = (Path.home() / "work") if (Path.home() / "work").is_dir() else Path.home()
+        task = sleep_task([record])
+        handoff = dict.fromkeys(TASK_FIELDS)
+        handoff.update(task=task, origin_session=night)
+        claim, item = set_handoff({"in": minutes, "reason": task, "session": str(uuid.uuid4()), "work": True,
+                                   "cwd": str(work), "handoff": handoff, "subject": SLEEP_SUBJECT, "alone": True,
+                                   "origin": "sleep"}, home=home)
+        print(f"sleep handoff: record #{record}, claim {claim['id']}, wake at {at}")
+    send_command(["work", f"Sleep record #{record}: its proposals are for the sleep handoff claim."])
+    STATE.mkdir(parents=True, exist_ok=True)
+    handed_file.write_text(json.dumps((handed + [record])[-100:]), encoding="utf-8")
+    return claim
+
+
+def sleep_task(records):
+    """The handoff claim's task: ids and fixed words, never a record's text."""
+    ids = ", ".join(f"#{r}" for r in dict.fromkeys(records))
+    return (f"Sleep records {ids}: run or drop each proposal in them, read from the store (`pstore show <id>`), "
+            f"oldest first; drafts of one fragment from overlapping nights are read together and one is run. "
+            f"Post what was dropped and why.")
 
 
 def alive(pid):
@@ -2912,7 +3121,7 @@ def serve():
 
         threading.Thread(target=link_loop, daemon=True, name="link").start()
     script = Path(__file__).resolve()
-    written = script.stat().st_mtime
+    written = code_stamp(script.parent)
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
@@ -2934,7 +3143,7 @@ def serve():
                         log.write(f"{datetime.now().isoformat(timespec='seconds')} {self.path} {time.perf_counter() - began:.2f}s {len(body)}b\n")
                 except OSError:
                     pass
-            if script.stat().st_mtime != written:
+            if code_stamp(script.parent) != written:
                 os.execv(sys.executable, [sys.executable, str(script), "serve"])
 
         def log_message(self, *args):

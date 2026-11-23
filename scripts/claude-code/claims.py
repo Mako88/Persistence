@@ -582,6 +582,18 @@ class Claims:
             self._write(record)
             return record
 
+    def amend(self, claim_id, task, by="harness", **why):
+        """The task of a live claim widened, not a transition: status, owner and spell stay. A sleep handoff joins the
+        live claim for its subject instead of stacking a second (Arden's condition 1 on #67); the old task is kept in
+        the history entry, so nothing the claim said is lost."""
+        self._actor(by, ("harness",))
+        with self._locked(claim_id) as record:
+            self._expect(record, "amend", "open", "claimed", "paused")
+            self._append(record, "amend", record["status"], by, task_was=record["task"], **why)
+            record["task"] = str(task)
+            self._write(record)
+            return record
+
     def done(self, claim_id, by, outcome=""):
         return self._close(claim_id, by, "done", outcome, ("claimed", "paused"))
 
