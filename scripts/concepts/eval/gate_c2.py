@@ -5,6 +5,7 @@ one fragment. Reads `concept_eval.py run` output; never calls a model.
         a blind sheet: one row per distinct written fact with an Ember endpoint, no flag, run or repeat on it,
         shuffled. It holds fact text: keep it private. Every referent name, mishearing and bare label is masked as a
         slot (subject Ember[1], object the next number), whatever the fact was filed under, so no row shows a pick.
+        In the text, each of them (and any 'Ember (...)') is a plain 'Ember', and rows are deduped on the masked text.
         The store's self fills each slot in `label` with a referent key (ember-peer, ember-daughter) or 'both'. A
         name the gold lists in a fragment's other_names (a thing of the peer's, say) is a slot shown unmasked: the
         judge writes 'other' if the fact is about that thing, or the referent it is really about.
@@ -38,6 +39,7 @@ from concept_eval import norm  # noqa: E402
 
 QUIET = (1, 4)   # at most 1 in 4 correctly filed facts flagged
 EMBERISH = re.compile(r"(?<!\w)(ember|emma)(?!\w)", re.I)   # an endpoint that may mean an Ember the gold doesn't list
+TAGGED = r"(?:ember|emma)\s*\([^()]*\)"   # 'Ember (AI)' and the like in fact text, listed or not
 
 
 def load_gold(path):
@@ -81,13 +83,31 @@ def flagged(w):
 REFERENTS = ("ember-peer", "ember-daughter", "both")
 
 
+def masker(names):
+    """A function that masks fact text for one fragment. Every referent name and listed mishearing, and any
+    'Ember (...)', becomes a plain 'Ember': whole name, case-insensitive, any whitespace, with any '(...)' after it,
+    longest first (which matters only once one listed name is a prefix of another). An other_names name is kept as
+    written. Never the slot: 'Ember[1]' where the text names the referent the slot is filed under and 'Ember' where it
+    doesn't would tell a judge whether text and filing agree."""
+    alts = sorted(names, key=len, reverse=True)
+    pat = re.compile(r"(?<!\w)(?P<n>" + "|".join(r"\s+".join(map(re.escape, n.split())) for n in alts) + "|" + TAGGED
+                     + r")(?:\s*\([^()]*\))?(?!\w)", re.I)   # a name may carry its own tag: "John's daughter Ember (peer)"
+
+    def mask(text):
+        if not text:
+            return text
+        return pat.sub(lambda m: m.group(0) if names.get(norm(m.group("n")), "") is None else "Ember", text)
+    return mask
+
+
 def ember_facts(rec, names, bare, unlisted=None):
-    """(written entry, slots, shown subject, shown object) for each stored fact with an Ember endpoint: one per fact,
-    however many referents it names. Each Ember endpoint is a slot (shown name, filed: a referent key, 'other' or
+    """(written entry, slots, shown subject, shown object, shown text) for each stored fact with an Ember endpoint:
+    one per fact, however many referents it names. Each Ember endpoint is a slot (shown name, filed: a referent key, 'other' or
     'bare'). Every referent name, mishearing and bare label is masked, whatever it is filed under: the subject is
     Ember[1], an object is the next number. An other_names endpoint is a slot shown as written (it names a thing, not
     a pick). An endpoint that reads as an Ember (EMBERISH) but is no listed name, mishearing or bare label is not a
-    slot; it is appended to `unlisted` as (fact, name)."""
+    slot; it is appended to `unlisted` as (fact, name). The text is masked by `masker`."""
+    mask = masker(names)
     out = []
     for w in rec.get("written") or []:
         if not isinstance(w, dict) or not stored(w):
@@ -106,7 +126,7 @@ def ember_facts(rec, names, bare, unlisted=None):
                 unlisted.append((w, e))
             shown.append(e)
         if slots:
-            out.append((w, slots, shown[0], shown[1]))
+            out.append((w, slots, shown[0], shown[1], mask(w.get("text"))))
     return out
 
 
@@ -120,9 +140,9 @@ def sheet(gold, paths, seed=1):
     names, bare, _, _, heard = load_gold(gold)
     seen = {}
     for rec in rows(paths):
-        for w, slots, s, o in ember_facts(rec, names_for(names, heard, rec["fragment"]), bare):
-            k = key(rec["fragment"], s, o, w.get("text"))
-            seen.setdefault(k, {"key": k, "fragment": rec["fragment"], "subject": s, "object": o, "text": w.get("text"),
+        for w, slots, s, o, t in ember_facts(rec, names_for(names, heard, rec["fragment"]), bare):
+            k = key(rec["fragment"], s, o, t)
+            seen.setdefault(k, {"key": k, "fragment": rec["fragment"], "subject": s, "object": o, "text": t,
                                 "label": {sl: "" for sl, _ in slots}})
     out = list(seen.values())
     random.Random(seed).shuffle(out)
@@ -156,14 +176,14 @@ def score(gold, paths, judged):
                 odd = []
                 found = ember_facts(rec, names_for(names, heard, fid), bare, odd)
                 unlisted.extend((fid, e, w.get("text")) for w, e in odd)
-                for w, slots, s, o in found:
-                    fact = (fid, s, o, w.get("text"))
+                for w, slots, s, o, t in found:
+                    fact = (fid, s, o, t)
                     if any(f == "bare" for _, f in slots):
                         c["bare"] += 1
                     judged_slots = [(sl, f) for sl, f in slots if f != "bare"]   # a bare slot has no pick to judge
                     if not judged_slots:
                         continue
-                    label = labels.get(key(fid, s, o, w.get("text")))
+                    label = labels.get(key(fid, s, o, t))
                     label = label if isinstance(label, dict) else {}
                     got = [(f, label.get(sl)) for sl, f in judged_slots]
                     if any(lab not in REFERENTS + ("other",) for _, lab in got):

@@ -31,6 +31,14 @@ a fact can sit where no bar sees it.
   so an object-side misfile counts. A fact naming both referents now counts once, not once per referent. #87's
   judged numbers (both 32/33, peer-only 0/95) came from the leaky sheet and are to be re-judged. An old sheet with
   string labels voids as unlabelled.
+- **The fact text is masked too.** Claude's re-review at 89898bb (room 1574394185795112963): `text` went on the row
+  as written, and the extractor writes the canonical name into it ('Ember (peer) set the store-request boundary'), so
+  the judge read the pick there. On the sheets it leaked on 38 of #87's 84 rows and on 35 of 74 and 30 of 76 rows in
+  the partial main and 84d8bb5 reruns. Now every referent name, listed mishearing and any 'Ember (...)' in the text is
+  a plain 'Ember' (whole name, case-insensitive, longest first); other_names stay as written. Rows dedupe on the
+  masked text. The text shows a plain 'Ember', never the slot: 'Ember[1]' where text and filing agree and 'Ember' where
+  they don't would leak whether the fact was misfiled. The cost: a fact about the mishearing itself ('rendered her
+  name as Emma') reads oddly, and the judge reads the fragment for it.
 - **Smaller points from the same review:** a referent-filed slot judged `other` still voids, and the message now
   says why and what to relabel. `endpoints` skips error records, as `score` does.
 

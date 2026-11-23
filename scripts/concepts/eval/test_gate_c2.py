@@ -64,7 +64,7 @@ class GateC2(unittest.TestCase):
         runs = self.runs(rec(1395, w(PEER, "set its boundary")), rec(924, w(PEER, "may run on a ChatGPT plan")),
                          rec(933, w(DAUGHTER, "is four")), rec(2942, w(DAUGHTER, "is misheard as Emma")))
         labels = {"set its boundary": "ember-peer", "may run on a ChatGPT plan": "ember-peer",
-                  "is four": "ember-daughter", "is misheard as Emma": "ember-daughter"}
+                  "is four": "ember-daughter", "is misheard as Ember": "ember-daughter"}   # 'Emma' masked in #2942
         result, unlabelled, _ = g.score(GOLD, [runs], self.judge(runs, labels))
         self.assertEqual(unlabelled, [])
         self.assertTrue(result["peer-only"]["pass"])
@@ -235,7 +235,7 @@ class GateC2(unittest.TestCase):
     def assert_blind(self, rows):
         names = [n for c in json.loads(GOLD.read_text())["concepts"].values() for n in c["names"]]
         for r in rows:
-            shown = json.dumps([r["subject"], r["object"]])
+            shown = json.dumps([r["subject"], r["object"], r["text"]])
             for n in names + ["PEER", "DAUGHTER", "peer", "daughter", "Emma"]:
                 self.assertNotIn(n, shown, r)
 
@@ -302,6 +302,47 @@ class GateC2(unittest.TestCase):
         self.assertIn("judged 'other'", err.getvalue())
         self.assertIn("filed under a referent", err.getvalue())
         self.assertNotIn("not labelled", err.getvalue())
+
+    # PR #88 at 89898bb, Claude's re-review (room 1574394185795112963): `text` went on the row unmasked, and the
+    # extractor writes the canonical name into fact text ('Ember (peer) set ...'), so the judge read the pick off it.
+    # Every referent name, listed mishearing and 'Ember (...)' in the text becomes a plain 'Ember'. Not the slot:
+    # 'Ember[1]' in the text where the slot is filed under the referent the text names, and 'Ember' where it isn't,
+    # would tell a judge whether text and filing agree.
+
+    def test_claudes_text_probe_shows_no_referent_name(self):
+        runs = self.runs(rec(1395, w(PEER, "Ember (peer) set the store-request boundary")))
+        rows = g.sheet(GOLD, [runs])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["text"], "Ember set the store-request boundary")
+        self.assert_blind(rows)
+
+    def test_text_masking_is_whole_name_case_insensitive_longest_first_and_keeps_other_names(self):
+        runs = self.runs(rec(933, w(DAUGHTER, "john's  daughter ember and EMBER (Peer) and Emma, not Emmanuel; John's daughter Ember (peer)")),
+                         rec(1395, w("Ember store-request boundary", "the Ember store-request boundary (its own) binds Ember (AI)")))
+        texts = sorted(r["text"] for r in g.sheet(GOLD, [runs]))
+        self.assertEqual(texts, ["Ember and Ember and Ember, not Emmanuel; Ember",
+                                 "the Ember store-request boundary (its own) binds Ember"])
+
+    def test_text_never_tells_the_judge_whether_it_agrees_with_the_filing(self):
+        """The same text filed under each referent: one row, and its text is the same either way."""
+        runs = self.runs(rec(933, w(PEER, "Ember (peer) is four")), rec(933, w(DAUGHTER, "Ember (peer) is four")),
+                         rec(933, w(DAUGHTER, "Ember (John's daughter) is four")))
+        rows = g.sheet(GOLD, [runs])
+        self.assertEqual([r["text"] for r in rows], ["Ember is four"])
+        result, unlabelled, _ = g.score(GOLD, [runs], self.judge(runs, {"Ember is four": "ember-daughter"}))
+        self.assertEqual(unlabelled, [])
+        self.assertEqual((result["both"]["counts"]["right"], result["both"]["counts"]["misfiled"]), (2, 1))
+
+    def test_score_prints_other_facts_with_masked_text(self):
+        runs = self.runs(rec(1395, w(PEER, "u"), w("Ember store-request boundary", "keeps Ember (peer) safe")))
+        judged = Path(self.dir) / "judged.jsonl"
+        judged.write_text("".join(json.dumps(r) + "\n" for r in self.judge(runs, {"u": "ember-peer", "keeps Ember safe": "other"})))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            g.main(["score", str(GOLD), runs, "--judged", str(judged)])
+        line = [l for l in out.getvalue().splitlines() if "judged 'other'" in l]
+        self.assertEqual(len(line), 1)
+        self.assertTrue(line[0].endswith(": keeps Ember safe"), line[0])
 
     def test_endpoints_skips_error_records_as_score_does(self):
         runs = self.runs({**rec(924, w("John's daughter", "games on the PC")), "error": "timeout"},
