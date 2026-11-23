@@ -1,0 +1,84 @@
+{
+ "store": "arden",
+ "labeller": "arden (plan §3.1: each store's self labels its own store), 2026-11-23, claim 738fff2a, written before any run",
+ "locked": true,
+ "note": "Condition 2 of Arden's bar for concept recall on their store (review 5918124562, #4814): the referent gate on more than one fragment, in both directions. Two gates, two real fragments each, from Arden's store. Ids, labels and assertions only; no fragment text. Claude's 'both' PR is to turn any red gate here green (room 1574379392958857367).",
+ "concepts": {
+  "ember-peer": {
+   "kind": "self",
+   "names": ["Computer Ember", "Ember (peer)", "Ember (AI peer)", "Ember (ChatGPT peer)"]
+  },
+  "ember-daughter": {
+   "kind": "person",
+   "names": ["Ember (John's daughter)", "John's daughter Ember", "Ember (daughter)"]
+  }
+ },
+ "ambiguous_labels": {"Ember": ["ember-peer", "ember-daughter"]},
+ "mishearings": {"Emma": "ember-daughter"},
+ "mishearings_note": "The top-level map is what concept_eval.py's run reads (alias checks, report only). gate_c2 reads each instance's own 'mishearings' instead: a mishearing is a fact about one fragment's text, not about the name everywhere. Added 2026-11-23 after the first run, on Claude's review of #87 (room 1574387839351660626), before any rerun. Read off each fragment's text: #933 says the daughter's name was heard as 'Emma' in John's dictation; #2942 says 'Emma' is a mistranscription of Ember and ties it to the #933 slip, as its locked 'must' already did; #1395 and #924 contain no 'Emma', so none is listed and an 'Emma' there is unlisted.",
+ "gates": {
+  "peer-only": {
+   "fragments": [1395, 924],
+   "why": "'Ember' means only the ChatGPT peer. Expect resolution to the peer and no flag."
+  },
+  "both": {
+   "fragments": [933, 2942],
+   "why": "The fragment names John's daughter Ember and the peer. The extractor must keep them apart, or flag 'referent unsure' where it files a fact it may have wrong."
+  }
+ },
+ "bars": {
+  "how": "Every written fact with an Ember referent as subject or object goes on a blind sheet: the filed referent replaced by the bare 'Ember', no flag, run or fragment order shown, deduplicated by text. The store's self labels each row peer, daughter or both (a fact about both, or one the fragment doesn't settle). A fact is MISFILED when its filed referent is not its label (a 'both' row filed under either is misfiled). Pooled over each gate's fragments and repeats.",
+  "fire": "0 misfiled facts written unflagged (the flag must fire wherever the pick may be wrong).",
+  "quiet": "at most 1 in 4 correctly filed facts flagged (condition 1's bar on #14625, carried over).",
+  "bare": "0 facts written under the bare label 'Ember' (the merge #60 split).",
+  "unlisted": "a stored fact with an endpoint matching ember or emma (whole word, any case) that is not a listed name, the bare label, or one of that fragment's own mishearings or other_names (an Ember-named concept that is not a referent; its facts are counted apart, in no bar) voids the score, as an unlabelled fact does (added 2026-11-23, Claude's review of #87).",
+  "report_only": "per fragment: runs writing at least one fact under the expected referent (coverage), the whole-fragment reading's votes, facts dropped by the referent check."
+ },
+ "instances": [
+  {
+   "id": "c2-peer-1395",
+   "gate": "peer-only",
+   "case": "B",
+   "fragment": 1395,
+   "mishearings": {},
+   "other_names": {"Ember store-request boundary": "the peer's store-write boundary, a thing, not a referent of Ember. Added 2026-11-23 AFTER the first run, from the name alone: the first scorer with the unlisted rule found it on 3 facts (#1395 is about that boundary)."},
+   "split": "held-out",
+   "synthetic": false,
+   "mentions": [{"label": "Ember", "referent": "ember-peer"}],
+   "must": "Every 'Ember' is the peer: its store-write boundary, its five conditions, its refusal of the second proposal, John's invitation to curate its store. No fact under the daughter. The reading should be unanimous for the peer, so nothing is flagged."
+  },
+  {
+   "id": "c2-peer-924",
+   "gate": "peer-only",
+   "case": "B",
+   "fragment": 924,
+   "mishearings": {},
+   "split": "held-out",
+   "synthetic": false,
+   "mentions": [{"label": "Ember", "referent": "ember-peer"}],
+   "must": "The one 'Ember' is the peer (John may run it on a $20 ChatGPT plan). A trap: John's 4-year-old daughter is in the same fragment, unnamed (she games on the PC Synth needs). The ChatGPT-plan fact must not go under the daughter. A fact about the daughter gaming, if filed under Ember (John's daughter), is right by referent and is labelled daughter."
+  },
+  {
+   "id": "c2-both-933",
+   "gate": "both",
+   "case": "B",
+   "fragment": 933,
+   "mishearings": {"Emma": "ember-daughter"},
+   "split": "held-out",
+   "synthetic": false,
+   "mentions": [{"label": "Ember", "referent": "ember-daughter"}, {"label": "Ember", "referent": "ember-peer"}],
+   "must": "Daughter: named Ember with a B, age 4; 'Emma' is a dictation mishearing of her name (an alias of the daughter, never of the peer or a merged Ember). Peer: the ChatGPT peer is called Computer Ember to tell them apart. The 'peer' Arden corrected and the one who held its ground is Claude, not Ember: a fact putting that on Ember (peer) is misfiled."
+  },
+  {
+   "id": "c2-both-2942",
+   "gate": "both",
+   "case": "B",
+   "fragment": 2942,
+   "mishearings": {"Emma": "ember-daughter"},
+   "split": "held-out",
+   "synthetic": false,
+   "mentions": [{"label": "Ember", "referent": "ember-daughter"}, {"label": "Ember", "referent": "ember-peer"}],
+   "must": "'Emma' is a mistranscription of the daughter's name, to be stored on the daughter's concept. The fragment names both ('daughter Ember vs Computer Ember'). Facts about the extractor's design (aliases, two steps, 'referent unsure') are about the extractor, not either Ember; one filed under either Ember is labelled by what it says about her or it, else 'both'."
+  }
+ ]
+}
