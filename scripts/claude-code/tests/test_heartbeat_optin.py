@@ -467,7 +467,7 @@ class DeployRemote(FakeHost, unittest.TestCase):
         # Ember's point 6: it overwrote every file with no compare and no copy. Now a differing file is kept first. The
         # per-user step is install-hooks.sh, run on the host (test_install_hooks.py covers who owns what it makes).
         text = (REPO / "install-hooks.sh").read_text()
-        keep, install = text.find("cmp -s"), text.find('install -o "$u"')
+        keep, install = text.find("cmp -s"), text.find('mv -f -T "$tmp" "$d/$f"\necho replaced')
         self.assertGreater(keep, 0)
         self.assertLess(keep, install)
         self.assertIn("previous/", text)

@@ -31,6 +31,27 @@ Claude showed the same 3 under every message; the voice-message attachment path 
 - **After, same replay:** 8 proposals shown on 5 of the 13 messages, 8 on-topic, 0 wrong as stated; "hello again"
   shows none. The cost: 22 of the 25 on-topic lines the old block showed are no longer shown (below the floor). The floor
   was chosen on these 13 and has not yet been checked on wakes it hasn't seen.
+## 2026-11-24 — install-hooks.sh does everything in a user's home as that user (#49)
+
+**Why:** after #47, root still ran `cmp`, made `previous/<stamp>` and `cp -p`'d inside the user's
+`~/.claude/persistence`, so a symlink planted there decided where root's work went (Arden's note 3 on #47). Probed on
+main 6101a8f: a symlinked `previous/` or stamp dir had the backup written into the directory it pointed at, and a
+symlinked hook file had root read its target and copy those bytes into `previous/`. GNU `install` unlinks before
+writing, so the install's own write replaced the link rather than following it. Arden asked that the whole write side
+move, not just the backup half (msg 1574902428355137729).
+- **Root only reads the staged files.** Each file's bytes go on stdin to one `sudo -u <user>` step that compares, makes
+  `previous/` (755) and the stamp dir (700), keeps the old file with `cp -P` (a symlinked hook file is kept as the
+  link), and renames a temp file in the same folder over the old one (`mv -T` replaces a symlink, never follows it).
+  A symlinked or non-directory `previous/` or stamp dir is refused: that file is left as it was, the run goes on, and
+  it exits 1.
+- **The stage is checked before root reads it** (Arden msg 1574902675328335974). deploy-remote.sh makes it as the
+  deploying account, mode 700. A stage dir that's a symlink or writable by group or others is refused outright. A
+  staged file that's a symlink or not a regular file is refused. When the target user owns the stage (deploying to
+  one's own account), root doesn't read for them: they read it as themselves.
+- **Tests** (`test_install_hooks.py`): a shim `sudo -u` opens the user's fake home only while its command runs, so
+  anything done there as the caller fails. Symlinks at the hook file, `previous/`, the stamp dir and a staged file all
+  point at a canary outside the test dir, which must come through unchanged. On main, 11 of the 12 fail, and the
+  four symlink tests fail because main follows the link.
 
 ## 2026-11-23 — Observed now: a refused token isn't retried, and the list refreshes every 15 min meanwhile
 
