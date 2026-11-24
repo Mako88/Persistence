@@ -118,13 +118,16 @@ internal sealed partial class FragmentStore
     /// among themselves by how many of their cue words the text uses: model-free, and both shown. The merged concept of
     /// that name comes after them, and only while it still holds a standing fact.
     /// </summary>
-    public async Task<IReadOnlyList<Touched>> ConceptsTouchedAsync(string text, IReadOnlyDictionary<string, IReadOnlyList<Referent>>? ambiguous = null)
+    public async Task<IReadOnlyList<Touched>> ConceptsTouchedAsync(string text, IReadOnlyDictionary<string, IReadOnlyList<Referent>>? ambiguous = null,
+        DateTimeOffset? asOf = null)
     {
+        var located = text;
+        text = WithoutLocations(text);
         var words = WordSequence(text);
         var spans = new Dictionary<long, int>();
         foreach (var (id, label) in await concepts.LabelsAsync())
         {
-            var n = Occurrences(words, label);
+            var n = LabelOccurrences(located, text, words, label);
             if (n > 0)
             {
                 spans[id] = spans.GetValueOrDefault(id) + n;
@@ -170,10 +173,15 @@ internal sealed partial class FragmentStore
             }
 
             // Accepted facts before proposals, each newest-known first: the self's word outranks the extractor's.
-            var facts = (await concepts.FactsOfAsync(id, history: false))
+            var facts = StandingAsOf(await concepts.FactsOfAsync(id, history: asOf is not null), asOf)
                 .OrderBy(f => f.Status == "active" ? 0 : 1).ThenByDescending(f => f.RecordedAtUtc).ThenByDescending(f => f.Id).ToList();
             var aliases = (await concepts.AliasesAsync(id)).Select(a => a.Alias).ToList();
             var sources = await concepts.SourcesAsync(facts.Select(f => f.Id).ToList());
+            if (asOf is not null && facts.Count == 0)
+            {
+                continue;   // as of then, nothing was known of it: a replay doesn't show a concept the store hadn't filled yet
+            }
+
             if (mergedOf.TryGetValue(id, out var m))
             {
                 // Its facts are the ones split left on it (unsure, or about both); with none, its name says nothing.
@@ -201,6 +209,64 @@ internal sealed partial class FragmentStore
             .ToList();
     }
 
+    private static readonly Regex Url = new(@"\b[a-z][a-z0-9+.-]*://\S+", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    // Two or more segments, starting at a word's edge: /home/ubuntu/.config, ~/work/x, ./a/b, C:\Users\x. "/loop" and
+    // "11/23" are left alone (one segment; a digit before the slash).
+    private static readonly Regex FilePath = new(@"(?<![\w/\\])(?:~|\.\.?|[A-Za-z]:)?[/\\][\w.@+-]+(?:[/\\][\w.@+-]*)+", RegexOptions.Compiled);
+
+    // The room's attachment note, "(audio: /home/ubuntu/.config/persistence-room/state/attachments/.../voice-message.ogg)".
+    private static readonly Regex Attachment = new(@"\(\s*[a-z]+:\s*(?:[a-z][a-z0-9+.-]*://|~|\.{0,2}/|[A-Za-z]:\\)[^)\n]*\)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// <paramref name="text"/> without attachment notes, URLs and file paths: a name inside one is where a file lives,
+    /// not what the message is about. Every voice message's "(audio: /home/ubuntu/.config/persistence-room/...)" named
+    /// ubuntu, home and Persistence, and put 9 off-topic deploy and reboot facts under John's "hello again" (room
+    /// 1574775055601107046, cause 2).
+    /// </summary>
+    public static string WithoutLocations(string text) => FilePath.Replace(Url.Replace(Attachment.Replace(text, " "), " "), " ");
+
+    private static readonly Regex Identifier = new(@"^#\d+$", RegexOptions.Compiled);
+
+    /// <summary>
+    /// How often a label is named. A label that is itself a location (a path, a URL) is found in the text as written; an
+    /// identifier like "#81" only as "#81", never as the bare number "81" (a fact count, a time, a line); any other label
+    /// as a whole word sequence of the text without its locations.
+    /// </summary>
+    private static int LabelOccurrences(string located, string text, string[] words, string label)
+    {
+        var l = label.Trim();
+        if (Identifier.IsMatch(l))
+        {
+            return Regex.Matches(text, $@"(?<![\w#]){Regex.Escape(l)}(?!\d)").Count;
+        }
+
+        if (WithoutLocations(l) != l)
+        {
+            return Regex.Matches(located, $@"(?<![\w/]){Regex.Escape(l)}(?![\w/])", RegexOptions.IgnoreCase).Count;
+        }
+
+        return Occurrences(words, l);
+    }
+
+    /// <summary>
+    /// The facts that stood <paramref name="asOf"/>: written before it, and not yet replaced by a fact written before it
+    /// (a replacement this list doesn't hold is taken as earlier). Accepted and rejected decisions carry no date, so a
+    /// fact counts with the status it has now. Without a time, the standing facts as given.
+    /// </summary>
+    private static IReadOnlyList<FactRow> StandingAsOf(IReadOnlyList<FactRow> facts, DateTimeOffset? asOf)
+    {
+        if (asOf is not { } at)
+        {
+            return facts;
+        }
+
+        var written = facts.ToDictionary(f => f.Id, f => DateTimeOffset.Parse(f.CreatedUtc, System.Globalization.CultureInfo.InvariantCulture));
+        return facts.Where(f => written[f.Id] < at && (f.Status is "active" or "proposed")
+                && (f.SupersededById is not { } by || (written.TryGetValue(by, out var w) && w >= at)))
+            .ToList();
+    }
+
     /// <summary>
     /// The concept section of a turn's recall: up to <paramref name="maxConcepts"/> concepts at
     /// <paramref name="factsEach"/> facts each, every fact with the fragment ids behind it and a snippet of the first,
@@ -209,16 +275,26 @@ internal sealed partial class FragmentStore
     /// text names no concept.
     /// </summary>
     public async Task<string> ConceptBlockAsync(string text, int maxConcepts = 5, int factsEach = 3, int budget = ConceptBudget, int snippet = 140,
-        IReadOnlyDictionary<string, IReadOnlyList<Referent>>? ambiguous = null)
+        IReadOnlyDictionary<string, IReadOnlyList<Referent>>? ambiguous = null, DateTimeOffset? asOf = null)
     {
-        var touched = await ConceptsTouchedAsync(text, ambiguous);
+        const string heading = "Concepts this message names (concept-first recall v0: current facts with the fragments behind them; "
+            + "'proposed' is the extractor's reading, not yet accepted):";
+        return await ConceptSectionAsync(await ConceptsTouchedAsync(text, ambiguous, asOf), heading, t => Math.Min(factsEach, t.Facts.Count),
+            maxConcepts, budget, snippet);
+    }
+
+    /// <summary>
+    /// <paramref name="touched"/> under <paramref name="heading"/>: up to <paramref name="maxConcepts"/> of them, each
+    /// with at most <paramref name="factsOf"/> of its facts (fewer when the budget is short), and a line naming what was
+    /// cut. Empty when there is nothing to show.
+    /// </summary>
+    private async Task<string> ConceptSectionAsync(IReadOnlyList<Touched> touched, string heading, Func<Touched, int> factsOf, int maxConcepts, int budget, int snippet)
+    {
         if (touched.Count == 0)
         {
             return "";
         }
 
-        const string heading = "Concepts this message names (concept-first recall v0: current facts with the fragments behind them; "
-            + "'proposed' is the extractor's reading, not yet accepted):";
         var sb = new StringBuilder(heading);
         var omitted = new List<string>();
         var names = new Dictionary<long, string>();
@@ -249,7 +325,7 @@ internal sealed partial class FragmentStore
             // Fewer facts if the whole concept doesn't fit; its state line alone if none do; else it is omitted.
             var reserve = i < touched.Count - 1 || omitted.Count > 0 ? omissionRoom : 0;
             string? chunk = null;
-            for (var k = Math.Min(factsEach, t.Facts.Count); k >= 0 && chunk is null; k--)
+            for (var k = factsOf(t); k >= 0 && chunk is null; k--)
             {
                 var candidate = await ConceptChunkAsync(t, k, names, snippet);
                 if (sb.Length + candidate.Length + reserve <= budget)

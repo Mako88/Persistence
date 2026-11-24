@@ -55,6 +55,12 @@ public interface IContextFragmentRepository : IEntityRepository<ContextFragmentE
     Task<IEnumerable<ContextFragmentEntity>> SearchRelevantAsync(string query, int limit = 20, CancellationToken ct = default);
 
     /// <summary>
+    /// How many fragments the full-text index holds, and for each of <paramref name="prefixes"/> (letters and digits
+    /// only) how many contain a word starting with it: the document frequencies behind a word's rarity.
+    /// </summary>
+    Task<(long Total, IReadOnlyDictionary<string, long> Containing)> PrefixDocumentCountsAsync(IReadOnlyCollection<string> prefixes);
+
+    /// <summary>
     /// Soft-deletes (<c>forget</c>) or restores (<c>unforget</c>) a fragment by flipping its
     /// <see cref="ContextFragmentEntity.IsDeleted"/> flag only — content, tags, and status untouched.
     /// When forgetting, an optional <paramref name="reason"/> is recorded (in Notes) for later recall.

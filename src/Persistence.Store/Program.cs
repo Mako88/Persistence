@@ -447,8 +447,27 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
                     case "touched":
                         var said = line.Text("text") ?? throw new UsageException("concept touched needs --text <text> (or - for stdin).");
                         var ambiguous = FragmentStore.ParseAmbiguous(line.Get("ambiguous"));
+                        DateTimeOffset? asOf = line.Get("as-of") is { } asOfText
+                            ? DateTimeOffset.Parse(asOfText, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal)
+                            : null;
+                        if (line.Has("split"))
+                        {
+                            // The hook's form: accepted facts for the top of recall, the closest proposals for after it.
+                            var recall = await store.ConceptRecallAsync(said, ambiguous, asOf, line.GetInt("concepts", 5), line.GetInt("facts", 3),
+                                line.GetInt("budget", FragmentStore.ConceptBudget), cap: line.GetInt("proposed", FragmentStore.ProposedCap),
+                                floor: line.GetFloat("floor") ?? FragmentStore.ProposedFloor);
+                            Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new
+                            {
+                                top = recall.Top, after = recall.After,
+                                candidates = line.Has("json")
+                                    ? recall.Candidates.Select(c => new { id = c.Fact.Id, concept = c.Concept, text = c.Fact.Text, score = Math.Round(c.Score, 2), shared = c.Shared, held = c.Held, shown = c.Shown, written = c.Fact.CreatedUtc })
+                                    : null,
+                            }));
+                            break;
+                        }
+
                         Console.WriteLine(line.Has("json") ? await store.ConceptsTouchedJsonAsync(said, ambiguous)
-                            : await store.ConceptBlockAsync(said, line.GetInt("concepts", 5), line.GetInt("facts", 3), line.GetInt("budget", FragmentStore.ConceptBudget), ambiguous: ambiguous));
+                            : await store.ConceptBlockAsync(said, line.GetInt("concepts", 5), line.GetInt("facts", 3), line.GetInt("budget", FragmentStore.ConceptBudget), ambiguous: ambiguous, asOf: asOf));
                         break;
                     case "list":
                         Console.WriteLine(await store.ConceptListJsonAsync());

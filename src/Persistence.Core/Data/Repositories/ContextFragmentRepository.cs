@@ -159,6 +159,24 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
         return rankedIds.Where(id => entities.ContainsKey(id)).Select(id => entities[id]);
     }
 
+    public async Task<(long Total, IReadOnlyDictionary<string, long> Containing)> PrefixDocumentCountsAsync(IReadOnlyCollection<string> prefixes)
+    {
+        var total = (await QueryAsync<long>($"SELECT COUNT(*) FROM ContextFragments")).Single();
+        var containing = new Dictionary<string, long>();
+        foreach (var prefix in prefixes.Distinct())
+        {
+            if (prefix.Length == 0 || !prefix.All(char.IsLetterOrDigit))
+            {
+                throw new ArgumentException($"A prefix is letters and digits only, not '{prefix}'.", nameof(prefixes));
+            }
+
+            var match = $"\"{prefix}\"*";
+            containing[prefix] = (await QueryAsync<long>($"SELECT COUNT(*) FROM ContextFragments_fts WHERE ContextFragments_fts MATCH {match}")).Single();
+        }
+
+        return (total, containing);
+    }
+
     #endregion
 
     #region Base overrides

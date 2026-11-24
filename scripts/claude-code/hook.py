@@ -1404,19 +1404,40 @@ def concepts_on():
 
 
 def concept_block(raw):
-    """Concept-first recall v0 (scripts/claude-code/concepts.py), behind PERSISTENCE_CONCEPTS: the concepts the message
-    names, each with its current facts and the fragments behind them. Names are matched in the message alone: a room
-    wake is read back to its messages whatever PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE says, since the wrapper names
-    every self in the room (concept-store.md: alias matching never reads the preamble)."""
+    """Concept-first recall (scripts/claude-code/concepts.py), behind PERSISTENCE_CONCEPTS: the concepts the message
+    names. Names are matched in the message alone: a room wake is read back to its messages whatever
+    PERSISTENCE_RECALL_STRIP_ROOM_PREAMBLE says, since the wrapper names every self in the room (concept-store.md:
+    alias matching never reads the preamble). Returns (top, after): the facts the self accepted, for the top of
+    recall, and at most three of the extractor's proposals, the closest to the message, for after it (room
+    1574775057589342241: proposals had taken the top, 55 of 81 off-topic). A store older than --split answers 1 (an
+    option it doesn't know) and gets the old question, its whole block on top as before."""
     if not concepts_on():
-        return ""
+        return "", ""
     query = raw.strip()
     rc = roomcore()
     if rc is not None and hasattr(rc, "recall_query"):
         stripped = rc.recall_query(raw)
         query = stripped if stripped.strip() else query
-    args = ("concept", "touched", "--text", "-")
     ambiguous = ambiguous_names()
+    names = ("--ambiguous", json.dumps(ambiguous)) if ambiguous else ()
+    code, out, err = call_store("concept", "touched", "--split", "--text", "-", *names, stdin=query, cold=False, quiet=True)
+    if code == 0:
+        try:
+            parts = json.loads(out)
+            return (parts.get("top") or "").strip(), (parts.get("after") or "").strip()
+        except (ValueError, AttributeError):
+            print(f"persistence hook: concept touched --split did not answer JSON: {out[:200]!r}", file=sys.stderr)
+            return "", ""
+    if code != 1:
+        if code is not None:
+            print(f"persistence hook: concept touched failed: {err.strip()}", file=sys.stderr)
+        return "", ""
+    return whole_concept_block(query, ambiguous), ""
+
+
+def whole_concept_block(query, ambiguous):
+    """The block of a store older than --split: every named concept with its newest facts, accepted or proposed."""
+    args = ("concept", "touched", "--text", "-")
     if ambiguous:
         # A name listed in state/concepts/ambiguous.json reaches each concept it means (#60): "Ember" in a message
         # never spells "Ember (peer)". A store older than that answers 1 (an option it doesn't know): recall as before.
@@ -1492,7 +1513,7 @@ def recall(event):
         return  # the harness reporting a background task or a subagent, not the human: nothing of theirs to associate with
     # A short message ("sounds good") matches past acknowledgements, not what it is about: no past utterances for it.
     reminded = cued(event, "prompt", prompt)
-    concepts = concept_block(event.get("prompt") or "")
+    concepts, proposals = concept_block(event.get("prompt") or "")
     already = seen(event)
     query = recall_query(event.get("prompt") or "")
     since = STATE / f"{event.get('session_id', 'unknown')}.since"
@@ -1528,8 +1549,8 @@ def recall(event):
             lines.append(words_only.group(1))
         if budget:
             lines.append(budget)  # a cut is said even when it is all there is to say (Ember's CHANGES on #80)
-        if lines or concepts:
-            text = (concepts + "\n\n" if concepts else "") + " ".join(lines)
+        if lines or concepts or proposals:
+            text = (concepts + "\n\n" if concepts else "") + " ".join(lines) + ("\n\n" + proposals if proposals else "")
             print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": defuse(text.strip())[:CAP]}}))
         return
     seen(event, add=ids)
@@ -1541,6 +1562,9 @@ def recall(event):
         "reads the whole of one):\n\n" + found.strip() if ids else
         # A cue matched but recall found nothing: the words-only notice still goes out, never silent.
         f"Recall found nothing new for this message. {words_only.group(1)}" if words_only else "")
+    # The extractor's proposals after recall, never ahead of it: the self's words first (room 1574775057589342241).
+    if proposals:
+        text = (text.rstrip() + "\n\n" + proposals).lstrip()
     # A cut is said whatever came back, a cue alone included (Ember's CHANGES on #80, 1572688728097431615).
     if budget:
         text = (text.rstrip() + "\n\n" + budget).lstrip()

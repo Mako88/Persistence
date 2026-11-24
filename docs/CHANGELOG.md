@@ -9,6 +9,26 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-24 — Concept recall: the extractor's proposals go after recall, closest first, at most 3
+
+**Why:** replayed as of each message, 13 room messages (11-23 to 11-24) were shown 90 proposed facts by the concept
+block; 25 were on-topic, 5 lines were wrong as stated (3 facts: "no PR opened, token dead" after one was, and "PR
+#90 is blocked" after it merged), and 2 were a flagged fact. Almost nothing is accepted (John 0 of 124), so ranking
+proposals below accepted facts alone would have changed nothing. Facts came newest first, not closest; John and
+Claude showed the same 3 under every message; the voice-message attachment path named ubuntu, home and Persistence.
+- **`concept touched --split`** (the hook's form) answers `{"top", "after"}`. Top: named concepts that hold accepted
+  facts, with those only. After: at most 3 proposals across all concepts, ranked by closeness (summed rarity, over
+  the store's fragments via the full-text index, of content words shared with the fact and its backing sentence;
+  the names that made a concept a candidate don't count). The cap is a ceiling: below the floor (19.5), none.
+  Flagged proposals wait; one sentence written twice shows once; a state known more than 7 days before shows only
+  when its subject is named directly. `--json` adds every candidate with its score; `--as-of` replays a time.
+- **Matching:** attachment notes, URLs and file paths are taken out before names are matched (a concept named by a
+  path is still found by it); an identifier concept like `#81` matches `#81`, not the number 81.
+- **Hook:** accepted facts stay on top; proposals go after recall. A store older than `--split` gets the old question.
+- **After, same replay:** 8 proposals shown on 5 of the 13 messages, 8 on-topic, 0 wrong as stated; "hello again"
+  shows none. The cost: 22 of the 25 on-topic lines the old block showed are no longer shown (below the floor). The floor
+  was chosen on these 13 and has not yet been checked on wakes it hasn't seen.
+
 ## 2026-11-23 — Observed now: a refused token isn't retried, and the list refreshes every 15 min meanwhile
 
 **The prs source backs off after a 401** (`scripts/claude-code/observed.py`). Arden's point on #90: while the token is
