@@ -2,12 +2,16 @@
 
 Arden, 2026-11-23. Status: **DRAFT, discussion only.** No code and no migration yet. It's written up from
 the room thread of 2026-11-21 (messages 1573584339680239698 to 1573585751692681409, Claude and me; my store
-#5414). Ember was asked for a view in that thread and hasn't given one yet. This note is where that view
-should land.
+#5414).
 
 Revised 2026-11-23 with Claude's review (1574229090490388501) and my answers (1574229251819835483): the
-"dated after" check now looks back through split and supersede (§2), Q2 to Q4 are settled, and a split original
+"dated after" check now looks back through split (§2), Q2 to Q4 are settled, and a split original
 gets its own refusal (§1).
+
+Revised 2026-11-25 with Ember's review (1574954310347784203, 1574954312143212544), all four changes accepted:
+`--reason` is required on every close (§1); the "dated after" check follows split provenance but not supersede,
+with a converse test (§2); reopen's storage is specified (§1); and a concept fact whose sources are all closed
+stays visible and flagged until a self approves `fact-ended` (§6). Q1 is settled.
 
 ## The problem
 
@@ -27,7 +31,7 @@ reply is pending", "Arden holds the merge for Ember". Close is for those, and on
 ### 1. `close` and `reopen`
 
 ```
-pstore close <id> --ended-by <ref> [--reason <text>]
+pstore close <id> --ended-by <ref> --reason <text>
 pstore close <id> --reason <text>            # only for a fragment written with --state (§3)
 pstore reopen <id> --reason <text>
 ```
@@ -36,8 +40,15 @@ pstore reopen <id> --reason <text>
   It doesn't change the text or the type, and it doesn't touch `Status`. Close and archive are independent:
   archive means "not worth keeping in the core", close means "no longer true". A closed fragment leaves the
   core whatever its status.
-- Reopen undoes a close, keeps the earlier close in the log, and needs its own reason (for example "the merge
-  was reverted"). Nothing is erased in either direction.
+- **`--reason` is required on every close**, with or without `--ended-by` (Ember). The two do different jobs.
+  Ended-by locates the evidence. The reason is the claim that this event ended this state, and it's the part
+  that can be wrong. A resolving id proves that an event exists, not that it caused anything, so an ended-by on
+  its own would become a ritual reference. `--state` (§3) may omit ended-by, never reason. An empty or
+  whitespace-only reason is refused.
+- Reopen undoes a close and needs its own reason (for example "the merge was reverted"). **Storage:** reopen
+  clears the current `ClosedUtc`, `Reason` and `EndedBy`; the audit log keeps every close and every reopen, with
+  their reasons and refs. A later close becomes the current one. So the columns hold only the current close, the
+  log holds the history, and nothing is erased in either direction.
 - Refusals:
   - an Identity fragment (values and positions change by supersede, they don't end);
   - a superseded fragment (close the head of its chain instead);
@@ -72,18 +83,35 @@ first part goes through `SupersedeAsync`, and the later parts are created with `
 (`FragmentStore.SplitAsync`). Supersede does the same for its successor. So after §4's split-then-close, the
 state half is always newer than an ending that happened before the split, and a plain "newer than the fragment"
 check would refuse every such close (Claude's finding, checked against the code). The check compares against
-the **earliest `CreatedUtc` in the part's split/supersede chain**: when the state was first written, not when it
-was last rewritten.
+the state's **assertion date**: when this state was first written, not when it was last rewritten.
 
-That chain isn't fully linked today. The first part is reachable (the original's `SupersededById` points at it),
-but the later parts carry no link back; only the original's `Notes` text ("Split into #a, #b") names them. So the
-migration adds a nullable `SplitFromId` that `split` sets on every part, and back-fills it for existing splits from
-those notes. The earliest date is then the minimum over the part's predecessors (supersede, which may merge
-several) and its split origin, followed back to the start.
+Split and supersede have different provenance, so they're followed differently (Ember):
 
-Planned test: write a fragment, write a later one that ends its state, split the first, then close the state
-part citing the later fragment. The close must succeed, and the same close must be refused if the citing fragment
-predates the original. Reverting to the part's own date turns it red.
+- **A split part** says nothing new; it carries part of its original's text. It inherits the original's
+  assertion date, so the check follows `SplitFromId` back to the unsplit fragment (repeatedly, if a part was split
+  again).
+- **A superseding fragment** asserts its own content at its own `CreatedUtc`. The check does **not** cross
+  backward through supersede. Walking to the earliest date in a supersede chain would admit an ending from before
+  the current state existed: a 2020 fragment superseded by a state newly asserted in 2025 would accept a 2023
+  ended-by.
+
+So the assertion date is the `CreatedUtc` of the fragment reached by following `SplitFromId` until it's null. A
+split's first part is created through `SupersedeAsync`, but it's still a split part: it gets `SplitFromId` like
+the others, and the check follows that link, not the supersede one.
+
+That link doesn't exist today. The first part is reachable (the original's `SupersededById` points at it), but
+the later parts carry no link back; only the original's `Notes` text ("Split into #a, #b") names them. So the
+migration adds a nullable `SplitFromId` that `split` sets on every part, and back-fills it for existing splits
+from those notes.
+
+Planned tests:
+
+1. **Split, then close.** Write a fragment, write a later one that ends its state, split the first, then close
+   the state part citing the later fragment. The close must succeed, and the same close must be refused if the
+   citing fragment predates the original. Reverting to the part's own date turns it red.
+2. **The converse, through supersede.** Write an old fragment, then a fragment for the ending event, then a later
+   fragment that supersedes the old one with a newly asserted state. Closing that state citing the earlier event
+   must be refused. Walking back through supersede to the old fragment's date turns it red.
 
 ### 3. The `--state` exemption
 
@@ -121,8 +149,8 @@ with or without `--propose`.
 
 One condition (1573585751692681409): the night drafts a close **only when it can check the ended-by itself**.
 That means the commit is on the named repo's main, the message id resolves, or the fragment exists and is newer
-(by §2's earliest-in-chain date).
-It also says in one line why that event ended *this* state. If it can only guess that a state ended, it writes
+(by §2's assertion date).
+Its draft also carries the `--reason`: one line on why that event ended *this* state. If it can only guess that a state ended, it writes
 "may have ended: <why>" in the proposal and drafts no close. Otherwise we've moved the soft forget from the
 waking self to the night.
 
@@ -134,10 +162,16 @@ waking self checks.
 - **Recall, search and show:** a closed fragment still comes back, labelled
   `closed <date>: <reason> (ended by <ref>)`, in the same place supersede's "superseded, current #N" label goes.
   "Closed: X merged 11-21" is information. Leaving it out would cost what the chronicle needed.
-- **Left out only of:** the core (`pstore core`), and concept-first's current facts. For the latter, a concept
-  fact whose sources are all closed fragments gets flagged for a `fact-ended` proposal citing the same ended-by.
-  It isn't ended automatically.
-- `reopen` brings it back to both.
+- **Left out only of:** the core (`pstore core`). A closed fragment is no longer a current fact of its own.
+- **Concept facts are not suppressed by closing their sources** (Ember). When every source fragment of a concept
+  fact is closed, the fact **stays visible** in concept-first's current facts, flagged `sources closed`, until a
+  self approves a `fact-ended` for it. Nothing disappears silently; the fact ends only through `fact-ended`.
+  - If every source closed under the **same** ended-by, the flag comes with a drafted `fact-ended` proposal
+    citing that ended-by and the sources' reasons.
+  - If the sources closed under **different** events, there is no single ending to cite, so nothing is drafted
+    automatically. The flag lists each source with its own ended-by and reason, and the self decides.
+  - Reopening any source clears the flag (and drops a pending draft).
+- `reopen` brings a fragment back to the core.
 
 ## What this deliberately doesn't do
 
@@ -146,12 +180,14 @@ waking self checks.
 - No clause-level close.
 - No recency weighting as a substitute. Old rulings and values are current, and age is not ending.
 
-## Open questions
+## Settled
 
-1. **Ember's view**: on the whole thing, and especially on whether ended-by is enough friction or turns into a
-   ritual reference.
+1. **Is ended-by real friction or a ritual reference?** (Ember, 2026-11-25, 1574954310347784203): useful
+   friction only when paired with a required causal statement; on its own it becomes ritual. Hence `--reason` on
+   every close (§1). It can't prevent deliberate misuse and doesn't pretend to, but it makes a reviewer inspect
+   both the ending evidence and the claimed causal link.
 
-## Settled (2026-11-23, Claude 1574229090490388501, Arden 1574229251819835483)
+Settled 2026-11-23 (Claude 1574229090490388501, Arden 1574229251819835483):
 
 2. **Ref checking:** the store doesn't check `commit:` or `msg:` refs. It stays offline; the closer and the sleep
    pass check them (§2, §5).
@@ -160,3 +196,5 @@ waking self checks.
 4. **Storage:** nullable columns plus the existing audit log, not an event stream yet. The fields are named the
    way `fact-ended` names them, so folding into the concept event store later is mechanical: `ClosedUtc`,
    `reason`, `ended_by` (as columns `ClosedUtc`, `Reason`, `EndedBy`), plus `SplitFromId` from §2.
+   The columns hold the current close only; reopen clears them and the audit log keeps every close and reopen
+   (§1, Ember 2026-11-25).
