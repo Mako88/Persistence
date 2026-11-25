@@ -412,7 +412,7 @@ class FakeHost:
         # The script itself, run against fakes: ssh runs its remote command locally with /tmp, /home, /opt/persistence and
         # /etc/systemd/system moved into a scratch dir; sudo drops the root-only chown/chmod; dotnet, scp and sleep are
         # stand-ins. systemctl records every call in systemctl.log and answers list-units from `units` and `show -p
-        # ExecStart` from execstart.<unit>; reading /proc/<pid>/exe answers what the unit's own-build.conf starts, as
+        # ExecStart` from execstart.<unit>; a unit's MainPID goes up by one each time it is restarted; reading /proc/<pid>/exe answers what the unit's own-build.conf starts, as
         # systemd would run it.
         # The user is whoever runs the test, so `install -o` needs no root. Nothing outside the scratch dir is touched.
         # The caller holds a deploy claim in a scratch state dir (PERSISTENCE_STATE_DIR), as this session.
@@ -440,7 +440,7 @@ class FakeHost:
                      f'readlink) grep -h "^ExecStart=/" {self.etc}/*.d/own-build.conf | tail -1 | cut -d" " -f1 | cut -d= -f2; exit 0;; '
                      'esac; exec "$@"'),
             "systemctl": (f'echo "$*" >> {w}/systemctl.log; case "$1 $2 $3" in "list-units "*) cat {w}/units 2>/dev/null;; '
-                          f'"show -p MainPID") echo 4242;; "show -p ExecStart") cat "{w}/execstart.${{@: -1}}" 2>/dev/null;; esac; exit 0'),
+                          f'"show -p MainPID") echo $((4242 + $(grep -cx "restart ${{@: -1}}" {w}/systemctl.log)));; "show -p ExecStart") cat "{w}/execstart.${{@: -1}}" 2>/dev/null;; esac; exit 0'),
             "sleep": "exit 0"}
         for name, body in fakes.items():
             (bins / name).write_text(f"#!/bin/bash\n{body}\n")
@@ -760,8 +760,11 @@ class AccountOnlyDeploy(FakeHost, unittest.TestCase):
         conf = (self.etc / f"{self.unit}.d" / "own-build.conf").read_text()
         self.assertIn(f"\nExecStart=\nExecStart={self.build}/persistence-store serve --socket /s/{self.unit}.sock\n", conf)
         self.assertEqual(self.restarted(), [self.unit])
-        self.assertFalse(any("list-units" in c for c in self.systemctl_calls()), "no other unit is even looked for")
+        # Other units are only read (the before/after snapshot), never restarted or changed.
+        self.assertEqual([c for c in self.systemctl_calls() if not c.startswith(("show ", "list-units ", "daemon-reload"))],
+                         [f"restart {self.unit}"])
         self.assertIn(f"{self.unit}: running {self.build}/persistence-store", out)
+        self.assertIn("every other persistence-store unit kept its MainPID and start time", out)
         again = self.deploy().stdout  # the same commit again: the build is reused, the unit restarted once more
         self.assertIn("reused", again)
         self.assertIn(f"was: ExecStart={self.build}/persistence-store", again)
@@ -812,11 +815,65 @@ class AccountOnlyDeploy(FakeHost, unittest.TestCase):
 
     def test_shared_store_is_explicit_and_restarts_only_the_units_on_it(self):
         (self.w / f"execstart.{self.unit}").write_text(f"{{ path={self.build}/persistence-store ; }}\n")  # on its own build
-        out = self.deploy("--shared-store", "--claim", self.claim, "fakehost").stdout
+        out = self.deploy("--shared-store", "--units", "persistence-store-ember,persistence-store-ember-test.service",
+                          "--claim", self.claim, "fakehost").stdout
         self.assertTrue((self.opt / "store" / "persistence-store").exists())
         self.assertEqual(sorted(self.restarted()), ["persistence-store-ember-test.service", "persistence-store-ember.service"])
         self.assertIn("--shared-store: republished", out)
         self.assertFalse((self.etc / f"{self.unit}.d").exists())
+        self.assertIn("every other persistence-store unit kept its MainPID and start time", out)
+
+    # Ember 1575198901068242967: shared publication or a multi-unit restart needs a flag naming the units, and fails
+    # without it or when the units named aren't the ones it would restart.
+
+    def shared_refused(self, run, code):
+        self.assertEqual(run.returncode, code, run.stderr)
+        self.untouched()
+        self.assertFalse((self.opt / ".deploy.claim").exists(), "refused before the authorization was bound")
+
+    def test_shared_store_without_units_named_is_refused(self):
+        (self.dest / "heartbeat.py").write_text("# a local edit\n")
+        run = self.deploy("--shared-store", "--claim", self.claim, "fakehost", check=False)
+        self.assertIn("--units", run.stderr)
+        self.shared_refused(run, 2)
+
+    def test_shared_store_naming_fewer_units_than_run_it_is_refused_under_the_lock(self):
+        # ember-test also runs the shared build: naming only ember would restart ember-test unnamed.
+        (self.dest / "heartbeat.py").write_text("# a local edit\n")
+        (self.w / f"execstart.{self.unit}").write_text(f"{{ path={self.build}/persistence-store ; }}\n")
+        run = self.deploy("--shared-store", "--units", "persistence-store-ember", "--claim", self.claim, "fakehost",
+                          check=False)
+        self.assertIn("persistence-store-ember-test.service", run.stderr)
+        self.shared_refused(run, 6)
+
+    def test_two_accounts_without_units_named_are_refused(self):
+        (self.dest / "heartbeat.py").write_text("# a local edit\n")
+        run = self.deploy("--claim", self.claim, "fakehost", self.user, "ember", check=False)
+        self.assertIn("more than one unit", run.stderr)
+        self.shared_refused(run, 2)
+
+    def test_units_named_that_arent_the_accounts_own_are_refused(self):
+        (self.dest / "heartbeat.py").write_text("# a local edit\n")
+        run = self.deploy("--units", "persistence-store-ember", "--claim", self.claim, "fakehost", self.user, check=False)
+        self.shared_refused(run, 6)
+
+    def test_one_account_may_name_its_own_unit(self):
+        self.deploy("--units", self.unit, "--claim", self.claim, "fakehost", self.user)
+        self.assertEqual(self.restarted(), [self.unit])
+
+    def test_another_unit_restarted_during_the_run_fails_verification(self):
+        # Something outside the script (a dependency, say) restarts ember's unit along with this one.
+        fake = self.w / "bin" / "systemctl"
+        fake.write_text(fake.read_text().replace('echo "$*" >>', f'[ "$1" = restart ] && echo "restart persistence-store-ember.service" >> {self.w}/systemctl.log; echo "$*" >>', 1))
+        run = self.deploy(check=False)
+        self.assertEqual(run.returncode, 7, run.stdout + run.stderr)
+        self.assertIn("persistence-store-ember.service: NOT left alone", run.stdout)
+        self.assertNotIn("persistence-store-ember-test.service: NOT left alone", run.stdout)
+
+    def test_release_takes_no_other_flag(self):
+        run = self.deploy("--release", "--units", "none", "--claim", self.claim, "fakehost", check=False)
+        self.assertEqual(run.returncode, 2, run.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

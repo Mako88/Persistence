@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Publishes the store CLI for linux-x64 and installs it on a server reached as `ssh <host>`, with the hook
-# for each user who runs Claude Code there. Usage: deploy-remote.sh [--shared-store] --claim <claim id> <host> [user ...]
+# for each user who runs Claude Code there.
+# Usage: deploy-remote.sh [--shared-store] [--units <unit,...|none>] --claim <claim id> <host> [user ...]
 # Account-only by default (2026-11-25: a deploy meant for ubuntu only republished the shared /opt/persistence/store and
 # restarted Ember's two store units onto d00f8e1 without their say; #14953). Each user named gets the store in its own
 # build, /opt/persistence/store.<user>-<commit>, and its own store unit (persistence-store.service for ubuntu,
@@ -11,6 +12,14 @@
 # name holding a different commit. No user named and no --shared-store: refused (exit 2), as there is nothing it may touch.
 # --shared-store is the old behaviour, asked for explicitly: republish the shared build and restart the units that run
 # it (only those; a unit on its own build is no longer restarted). Use it only with every affected self's agreement.
+# Naming the units (Ember 1575198901068242967): a run that would restart more than one unit, and every --shared-store
+# run, needs --units naming exactly the units it restarts (comma-separated; `none` for a shared publication that
+# restarts nothing). Without it, refused (exit 2); if the set named isn't the set it would restart, refused (exit 6),
+# both before anything is installed. For --shared-store the set is read on the host under the lock, so a unit that moved
+# on or off the shared build since you looked refuses rather than being restarted unnamed. A one-user run may name its
+# one unit; it doesn't have to.
+# Verified after the restart: each restarted unit runs the binary it should (/proc), and every other persistence-store*
+# unit kept the MainPID and start time it had before the install (read-only; exit 7 if one changed).
 # Releasing the host's deploy authorization (below): deploy-remote.sh --release --claim <claim id> <host>
 # Publishing on Windows loses the execute bit and the folder's permissions, so they are set after unpacking
 # (a 203/EXEC "Permission denied" took both stores down for a minute on 2026-11-09).
@@ -26,10 +35,18 @@
 #    once that claim is closed). Read first, then compared again under the lock, so a change in between refuses.
 # 3. The install and restart run under an exclusive flock on the host; a held lock refuses, it doesn't wait.
 set -euo pipefail
-usage="usage: deploy-remote.sh [--release | --shared-store] --claim <claim id> <host> [user ...]"
-release= shared=
-if [ "${1:-}" = --release ]; then release=1; shift; elif [ "${1:-}" = --shared-store ]; then shared=1; shift; fi
+usage="usage: deploy-remote.sh [--release | --shared-store] [--units <unit,...|none>] --claim <claim id> <host> [user ...]"
+release= shared= named= named_given=
+while [ $# -gt 0 ] && [ "$1" != --claim ]; do
+  case "$1" in
+    --release) release=1; shift;;
+    --shared-store) shared=1; shift;;
+    --units) [ -n "${2:-}" ] || { echo "$usage" >&2; exit 2; }; named_given=1; named=$2; shift 2;;
+    *) echo "$usage" >&2; exit 2;;
+  esac
+done
 [ "${1:-}" = --claim ] && [ -n "${2:-}" ] || { echo "$usage" >&2; exit 2; }
+[ -z "$release" ] || { [ -z "$shared" ] && [ -z "$named_given" ]; } || { echo "--release takes no other flag; $usage" >&2; exit 2; }
 claim=$2
 shift 2
 host=${1:?$usage}
@@ -43,6 +60,34 @@ fi
 for u in "${users[@]}"; do
   [[ $u =~ ^[a-z_][a-z0-9_-]*$ ]] || { echo "deploy refused: '$u' isn't a user name" >&2; exit 2; }
 done
+# The units named with --units, as a sorted space-separated set ("" for none); ".service" may be left off.
+if [ -n "$named_given" ]; then
+  if [ "$named" = none ]; then named=; else
+    named=$(printf %s "$named" | tr , '\n' | sed '/^$/d; /\.service$/!s/$/.service/' | sort -u | tr '\n' ' ')
+    named=${named% }
+    for n in $named; do
+      [[ $n =~ ^persistence-store[a-z0-9_-]*\.service$ ]] || { echo "deploy refused: '$n' isn't a persistence-store unit" >&2; exit 2; }
+    done
+  fi
+fi
+unit_of() { if [ "$1" = ubuntu ]; then echo persistence-store.service; else echo "persistence-store-$1.service"; fi; }
+if [ -n "$shared" ] && [ -z "$named_given" ]; then
+  echo "deploy refused: --shared-store restarts every unit running the shared build, so it needs --units naming them" \
+    "(or --units none); ask each of their selves first" >&2
+  exit 2
+fi
+if [ -z "$release" ] && [ -z "$shared" ]; then
+  # Account-only: the units it restarts are the named users' own, known here.
+  own=$(for u in "${users[@]}"; do unit_of "$u"; done | sort -u | tr '\n' ' '); own=${own% }
+  if [ ${#users[@]} -gt 1 ] && [ -z "$named_given" ]; then
+    echo "deploy refused: this run would restart more than one unit ($own); name them with --units to mean it" >&2
+    exit 2
+  fi
+  if [ -n "$named_given" ] && [ "$named" != "$own" ]; then
+    echo "deploy refused: --units names '${named:-none}' but this run would restart '$own'; nothing installed" >&2
+    exit 6
+  fi
+fi
 repo=$(cd "$(dirname "$0")/../.." && pwd)
 claims=("python3" "$repo/scripts/claude-code/claims.py")
 if "${claims[@]}" holds "$claim" deploy; then held=1
@@ -90,6 +135,19 @@ tag=${deployed:0:7}${deployed:40}  # the short commit, and -dirty when the tree 
 stage=/tmp/persistence-deploy.$claim.$$
 units=/etc/systemd/system
 shared_exe=/opt/persistence/store/persistence-store
+# Every persistence-store* unit's MainPID and start time, one line each, read-only; taken under the lock before the
+# install and again after the restarts, and compared for every unit this run didn't restart.
+snapshot="systemctl list-units --type=service --all --no-legend 'persistence-store*' | awk '{print \$1}' | sed 's/^[^a-z]*//' | sort | while read -r s; do echo \"\$s pid=\$(systemctl show -p MainPID --value \$s) since=\$(systemctl show -p ActiveEnterTimestamp --value \$s)\"; done"
+others_unchanged="after=\$($snapshot)
+  changed=
+  while read -r s rest; do
+    [ -n \"\$s\" ] || continue
+    case \" \$restarting \" in *\" \$s \"*) continue;; esac
+    now=\$(printf '%s\\n' \"\$after\" | awk -v s=\"\$s\" '\$1 == s' | cut -d' ' -f2-)
+    if [ \"\$now\" != \"\$rest\" ]; then echo \"\$s: NOT left alone: was \$rest, now \${now:-gone}\"; changed=1; fi
+  done <<< \"\$before\"
+  if [ -n \"\$changed\" ]; then exit 7; fi
+  echo \"every other persistence-store unit kept its MainPID and start time\""
 # Account-only, on the host: each named user's unit and build. Checked in full under the lock before anything is
 # installed or bound, so a refusal changes nothing; then installed, restarted and read back one unit at a time.
 each_unit="for u in ${users[*]:-}; do
@@ -128,20 +186,27 @@ install_own="$each_unit
     exe=\$(sudo readlink /proc/\$pid/exe 2>/dev/null || true)
     if [ \"\$exe\" = \$b/persistence-store ]; then echo \"\$unit: running \$exe\"; else echo \"\$unit: NOT verified: it runs \${exe:-nothing readable}, not \$b/persistence-store\"; bad=1; fi
   done
-  [ -z \"\$bad\" ] || exit 7"
+  [ -z \"\$bad\" ] || exit 7
+  $others_unchanged"
 # --shared-store: the shared build, and the units whose ExecStart (drop-ins applied) runs it.
+preflight_shared="on=\$(for s in \$(systemctl list-units --type=service --no-legend 'persistence-store*' | awk '{print \$1}' | sed 's/^[^a-z]*//'); do
+    case \"\$(systemctl show -p ExecStart --value \$s)\" in *'path=$shared_exe '*) echo \$s;; esac
+  done | sort -u | tr '\\n' ' ')
+  on=\${on% }
+  if [ \"\$on\" != '$named' ]; then
+    echo \"deploy refused: --units names '${named:-none}' but the units running the shared build are '\${on:-none}'; nothing installed\" >&2
+    exit 6
+  fi
+  restarting=\$on"
 install_shared="sudo tar -xzf $stage/store.tgz -C /opt/persistence/store
   sudo chown -R root:root /opt/persistence/store
   sudo chmod -R a+rX /opt/persistence/store
   sudo chmod 755 $shared_exe
-  on=
-  for s in \$(systemctl list-units --type=service --no-legend 'persistence-store*' | awk '{print \$1}'); do
-    case \"\$(systemctl show -p ExecStart --value \$s)\" in *'path=$shared_exe '*) on=\"\$on \$s\";; esac
-  done
-  echo \"--shared-store: republished /opt/persistence/store ($deployed); restarting the units that run it:\${on:- none}\"
+  echo \"--shared-store: republished /opt/persistence/store ($deployed); restarting the units named, which run it: \${on:-none}\"
   for s in \$on; do sudo systemctl restart \$s; done
   sleep 5
-  [ -z \"\$on\" ] || systemctl is-active \$on"
+  [ -z \"\$on\" ] || systemctl is-active \$on
+  $others_unchanged"
 # hook.py imports coordination.py (the locks and the fired-wake ledger) and, for ptask and run-due, claims.py and
 # cwd_exec.py; run-due launches every firing through run_line.py and refuses to fire without it; observe reads its opted-in
 # sources from observed.py; persistence-heartbeat@.service runs heartbeat.py from the same place (a beat with the switch
@@ -159,7 +224,8 @@ install_shared="sudo tar -xzf $stage/store.tgz -C /opt/persistence/store
 py=(hook.py coordination.py claims.py cwd_exec.py run_line.py observed.py heartbeat.py concepts.py)
 ssh "$host" "mkdir -m 700 $stage"
 scp -q "$work/store.tgz" "${py[@]/#/$repo/scripts/claude-code/}" "$repo/scripts/claude-code/install-hooks.sh" "$host:$stage/"
-if [ -n "$shared" ]; then pre= install=$install_shared; else pre=$preflight install=$install_own; fi
+if [ -n "$shared" ]; then pre=$preflight_shared install=$install_shared; else pre="$preflight
+  restarting='$own'" install=$install_own; fi
 # Arden's B: the claim is checked again once the host's lock is held, right before anything is installed. The host
 # says LOCKED (lock held, authorization unchanged) and waits; this side re-runs `holds` in the caller's own claims and
 # answers go or stop. Anything but go, an EOF included, refuses there with nothing installed.
@@ -171,6 +237,7 @@ coproc REMOTE { ssh "$host" "set -e
   read -r go || true
   if [ \"\$go\" != go ]; then echo \"deploy refused: claim $claim was no longer held once the host's lock was taken\" >&2; exit 3; fi
   $pre
+  before=\$($snapshot)
   if [ \"\${cur%% *}\" != $claim ]; then
     echo \"$claim \$(id -un) ${CLAUDE_CODE_SESSION_ID:-} \$(date -u +%Y-%m-%dT%H:%M:%SZ)\" | sudo tee $auth >/dev/null
     echo \"the host's deploy authorization is now bound to claim $claim\${cur:+ (was: \$cur)}\"

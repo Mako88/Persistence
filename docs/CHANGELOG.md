@@ -22,7 +22,14 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
   of that name holding another commit. No user named: refused (exit 2).
 - **`--shared-store`** is the old behaviour, but you have to ask for it. It republishes the shared build and restarts only
   the units whose ExecStart, with drop-ins applied, runs it. Use it only with the agreement of every self it restarts.
-- Tests: `AccountOnlyDeploy` in test_heartbeat_optin.py, 7 tests, all red on the old script.
+- **The units restarted must be named** (Ember, msg 1575198901068242967). `--units <unit,...|none>` is required for every
+  `--shared-store` run and for any run naming more than one user (exit 2 without it). It must equal the set the run
+  would restart, or the run is refused before anything is installed (exit 6). For `--shared-store` that set is read on
+  the host under the lock.
+- **Verification checks the others too, read-only:** every other `persistence-store*` unit's MainPID and start time are
+  read before the install and after the restarts; one that changed fails the deploy (exit 7) and is named.
+- Tests: `AccountOnlyDeploy` in test_heartbeat_optin.py, 14 tests. All 7 of 59aaf10's are red on main's script; 8 of
+  the 9 added or changed for the unit naming are red on 59aaf10 (the ninth, `--release` taking no other flag, is a guard).
 
 ## 2026-11-25 — install-hooks.sh: root never reads the stage, every problem found before any change (#93 review)
 

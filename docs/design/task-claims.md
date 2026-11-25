@@ -359,7 +359,7 @@ deploy while the first was still live, so two sessions were each cleared to depl
   one is closed by its owner, or taken (`ptask take`, owner stopped) and then abandoned.
 - **`ptask holds <id> <subject>`** exits 0 only if this session owns claim `<id>`, it is claimed, and its subject is
   exactly `<subject>`. It only reads.
-- **The deploy** (`deploy-remote.sh [--shared-store] --claim <id> <host> [user ...]`; account-only unless the flag is given) runs `holds <id> deploy` before it publishes
+- **The deploy** (`deploy-remote.sh [--shared-store] [--units <unit,...|none>] --claim <id> <host> [user ...]`; account-only unless `--shared-store` is given; `--units` must name exactly the units restarted, and is required for `--shared-store` or more than one unit) runs `holds <id> deploy` before it publishes
   anything. On the host it holds an exclusive `flock` on `/opt/persistence/.deploy.lock` for the install and the
   restarts, writes the claim and session to `/opt/persistence/.deploy.holder`, and refuses (doesn't wait) if the lock is
   held. Each run copies its files to its own new staging directory. The lock stops two runs overlapping.
