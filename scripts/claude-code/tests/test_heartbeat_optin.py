@@ -979,6 +979,20 @@ class AccountOnlyDeploy(FakeHost, unittest.TestCase):
                                                            "persistence-store-ember-test.service", self.unit]))
         self.assertIn("--shared-store: republished", out)
 
+    def test_shared_store_with_units_none_publishes_and_restarts_nothing(self):
+        for u in (self.unit, "persistence-store-ember.service", "persistence-store-ember-test.service"):
+            self.on_own_build(u)
+        out = self.deploy("--shared-store", "--units", "none", "--claim", self.claim, "fakehost").stdout
+        self.assertTrue((self.opt / "store" / "persistence-store").exists())
+        self.assertEqual(self.restarted(), [])
+        self.assertIn("restarting the units named, which run it: none", out)
+        self.assertIn("every other persistence-store unit kept its MainPID and start time", out)
+        # Once a unit runs the shared build again, 'none' is a wrong set.
+        (self.w / "execstart.persistence-store-ember.service").write_text(f"{{ path={self.opt}/store/persistence-store ; }}\n")
+        run = self.deploy("--shared-store", "--units", "none", "--claim", self.claim, "fakehost", check=False)
+        self.assertEqual(run.returncode, 6, run.stderr)
+        self.assertEqual(self.restarted(), [])
+
     def test_shared_store_another_unit_restarted_during_the_run_fails_verification(self):
         self.on_own_build(self.unit)
         self.on_own_build("persistence-store-ember-test.service")
