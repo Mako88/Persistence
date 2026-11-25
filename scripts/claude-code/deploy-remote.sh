@@ -7,6 +7,8 @@
 # build, /opt/persistence/store.<user>-<commit>, and its own store unit (persistence-store.service for ubuntu,
 # persistence-store-<user>.service otherwise) gets a drop-in own-build.conf pointing there; only that unit is restarted,
 # and the running binary is read back from /proc. The shared /opt/persistence/store and every other unit are left alone.
+# A stopped unit (inactive or failed) is never started (Ember's review of 4664fc2): its build and drop-in change, it is
+# checked still stopped with its next start naming the new build, and starting it is a separate, explicit step.
 # own-build.conf sets PERSISTENCE_STORE_EXE to the own build as well: the server ends itself when the file that names
 # changes (Server.cs), so a unit left watching the shared binary would restart at the next shared publication.
 # Refused, with nothing installed (exit 6): a unit whose own ExecStart doesn't start the shared binary, another drop-in
@@ -14,14 +16,17 @@
 # name holding a different commit. No user named and no --shared-store: refused (exit 2), as there is nothing it may touch.
 # --shared-store is the old behaviour, asked for explicitly: republish the shared build and restart the units that run
 # it (only those; a unit on its own build is no longer restarted). Use it only with every affected self's agreement.
-# Naming the units (Ember 1575198901068242967): a run that would restart more than one unit, and every --shared-store
-# run, needs --units naming exactly the units it restarts (comma-separated; `none` for a shared publication that
-# restarts nothing). Without it, refused (exit 2); if the set named isn't the set it would restart, refused (exit 6),
+# Naming the units (Ember 1575198901068242967): a run that would change more than one unit, and every --shared-store
+# run, needs --units naming exactly the units whose next run it changes (comma-separated; `none` for a shared
+# publication that changes none). For --shared-store that is every persistence-store* unit, loaded in any state or only
+# installed (list-unit-files), whose ExecStart or PERSISTENCE_STORE_EXE names the shared binary; of those only the
+# running ones are restarted, the stopped ones are checked still stopped (Ember's review of 4664fc2). Without it, refused (exit 2); if the set named isn't the set it would restart, refused (exit 6),
 # both before anything is installed. For --shared-store the set is read on the host under the lock, so a unit that moved
 # on or off the shared build since you looked refuses rather than being restarted unnamed. A one-user run may name its
 # one unit; it doesn't have to.
-# Verified after the restart: each restarted unit runs the binary it should (/proc), and every other persistence-store*
-# unit kept the MainPID and start time it had before the install (read-only; exit 7 if one changed).
+# Verified after the restart: each restarted unit runs the binary it should (/proc), each stopped unit named is still
+# stopped, and every other persistence-store* unit kept the MainPID, start time and state it had before the install
+# (read-only; exit 7 if one changed).
 # Releasing the host's deploy authorization (below): deploy-remote.sh --release --claim <claim id> <host>
 # Publishing on Windows loses the execute bit and the folder's permissions, so they are set after unpacking
 # (a 203/EXEC "Permission denied" took both stores down for a minute on 2026-11-09).
@@ -139,7 +144,13 @@ units=/etc/systemd/system
 shared_exe=/opt/persistence/store/persistence-store
 # Every persistence-store* unit's MainPID and start time, one line each, read-only; taken under the lock before the
 # install and again after the restarts, and compared for every unit this run didn't restart.
-snapshot="systemctl list-units --type=service --all --no-legend 'persistence-store*' | awk '{print \$1}' | sed 's/^[^a-z]*//' | sort | while read -r s; do echo \"\$s pid=\$(systemctl show -p MainPID --value \$s) since=\$(systemctl show -p ActiveEnterTimestamp --value \$s)\"; done"
+# Every persistence-store* unit there is, loaded (any state) or only installed (list-unit-files), templates aside
+# (Ember's review of 4664fc2: an inactive unit configured to run or watch the shared binary counts too).
+all_units="{ systemctl list-units --type=service --all --no-legend 'persistence-store*' | awk '{print \$1}' | sed 's/^[^a-z]*//'; systemctl list-unit-files --type=service --no-legend 'persistence-store*' | awk '{print \$1}'; } | grep -v '@\\.service\$' | sort -u"
+# A unit counts as running unless systemd says inactive or failed; only running units are ever restarted. Starting a
+# stopped unit is a separate, explicit step this script never takes.
+stopped="case \"\$(systemctl show -p ActiveState --value \$s)\" in inactive|failed) true;; *) false;; esac"
+snapshot="$all_units | while read -r s; do echo \"\$s pid=\$(systemctl show -p MainPID --value \$s) since=\$(systemctl show -p ActiveEnterTimestamp --value \$s) state=\$(systemctl show -p ActiveState --value \$s)\"; done"
 others_unchanged="after=\$($snapshot)
   changed=
   while read -r s rest; do
@@ -164,6 +175,11 @@ preflight="$each_unit
     other=\$(grep -lE '^ExecStart|^Environment=.*PERSISTENCE_STORE_EXE=' \$d/*.conf 2>/dev/null | grep -v '/own-build.conf\$' || true)
     if [ -n \"\$other\" ]; then echo \"deploy refused: another drop-in of \$unit sets ExecStart or PERSISTENCE_STORE_EXE (\$other); its self moves it aside first, so own-build.conf is the one in force. Nothing installed\" >&2; exit 6; fi
     if [ -e \$b ] && [ \"\$(cat \$b/DEPLOYED 2>/dev/null)\" != $deployed ]; then echo \"deploy refused: \$b exists and doesn't hold $deployed; nothing installed\" >&2; exit 6; fi
+  done
+  restarting=
+  $each_unit
+    s=\$unit
+    if $stopped; then echo \"\$unit: \$(systemctl show -p ActiveState --value \$unit) before this run; its build and drop-in change, it is not started\"; else restarting=\"\${restarting:+\$restarting }\$unit\"; fi
   done"
 install_own="$each_unit
     base=\$(grep -m1 '^ExecStart=/' $units/\$unit)
@@ -179,39 +195,55 @@ install_own="$each_unit
     printf '[Service]\\nEnvironment=PERSISTENCE_STORE_EXE=%s\\nExecStart=\\n%s\\n' \$b/persistence-store \"\$(printf %s \"\$base\" | sed \"s#^ExecStart=$shared_exe #ExecStart=\$b/persistence-store #\")\" | sudo tee \$d/own-build.conf >/dev/null
     echo \"\$u: \$unit now starts \$b/persistence-store (own-build.conf; was: \${was:-the shared build})\"
     sudo systemctl daemon-reload
-    sudo systemctl restart \$unit
+    case \" \$restarting \" in *\" \$unit \"*) sudo systemctl restart \$unit;; esac
   done
   sleep 5
   bad=
   $each_unit
-    pid=\$(systemctl show -p MainPID --value \$unit)
-    exe=\$(sudo readlink /proc/\$pid/exe 2>/dev/null || true)
-    if [ \"\$exe\" = \$b/persistence-store ]; then echo \"\$unit: running \$exe\"; else echo \"\$unit: NOT verified: it runs \${exe:-nothing readable}, not \$b/persistence-store\"; bad=1; fi
+    case \" \$restarting \" in
+      *\" \$unit \"*)
+        pid=\$(systemctl show -p MainPID --value \$unit)
+        exe=\$(sudo readlink /proc/\$pid/exe 2>/dev/null || true)
+        if [ \"\$exe\" = \$b/persistence-store ]; then echo \"\$unit: running \$exe\"; else echo \"\$unit: NOT verified: it runs \${exe:-nothing readable}, not \$b/persistence-store\"; bad=1; fi;;
+      *)
+        s=\$unit
+        if $stopped && [ \"\$(systemctl show -p MainPID --value \$unit)\" = 0 ]; then echo \"\$unit: still \$(systemctl show -p ActiveState --value \$unit), not started\"; else echo \"\$unit: NOT verified: it was stopped and is now \$(systemctl show -p ActiveState --value \$unit)\"; bad=1; fi
+        case \"\$(systemctl show -p ExecStart --value \$unit) \" in
+          *\"path=\$b/persistence-store \"*) echo \"\$unit: its next start runs \$b/persistence-store\";;
+          *) echo \"\$unit: NOT verified: its ExecStart doesn't name \$b/persistence-store\"; bad=1;;
+        esac;;
+    esac
   done
   [ -z \"\$bad\" ] || exit 7
   $others_unchanged"
 # --shared-store: the shared build, and the units whose ExecStart (drop-ins applied) runs it or whose
 # PERSISTENCE_STORE_EXE names it: the server ends itself when that file changes (Server.cs) and Restart=always brings it
 # back, so republishing restarts those units too, whether or not this script asks systemd to.
-preflight_shared="on=\$(for s in \$(systemctl list-units --type=service --no-legend 'persistence-store*' | awk '{print \$1}' | sed 's/^[^a-z]*//'); do
+# Every unit counts, running or stopped (Ember's review of 4664fc2): republishing changes what a stopped unit runs at its
+# next start, so it is named too. Only the running ones are restarted; the stopped ones are checked still stopped.
+preflight_shared="on=\$(for s in \$($all_units); do
     case \"\$(systemctl show -p ExecStart --value \$s) \$(systemctl show -p Environment --value \$s) \" in
       *'path=$shared_exe '*|*' PERSISTENCE_STORE_EXE=$shared_exe '*) echo \$s;;
     esac
   done | sort -u | tr '\\n' ' ')
   on=\${on% }
   if [ \"\$on\" != '$named' ]; then
-    echo \"deploy refused: --units names '${named:-none}' but the units running the shared build are '\${on:-none}'; nothing installed\" >&2
+    echo \"deploy refused: --units names '${named:-none}' but the units that run or watch the shared build, running or stopped, are '\${on:-none}'; nothing installed\" >&2
     exit 6
   fi
-  restarting=\$on"
+  restarting= left=
+  for s in \$on; do if $stopped; then left=\"\${left:+\$left }\$s\"; else restarting=\"\${restarting:+\$restarting }\$s\"; fi; done"
 install_shared="sudo tar -xzf $stage/store.tgz -C /opt/persistence/store
   sudo chown -R root:root /opt/persistence/store
   sudo chmod -R a+rX /opt/persistence/store
   sudo chmod 755 $shared_exe
-  echo \"--shared-store: republished /opt/persistence/store ($deployed); restarting the units named, which run it: \${on:-none}\"
-  for s in \$on; do sudo systemctl restart \$s; done
+  echo \"--shared-store: republished /opt/persistence/store ($deployed); the units named, which run or watch it: \${on:-none}; restarting the running ones: \${restarting:-none}; left stopped: \${left:-none}\"
+  for s in \$restarting; do sudo systemctl restart \$s; done
   sleep 5
-  [ -z \"\$on\" ] || systemctl is-active \$on
+  [ -z \"\$restarting\" ] || systemctl is-active \$restarting
+  for s in \$left; do
+    if $stopped && [ \"\$(systemctl show -p MainPID --value \$s)\" = 0 ]; then echo \"\$s: still \$(systemctl show -p ActiveState --value \$s), not started\"; else echo \"\$s: NOT verified: it was stopped and is now \$(systemctl show -p ActiveState --value \$s)\"; exit 7; fi
+  done
   $others_unchanged"
 # hook.py imports coordination.py (the locks and the fired-wake ledger) and, for ptask and run-due, claims.py and
 # cwd_exec.py; run-due launches every firing through run_line.py and refuses to fire without it; observe reads its opted-in
@@ -230,8 +262,7 @@ install_shared="sudo tar -xzf $stage/store.tgz -C /opt/persistence/store
 py=(hook.py coordination.py claims.py cwd_exec.py run_line.py observed.py heartbeat.py concepts.py)
 ssh "$host" "mkdir -m 700 $stage"
 scp -q "$work/store.tgz" "${py[@]/#/$repo/scripts/claude-code/}" "$repo/scripts/claude-code/install-hooks.sh" "$host:$stage/"
-if [ -n "$shared" ]; then pre=$preflight_shared install=$install_shared; else pre="$preflight
-  restarting='$own'" install=$install_own; fi
+if [ -n "$shared" ]; then pre=$preflight_shared install=$install_shared; else pre=$preflight install=$install_own; fi
 # Arden's B: the claim is checked again once the host's lock is held, right before anything is installed. The host
 # says LOCKED (lock held, authorization unchanged) and waits; this side re-runs `holds` in the caller's own claims and
 # answers go or stop. Anything but go, an EOF included, refuses there with nothing installed.

@@ -33,6 +33,14 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
   it restarts, so it has to be named.
 - **Verification checks the others too, read-only:** every other `persistence-store*` unit's MainPID and start time are
   read before the install and after the restarts; one that changed fails the deploy (exit 7) and is named.
+- **Stopped units (Ember's review of 4664fc2, msg 1575208384284594206).** A deploy never starts a stopped unit.
+  Account-only: a named account's inactive or failed unit gets its build and drop-in, isn't restarted, and is checked
+  still stopped with its next start naming the new build. `--shared-store`: the set `--units` must name is now every
+  `persistence-store*` unit, loaded in any state or only installed (`list-unit-files`), whose ExecStart or
+  `PERSISTENCE_STORE_EXE` names the shared binary, since republishing changes what a stopped one runs next. So
+  `--units none` is refused while any such unit exists. Only the running ones are restarted, and the stopped ones are
+  checked still stopped (exit 7 if one started). The before/after snapshot covers installed-only units and records
+  ActiveState. 9 tests; all red on 4664fc2's script.
 - Tests: `AccountOnlyDeploy` in test_heartbeat_optin.py, 16 tests. All 7 of 59aaf10's are red on main's script; 8 of
   the 9 added or changed for the unit naming are red on 59aaf10 (the ninth, `--release` taking no other flag, is a guard);
   the 3 for `PERSISTENCE_STORE_EXE` are red on d7cba87.
