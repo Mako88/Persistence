@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 # Publishes the store CLI for linux-x64 and installs it on a server reached as `ssh <host>`, with the hook
-# for each user who runs Claude Code there. Usage: deploy-remote.sh --claim <claim id> <host> [user ...]
+# for each user who runs Claude Code there. Usage: deploy-remote.sh [--shared-store] --claim <claim id> <host> [user ...]
+# Account-only by default (2026-11-25: a deploy meant for ubuntu only republished the shared /opt/persistence/store and
+# restarted Ember's two store units onto d00f8e1 without their say; #14953). Each user named gets the store in its own
+# build, /opt/persistence/store.<user>-<commit>, and its own store unit (persistence-store.service for ubuntu,
+# persistence-store-<user>.service otherwise) gets a drop-in own-build.conf pointing there; only that unit is restarted,
+# and the running binary is read back from /proc. The shared /opt/persistence/store and every other unit are left alone.
+# Refused, with nothing installed (exit 6): a unit whose own ExecStart doesn't start the shared binary, another drop-in
+# of the unit that sets ExecStart (it would fight own-build.conf; its self moves it aside), or a build directory of that
+# name holding a different commit. No user named and no --shared-store: refused (exit 2), as there is nothing it may touch.
+# --shared-store is the old behaviour, asked for explicitly: republish the shared build and restart the units that run
+# it (only those; a unit on its own build is no longer restarted). Use it only with every affected self's agreement.
 # Releasing the host's deploy authorization (below): deploy-remote.sh --release --claim <claim id> <host>
 # Publishing on Windows loses the execute bit and the folder's permissions, so they are set after unpacking
 # (a 203/EXEC "Permission denied" took both stores down for a minute on 2026-11-09).
@@ -16,15 +26,23 @@
 #    once that claim is closed). Read first, then compared again under the lock, so a change in between refuses.
 # 3. The install and restart run under an exclusive flock on the host; a held lock refuses, it doesn't wait.
 set -euo pipefail
-usage="usage: deploy-remote.sh [--release] --claim <claim id> <host> [user ...]"
-release=
-if [ "${1:-}" = --release ]; then release=1; shift; fi
+usage="usage: deploy-remote.sh [--release | --shared-store] --claim <claim id> <host> [user ...]"
+release= shared=
+if [ "${1:-}" = --release ]; then release=1; shift; elif [ "${1:-}" = --shared-store ]; then shared=1; shift; fi
 [ "${1:-}" = --claim ] && [ -n "${2:-}" ] || { echo "$usage" >&2; exit 2; }
 claim=$2
 shift 2
 host=${1:?$usage}
 shift
 users=("$@")
+if [ -z "$release" ] && [ -z "$shared" ] && [ ${#users[@]} -eq 0 ]; then
+  echo "deploy refused: no user named. A deploy touches only the named accounts' own store builds and units;" \
+    "republishing the shared /opt/persistence/store and restarting every unit on it needs --shared-store" >&2
+  exit 2
+fi
+for u in "${users[@]}"; do
+  [[ $u =~ ^[a-z_][a-z0-9_-]*$ ]] || { echo "deploy refused: '$u' isn't a user name" >&2; exit 2; }
+done
 repo=$(cd "$(dirname "$0")/../.." && pwd)
 claims=("python3" "$repo/scripts/claude-code/claims.py")
 if "${claims[@]}" holds "$claim" deploy; then held=1
@@ -65,6 +83,65 @@ dotnet publish "$repo/src/Persistence.Store" -c Release -r linux-x64 --self-cont
 # tree had changes.
 echo "$(git -C "$repo" rev-parse HEAD)$(git -C "$repo" diff --quiet HEAD -- src || echo -dirty)" > "$work/pub/DEPLOYED"
 tar -czf "$work/store.tgz" -C "$work/pub" .
+deployed=$(cat "$work/pub/DEPLOYED")
+tag=${deployed:0:7}${deployed:40}  # the short commit, and -dirty when the tree had changes
+# Each run stages in its own new directory (mkdir fails if it exists), so a run refused at the lock can't have
+# overwritten what the running one copied.
+stage=/tmp/persistence-deploy.$claim.$$
+units=/etc/systemd/system
+shared_exe=/opt/persistence/store/persistence-store
+# Account-only, on the host: each named user's unit and build. Checked in full under the lock before anything is
+# installed or bound, so a refusal changes nothing; then installed, restarted and read back one unit at a time.
+each_unit="for u in ${users[*]:-}; do
+    if [ \$u = ubuntu ]; then unit=persistence-store.service; else unit=persistence-store-\$u.service; fi
+    b=/opt/persistence/store.\$u-$tag d=$units/\$unit.d"
+preflight="$each_unit
+    base=\$(grep -m1 '^ExecStart=/' $units/\$unit 2>/dev/null || true)
+    case \"\$base \" in
+      'ExecStart=$shared_exe '*) ;;
+      *) echo \"deploy refused: $units/\$unit doesn't start $shared_exe (\${base:-no unit file or no ExecStart}); nothing installed\" >&2; exit 6;;
+    esac
+    other=\$(grep -l '^ExecStart' \$d/*.conf 2>/dev/null | grep -v '/own-build.conf\$' || true)
+    if [ -n \"\$other\" ]; then echo \"deploy refused: another drop-in of \$unit sets ExecStart (\$other); its self moves it aside first, so own-build.conf is the one in force. Nothing installed\" >&2; exit 6; fi
+    if [ -e \$b ] && [ \"\$(cat \$b/DEPLOYED 2>/dev/null)\" != $deployed ]; then echo \"deploy refused: \$b exists and doesn't hold $deployed; nothing installed\" >&2; exit 6; fi
+  done"
+install_own="$each_unit
+    base=\$(grep -m1 '^ExecStart=/' $units/\$unit)
+    if [ -e \$b ]; then echo \"\$u: \$b already holds $deployed, reused\"; else
+      sudo mkdir \$b
+      sudo tar -xzf $stage/store.tgz -C \$b
+      sudo chown -R root:root \$b
+      sudo chmod -R a+rX \$b
+      sudo chmod 755 \$b/persistence-store
+    fi
+    was=\$(grep -h '^ExecStart=/' \$d/own-build.conf 2>/dev/null || true)
+    sudo mkdir -p \$d
+    printf '[Service]\\nExecStart=\\n%s\\n' \"\$(printf %s \"\$base\" | sed \"s#^ExecStart=$shared_exe #ExecStart=\$b/persistence-store #\")\" | sudo tee \$d/own-build.conf >/dev/null
+    echo \"\$u: \$unit now starts \$b/persistence-store (own-build.conf; was: \${was:-the shared build})\"
+    sudo systemctl daemon-reload
+    sudo systemctl restart \$unit
+  done
+  sleep 5
+  bad=
+  $each_unit
+    pid=\$(systemctl show -p MainPID --value \$unit)
+    exe=\$(sudo readlink /proc/\$pid/exe 2>/dev/null || true)
+    if [ \"\$exe\" = \$b/persistence-store ]; then echo \"\$unit: running \$exe\"; else echo \"\$unit: NOT verified: it runs \${exe:-nothing readable}, not \$b/persistence-store\"; bad=1; fi
+  done
+  [ -z \"\$bad\" ] || exit 7"
+# --shared-store: the shared build, and the units whose ExecStart (drop-ins applied) runs it.
+install_shared="sudo tar -xzf $stage/store.tgz -C /opt/persistence/store
+  sudo chown -R root:root /opt/persistence/store
+  sudo chmod -R a+rX /opt/persistence/store
+  sudo chmod 755 $shared_exe
+  on=
+  for s in \$(systemctl list-units --type=service --no-legend 'persistence-store*' | awk '{print \$1}'); do
+    case \"\$(systemctl show -p ExecStart --value \$s)\" in *'path=$shared_exe '*) on=\"\$on \$s\";; esac
+  done
+  echo \"--shared-store: republished /opt/persistence/store ($deployed); restarting the units that run it:\${on:- none}\"
+  for s in \$on; do sudo systemctl restart \$s; done
+  sleep 5
+  [ -z \"\$on\" ] || systemctl is-active \$on"
 # hook.py imports coordination.py (the locks and the fired-wake ledger) and, for ptask and run-due, claims.py and
 # cwd_exec.py; run-due launches every firing through run_line.py and refuses to fire without it; observe reads its opted-in
 # sources from observed.py; persistence-heartbeat@.service runs heartbeat.py from the same place (a beat with the switch
@@ -80,11 +157,9 @@ tar -czf "$work/store.tgz" -C "$work/pub" .
 # persistence-heartbeat@ unit, so naming one would install files and seed a ledger-since nothing of theirs reads; their
 # files change through them (#14953).
 py=(hook.py coordination.py claims.py cwd_exec.py run_line.py observed.py heartbeat.py concepts.py)
-# Each run stages in its own new directory (mkdir fails if it exists), so a run refused at the lock can't have
-# overwritten what the running one copied.
-stage=/tmp/persistence-deploy.$claim.$$
 ssh "$host" "mkdir -m 700 $stage"
 scp -q "$work/store.tgz" "${py[@]/#/$repo/scripts/claude-code/}" "$repo/scripts/claude-code/install-hooks.sh" "$host:$stage/"
+if [ -n "$shared" ]; then pre= install=$install_shared; else pre=$preflight install=$install_own; fi
 # Arden's B: the claim is checked again once the host's lock is held, right before anything is installed. The host
 # says LOCKED (lock held, authorization unchanged) and waits; this side re-runs `holds` in the caller's own claims and
 # answers go or stop. Anything but go, an EOF included, refuses there with nothing installed.
@@ -95,15 +170,12 @@ coproc REMOTE { ssh "$host" "set -e
   echo LOCKED
   read -r go || true
   if [ \"\$go\" != go ]; then echo \"deploy refused: claim $claim was no longer held once the host's lock was taken\" >&2; exit 3; fi
+  $pre
   if [ \"\${cur%% *}\" != $claim ]; then
     echo \"$claim \$(id -un) ${CLAUDE_CODE_SESSION_ID:-} \$(date -u +%Y-%m-%dT%H:%M:%SZ)\" | sudo tee $auth >/dev/null
     echo \"the host's deploy authorization is now bound to claim $claim\${cur:+ (was: \$cur)}\"
   fi
   echo \"claim $claim, session ${CLAUDE_CODE_SESSION_ID:-}, since \$(date -u +%Y-%m-%dT%H:%M:%SZ)\" | sudo tee /opt/persistence/.deploy.holder >/dev/null
-  sudo tar -xzf $stage/store.tgz -C /opt/persistence/store
-  sudo chown -R root:root /opt/persistence/store
-  sudo chmod -R a+rX /opt/persistence/store
-  sudo chmod 755 /opt/persistence/store/persistence-store
   stamp=\$(date -u +%Y%m%dT%H%M%SZ)
   sudo bash $stage/install-hooks.sh /home/ $stage \$stamp \"${py[*]}\" ${users[*]:-}
   for u in ${users[*]:-}; do
@@ -114,9 +186,7 @@ coproc REMOTE { ssh "$host" "set -e
       echo \"\$u: ledger-since NOT written (seed-ledger-since failed, above); its heartbeat judges every firing as before\"
     fi
   done
-  for s in \$(systemctl list-units --type=service --no-legend 'persistence-store*' | awk '{print \$1}'); do sudo systemctl restart \$s; done
-  sleep 5
-  systemctl is-active \$(systemctl list-units --type=service --all --no-legend 'persistence-store*' | awk '{print \$1}')"; }
+  $install"; }
 exec {from}<&"${REMOTE[0]}" {to}>&"${REMOTE[1]}"
 remote=$REMOTE_PID
 if IFS= read -r line <&"$from" && [ "$line" = LOCKED ]; then

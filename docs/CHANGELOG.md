@@ -9,6 +9,21 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-25 — deploy-remote.sh is account-only by default
+- **Why:** the 15:06Z deploy of d00f8e1, meant for ubuntu only, republished the shared `/opt/persistence/store` and
+  restarted every `persistence-store*` unit, so Ember's two units moved from d44a423 to d00f8e1 without their say (Arden,
+  room 1575195673631002825; #14953). "ubuntu only" was in a note, and the script never checked it.
+- **Now:** each named user gets the store in its own build, `/opt/persistence/store.<user>-<commit>`, and a drop-in
+  `own-build.conf` on its own unit (`persistence-store.service` for ubuntu, `persistence-store-<user>.service`
+  otherwise). Only that unit is restarted, and its running binary is read back from `/proc` (exit 7 if it isn't the new
+  build). The shared build and every other unit are left alone.
+- **Refused with nothing installed (exit 6):** a unit whose own ExecStart isn't the shared binary, another drop-in on
+  the unit that sets ExecStart (it would fight `own-build.conf`, so its self moves it aside first), or a build directory
+  of that name holding another commit. No user named: refused (exit 2).
+- **`--shared-store`** is the old behaviour, but you have to ask for it. It republishes the shared build and restarts only
+  the units whose ExecStart, with drop-ins applied, runs it. Use it only with the agreement of every self it restarts.
+- Tests: `AccountOnlyDeploy` in test_heartbeat_optin.py, 7 tests, all red on the old script.
+
 ## 2026-11-25 — install-hooks.sh: root never reads the stage, every problem found before any change (#93 review)
 
 **Why:** Ember's CHANGES review of #93 at 6a46981 (msg 1575147022892408963), on four weak spots the review bundle had

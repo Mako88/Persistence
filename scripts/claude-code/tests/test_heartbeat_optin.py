@@ -409,8 +409,11 @@ class FakeHost:
     TEXT = (REPO / "deploy-remote.sh").read_text()
 
     def fake_host(self):
-        # The script itself, run against fakes: ssh runs its remote command locally with /tmp, /home and /opt/persistence
-        # moved into a scratch dir; sudo drops the root-only chown/chmod/systemctl; dotnet, scp and sleep are stand-ins.
+        # The script itself, run against fakes: ssh runs its remote command locally with /tmp, /home, /opt/persistence and
+        # /etc/systemd/system moved into a scratch dir; sudo drops the root-only chown/chmod; dotnet, scp and sleep are
+        # stand-ins. systemctl records every call in systemctl.log and answers list-units from `units` and `show -p
+        # ExecStart` from execstart.<unit>; reading /proc/<pid>/exe answers what the unit's own-build.conf starts, as
+        # systemd would run it.
         # The user is whoever runs the test, so `install -o` needs no root. Nothing outside the scratch dir is touched.
         # The caller holds a deploy claim in a scratch state dir (PERSISTENCE_STATE_DIR), as this session.
         import pwd, os, uuid
@@ -420,17 +423,25 @@ class FakeHost:
         self.w = w = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, w)
         bins, self.tmp, self.dest = w / "bin", w / "tmp", w / "home" / user / ".claude" / "persistence"
-        self.opt, self.state = w / "opt" / "persistence", w / "state"
-        for d in (bins, self.tmp, self.dest, self.opt / "store", self.state):
+        self.opt, self.state, self.etc = w / "opt" / "persistence", w / "state", w / "etc" / "systemd" / "system"
+        for d in (bins, self.tmp, self.dest, self.opt / "store", self.state, self.etc):
             d.mkdir(parents=True)
+        # This user's store unit, started from the shared build as every unit is until a deploy gives it its own.
+        self.unit = "persistence-store.service" if user == "ubuntu" else f"persistence-store-{user}.service"
+        self.unit_file(self.unit)
         fakes = {
             "dotnet": 'while [ "$1" != "-o" ]; do shift; done; mkdir -p "$2"; echo x > "$2/persistence-store"',
             "scp": (f'shift; a=("$@"); d="${{a[-1]#*:}}"; d=${{d//\\/tmp\\//{self.tmp}/}}; unset "a[-1]"; '
                     f'cp "${{a[@]}}" "$d"'),
             "ssh": (f'c="$2"; c=${{c//\\/tmp\\//{self.tmp}/}}; c=${{c//\\/home\\//{w}/home/}}; '
-                    f'c=${{c//\\/opt\\/persistence\\//{self.opt}/}}; exec bash -c "$c"'),
-            "sudo": '[ "$1" = -u ] && shift 2 || export SUDO_USER=$(id -un); case "$1" in chown|chmod|systemctl) exit 0;; esac; exec "$@"',
-            "systemctl": "exit 0", "sleep": "exit 0"}
+                    f'c=${{c//\\/opt\\/persistence\\//{self.opt}/}}; c=${{c//\\/etc\\/systemd\\/system\\//{self.etc}/}}; '
+                    f'exec bash -c "$c"'),
+            "sudo": ('[ "$1" = -u ] && shift 2 || export SUDO_USER=$(id -un); case "$1" in chown|chmod) exit 0;; '
+                     f'readlink) grep -h "^ExecStart=/" {self.etc}/*.d/own-build.conf | tail -1 | cut -d" " -f1 | cut -d= -f2; exit 0;; '
+                     'esac; exec "$@"'),
+            "systemctl": (f'echo "$*" >> {w}/systemctl.log; case "$1 $2 $3" in "list-units "*) cat {w}/units 2>/dev/null;; '
+                          f'"show -p MainPID") echo 4242;; "show -p ExecStart") cat "{w}/execstart.${{@: -1}}" 2>/dev/null;; esac; exit 0'),
+            "sleep": "exit 0"}
         for name, body in fakes.items():
             (bins / name).write_text(f"#!/bin/bash\n{body}\n")
             (bins / name).chmod(0o755)
@@ -444,6 +455,13 @@ class FakeHost:
         self.env = dict(os.environ, PATH=f"{bins}:{os.environ['PATH']}", PERSISTENCE_STATE_DIR=str(self.state),
                         CLAUDE_CODE_SESSION_ID=self.me)
 
+    def unit_file(self, unit):
+        (self.etc / unit).write_text(f"[Service]\nExecStart={self.opt}/store/persistence-store serve --socket /s/{unit}.sock\n")
+
+    def systemctl_calls(self):
+        log = self.w / "systemctl.log"
+        return log.read_text().splitlines() if log.exists() else []
+
     def deploy(self, *args, check=True, env=None):
         args = args or ("--claim", self.claim, "fakehost", self.user)
         run = subprocess.run(["bash", str(REPO / "deploy-remote.sh"), *args], env=env or self.env, capture_output=True,
@@ -455,6 +473,9 @@ class FakeHost:
     def untouched(self):
         self.assertEqual((self.dest / "heartbeat.py").read_text(), "# a local edit\n")
         self.assertFalse((self.opt / "store" / "persistence-store").exists())
+        self.assertEqual(sorted(p.name for p in self.opt.glob("store.*")), [])
+        self.assertFalse((self.etc / f"{self.unit}.d").exists())
+        self.assertFalse(any("restart" in c for c in self.systemctl_calls()))
         self.assertFalse((self.dest / "previous").exists())
 
 
@@ -709,6 +730,93 @@ class HostWideDeploy(FakeHost, unittest.TestCase):
 
     def untouched_store(self):
         self.assertFalse((self.opt / "store" / "persistence-store").exists())
+        self.assertEqual(list(self.opt.glob("store.*")), [])
+
+
+class AccountOnlyDeploy(FakeHost, unittest.TestCase):
+    """2026-11-25 (Arden 1575195673631002825): a deploy of d00f8e1 meant for ubuntu only republished the shared
+    /opt/persistence/store and restarted Ember's units onto it. By default a deploy now touches only the named account's
+    own build and unit; the shared build and every other unit need --shared-store."""
+
+    def setUp(self):
+        self.fake_host()
+        for other in ("persistence-store-ember.service", "persistence-store-ember-test.service"):
+            self.unit_file(other)
+            (self.w / f"execstart.{other}").write_text(
+                f"{{ path={self.opt}/store/persistence-store ; argv[]={self.opt}/store/persistence-store serve ; }}\n")
+        (self.w / "units").write_text("".join(f"{u} loaded active running x\n" for u in
+                                              (self.unit, "persistence-store-ember.service", "persistence-store-ember-test.service")))
+        head = subprocess.run(["git", "-C", str(REPO), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        self.build = self.opt / f"store.{self.user}-{head[:7]}"
+
+    def restarted(self):
+        return [c.split()[-1] for c in self.systemctl_calls() if c.startswith("restart ")]
+
+    def test_the_named_account_gets_its_own_build_and_no_other_unit_is_touched(self):
+        out = self.deploy().stdout
+        self.assertFalse((self.opt / "store" / "persistence-store").exists(), "the shared build was republished")
+        self.assertTrue((self.build / "persistence-store").exists(), out)
+        self.assertTrue((self.build / "DEPLOYED").read_text().startswith(self.build.name.rsplit("-", 1)[1]))
+        conf = (self.etc / f"{self.unit}.d" / "own-build.conf").read_text()
+        self.assertIn(f"\nExecStart=\nExecStart={self.build}/persistence-store serve --socket /s/{self.unit}.sock\n", conf)
+        self.assertEqual(self.restarted(), [self.unit])
+        self.assertFalse(any("list-units" in c for c in self.systemctl_calls()), "no other unit is even looked for")
+        self.assertIn(f"{self.unit}: running {self.build}/persistence-store", out)
+        again = self.deploy().stdout  # the same commit again: the build is reused, the unit restarted once more
+        self.assertIn("reused", again)
+        self.assertIn(f"was: ExecStart={self.build}/persistence-store", again)
+        self.assertEqual(self.restarted(), [self.unit, self.unit])
+
+    def test_no_user_named_is_refused_without_the_flag(self):
+        (self.dest / "heartbeat.py").write_text("# a local edit\n")
+        run = self.deploy("--claim", self.claim, "fakehost", check=False)
+        self.assertEqual(run.returncode, 2, run.stderr)
+        self.assertIn("--shared-store", run.stderr)
+        self.untouched()
+
+    def test_another_drop_in_setting_exec_start_refuses_before_anything_is_installed(self):
+        # Arden's own build is a drop-in of their naming (arden-c377df5.conf): a deploy can't quietly outrank it.
+        (self.dest / "heartbeat.py").write_text("# a local edit\n")
+        d = self.etc / f"{self.unit}.d"
+        d.mkdir()
+        (d / "arden-c377df5.conf").write_text("[Service]\nExecStart=\nExecStart=/elsewhere serve\n")
+        run = self.deploy(check=False)
+        self.assertEqual(run.returncode, 6, run.stderr)
+        self.assertIn("arden-c377df5.conf", run.stderr)
+        self.assertEqual([p.name for p in d.iterdir()], ["arden-c377df5.conf"])
+        (d / "arden-c377df5.conf").unlink(); d.rmdir()
+        self.untouched()
+        self.assertFalse((self.opt / ".deploy.claim").exists(), "refused before the authorization was bound")
+
+    def test_a_unit_not_started_from_the_shared_build_refuses(self):
+        (self.etc / self.unit).write_text("[Service]\nExecStart=/somewhere/else serve\n")
+        run = self.deploy(check=False)
+        self.assertEqual(run.returncode, 6, run.stderr)
+        self.assertEqual(list(self.opt.glob("store.*")), [])
+        self.assertEqual(self.restarted(), [])
+
+    def test_a_build_directory_holding_another_commit_refuses(self):
+        self.build.mkdir()
+        (self.build / "DEPLOYED").write_text("0000000000000000000000000000000000000000\n")
+        run = self.deploy(check=False)
+        self.assertEqual(run.returncode, 6, run.stderr)
+        self.assertEqual(self.restarted(), [])
+        self.assertEqual((self.build / "DEPLOYED").read_text(), "0000000000000000000000000000000000000000\n")
+
+    def test_a_unit_that_doesnt_come_back_on_its_build_fails_the_deploy(self):
+        fake_sudo = self.w / "bin" / "sudo"
+        fake_sudo.write_text(fake_sudo.read_text().replace("readlink) grep", "readlink) echo /old/build; exit 0; grep"))
+        run = self.deploy(check=False)
+        self.assertEqual(run.returncode, 7, run.stdout)
+        self.assertIn("NOT verified: it runs /old/build", run.stdout)
+
+    def test_shared_store_is_explicit_and_restarts_only_the_units_on_it(self):
+        (self.w / f"execstart.{self.unit}").write_text(f"{{ path={self.build}/persistence-store ; }}\n")  # on its own build
+        out = self.deploy("--shared-store", "--claim", self.claim, "fakehost").stdout
+        self.assertTrue((self.opt / "store" / "persistence-store").exists())
+        self.assertEqual(sorted(self.restarted()), ["persistence-store-ember-test.service", "persistence-store-ember.service"])
+        self.assertIn("--shared-store: republished", out)
+        self.assertFalse((self.etc / f"{self.unit}.d").exists())
 
 if __name__ == "__main__":
     unittest.main()
