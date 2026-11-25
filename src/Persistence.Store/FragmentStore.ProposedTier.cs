@@ -212,9 +212,31 @@ internal sealed partial class FragmentStore
     /// <summary>
     /// The content words of <paramref name="text"/>, crudely stemmed: four letters or more, not all digits, not in
     /// <see cref="Unsaying"/>, a plural s dropped and cut to six letters, so "deployed" meets "deploy" and "reboots" "reboot".
+    /// Words are split on <see cref="ContextFragmentRepository.IsPrefixChar"/>, the rule the rarity lookup checks, so every
+    /// stem is one it can count: "12m²" gives "12m", never a word the lookup refuses.
     /// </summary>
     internal static HashSet<string> Stems(string text) =>
-        WordSequence(text).Where(w => w.Length >= 4 && !w.All(char.IsDigit) && !Unsaying.Contains(w)).Select(Stem).ToHashSet();
+        PrefixWords(text).Where(w => w.Length >= 4 && !w.All(char.IsDigit) && !Unsaying.Contains(w)).Select(Stem).ToHashSet();
+
+    private static IEnumerable<string> PrefixWords(string text)
+    {
+        var lower = text.ToLowerInvariant();
+        for (var i = 0; i < lower.Length;)
+        {
+            var start = i;
+            while (i < lower.Length && ContextFragmentRepository.IsPrefixChar(lower[i]))
+            {
+                i++;
+            }
+
+            if (i > start)
+            {
+                yield return lower[start..i];
+            }
+
+            i = Math.Max(i, start + 1);
+        }
+    }
 
     private static string Stem(string w)
     {

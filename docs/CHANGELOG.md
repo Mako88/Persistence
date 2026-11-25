@@ -25,6 +25,9 @@ Claude showed the same 3 under every message; the voice-message attachment path 
 - **Matching:** attachment notes, URLs and file paths are taken out before names are matched (a concept named by a
   path is still found by it); an identifier concept like `#81` matches `#81`, not the number 81.
 - **Hook:** accepted facts stay on top; proposals go after recall. A store older than `--split` gets the old question.
+- **Superscripts and fractions** (Arden's CHANGES at 081f9ce): "12m²" in a message threw in the rarity lookup (the word
+  pattern took Unicode No, the full-text prefix check only L and Nd), the server answered 3 and the hook dropped both
+  tiers. Stems now split on the lookup's own rule (`ContextFragmentRepository.IsPrefixChar`), so "12m²" gives "12m".
 - **After, same replay:** 8 proposals shown on 5 of the 13 messages, 8 on-topic, 0 wrong as stated; "hello again"
   shows none. The cost: 22 of the 25 on-topic lines the old block showed are no longer shown (below the floor). The floor
   was chosen on these 13 and has not yet been checked on wakes it hasn't seen.

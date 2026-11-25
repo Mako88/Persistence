@@ -217,4 +217,105 @@ public sealed class ConceptProposedTierTests : IDisposable
         Assert.DoesNotContain($"#{late} ", await store.ConceptBlockAsync("John and the crop circles decoys", asOf: before));
         Assert.Contains((await store.ConceptRecallAsync("John and the crop circles decoys", floor: 0.5)).Candidates, c => c.Fact.Id == late);
     }
+
+    /// <summary>A glider store: one accepted fact and one proposal about the glider, filler so the index knows common words.</summary>
+    private async Task<(FragmentStore Store, long Accepted, long Proposed)> GliderAsync()
+    {
+        var store = await OpenAsync();
+        for (var i = 0; i < 5; i++)
+        {
+            await FragmentAsync(store, $"Routine note {i}: the main branch was reviewed and merged.");
+        }
+
+        var source = await FragmentAsync(store, "The glider wing is sized for a heavy pilot.");
+        await store.ConceptAsync("glider", "thing");
+        await store.ConfirmKindAsync("glider", "thing");
+        var accepted = await store.AddFactAsync("glider", "has a wing sized for a heavy pilot", [source]);
+        Assert.Equal("active", accepted.Status);
+        var proposed = await ProposeAsync(store, "glider", "the glider wing area was measured for a heavy pilot");
+        return (store, accepted.Id, proposed);
+    }
+
+    // Superscripts, fractions and Roman numerals are Unicode numbers but not decimal digits: the word pattern took them,
+    // the full-text prefix check refused them, and concept recall threw (Arden's CHANGES on #92 at 081f9ce).
+    public static TheoryData<string> NumberLike => new()
+    {
+        "The glider wing area is 12m² for a heavy pilot.",
+        "The glider wing is ½ a span wider for a heavy pilot.",
+        "glider ²",
+        "The glider wing: x²term, ³⁄₄ chord, Ⅻ ribs and 12m² area for a heavy pilot.",
+    };
+
+    [Theory]
+    [MemberData(nameof(NumberLike))]
+    public async Task A_message_with_superscripts_or_fractions_keeps_both_tiers(string message)
+    {
+        var (store, accepted, proposed) = await GliderAsync();
+
+        var recall = await store.ConceptRecallAsync(message, floor: 0.01);
+        Assert.Contains($"#{accepted} has a wing sized for a heavy pilot", recall.Top);
+        Assert.Contains(recall.Candidates, c => c.Fact.Id == proposed);
+        Assert.All(FragmentStore.Stems(message), w => Assert.True(w.All(char.IsLetterOrDigit), w));
+    }
+
+    [Fact]
+    public async Task The_store_server_answers_a_superscript_message_with_the_accepted_facts()
+    {
+        // The hook asks the running store over its socket; a thrown lookup came back as code 3 and the hook dropped
+        // the whole concept block, accepted facts too. This runs the real `persistence-store serve`.
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        var (_, accepted, _) = await GliderAsync();
+        var socket = Path.Combine(Path.GetTempPath(), $"tier-{Guid.NewGuid():N}.sock");
+        var start = new System.Diagnostics.ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        foreach (var arg in new[] { Path.Combine(AppContext.BaseDirectory, "persistence-store.dll"), "serve", "--socket", socket, "--db", db })
+        {
+            start.ArgumentList.Add(arg);
+        }
+
+        foreach (var key in start.Environment.Keys.Where(k => k.StartsWith("PERSISTENCE_") || k == "CLAUDE_CODE_SESSION_ID").ToList())
+        {
+            start.Environment.Remove(key);
+        }
+
+        using var server = System.Diagnostics.Process.Start(start)!;
+        try
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+            while (!File.Exists(socket) && DateTime.UtcNow < deadline && !server.HasExited)
+            {
+                await Task.Delay(50);
+            }
+
+            Assert.True(File.Exists(socket), "the store server did not open its socket within 30 s");
+            using var client = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.Unix, System.Net.Sockets.SocketType.Stream, System.Net.Sockets.ProtocolType.Unspecified);
+            await client.ConnectAsync(new System.Net.Sockets.UnixDomainSocketEndPoint(socket));
+            await using var stream = new System.Net.Sockets.NetworkStream(client);
+            var ask = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                args = new[] { "concept", "touched", "--split", "--text", "-" },
+                stdin = "The glider wing area is 12m², ½ a span wider, for a heavy pilot.",
+            });
+            await stream.WriteAsync(System.Text.Encoding.UTF8.GetBytes(ask + "\n"));
+            using var reader = new StreamReader(stream);
+            var reply = System.Text.Json.JsonDocument.Parse(await reader.ReadLineAsync() ?? "{}").RootElement;
+
+            Assert.True(0 == reply.GetProperty("code").GetInt32(), reply.GetProperty("err").GetString());
+            var parts = System.Text.Json.JsonDocument.Parse(reply.GetProperty("out").GetString()!).RootElement;
+            Assert.Contains($"#{accepted} has a wing sized for a heavy pilot", parts.GetProperty("top").GetString());
+        }
+        finally
+        {
+            server.Kill();
+            await server.WaitForExitAsync();
+            File.Delete(socket);
+        }
+    }
 }
