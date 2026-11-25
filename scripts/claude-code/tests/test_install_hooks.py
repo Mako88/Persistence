@@ -13,7 +13,11 @@ the temp dir: a planted symlink points at one, and it must come through unchange
 The script runs everything as another account under `env -i PATH=/usr/bin:/bin bash --noprofile --norc -c`. The shim
 logs that prefix and checks it, then puts its own dir back at the front of that PATH (and passes TEST_ROOT and FAIL_ON
 through), so the guarded writers still stand in front of the real ones. FAIL_ON names a path: a shim writer given it
-fails, which is how a test makes a step fail after every check passed (Ember's review of #93)."""
+fails, which is how a test makes a step fail after every check passed (Ember's review of #93); FAIL_CMD=<name> limits
+that to one writer. FAIL_AFTER names a path the same way, but the writer does its work first and then fails, and
+FAIL_AS=<name> makes the shim sudo fail a script run under that name (`bash -c <script> <name>`). Those three stand in
+for a step that dies after its backup landed, after its rename, and a look afterwards that fails (Ember's review of #93
+at 735f69b: the failure report must say what it saw, not what the step order implies)."""
 import getpass
 import os
 import shutil
@@ -39,7 +43,10 @@ for a in "$@"; do
   if [ -n "$skip" ]; then skip=; continue; fi
   case $a in -c) skip=1; continue;; -*|[0-7][0-7][0-7]|[A-Za-z_]*=*) continue;; esac
   case $a in */*) inside "$a" || { echo "test shim: refused $a, outside $TEST_ROOT" >&2; exit 97; };; esac
-  if [ -n "${FAIL_ON:-}" ] && [ "$(realpath -ms -- "$a")" = "$FAIL_ON" ]; then echo "test shim: injected failure at $a" >&2; exit 1; fi
+  if [ -n "${FAIL_ON:-}" ] && [ "$(realpath -ms -- "$a")" = "$FAIL_ON" ] && [ "${FAIL_CMD:-${0##*/}}" = "${0##*/}" ]; then
+    echo "test shim: injected failure at $a" >&2; exit 1
+  fi
+  if [ -n "${FAIL_AFTER:-}" ] && [ "$(realpath -ms -- "$a")" = "$FAIL_AFTER" ] && [ "${FAIL_CMD:-${0##*/}}" = "${0##*/}" ]; then after=1; fi
 done
 """
 
@@ -52,14 +59,19 @@ SUDO = "#!/usr/bin/env bash\n" + r"""[ "$1" = -u ] || { echo "test shim: sudo wi
 u=$2; shift 2
 """ + GUARD + r"""pre=; for a; do pre="$pre${pre:+ }$a"; [ "$a" = -c ] && break; done
 printf '%s %s\n' "$u" "$pre" >> "$SUDO_LOG"
+name=; seen=; for a; do [ -n "$seen" ] && { [ "$seen" = 2 ] && { name=$a; break; }; seen=2; continue; }; [ "$a" = -c ] && seen=1; done
+if [ -n "${FAIL_AS:-}" ] && [ "$name" = "$FAIL_AS" ]; then echo "test shim: injected failure running $name as $u" >&2; exit 1; fi
+locked=; if [ "$name" = inspect ] && [ -n "${LOCK_FOR_INSPECT:-}" ]; then locked=$LOCK_FOR_INSPECT; fi
 if [ "$1 $2 $3" = "env -i PATH=/usr/bin:/bin" ]; then
   shift 3; set -- env -i "PATH=$SHIMS:/usr/bin:/bin" "TEST_ROOT=$TEST_ROOT" "FAIL_ON=${FAIL_ON:-}" \
-    "PLANT_LINK=${PLANT_LINK:-}" "$@"
+    "FAIL_CMD=${FAIL_CMD:-}" "FAIL_AFTER=${FAIL_AFTER:-}" "PLANT_LINK=${PLANT_LINK:-}" "$@"
 fi
 h=$TEST_HOMES/$u
 [ -d "$h" ] && chmod 700 "$h"
 [ "$u" = "${STAGE_OWNER_UNLOCKS:-}" ] && chmod 700 "$TEST_STAGE"
+[ -n "$locked" ] && chmod 000 "$locked"
 rc=0; "$@" || rc=$?
+[ -n "$locked" ] && chmod 700 "$locked"
 [ -d "$h" ] && chmod 000 "$h"
 [ "$u" = "${STAGE_OWNER_UNLOCKS:-}" ] && chmod 000 "$TEST_STAGE"
 exit $rc
@@ -86,7 +98,12 @@ class InstallHooksTest(unittest.TestCase):
             # that appears after every check passed (the user racing their own install step).
             plant = ('[ "${0##*/}" = cp ] && [ -n "${PLANT_LINK:-}" ] && /bin/ln -s "${PLANT_LINK#*=}" "${PLANT_LINK%%=*}"\n'
                      if name == "cp" else "")
-            (shims / name).write_text("#!/usr/bin/env bash\n" + GUARD + plant + f'exec {real} "$@"\n')
+            # FAIL_AFTER=<path>: the writer given it does its work, then fails, standing in for a step that dies after
+            # its last real change (Ember's review of #93 at 735f69b).
+            (shims / name).write_text("#!/usr/bin/env bash\nafter=\n" + GUARD + plant
+                                      + f'{real} "$@" || exit $?\n'
+                                      + '[ -n "$after" ] && { echo "test shim: injected failure after $0 ran" >&2; exit 1; }\n'
+                                      + 'exit 0\n')
         (shims / "sudo").write_text(SUDO)
         for p in shims.iterdir():
             p.chmod(0o755)
@@ -344,6 +361,7 @@ class InstallHooksTest(unittest.TestCase):
         (self.d / "hook.py").write_text("old hook\n")
         (self.d / "coordination.py").write_text("old coordination\n")
         self.env["FAIL_ON"] = str((self.d / "coordination.py").resolve())
+        self.env["FAIL_CMD"] = "cp"  # the backup's copy fails, so neither the backup nor the new version landed
         r = self.run_script(users=[self.user, peer], files=files, check=False)
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertEqual(r.stdout, "")
@@ -352,8 +370,7 @@ class InstallHooksTest(unittest.TestCase):
         self.assertIn("test shim: injected failure", lines[0] + lines[1])
         tail = [line for line in lines if not line.startswith(("STOPPED", "test shim", "mv:"))]
         self.assertEqual(tail, [
-            f"{self.user}: coordination.py: its only change to {self.d}/coordination.py is the last step, a rename, "
-            "which didn't happen, so it is as it was",
+            self.seen("coordination.py", "a regular file, not the new version", "absent"),
             f"{self.user}: replaced: hook.py (the copies they replaced are in {self.d}/previous/{STAMP})",
             f"not attempted, {self.user}: claims.py",
             f"not attempted, {peer}: hook.py coordination.py claims.py"])
@@ -362,6 +379,66 @@ class InstallHooksTest(unittest.TestCase):
         self.assertFalse((self.d / "claims.py").exists())
         self.assertEqual(list(dp.iterdir()), [])
         self.assertEqual([p.name for p in self.d.iterdir() if p.name.startswith(".")], [], "no temp file left")
+
+    def seen(self, f, target, backup, d=None):
+        d = d or self.d
+        return (f"{self.user}: {f}, seen as {self.user} after the failure: {d}/{f} is {target}; "
+                f"the backup's name {d}/previous/{STAMP}/{f}: {backup}")
+
+    def failed_replacement(self, **env):
+        # One file to replace, made to fail somewhere in its install step; returns the report's lines after STOPPED.
+        (self.d / "hook.py").write_text("old hook\n")
+        self.env.update(env)
+        r = self.run_script(files=["hook.py"], check=False)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertEqual(r.stdout, "")
+        lines = r.stderr.splitlines()
+        self.assertTrue(lines[0].startswith(f"STOPPED at {self.user}: hook.py: "), lines)
+        self.assertNotIn("as it was", r.stderr)
+        return [line for line in lines if not line.startswith(("STOPPED", "test shim", "mv:", "ln:", "cp:"))]
+
+    def test_a_failure_after_the_backup_landed_says_it_landed(self):
+        # Ember at 735f69b: the step failed after ln published the backup, before mv. The old report omitted the
+        # backup. Now it's looked at: there, and the target isn't the new version.
+        tail = self.failed_replacement(FAIL_ON=str((self.d / "hook.py").resolve()), FAIL_CMD="mv")
+        self.assertEqual(tail, [self.seen("hook.py", "a regular file, not the new version", "there (a regular file)"),
+                                f"{self.user}: no hook file changed"])
+        self.assertEqual((self.d / "hook.py").read_text(), "old hook\n")
+        self.assertEqual((self.d / "previous" / STAMP / "hook.py").read_text(), "old hook\n", "the backup is kept")
+
+    def test_a_failure_after_the_rename_says_the_new_version_is_there(self):
+        # Ember at 735f69b: mv succeeded and the step failed before it said "replaced"; the old report said the target
+        # "is as it was", which was false.
+        tail = self.failed_replacement(FAIL_AFTER=str((self.d / "hook.py").resolve()), FAIL_CMD="mv")
+        self.assertEqual(tail, [self.seen("hook.py", "the new version: the rename happened", "there (a regular file)"),
+                                f"{self.user}: no hook file changed"])
+        self.assertEqual((self.d / "hook.py").read_text(), "new hook.py\n")
+
+    def test_a_look_that_fails_says_unknown_not_a_guess(self):
+        tail = self.failed_replacement(FAIL_ON=str((self.d / "hook.py").resolve()), FAIL_CMD="mv", FAIL_AS="inspect")
+        why = f"unknown (looking as {self.user} failed: test shim: injected failure running inspect as {self.user})"
+        self.assertEqual(tail, [self.seen("hook.py", why, why), f"{self.user}: no hook file changed"])
+
+    def test_a_path_that_cant_be_looked_at_is_unknown_not_absent(self):
+        # stat failing for any reason but "no such file" (here the stamp dir can't be searched during the look) is
+        # reported with stat's words, never as absent.
+        sd = self.d / "previous" / STAMP
+        tail = self.failed_replacement(FAIL_ON=str((self.d / "hook.py").resolve()), FAIL_CMD="mv",
+                                       LOCK_FOR_INSPECT=str(sd))
+        self.assertEqual(len(tail), 2, tail)
+        self.assertTrue(tail[0].startswith(self.seen("hook.py", "a regular file, not the new version", "unknown (")),
+                        tail)
+        self.assertIn("Permission denied", tail[0])
+        self.assertEqual((sd / "hook.py").read_text(), "old hook\n")
+
+    def test_a_symlinked_target_is_reported_as_the_link_not_what_it_points_at(self):
+        before = self.canary_state()
+        (self.d / "hook.py").symlink_to(self.canary / "secret")
+        self.env.update(FAIL_ON=str(self.d / "hook.py"), FAIL_CMD="cp")
+        r = self.run_script(files=["hook.py"], check=False, lock=False)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn(self.seen("hook.py", "a symbolic link, not the new version", "absent"), r.stderr)
+        self.assertEqual(self.canary_state(), before)
 
     def test_a_run_that_only_adds_new_files_says_so(self):
         # Ember's blocker 4: at 6a46981 a run whose files were all new said "no hook file changed".

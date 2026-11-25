@@ -27,7 +27,10 @@
 # which must not exist yet (a link there included). Any problem found is named, with all the others, and nothing is
 # installed. (3) The files are installed, each in one step as its user: a temp file in the same folder, renamed over
 # the old one (`mv -T` replaces a symlink, never follows it), after the old one is kept. If a step fails anyway, the run
-# stops there and names the file that failed, what had landed, and every user and file it didn't reach.
+# stops there and names the file that failed, what had landed, and every user and file it didn't reach. For the file
+# that failed it reports what is there, looked at as that user after the failure, not what the step order implies
+# (Ember's review of #93 at 735f69b, msg 1575154140798255107): whether the file now holds the new bytes, and whether a
+# backup of the old one is at its name. A look that fails says unknown. A backup that landed is left where it is.
 set -euo pipefail
 homes=${1:?usage}
 homes=${homes%/}
@@ -112,6 +115,47 @@ mv -f -T -- "$tmp" "$t"; tmp=
 echo "$plan"
 EOF
 
+# Run by the user after an install step failed: inspect <target> <backup name>, with the new bytes on stdin. Prints
+# two lines, "target: ..." and "backup: ...", each what it saw: a kind (stat, not following a link), absent only when
+# stat said there is no such file, and otherwise unknown with stat's own words. The target is compared with the new
+# bytes only if it is a regular file. It changes nothing.
+read -r -d '' inspect <<'EOF' || true
+set -u
+kind() {
+  local k
+  if k=$(LC_ALL=C stat -c %F -- "$1" 2>&1); then echo "$k"
+  elif [[ $k == *"No such file or directory" ]]; then echo absent
+  else echo "unknown (${k//$'\n'/ })"; fi
+}
+k=$(kind "$1")
+case $k in
+  "regular file"|"regular empty file")
+    cmp -s - "$1"; rc=$?
+    case $rc in
+      0) t="the new version: the rename happened";;
+      1) t="a regular file, not the new version";;
+      *) t="unknown (a regular file that couldn't be compared with the new version)";;
+    esac;;
+  absent|unknown*) t=$k;;
+  *) t="a $k, not the new version";;
+esac
+echo "target: $t"
+k=$(kind "$2")
+case $k in absent|unknown*) echo "backup: $k";; *) echo "backup: there (a $k)";; esac
+EOF
+observe() {  # observe <user> <hook dir> <file>: what is there now, looked at as the user
+  local u=$1 d=$2 f=$3 o t b
+  local leaf=$d/previous/$stamp/$f
+  if o=$(as "$u" "$inspect" inspect "$d/$f" "$leaf" < "$snap/$f" 2>&1); then
+    t=$(sed -n 's/^target: //p' <<< "$o") b=$(sed -n 's/^backup: //p' <<< "$o")
+  else
+    o=${o//$'\n'/ }
+    t= b=
+  fi
+  : "${t:=unknown (looking as $u failed${o:+: $o})}" "${b:=unknown (looking as $u failed${o:+: $o})}"
+  echo "$u: $f, seen as $u after the failure: $d/$f is $t; the backup's name $leaf: $b"
+}
+
 # (2) Check every user and file before anything changes.
 for u in "${users[@]}"; do
   d=$homes/$u/.claude/persistence
@@ -149,7 +193,7 @@ for ((i = 0; i < ${#users[@]}; i++)); do
       continue
     fi
     echo "STOPPED at $u: $f: ${out:-failed with no message}" >&2
-    echo "$u: $f: its only change to $d/$f is the last step, a rename, which didn't happen, so it is as it was" >&2
+    observe "$u" "$d" "$f" >&2
     summary "$u" "$d" >&2
     left=$(for ((k = j + 1; k < ${#files[@]}; k++)); do printf ' %s' "${files[k]}"; done)
     [ -n "$left" ] && echo "not attempted, $u:$left" >&2

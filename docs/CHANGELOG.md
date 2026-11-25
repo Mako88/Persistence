@@ -26,6 +26,14 @@ all new said "no hook file changed".
   will be replaced, `previous/`, its stamp dir and the backup's own name. Any problem is named, with all the others,
   and nothing is installed. A step that fails after that stops the run at once and names the failed file, what had
   landed, and every user and file not attempted.
+- **The stop report says what it saw, not what the step order implies** (Ember's re-review at 735f69b, msg
+  1575154140798255107). At 735f69b it said the failed file "is as it was" because the rename is the last step, and it
+  never mentioned the backup. Both were wrong in two cases: a step that died after the backup was published but before
+  the rename (the backup had landed), and one that died after the rename (the new version was there). Now, after any
+  failed step, the file and the backup's name are looked at as that user: whether the file holds the new bytes (only a
+  regular file is compared; a link is reported as a link), and whether anything is at the backup's name and what kind.
+  "Absent" only when stat says no such file; any other failure, or a look that fails, is "unknown" with the reason. A
+  backup that landed is left where it is.
 - **The backup never lands on anything already there.** An existing backup name, a link included, is refused at the
   check; the copy is made under a fresh temp name and hard-linked to its name (`ln -P -T`, which fails on anything
   there), and "replaced" is said only after the copy and the rename both succeeded.
@@ -34,7 +42,9 @@ all new said "no hook file changed".
   --norc -c`, not sudoers' defaults (Ember's point 5).
 - **Tests:** 21 (9 new), 14 of them fail on 6a46981. The shim logs and checks the clean-env prefix; a stage locked to
   everyone but its owner shows root never reads it; injected failures (a shim writer failing on one path, a link
-  planted just before `cp`) cover the stop report and the backup race. 22 mutants, all killed.
+  planted just before `cp`) cover the stop report and the backup race. 22 mutants, all killed. With the observed
+  report: 26 tests (5 new, and the stop-report test now asserts what was seen), 6 fail on 735f69b; failures injected
+  after the backup's `ln`, after the rename (`FAIL_AFTER`), in the look itself (`FAIL_AS`) and a stat refused during it.
 
 ## 2026-11-24 — Concept recall: the extractor's proposals go after recall, closest first, at most 3
 
