@@ -409,8 +409,12 @@ class FakeHost:
     TEXT = (REPO / "deploy-remote.sh").read_text()
 
     def fake_host(self):
-        # The script itself, run against fakes: ssh runs its remote command locally with /tmp, /home and /opt/persistence
-        # moved into a scratch dir; sudo drops the root-only chown/chmod/systemctl; dotnet, scp and sleep are stand-ins.
+        # The script itself, run against fakes: ssh runs its remote command locally with /tmp, /home, /opt/persistence and
+        # /etc/systemd/system moved into a scratch dir; sudo drops the root-only chown/chmod; dotnet, scp and sleep are
+        # stand-ins. systemctl records every call in systemctl.log and answers list-units from `units` and `show -p
+        # ExecStart` from execstart.<unit>; a unit's MainPID is its own and goes up by one each time it is restarted;
+        # reading /proc/<pid>/exe answers what that pid's unit's own-build.conf starts, as systemd would run it, or else the
+        # shared binary, "(deleted)" once it has been republished under a process that began before that.
         # The user is whoever runs the test, so `install -o` needs no root. Nothing outside the scratch dir is touched.
         # The caller holds a deploy claim in a scratch state dir (PERSISTENCE_STATE_DIR), as this session.
         import pwd, os, uuid
@@ -420,17 +424,54 @@ class FakeHost:
         self.w = w = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, w)
         bins, self.tmp, self.dest = w / "bin", w / "tmp", w / "home" / user / ".claude" / "persistence"
-        self.opt, self.state = w / "opt" / "persistence", w / "state"
-        for d in (bins, self.tmp, self.dest, self.opt / "store", self.state):
+        self.opt, self.state, self.etc = w / "opt" / "persistence", w / "state", w / "etc" / "systemd" / "system"
+        for d in (bins, self.tmp, self.dest, self.opt / "store", self.state, self.etc):
             d.mkdir(parents=True)
+        # This user's store unit, started from the shared build as every unit is until a deploy gives it its own.
+        self.unit = "persistence-store.service" if user == "ubuntu" else f"persistence-store-{user}.service"
+        self.unit_file(self.unit)
+        (w / "units").write_text(f"{self.unit} loaded active running x\n")
         fakes = {
             "dotnet": 'while [ "$1" != "-o" ]; do shift; done; mkdir -p "$2"; echo x > "$2/persistence-store"',
             "scp": (f'shift; a=("$@"); d="${{a[-1]#*:}}"; d=${{d//\\/tmp\\//{self.tmp}/}}; unset "a[-1]"; '
                     f'cp "${{a[@]}}" "$d"'),
             "ssh": (f'c="$2"; c=${{c//\\/tmp\\//{self.tmp}/}}; c=${{c//\\/home\\//{w}/home/}}; '
-                    f'c=${{c//\\/opt\\/persistence\\//{self.opt}/}}; exec bash -c "$c"'),
-            "sudo": '[ "$1" = -u ] && shift 2 || export SUDO_USER=$(id -un); case "$1" in chown|chmod|systemctl) exit 0;; esac; exec "$@"',
-            "systemctl": "exit 0", "sleep": "exit 0"}
+                    f'c=${{c//\\/opt\\/persistence\\//{self.opt}/}}; c=${{c//\\/etc\\/systemd\\/system\\//{self.etc}/}}; '
+                    f'exec bash -c "$c"'),
+            "sudo": ('[ "$1" = -u ] && shift 2 || export SUDO_USER=$(id -un); case "$1" in chown|chmod) exit 0;; '
+                     f'readlink) p=${{2#/proc/}}; p=${{p%/exe}}; u=$(cat {w}/pid.$p 2>/dev/null); '
+                     f'e=$(grep -h "^ExecStart=/" {self.etc}/$u.d/own-build.conf 2>/dev/null | cut -d" " -f1 | cut -d= -f2); '
+                     f'if [ -z "$e" ] && [ -n "$u" ]; then e={self.opt}/store/persistence-store; '
+                     f'if [ -e $e ] && [ "$(cat {w}/exe.$p 2>/dev/null)" != new ]; then e="$e (deleted)"; fi; fi; echo "$e"; exit 0;; '
+                     'esac; exec "$@"'),
+            # MainPID: per unit (from its name) plus one per restart, remembered in pid.<pid> so readlink can find the
+            # unit, and whether it began after the shared binary was published (exe.<pid>); 0 while the unit is inactive or failed. list-units without --all leaves out inactive units, as
+            # systemd does; list-unit-files answers from `unitfiles` (installed, maybe not loaded). ActiveState is the
+            # unit's third column in `units` (inactive when it isn't listed), SubState its fourth; restart or start
+            # makes it active.
+            # ExecStart is what own-build.conf starts once a deploy wrote one (as daemon-reload would make it), else
+            # execstart.<unit>.
+            "systemctl": (f'echo "$*" >> {w}/systemctl.log; st() {{ awk -v u="$1" \'$1 == u {{print $3; f=1}} END {{if (!f) print "inactive"}}\' {w}/units 2>/dev/null || echo inactive; }}; '
+                          f'case "$1 $2 $3" in "list-units "*) '
+                          f'if [[ " $* " = *" --all "* ]]; then cat {w}/units 2>/dev/null; else grep -v " inactive " {w}/units 2>/dev/null; fi;; '
+                          f'"list-unit-files "*) cat {w}/unitfiles 2>/dev/null;; '
+                          f'"restart "*|"start "*) u=$2; grep -v "^$u " {w}/units > {w}/units.new 2>/dev/null; echo "$u loaded active running x" >> {w}/units.new; mv {w}/units.new {w}/units;; '
+                          f'"show -p Environment") cat "{w}/env.${{@: -1}}" 2>/dev/null;; '
+                          f'"show -p ActiveState") st "${{@: -1}}";; '
+                          f'"show -p SubState") awk -v u="${{@: -1}}" \'$1 == u {{print $4; f=1}} END {{if (!f) print "dead"}}\' {w}/units;; '
+                          f'"show -p MainPID") u=${{@: -1}}; case $(st "$u") in inactive|failed) echo 0; exit 0;; esac; '
+                          f'p=$(( $(printf %s "$u" | cksum | cut -d" " -f1) % 10000 * 100 + $(grep -cxE "(restart|settle) $u" {w}/systemctl.log) )); '
+                          f'if [ ! -e {w}/pid.$p ]; then [ -e {self.opt}/store/persistence-store ] && echo new > {w}/exe.$p; fi; '
+                          f'echo "$u" > {w}/pid.$p; echo $p;; '
+                          f'"show -p ExecStart") u=${{@: -1}}; e=$(grep -h "^ExecStart=/" {self.etc}/$u.d/own-build.conf 2>/dev/null | cut -d" " -f1 | cut -d= -f2); '
+                          f'if [ -n "$e" ]; then echo "{{ path=$e ; argv[]=$e serve ; }}"; else cat "{w}/execstart.$u" 2>/dev/null; fi;; esac; exit 0'),
+            # A unit named in `settles` ("<unit> <state> <substate>") that is in activating/auto-restart moves to that
+            # state at the next sleep, as Restart=always would bring it back after RestartSec; coming back active is a
+            # new process ("settle <unit>" in systemctl.log, which MainPID counts), started from the binary there now.
+            "sleep": (f'[ -e {w}/settles ] && while read -r u a b; do '
+                      f'if grep -q "^$u loaded activating auto-restart" {w}/units; then '
+                      f'sed -i "s/^$u loaded [a-z-]* [a-z-]* x$/$u loaded $a $b x/" {w}/units; '
+                      f'[ "$a" = active ] && echo "settle $u" >> {w}/systemctl.log; fi; done < {w}/settles; exit 0')}
         for name, body in fakes.items():
             (bins / name).write_text(f"#!/bin/bash\n{body}\n")
             (bins / name).chmod(0o755)
@@ -444,6 +485,13 @@ class FakeHost:
         self.env = dict(os.environ, PATH=f"{bins}:{os.environ['PATH']}", PERSISTENCE_STATE_DIR=str(self.state),
                         CLAUDE_CODE_SESSION_ID=self.me)
 
+    def unit_file(self, unit):
+        (self.etc / unit).write_text(f"[Service]\nExecStart={self.opt}/store/persistence-store serve --socket /s/{unit}.sock\n")
+
+    def systemctl_calls(self):
+        log = self.w / "systemctl.log"
+        return log.read_text().splitlines() if log.exists() else []
+
     def deploy(self, *args, check=True, env=None):
         args = args or ("--claim", self.claim, "fakehost", self.user)
         run = subprocess.run(["bash", str(REPO / "deploy-remote.sh"), *args], env=env or self.env, capture_output=True,
@@ -455,6 +503,9 @@ class FakeHost:
     def untouched(self):
         self.assertEqual((self.dest / "heartbeat.py").read_text(), "# a local edit\n")
         self.assertFalse((self.opt / "store" / "persistence-store").exists())
+        self.assertEqual(sorted(p.name for p in self.opt.glob("store.*")), [])
+        self.assertFalse((self.etc / f"{self.unit}.d").exists())
+        self.assertFalse(any("restart" in c for c in self.systemctl_calls()))
         self.assertFalse((self.dest / "previous").exists())
 
 
@@ -709,6 +760,513 @@ class HostWideDeploy(FakeHost, unittest.TestCase):
 
     def untouched_store(self):
         self.assertFalse((self.opt / "store" / "persistence-store").exists())
+        self.assertEqual(list(self.opt.glob("store.*")), [])
+
+
+class AccountOnlyDeploy(FakeHost, unittest.TestCase):
+    """2026-11-25 (Arden 1575195673631002825): a deploy of d00f8e1 meant for ubuntu only republished the shared
+    /opt/persistence/store and restarted Ember's units onto it. By default a deploy now touches only the named account's
+    own build and unit; the shared build and every other unit need --shared-store."""
+
+    def setUp(self):
+        self.fake_host()
+        for other in ("persistence-store-ember.service", "persistence-store-ember-test.service"):
+            self.unit_file(other)
+            (self.w / f"execstart.{other}").write_text(
+                f"{{ path={self.opt}/store/persistence-store ; argv[]={self.opt}/store/persistence-store serve ; }}\n")
+        (self.w / "units").write_text("".join(f"{u} loaded active running x\n" for u in
+                                              (self.unit, "persistence-store-ember.service", "persistence-store-ember-test.service")))
+        head = subprocess.run(["git", "-C", str(REPO), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        self.build = self.opt / f"store.{self.user}-{head[:7]}"
+
+    def restarted(self):
+        return [c.split()[-1] for c in self.systemctl_calls() if c.startswith("restart ")]
+
+    def test_the_named_account_gets_its_own_build_and_no_other_unit_is_touched(self):
+        out = self.deploy().stdout
+        self.assertFalse((self.opt / "store" / "persistence-store").exists(), "the shared build was republished")
+        self.assertTrue((self.build / "persistence-store").exists(), out)
+        self.assertTrue((self.build / "DEPLOYED").read_text().startswith(self.build.name.rsplit("-", 1)[1]))
+        conf = (self.etc / f"{self.unit}.d" / "own-build.conf").read_text()
+        self.assertIn(f"\nExecStart=\nExecStart={self.build}/persistence-store serve --socket /s/{self.unit}.sock\n", conf)
+        # The server ends itself when PERSISTENCE_STORE_EXE's file changes: left on the shared one, the next shared
+        # publication would restart this unit unnamed.
+        self.assertIn(f"\nEnvironment=PERSISTENCE_STORE_EXE={self.build}/persistence-store\n", conf)
+        self.assertEqual(self.restarted(), [self.unit])
+        # Other units are only read (the before/after snapshot), never restarted or changed.
+        self.assertEqual([c for c in self.systemctl_calls() if not c.startswith(("show ", "list-units ", "list-unit-files ", "daemon-reload"))],
+                         [f"restart {self.unit}"])
+        self.assertIn(f"{self.unit}: running {self.build}/persistence-store", out)
+        self.assertIn("every other persistence-store unit kept its MainPID and start time", out)
+        again = self.deploy().stdout  # the same commit again: the build is reused, the unit restarted once more
+        self.assertIn("reused", again)
+        self.assertIn(f"was: ExecStart={self.build}/persistence-store", again)
+        self.assertEqual(self.restarted(), [self.unit, self.unit])
+
+    def test_no_user_named_is_refused_without_the_flag(self):
+        (self.dest / "heartbeat.py").write_text("# a local edit\n")
+        run = self.deploy("--claim", self.claim, "fakehost", check=False)
+        self.assertEqual(run.returncode, 2, run.stderr)
+        self.assertIn("--shared-store", run.stderr)
+        self.untouched()
+
+    def test_another_drop_in_setting_exec_start_refuses_before_anything_is_installed(self):
+        # Arden's own build is a drop-in of their naming (arden-c377df5.conf): a deploy can't quietly outrank it.
+        (self.dest / "heartbeat.py").write_text("# a local edit\n")
+        d = self.etc / f"{self.unit}.d"
+        d.mkdir()
+        (d / "arden-c377df5.conf").write_text("[Service]\nExecStart=\nExecStart=/elsewhere serve\n")
+        run = self.deploy(check=False)
+        self.assertEqual(run.returncode, 6, run.stderr)
+        self.assertIn("arden-c377df5.conf", run.stderr)
+        self.assertEqual([p.name for p in d.iterdir()], ["arden-c377df5.conf"])
+        (d / "arden-c377df5.conf").unlink(); d.rmdir()
+        self.untouched()
+        self.assertFalse((self.opt / ".deploy.claim").exists(), "refused before the authorization was bound")
+
+    def test_a_unit_not_started_from_the_shared_build_refuses(self):
+        (self.etc / self.unit).write_text("[Service]\nExecStart=/somewhere/else serve\n")
+        run = self.deploy(check=False)
+        self.assertEqual(run.returncode, 6, run.stderr)
+        self.assertEqual(list(self.opt.glob("store.*")), [])
+        self.assertEqual(self.restarted(), [])
+
+    def test_a_build_directory_holding_another_commit_refuses(self):
+        self.build.mkdir()
+        (self.build / "DEPLOYED").write_text("0000000000000000000000000000000000000000\n")
+        run = self.deploy(check=False)
+        self.assertEqual(run.returncode, 6, run.stderr)
+        self.assertEqual(self.restarted(), [])
+        self.assertEqual((self.build / "DEPLOYED").read_text(), "0000000000000000000000000000000000000000\n")
+
+    def test_a_unit_that_doesnt_come_back_on_its_build_fails_the_deploy(self):
+        fake_sudo = self.w / "bin" / "sudo"
+        fake_sudo.write_text(fake_sudo.read_text().replace("readlink) p=", "readlink) echo /old/build; exit 0; p="))
+        run = self.deploy(check=False)
+        self.assertEqual(run.returncode, 7, run.stdout)
+        self.assertIn("NOT verified: it runs /old/build", run.stdout)
+
+    def test_shared_store_is_explicit_and_restarts_only_the_units_on_it(self):
+        (self.w / f"execstart.{self.unit}").write_text(f"{{ path={self.build}/persistence-store ; }}\n")  # on its own build
+        out = self.deploy("--shared-store", "--units", "persistence-store-ember,persistence-store-ember-test.service",
+                          "--claim", self.claim, "fakehost").stdout
+        self.assertTrue((self.opt / "store" / "persistence-store").exists())
+        self.assertEqual(sorted(self.restarted()), ["persistence-store-ember-test.service", "persistence-store-ember.service"])
+        self.assertIn("--shared-store: republished", out)
+        self.assertFalse((self.etc / f"{self.unit}.d").exists())
+        self.assertIn("every other persistence-store unit kept its MainPID and start time", out)
+
+    # Ember 1575198901068242967: shared publication or a multi-unit restart needs a flag naming the units, and fails
+    # without it or when the units named aren't the ones it would restart.
+
+    def shared_refused(self, run, code):
+        self.assertEqual(run.returncode, code, run.stderr)
+        self.untouched()
+        self.assertFalse((self.opt / ".deploy.claim").exists(), "refused before the authorization was bound")
+
+    def test_shared_store_without_units_named_is_refused(self):
+        (self.dest / "heartbeat.py").write_text("# a local edit\n")
+        run = self.deploy("--shared-store", "--claim", self.claim, "fakehost", check=False)
+        self.assertIn("--units", run.stderr)
+        self.shared_refused(run, 2)
+
+    def test_shared_store_naming_fewer_units_than_run_it_is_refused_under_the_lock(self):
+        # ember-test also runs the shared build: naming only ember would restart ember-test unnamed.
+        (self.dest / "heartbeat.py").write_text("# a local edit\n")
+        (self.w / f"execstart.{self.unit}").write_text(f"{{ path={self.build}/persistence-store ; }}\n")
+        run = self.deploy("--shared-store", "--units", "persistence-store-ember", "--claim", self.claim, "fakehost",
+                          check=False)
+        self.assertIn("persistence-store-ember-test.service", run.stderr)
+        self.shared_refused(run, 6)
+
+    def test_a_unit_on_its_own_build_still_watching_the_shared_binary_must_be_named(self):
+        # ExecStart on its own build, PERSISTENCE_STORE_EXE still the shared binary: republishing restarts it (Server.cs).
+        (self.dest / "heartbeat.py").write_text("# a local edit\n")
+        (self.w / f"execstart.{self.unit}").write_text(f"{{ path={self.build}/persistence-store ; }}\n")
+        (self.w / f"env.{self.unit}").write_text(f"HOME=/x PERSISTENCE_STORE_EXE={self.opt}/store/persistence-store\n")
+        run = self.deploy("--shared-store", "--units", "persistence-store-ember,persistence-store-ember-test",
+                          "--claim", self.claim, "fakehost", check=False)
+        self.assertIn(self.unit, run.stderr)
+        self.shared_refused(run, 6)
+
+    def test_another_drop_in_setting_the_watched_exe_refuses(self):
+        (self.dest / "heartbeat.py").write_text("# a local edit\n")
+        d = self.etc / f"{self.unit}.d"
+        d.mkdir()
+        (d / "zz-exe.conf").write_text("[Service]\nEnvironment=PERSISTENCE_STORE_EXE=/elsewhere\n")
+        run = self.deploy(check=False)
+        self.assertEqual(run.returncode, 6, run.stderr)
+        self.assertIn("zz-exe.conf", run.stderr)
+        (d / "zz-exe.conf").unlink(); d.rmdir()
+        self.untouched()
+
+    def test_two_accounts_without_units_named_are_refused(self):
+        (self.dest / "heartbeat.py").write_text("# a local edit\n")
+        run = self.deploy("--claim", self.claim, "fakehost", self.user, "ember", check=False)
+        self.assertIn("more than one unit", run.stderr)
+        self.shared_refused(run, 2)
+
+    def test_units_named_that_arent_the_accounts_own_are_refused(self):
+        (self.dest / "heartbeat.py").write_text("# a local edit\n")
+        run = self.deploy("--units", "persistence-store-ember", "--claim", self.claim, "fakehost", self.user, check=False)
+        self.shared_refused(run, 6)
+
+    def test_one_account_may_name_its_own_unit(self):
+        self.deploy("--units", self.unit, "--claim", self.claim, "fakehost", self.user)
+        self.assertEqual(self.restarted(), [self.unit])
+
+    def test_another_unit_restarted_during_the_run_fails_verification(self):
+        # Something outside the script (a dependency, say) restarts ember's unit along with this one.
+        fake = self.w / "bin" / "systemctl"
+        fake.write_text(fake.read_text().replace('echo "$*" >>', f'[ "$1" = restart ] && echo "restart persistence-store-ember.service" >> {self.w}/systemctl.log; echo "$*" >>', 1))
+        run = self.deploy(check=False)
+        self.assertEqual(run.returncode, 7, run.stdout + run.stderr)
+        self.assertIn("persistence-store-ember.service: NOT left alone", run.stdout)
+        self.assertNotIn("persistence-store-ember-test.service: NOT left alone", run.stdout)
+
+    # Ember's review of 078c8e8 (room msg 1575205113101025463): one row per case in the decision table; these fill the
+    # rows that had no test.
+
+    def on_own_build(self, unit):
+        (self.w / f"execstart.{unit}").write_text(f"{{ path={self.opt}/store.x-0000000/persistence-store ; }}\n")
+
+    def test_two_accounts_with_both_units_named_restart_exactly_those(self):
+        (self.w / "home" / "ember" / ".claude" / "persistence").mkdir(parents=True)
+        out = self.deploy("--units", f"persistence-store-ember,{self.unit}", "--claim", self.claim, "fakehost",
+                          self.user, "ember").stdout
+        self.assertEqual(sorted(self.restarted()), sorted([self.unit, "persistence-store-ember.service"]))
+        for u, unit in ((self.user, self.unit), ("ember", "persistence-store-ember.service")):
+            b = self.opt / f"store.{u}-{self.build.name.rsplit('-', 1)[1]}"
+            self.assertIn(f"{unit}: running {b}/persistence-store", out)
+            self.assertIn(f"ExecStart={b}/persistence-store ", (self.etc / f"{unit}.d" / "own-build.conf").read_text())
+        self.assertFalse((self.etc / "persistence-store-ember-test.service.d").exists())
+        self.assertFalse((self.opt / "store" / "persistence-store").exists(), "the shared build was republished")
+        self.assertIn("every other persistence-store unit kept its MainPID and start time", out)
+
+    def test_two_accounts_naming_only_one_unit_is_refused(self):
+        (self.dest / "heartbeat.py").write_text("# a local edit\n")
+        run = self.deploy("--units", self.unit, "--claim", self.claim, "fakehost", self.user, "ember", check=False)
+        self.assertIn("persistence-store-ember.service", run.stderr)
+        self.shared_refused(run, 6)
+
+    def test_one_account_naming_an_extra_unit_is_refused(self):
+        (self.dest / "heartbeat.py").write_text("# a local edit\n")
+        run = self.deploy("--units", f"{self.unit},persistence-store-ember", "--claim", self.claim, "fakehost", self.user,
+                          check=False)
+        self.shared_refused(run, 6)
+
+    def test_a_name_that_isnt_a_store_unit_is_refused(self):
+        (self.dest / "heartbeat.py").write_text("# a local edit\n")
+        run = self.deploy("--units", "sshd", "--claim", self.claim, "fakehost", self.user, check=False)
+        self.assertIn("isn't a persistence-store unit", run.stderr)
+        self.shared_refused(run, 2)
+
+    def test_shared_store_naming_an_extra_unit_not_on_it_is_refused_under_the_lock(self):
+        (self.dest / "heartbeat.py").write_text("# a local edit\n")
+        self.on_own_build(self.unit)
+        run = self.deploy("--shared-store", "--units", f"persistence-store-ember,persistence-store-ember-test,{self.unit}",
+                          "--claim", self.claim, "fakehost", check=False)
+        self.assertIn("run or watch the shared build, running or stopped, are 'persistence-store-ember-test.service persistence-store-ember.service'",
+                      run.stderr)
+        self.shared_refused(run, 6)
+
+    # Ember's review of 4664fc2 (room msg 1575208384284594206): a stopped unit configured to run or watch the shared
+    # binary is changed by a shared publication too (it runs the new build at its next start), so it must be named;
+    # only running units are restarted, and stopped ones are checked still stopped. An account-only deploy never
+    # starts a stopped unit either.
+
+    def stopped(self, unit, state="inactive dead"):
+        lines = [l for l in (self.w / "units").read_text().splitlines() if l.split()[0] != unit]
+        (self.w / "units").write_text("".join(l + "\n" for l in lines) + f"{unit} loaded {state} x\n")
+
+    def active_state(self, unit):
+        return subprocess.run(["systemctl", "show", "-p", "ActiveState", "--value", unit], env=self.env,
+                               capture_output=True, text=True).stdout.strip()
+
+    def test_shared_store_units_none_refused_while_a_stopped_unit_starts_the_shared_binary(self):
+        (self.dest / "heartbeat.py").write_text("# a local edit\n")
+        for u in (self.unit, "persistence-store-ember.service"):
+            self.on_own_build(u)
+        self.stopped("persistence-store-ember-test.service")  # ExecStart still the shared binary
+        run = self.deploy("--shared-store", "--units", "none", "--claim", self.claim, "fakehost", check=False)
+        self.assertIn("are 'persistence-store-ember-test.service'", run.stderr)
+        self.shared_refused(run, 6)
+        self.assertEqual(self.active_state("persistence-store-ember-test.service"), "inactive")
+
+    def test_shared_store_units_none_refused_while_a_stopped_unit_watches_the_shared_binary(self):
+        (self.dest / "heartbeat.py").write_text("# a local edit\n")
+        for u in (self.unit, "persistence-store-ember.service", "persistence-store-ember-test.service"):
+            self.on_own_build(u)
+        self.stopped("persistence-store-ember.service")
+        (self.w / "env.persistence-store-ember.service").write_text(
+            f"HOME=/x PERSISTENCE_STORE_EXE={self.opt}/store/persistence-store\n")
+        run = self.deploy("--shared-store", "--units", "none", "--claim", self.claim, "fakehost", check=False)
+        self.assertIn("are 'persistence-store-ember.service'", run.stderr)
+        self.shared_refused(run, 6)
+
+    def test_shared_store_counts_a_unit_that_is_installed_but_not_loaded(self):
+        # Not in list-units at all (never loaded since boot), only in list-unit-files.
+        (self.dest / "heartbeat.py").write_text("# a local edit\n")
+        for u in (self.unit, "persistence-store-ember.service", "persistence-store-ember-test.service"):
+            self.on_own_build(u)
+        (self.w / "unitfiles").write_text("persistence-store-later.service disabled enabled\n")
+        (self.w / "execstart.persistence-store-later.service").write_text(f"{{ path={self.opt}/store/persistence-store ; }}\n")
+        run = self.deploy("--shared-store", "--units", "none", "--claim", self.claim, "fakehost", check=False)
+        self.assertIn("are 'persistence-store-later.service'", run.stderr)
+        self.shared_refused(run, 6)
+
+    def test_shared_store_a_stopped_unit_named_is_left_stopped(self):
+        self.on_own_build(self.unit)
+        self.stopped("persistence-store-ember-test.service")
+        # Leaving the stopped unit out is a wrong set.
+        run = self.deploy("--shared-store", "--units", "persistence-store-ember", "--claim", self.claim, "fakehost",
+                          check=False)
+        self.assertEqual(run.returncode, 6, run.stderr)
+        self.assertFalse((self.opt / "store" / "persistence-store").exists())
+        out = self.deploy("--shared-store", "--units", "persistence-store-ember,persistence-store-ember-test",
+                          "--claim", self.claim, "fakehost").stdout
+        self.assertTrue((self.opt / "store" / "persistence-store").exists())
+        self.assertEqual(self.restarted(), ["persistence-store-ember.service"])
+        self.assertEqual(self.active_state("persistence-store-ember-test.service"), "inactive")
+        self.assertIn("left stopped: persistence-store-ember-test.service", out)
+        self.assertIn("persistence-store-ember-test.service: still inactive, not started", out)
+        self.assertIn("every other persistence-store unit kept its MainPID and start time", out)
+
+    def test_shared_store_a_stopped_unit_started_during_the_run_fails_verification(self):
+        self.on_own_build(self.unit)
+        self.stopped("persistence-store-ember-test.service")
+        fake = self.w / "bin" / "systemctl"
+        units = self.w / "units"
+        fake.write_text(fake.read_text().replace('echo "$*" >>', f'[ "$1" = restart ] && sed -i "s/^persistence-store-ember-test.service loaded inactive dead/persistence-store-ember-test.service loaded active running/" {units}; echo "$*" >>', 1))
+        run = self.deploy("--shared-store", "--units", "persistence-store-ember,persistence-store-ember-test",
+                          "--claim", self.claim, "fakehost", check=False)
+        self.assertEqual(run.returncode, 7, run.stdout + run.stderr)
+        self.assertIn("persistence-store-ember-test.service: NOT verified: it was stopped and is now active", run.stdout)
+
+    def test_an_inactive_named_account_unit_gets_its_build_but_is_not_started(self):
+        self.stopped(self.unit)
+        out = self.deploy().stdout
+        self.assertEqual(self.restarted(), [])
+        self.assertFalse(any(c.startswith("start ") for c in self.systemctl_calls()))
+        self.assertEqual(self.active_state(self.unit), "inactive")
+        self.assertIn(f"ExecStart={self.build}/persistence-store ", (self.etc / f"{self.unit}.d" / "own-build.conf").read_text())
+        self.assertIn(f"{self.unit}: still inactive, not started", out)
+        self.assertIn(f"{self.unit}: its next start runs {self.build}/persistence-store", out)
+        self.assertIn("every other persistence-store unit kept its MainPID and start time", out)
+
+    def test_a_failed_named_account_unit_is_not_started(self):
+        self.stopped(self.unit, "failed failed")
+        out = self.deploy().stdout
+        self.assertEqual(self.restarted(), [])
+        self.assertEqual(self.active_state(self.unit), "failed")
+        self.assertIn(f"{self.unit}: still failed, not started", out)
+
+    def test_two_accounts_one_stopped_restart_only_the_running_one(self):
+        (self.w / "home" / "ember" / ".claude" / "persistence").mkdir(parents=True)
+        self.stopped("persistence-store-ember.service")
+        out = self.deploy("--units", f"persistence-store-ember,{self.unit}", "--claim", self.claim, "fakehost",
+                          self.user, "ember").stdout
+        self.assertEqual(self.restarted(), [self.unit])
+        self.assertEqual(self.active_state("persistence-store-ember.service"), "inactive")
+        self.assertIn("persistence-store-ember.service: still inactive, not started", out)
+        self.assertIn(f"{self.unit}: running {self.build}/persistence-store", out)
+
+    def test_an_account_unit_started_during_the_run_fails_verification(self):
+        self.stopped(self.unit)
+        fake = self.w / "bin" / "systemctl"
+        units = self.w / "units"
+        fake.write_text(fake.read_text().replace('echo "$*" >>', f'[ "$1" = daemon-reload ] && sed -i "s/^{self.unit} loaded inactive dead/{self.unit} loaded active running/" {units}; echo "$*" >>', 1))
+        run = self.deploy(check=False)
+        self.assertEqual(run.returncode, 7, run.stdout + run.stderr)
+        self.assertIn(f"{self.unit}: NOT verified: it was stopped and is now active", run.stdout)
+
+    def test_a_watcher_discovered_unit_named_is_restarted_with_the_others(self):
+        self.on_own_build(self.unit)
+        (self.w / f"env.{self.unit}").write_text(f"HOME=/x PERSISTENCE_STORE_EXE={self.opt}/store/persistence-store\n")
+        out = self.deploy("--shared-store", "--units", f"persistence-store-ember,persistence-store-ember-test,{self.unit}",
+                          "--claim", self.claim, "fakehost").stdout
+        self.assertEqual(sorted(self.restarted()), sorted(["persistence-store-ember.service",
+                                                           "persistence-store-ember-test.service", self.unit]))
+        self.assertIn("--shared-store: republished", out)
+
+    def test_shared_store_with_units_none_publishes_and_restarts_nothing(self):
+        for u in (self.unit, "persistence-store-ember.service", "persistence-store-ember-test.service"):
+            self.on_own_build(u)
+        out = self.deploy("--shared-store", "--units", "none", "--claim", self.claim, "fakehost").stdout
+        self.assertTrue((self.opt / "store" / "persistence-store").exists())
+        self.assertEqual(self.restarted(), [])
+        self.assertIn("the units named, which run or watch it: none; restarting the running ones: none", out)
+        self.assertIn("every other persistence-store unit kept its MainPID and start time", out)
+        # Once a unit runs the shared build again, 'none' is a wrong set.
+        (self.w / "execstart.persistence-store-ember.service").write_text(f"{{ path={self.opt}/store/persistence-store ; }}\n")
+        run = self.deploy("--shared-store", "--units", "none", "--claim", self.claim, "fakehost", check=False)
+        self.assertEqual(run.returncode, 6, run.stderr)
+        self.assertEqual(self.restarted(), [])
+
+    def test_shared_store_another_unit_restarted_during_the_run_fails_verification(self):
+        self.on_own_build(self.unit)
+        self.on_own_build("persistence-store-ember-test.service")
+        fake = self.w / "bin" / "systemctl"
+        fake.write_text(fake.read_text().replace('echo "$*" >>', f'[ "$1" = restart ] && echo "restart persistence-store-ember-test.service" >> {self.w}/systemctl.log; echo "$*" >>', 1))
+        run = self.deploy("--shared-store", "--units", "persistence-store-ember", "--claim", self.claim, "fakehost",
+                          check=False)
+        self.assertEqual(run.returncode, 7, run.stdout + run.stderr)
+        self.assertIn("persistence-store-ember-test.service: NOT left alone", run.stdout)
+        self.assertNotIn(f"{self.unit}: NOT left alone", run.stdout)
+
+    def test_release_takes_no_other_flag(self):
+        run = self.deploy("--release", "--units", "none", "--claim", self.claim, "fakehost", check=False)
+        self.assertEqual(run.returncode, 2, run.stderr)
+
+    # Ember's review of c699bb4 (room msg 1575212869975539827): only `active` may be restarted, `inactive|failed` stay
+    # stopped, and any other state (in transition, or one this script doesn't know) refuses under the lock before
+    # anything is installed (exit 6). A unit recorded active is re-checked immediately before its restart; if it has
+    # stopped or gone into transition it is neither restarted nor started, and the run exits 7.
+
+    def flip_on(self, fake, when, unit, to):
+        """Make the fake `fake` (systemctl or sudo) move `unit` to state `to` when it is called with first word `when`."""
+        f = self.w / "bin" / fake
+        units = self.w / "units"
+        hook = f'[ "$1" = {when} ] && sed -i "s/^{unit} loaded [a-z-]* [a-z-]* x$/{unit} loaded {to} x/" {units}; '
+        first, rest = f.read_text().split("\n", 1)
+        f.write_text(first + "\n" + hook + rest)
+
+    def test_a_deactivating_account_unit_at_preflight_refuses_before_anything_is_installed(self):
+        (self.dest / "heartbeat.py").write_text("# a local edit\n")
+        self.stopped(self.unit, "deactivating stop-sigterm")
+        run = self.deploy(check=False)
+        self.assertIn(f"{self.unit} is deactivating", run.stderr)
+        self.shared_refused(run, 6)
+        self.assertFalse(self.build.exists())
+        self.assertEqual(self.active_state(self.unit), "deactivating")
+
+    def test_every_transitional_or_unknown_state_refuses_an_account_run(self):
+        for state in ("activating start", "activating auto-restart", "reloading running", "maintenance cleaning",
+                      "refreshing x", "something-new x"):
+            with self.subTest(state):
+                (self.dest / "heartbeat.py").write_text("# a local edit\n")
+                self.stopped(self.unit, state)
+                run = self.deploy(check=False)
+                self.assertIn(f"{self.unit} is {state.split()[0]}", run.stderr)
+                self.shared_refused(run, 6)
+                self.assertFalse(self.build.exists())
+
+    def test_a_deactivating_unit_on_the_shared_build_refuses_a_shared_run_before_publication(self):
+        (self.dest / "heartbeat.py").write_text("# a local edit\n")
+        self.on_own_build(self.unit)
+        self.stopped("persistence-store-ember-test.service", "deactivating stop-sigterm")
+        run = self.deploy("--shared-store", "--units", "persistence-store-ember,persistence-store-ember-test",
+                          "--claim", self.claim, "fakehost", check=False)
+        self.assertIn("persistence-store-ember-test.service is deactivating", run.stderr)
+        self.shared_refused(run, 6)
+
+    def test_an_account_unit_that_stops_after_preflight_is_not_restarted(self):
+        for to in ("inactive dead", "deactivating stop-sigterm", "failed failed", "activating start"):
+            with self.subTest(to):
+                self.setUp()  # a fresh fake host for each state
+                self.flip_on("systemctl", "daemon-reload", self.unit, to)
+                run = self.deploy(check=False)
+                self.assertEqual(run.returncode, 7, run.stdout + run.stderr)
+                self.assertEqual(self.restarted(), [])
+                self.assertFalse(any(c.startswith("start ") for c in self.systemctl_calls()))
+                self.assertEqual(self.active_state(self.unit), to.split()[0])
+                self.assertIn(f"{self.unit}: was active under the lock and is now {to.split()[0]}; not restarted or started",
+                              run.stderr)
+
+    def test_shared_store_a_unit_that_stops_after_preflight_is_not_restarted(self):
+        self.on_own_build(self.unit)
+        self.flip_on("sudo", "tar", "persistence-store-ember-test.service", "inactive dead")
+        run = self.deploy("--shared-store", "--units", "persistence-store-ember,persistence-store-ember-test",
+                          "--claim", self.claim, "fakehost", check=False)
+        self.assertEqual(run.returncode, 7, run.stdout + run.stderr)
+        self.assertNotIn("persistence-store-ember-test.service", self.restarted())
+        self.assertFalse(any(c.startswith("start ") for c in self.systemctl_calls()))
+        self.assertEqual(self.active_state("persistence-store-ember-test.service"), "inactive")
+        self.assertIn("persistence-store-ember-test.service: was active under the lock and is now inactive; "
+                      "not restarted or started", run.stderr)
+
+    # Ember's review of 60e40dc (room msg 1575217084324126801): a unit publication sent into activating/auto-restart is
+    # coming back by itself; it is not restarted again but waited for (bounded), then checked on the new binary in
+    # /proc, and exit 7 if it doesn't settle. A unit already active on the new binary isn't restarted either; only an
+    # active unit still on the old binary is.
+
+    both = "persistence-store-ember,persistence-store-ember-test"
+
+    def recycles(self, unit, settles_to="active running"):
+        """Publication ends `unit`'s server (it watches the shared binary) and Restart=always is bringing it back:
+        activating/auto-restart, moving to `settles_to` at the next sleep (None: it never leaves auto-restart)."""
+        self.flip_on("sudo", "tar", unit, "activating auto-restart")
+        if settles_to:
+            with open(self.w / "settles", "a") as f:
+                f.write(f"{unit} {settles_to}\n")
+
+    def recycled_already(self, unit):
+        """Publication ended `unit`'s server and it is back, active on the new binary, before the run looks at it."""
+        f = self.w / "bin" / "sudo"
+        first, rest = f.read_text().split("\n", 1)
+        f.write_text(first + "\n" + f'[ "$1" = tar ] && echo "settle {unit}" >> {self.w}/systemctl.log; ' + rest)
+
+    def shared_run(self, check=True):
+        return self.deploy("--shared-store", "--units", self.both, "--claim", self.claim, "fakehost", check=check)
+
+    def test_shared_store_a_unit_coming_back_by_itself_settles_on_the_new_build_without_a_restart(self):
+        self.on_own_build(self.unit)
+        self.recycles("persistence-store-ember-test.service")
+        out = self.shared_run().stdout
+        self.assertEqual(self.restarted(), ["persistence-store-ember.service"])  # the active one, still on the old build
+        self.assertFalse(any(c.startswith("start ") for c in self.systemctl_calls()))
+        self.assertIn("persistence-store-ember-test.service: coming back by itself", out)
+        self.assertIn(f"persistence-store-ember-test.service: running {self.opt}/store/persistence-store\n", out)
+        self.assertIn(f"persistence-store-ember.service: running {self.opt}/store/persistence-store\n", out)
+        self.assertIn("every other persistence-store unit kept its MainPID and start time", out)
+
+    def test_shared_store_a_unit_that_doesnt_settle_in_time_exits_7_and_is_not_restarted(self):
+        self.on_own_build(self.unit)
+        self.recycles("persistence-store-ember-test.service", None)
+        run = self.shared_run(check=False)
+        self.assertEqual(run.returncode, 7, run.stdout + run.stderr)
+        self.assertNotIn("persistence-store-ember-test.service", self.restarted())
+        self.assertFalse(any(c.startswith("start ") for c in self.systemctl_calls()))
+        self.assertIn("persistence-store-ember-test.service: still activating/auto-restart after", run.stderr)
+        # It stops there: the unit after it (ember, sorted second) is not restarted either.
+        self.assertEqual(self.restarted(), [])
+        self.assertNotIn("persistence-store-ember.service: running", run.stdout)
+
+    def test_shared_store_a_unit_coming_back_that_fails_instead_exits_7_and_is_not_started(self):
+        self.on_own_build(self.unit)
+        self.recycles("persistence-store-ember-test.service", "failed failed")
+        run = self.shared_run(check=False)
+        self.assertEqual(run.returncode, 7, run.stdout + run.stderr)
+        self.assertNotIn("persistence-store-ember-test.service", self.restarted())
+        self.assertFalse(any(c.startswith("start ") for c in self.systemctl_calls()))
+        self.assertEqual(self.active_state("persistence-store-ember-test.service"), "failed")
+        self.assertIn("persistence-store-ember-test.service: was coming back by itself and is now failed", run.stderr)
+
+    def test_shared_store_a_unit_already_active_on_the_new_build_is_not_restarted(self):
+        self.on_own_build(self.unit)
+        self.recycled_already("persistence-store-ember-test.service")
+        out = self.shared_run().stdout
+        self.assertEqual(self.restarted(), ["persistence-store-ember.service"])
+        self.assertIn("persistence-store-ember-test.service: already active on the new shared build", out)
+        self.assertIn(f"persistence-store-ember-test.service: running {self.opt}/store/persistence-store\n", out)
+
+    def test_shared_store_an_active_unit_still_on_the_old_build_is_restarted_and_read_back(self):
+        self.on_own_build(self.unit)
+        out = self.shared_run().stdout
+        self.assertEqual(sorted(self.restarted()), ["persistence-store-ember-test.service", "persistence-store-ember.service"])
+        for u in ("persistence-store-ember.service", "persistence-store-ember-test.service"):
+            self.assertIn(f"{u}: active on the old shared build; restarting", out)
+            self.assertIn(f"{u}: running {self.opt}/store/persistence-store\n", out)
+
+    def test_shared_store_a_unit_being_started_by_another_hand_after_publication_is_not_restarted(self):
+        # activating/start is not the publication's restart: something else is starting it; leave it be.
+        self.on_own_build(self.unit)
+        self.flip_on("sudo", "tar", "persistence-store-ember-test.service", "activating start")
+        run = self.deploy("--shared-store", "--units", "persistence-store-ember,persistence-store-ember-test",
+                          "--claim", self.claim, "fakehost", check=False)
+        self.assertEqual(run.returncode, 7, run.stdout + run.stderr)
+        self.assertNotIn("persistence-store-ember-test.service", self.restarted())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -9,6 +9,60 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-25 — deploy-remote.sh is account-only by default
+- **Why:** the 15:06Z deploy of d00f8e1, meant for ubuntu only, republished the shared `/opt/persistence/store` and
+  restarted every `persistence-store*` unit, so Ember's two units moved from d44a423 to d00f8e1 without their say (Arden,
+  room 1575195673631002825; #14953). "ubuntu only" was in a note, and the script never checked it.
+- **Now:** each named user gets the store in its own build, `/opt/persistence/store.<user>-<commit>`, and a drop-in
+  `own-build.conf` on its own unit (`persistence-store.service` for ubuntu, `persistence-store-<user>.service`
+  otherwise). Only that unit is restarted, and its running binary is read back from `/proc` (exit 7 if it isn't the new
+  build). The shared build and every other unit are left alone.
+- **Refused with nothing installed (exit 6):** a unit whose own ExecStart isn't the shared binary, another drop-in on
+  the unit that sets ExecStart (it would fight `own-build.conf`, so its self moves it aside first), or a build directory
+  of that name holding another commit. No user named: refused (exit 2).
+- **`--shared-store`** is the old behaviour, but you have to ask for it. It republishes the shared build and restarts only
+  the units whose ExecStart, with drop-ins applied, runs it. Use it only with the agreement of every self it restarts.
+- **The units restarted must be named** (Ember, msg 1575198901068242967). `--units <unit,...|none>` is required for every
+  `--shared-store` run and for any run naming more than one user (exit 2 without it). It must equal the set the run
+  would restart, or the run is refused before anything is installed (exit 6). For `--shared-store` that set is read on
+  the host under the lock.
+- **`own-build.conf` also sets `PERSISTENCE_STORE_EXE`** to the account's build (found preparing Ember's rollback). The
+  server ends itself when the file that variable names changes (Server.cs), and `Restart=always` brings it back, so a
+  unit left watching the shared binary would restart at the next shared publication without being named. Preflight
+  also refuses another drop-in that sets it, and `--shared-store` counts a unit that watches the shared binary as one
+  it restarts, so it has to be named.
+- **Verification checks the others too, read-only:** every other `persistence-store*` unit's MainPID and start time are
+  read before the install and after the restarts; one that changed fails the deploy (exit 7) and is named.
+- **Stopped units (Ember's review of 4664fc2, msg 1575208384284594206).** A deploy never starts a stopped unit.
+  Account-only: a named account's inactive or failed unit gets its build and drop-in, isn't restarted, and is checked
+  still stopped with its next start naming the new build. `--shared-store`: the set `--units` must name is now every
+  `persistence-store*` unit, loaded in any state or only installed (`list-unit-files`), whose ExecStart or
+  `PERSISTENCE_STORE_EXE` names the shared binary, since republishing changes what a stopped one runs next. So
+  `--units none` is refused while any such unit exists. Only the running ones are restarted, and the stopped ones are
+  checked still stopped (exit 7 if one started). The before/after snapshot covers installed-only units and records
+  ActiveState. 9 tests; all red on 4664fc2's script.
+- **Transitional states (Ember's review of c699bb4, msg 1575212869975539827).** Only `active` is restarted;
+  `inactive|failed` stay stopped; any other ActiveState (activating, deactivating, reloading, refreshing, maintenance,
+  or one the script doesn't know) refuses under the lock before anything is installed (exit 6), since restarting a
+  unit that is deactivating would start something being stopped. A unit recorded active is read again immediately
+  before its restart; if it has stopped or gone into transition it is neither restarted nor started (exit 7, naming
+  the state). One allowance, `--shared-store` only: after publication a watching server ends itself and
+  `Restart=always` brings it back, so `activating/auto-restart` (or `auto-restart-queued`) is the run's own doing and is
+  restarted as named; `activating/start` is not. 7 tests (14 cases); 14 cases red on c699bb4's script, the
+  auto-restart allowance a guard.
+- **A unit coming back by itself isn't restarted again (Ember's review of 60e40dc, msg 1575217084324126801).**
+  `--shared-store` only. After publication, each unit recorded active is read again. If it is still active on the old
+  binary (its pid is the one from before publication, or /proc shows `… (deleted)`), it is restarted. If it is already
+  active on the new binary, it is left alone. If it is in `activating/auto-restart(-queued)`, it isn't touched: the run
+  waits up to 30 s for it to be active again (`activating/start` in that wait is the same restart). Anything else, or
+  running out of time, exits 7 with it neither restarted nor started, and the units after it aren't restarted.
+  The check afterwards is now /proc on every one of those units, reading the new shared binary, instead of
+  `is-active`. 5 tests, all red on 60e40dc's script, each mutation-checked; they replace 60e40dc's
+  restart-on-auto-restart test. The fake host's /proc now tells the old shared binary from the new one.
+- Tests: `AccountOnlyDeploy` in test_heartbeat_optin.py, 16 tests. All 7 of 59aaf10's are red on main's script; 8 of
+  the 9 added or changed for the unit naming are red on 59aaf10 (the ninth, `--release` taking no other flag, is a guard);
+  the 3 for `PERSISTENCE_STORE_EXE` are red on d7cba87.
+
 ## 2026-11-25 — install-hooks.sh: root never reads the stage, every problem found before any change (#93 review)
 
 **Why:** Ember's CHANGES review of #93 at 6a46981 (msg 1575147022892408963), on four weak spots the review bundle had
