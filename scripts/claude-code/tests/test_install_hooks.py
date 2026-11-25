@@ -409,15 +409,31 @@ class InstallHooksTest(unittest.TestCase):
     def test_a_failure_after_the_rename_says_the_new_version_is_there(self):
         # Ember at 735f69b: mv succeeded and the step failed before it said "replaced"; the old report said the target
         # "is as it was", which was false.
+        # Ember at 15cfe32: the summary under it still said "no hook file changed", which was false (blocker 4 back on
+        # the failure path). The file seen as the new version is counted as changed.
         tail = self.failed_replacement(FAIL_AFTER=str((self.d / "hook.py").resolve()), FAIL_CMD="mv")
         self.assertEqual(tail, [self.seen("hook.py", "the new version: the rename happened", "there (a regular file)"),
-                                f"{self.user}: no hook file changed"])
+                                f"{self.user}: changed, seen after the failure: hook.py (the new version is there)"])
+        self.assertNotIn("no hook file changed", "\n".join(tail))
         self.assertEqual((self.d / "hook.py").read_text(), "new hook.py\n")
 
     def test_a_look_that_fails_says_unknown_not_a_guess(self):
         tail = self.failed_replacement(FAIL_ON=str((self.d / "hook.py").resolve()), FAIL_CMD="mv", FAIL_AS="inspect")
         why = f"unknown (looking as {self.user} failed: test shim: injected failure running inspect as {self.user})"
-        self.assertEqual(tail, [self.seen("hook.py", why, why), f"{self.user}: no hook file changed"])
+        # A look that couldn't tell may not be followed by a claim that nothing changed (Ember at 15cfe32).
+        self.assertEqual(tail, [self.seen("hook.py", why, why),
+                                f"{self.user}: unknown whether it changed: hook.py (it couldn't be looked at)"])
+        self.assertNotIn("no hook file changed", "\n".join(tail))
+
+    def test_a_rename_that_landed_before_a_failure_counts_beside_earlier_files(self):
+        # The failed file's observed change joins what landed before it, in one summary line.
+        (self.d / "coordination.py").write_text("old coordination\n")
+        self.env.update(FAIL_AFTER=str((self.d / "coordination.py").resolve()), FAIL_CMD="mv")
+        r = self.run_script(check=False)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn(f"{self.user}: new: hook.py; changed, seen after the failure: coordination.py (the new version "
+                      f"is there)\n", r.stderr)
+        self.assertNotIn("no hook file changed", r.stderr)
 
     def test_a_path_that_cant_be_looked_at_is_unknown_not_absent(self):
         # stat failing for any reason but "no such file" (here the stamp dir can't be searched during the look) is

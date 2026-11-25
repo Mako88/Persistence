@@ -154,6 +154,7 @@ observe() {  # observe <user> <hook dir> <file>: what is there now, looked at as
   fi
   : "${t:=unknown (looking as $u failed${o:+: $o})}" "${b:=unknown (looking as $u failed${o:+: $o})}"
   echo "$u: $f, seen as $u after the failure: $d/$f is $t; the backup's name $leaf: $b"
+  seen=$t
 }
 
 # (2) Check every user and file before anything changes.
@@ -173,18 +174,22 @@ if (( ${#problems[@]} )); then
 fi
 
 # (3) Install, stopping at the first failure.
+# After a failure, the failed file counts by what observe saw: the new version there means it changed, and a look
+# that couldn't tell means "no hook file changed" can't be said. Only then is the whole run's summary true.
 summary() {  # summary <user> <hook dir>: what landed for that user, new, replaced and same counted apart
   local s=
   [ -n "$new" ] && s="$s; new:$new"
   [ -n "$replaced" ] && s="$s; replaced:$replaced (the copies they replaced are in $2/previous/$stamp)"
+  [ -n "$landed" ] && s="$s; changed, seen after the failure:$landed (the new version is there)"
   [ -n "$same" ] && s="$s; same:$same"
-  if [ -z "$new$replaced" ]; then s="no hook file changed$s"; else s=${s#; }; fi
+  [ -n "$unsure" ] && s="$s; unknown whether it changed:$unsure (it couldn't be looked at)"
+  if [ -z "$new$replaced$landed$unsure" ]; then s="no hook file changed$s"; else s=${s#; }; fi
   echo "$1: $s"
 }
 for ((i = 0; i < ${#users[@]}; i++)); do
   u=${users[i]}
   d=$homes/$u/.claude/persistence
-  new= replaced= same=
+  new= replaced= same= landed= unsure=
   for ((j = 0; j < ${#files[@]}; j++)); do
     f=${files[j]}
     if out=$(as "$u" "$user_side" user-side install "$d" "$stamp" "$f" < "$snap/$f" 2>&1) \
@@ -194,6 +199,7 @@ for ((i = 0; i < ${#users[@]}; i++)); do
     fi
     echo "STOPPED at $u: $f: ${out:-failed with no message}" >&2
     observe "$u" "$d" "$f" >&2
+    case $seen in "the new version"*) landed=" $f";; unknown*) unsure=" $f";; esac
     summary "$u" "$d" >&2
     left=$(for ((k = j + 1; k < ${#files[@]}; k++)); do printf ' %s' "${files[k]}"; done)
     [ -n "$left" ] && echo "not attempted, $u:$left" >&2

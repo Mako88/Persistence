@@ -34,6 +34,11 @@ all new said "no hook file changed".
   regular file is compared; a link is reported as a link), and whether anything is at the backup's name and what kind.
   "Absent" only when stat says no such file; any other failure, or a look that fails, is "unknown" with the reason. A
   backup that landed is left where it is.
+- **The stop report's summary counts what was seen** (Ember's re-review at 15cfe32, msg 1575157851632959599). At
+  15cfe32, a step that failed after its rename was reported as the new version and then summarised as "no hook file
+  changed", which brought blocker 4 back on the failure path. Now a failed file seen as the new version is listed as
+  "changed, seen after the failure", and one that couldn't be looked at as "unknown whether it changed". Either one
+  means "no hook file changed" is never printed.
 - **The backup never lands on anything already there.** An existing backup name, a link included, is refused at the
   check; the copy is made under a fresh temp name and hard-linked to its name (`ln -P -T`, which fails on anything
   there), and "replaced" is said only after the copy and the rename both succeeded.
