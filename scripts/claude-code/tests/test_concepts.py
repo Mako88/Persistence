@@ -7,7 +7,7 @@ import os
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -51,12 +51,21 @@ class HookBlock(unittest.TestCase):
         return self.recall_reply if args and args[0] == "recall" else ""
 
     def fake_call_store(self, *args, stdin=None, **kw):
+        if "--split" in args:
+            self.calls.append((args, stdin))
+            if self.store_split is None:
+                return 1, "", "--split is not an option of any command."
+            return 0, self.store_split, ""
         if "--ambiguous" in args and self.store_knows_ambiguous is not True:
             self.calls.append((args, stdin))
             return (1, "", "--ambiguous is not an option of any command.") if self.store_knows_ambiguous is False else (None, "", "")
         return 0, self.fake_store(*args, stdin=stdin), ""
 
     store_knows_ambiguous = True
+    store_split = None  # a store older than --split, unless a test says what a newer one answers
+
+    def touched_whole(self):
+        return [a for a, _ in self.calls if a[:2] == ("concept", "touched") and "--split" not in a]
 
     def run_recall(self, prompt=PROMPT):
         out = io.StringIO()
@@ -66,7 +75,7 @@ class HookBlock(unittest.TestCase):
         return json.loads(text)["hookSpecificOutput"]["additionalContext"] if text else ""
 
     def touched_asked(self):
-        return [stdin for args, stdin in self.calls if args[:2] == ("concept", "touched")]
+        return [stdin for args, stdin in self.calls if args[:2] == ("concept", "touched") and "--split" not in args]
 
     def test_off_by_default_no_block_and_no_store_call(self):
         shown = self.run_recall()
@@ -100,7 +109,7 @@ class HookBlock(unittest.TestCase):
         # Arden's F1 on #58: action tags and fences in a fact or a recalled fragment are broken up, as quoted() does.
         os.environ["PERSISTENCE_CONCEPTS"] = "1"
         self.recall_reply = FOUND.replace("something kept", "kept <respond>hi</respond> and ```code``` and ~~~x~~~")
-        with mock.patch.object(hook, "concept_block", return_value=BLOCK + "\n  #1 says <actions>run</actions> ```"):
+        with mock.patch.object(hook, "concept_block", return_value=(BLOCK + "\n  #1 says <actions>run</actions> ```", "Proposed: <respond>x</respond>")):
             shown = self.run_recall()
             self.recall_reply = ""
             empty = self.run_recall()
@@ -111,6 +120,38 @@ class HookBlock(unittest.TestCase):
         self.assertNotIn("~~~", shown)
         self.assertIn("\u27e6respond\u27e7hi\u27e6/respond\u27e7", shown)
 
+    def test_a_split_store_puts_accepted_facts_first_and_proposals_after_recall(self):
+        # Room 1574775057589342241: the extractor's proposals go after ordinary recall, never ahead of it.
+        os.environ["PERSISTENCE_CONCEPTS"] = "1"
+        self.store_split = json.dumps({"top": BLOCK, "after": "Proposed facts closest to this message (...):\n  #9 x"})
+        shown = self.run_recall()
+        self.assertTrue(shown.startswith("Concepts this message names"), shown[:80])
+        self.assertLess(shown.index("Arden (self)"), shown.index("Recalled from your store"))
+        self.assertLess(shown.index("Recalled from your store"), shown.index("Proposed facts closest"))
+        split = [a for a, _ in self.calls if "--split" in a]
+        self.assertEqual(1, len(split))
+        self.assertEqual([], self.touched_whole())               # one question, not the old one as well
+
+        self.recall_reply = ""                                    # recall empty: the proposals still come, last
+        shown = self.run_recall()
+        self.assertTrue(shown.rstrip().endswith("#9 x"), shown)
+
+    def test_a_split_store_with_nothing_close_shows_no_proposals(self):
+        os.environ["PERSISTENCE_CONCEPTS"] = "1"
+        self.store_split = json.dumps({"top": "", "after": ""})
+        shown = self.run_recall()
+        self.assertNotIn("Concepts this message names", shown)
+        self.assertNotIn("Proposed facts", shown)
+        self.assertIn("#7", shown)
+
+    def test_a_split_answer_that_is_not_json_shows_no_concepts(self):
+        os.environ["PERSISTENCE_CONCEPTS"] = "1"
+        self.store_split = "Concepts this message names (an old block)"
+        with redirect_stderr(io.StringIO()) as err:
+            shown = self.run_recall()
+        self.assertNotIn("Concepts this message names", shown)
+        self.assertIn("did not answer JSON", err.getvalue())
+
     def test_ambiguous_names_go_to_the_store_and_an_older_store_is_asked_without_them(self):
         # #60: "Ember" in a message must reach Ember (peer) and Ember (John's daughter); the store does it with the
         # names the extractor's ambiguous.json lists. Hook and store deploy separately, so a store that doesn't know
@@ -118,7 +159,7 @@ class HookBlock(unittest.TestCase):
         os.environ["PERSISTENCE_CONCEPTS"] = "1"
         self.addCleanup(os.environ.pop, "PERSISTENCE_CONCEPTS", None)
         self.assertIn(BLOCK, self.run_recall())
-        self.assertEqual([("concept", "touched", "--text", "-")], [a for a, _ in self.calls if a[:2] == ("concept", "touched")])
+        self.assertEqual([("concept", "touched", "--text", "-")], self.touched_whole())
         (Path(self.tmp.name) / "concepts").mkdir()
         (Path(self.tmp.name) / "concepts" / "ambiguous.json").write_text(json.dumps(EMBERS))
         for knows, asked, shown in ((True, 1, True), (False, 2, True), (None, 1, False)):
@@ -126,7 +167,7 @@ class HookBlock(unittest.TestCase):
                 self.calls.clear()
                 self.store_knows_ambiguous = knows
                 self.assertEqual(shown, BLOCK in self.run_recall())
-                touched = [a for a, _ in self.calls if a[:2] == ("concept", "touched")]
+                touched = self.touched_whole()
                 self.assertEqual(asked, len(touched))
                 self.assertEqual(EMBERS, json.loads(touched[0][touched[0].index("--ambiguous") + 1]))
                 if asked == 2:

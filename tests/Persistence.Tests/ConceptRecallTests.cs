@@ -157,6 +157,8 @@ public sealed class ConceptRecallTests : IDisposable
     [InlineData("list", "--after", "19300", "--limit", "4", "--json")]
     [InlineData("concept", "touched", "--text", "-", "--concepts", "2", "--facts", "1", "--budget", "900")]
     [InlineData("concept", "touched", "--json", "--text", "-")]
+    [InlineData("concept", "touched", "--split", "--text", "-", "--ambiguous", "{}")]
+    [InlineData("concept", "touched", "--split", "--json", "--text", "-", "--as-of", "2026-11-24T08:56:54Z", "--floor", "12.5", "--proposed", "3")]
     [InlineData("concept", "add", "Ember (peer)", "--fact", "x", "--source", "1", "--by", "extractor:abc", "--flag", "referent unsure: …")]
     public void The_options_the_extractor_and_the_hook_send_are_known(params string[] args)
     {

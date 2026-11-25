@@ -109,7 +109,7 @@ class ResumeKeepsTheWindow(unittest.TestCase):
                    mock.patch.object(hook, "project", return_value="work"),
                    mock.patch.object(hook, "keep_soon", return_value=None),
                    mock.patch.object(hook, "cued", return_value=""),
-                   mock.patch.object(hook, "concept_block", return_value=""),
+                   mock.patch.object(hook, "concept_block", return_value=("", "")),
                    mock.patch.object(hook, "record_shown", return_value=None),
                    mock.patch.dict(os.environ, CLEAN_ENV, clear=True)]
         for p in patches:

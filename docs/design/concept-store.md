@@ -153,6 +153,13 @@ Missed in the first draft (Claude's read):
   recent turn N), so a wrong match can be traced. If
   `session.compact` is ever used to replace context with the projection, the replacement **carries a visible
   provenance marker** and is tried on a scratch session first (#1396; all three of us agreed).
+- **Proposals in their own tier** (2026-11-24, room 1574775057589342241, Arden's asks 1574775678543470695): the
+  block's top holds only facts the self accepted. The extractor's proposals come after ordinary recall: at most 3
+  per wake across all concepts, the closest to the message (rare content words shared with the fact and the
+  sentence of its fragment that backs it, names left out), and none below a floor, so a message that only names
+  John gets none of his facts. Names inside paths, URLs and attachment notes name nothing; `#81` is named only as
+  `#81`. A state known more than 7 days before shows only when its own subject is named. Measured by replay as of
+  each message, before and after alike (`concept touched --split --json --as-of`).
 
 ## Resolutions of the seven questions
 

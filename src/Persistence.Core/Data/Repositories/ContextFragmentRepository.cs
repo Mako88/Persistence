@@ -159,6 +159,31 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
         return rankedIds.Where(id => entities.ContainsKey(id)).Select(id => entities[id]);
     }
 
+    /// <summary>
+    /// What a <see cref="PrefixDocumentCountsAsync"/> prefix may hold: letters and decimal digits (Unicode L and Nd). A
+    /// caller splitting text into prefixes splits on this, so the two never disagree: "12m²" is a superscript, Unicode No,
+    /// which a wider word pattern took and this check refused (#92 at 081f9ce).
+    /// </summary>
+    public static bool IsPrefixChar(char c) => char.IsLetterOrDigit(c);
+
+    public async Task<(long Total, IReadOnlyDictionary<string, long> Containing)> PrefixDocumentCountsAsync(IReadOnlyCollection<string> prefixes)
+    {
+        var total = (await QueryAsync<long>($"SELECT COUNT(*) FROM ContextFragments")).Single();
+        var containing = new Dictionary<string, long>();
+        foreach (var prefix in prefixes.Distinct())
+        {
+            if (prefix.Length == 0 || !prefix.All(IsPrefixChar))
+            {
+                throw new ArgumentException($"A prefix is letters and digits only, not '{prefix}'.", nameof(prefixes));
+            }
+
+            var match = $"\"{prefix}\"*";
+            containing[prefix] = (await QueryAsync<long>($"SELECT COUNT(*) FROM ContextFragments_fts WHERE ContextFragments_fts MATCH {match}")).Single();
+        }
+
+        return (total, containing);
+    }
+
     #endregion
 
     #region Base overrides
