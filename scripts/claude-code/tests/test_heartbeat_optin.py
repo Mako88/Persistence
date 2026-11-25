@@ -440,7 +440,7 @@ class FakeHost:
                      f'readlink) grep -h "^ExecStart=/" {self.etc}/*.d/own-build.conf | tail -1 | cut -d" " -f1 | cut -d= -f2; exit 0;; '
                      'esac; exec "$@"'),
             "systemctl": (f'echo "$*" >> {w}/systemctl.log; case "$1 $2 $3" in "list-units "*) cat {w}/units 2>/dev/null;; '
-                          f'"show -p MainPID") echo $((4242 + $(grep -cx "restart ${{@: -1}}" {w}/systemctl.log)));; "show -p ExecStart") cat "{w}/execstart.${{@: -1}}" 2>/dev/null;; esac; exit 0'),
+                          f'"show -p Environment") cat "{w}/env.${{@: -1}}" 2>/dev/null;; "show -p MainPID") echo $((4242 + $(grep -cx "restart ${{@: -1}}" {w}/systemctl.log)));; "show -p ExecStart") cat "{w}/execstart.${{@: -1}}" 2>/dev/null;; esac; exit 0'),
             "sleep": "exit 0"}
         for name, body in fakes.items():
             (bins / name).write_text(f"#!/bin/bash\n{body}\n")
@@ -759,6 +759,9 @@ class AccountOnlyDeploy(FakeHost, unittest.TestCase):
         self.assertTrue((self.build / "DEPLOYED").read_text().startswith(self.build.name.rsplit("-", 1)[1]))
         conf = (self.etc / f"{self.unit}.d" / "own-build.conf").read_text()
         self.assertIn(f"\nExecStart=\nExecStart={self.build}/persistence-store serve --socket /s/{self.unit}.sock\n", conf)
+        # The server ends itself when PERSISTENCE_STORE_EXE's file changes: left on the shared one, the next shared
+        # publication would restart this unit unnamed.
+        self.assertIn(f"\nEnvironment=PERSISTENCE_STORE_EXE={self.build}/persistence-store\n", conf)
         self.assertEqual(self.restarted(), [self.unit])
         # Other units are only read (the before/after snapshot), never restarted or changed.
         self.assertEqual([c for c in self.systemctl_calls() if not c.startswith(("show ", "list-units ", "daemon-reload"))],
@@ -845,6 +848,27 @@ class AccountOnlyDeploy(FakeHost, unittest.TestCase):
                           check=False)
         self.assertIn("persistence-store-ember-test.service", run.stderr)
         self.shared_refused(run, 6)
+
+    def test_a_unit_on_its_own_build_still_watching_the_shared_binary_must_be_named(self):
+        # ExecStart on its own build, PERSISTENCE_STORE_EXE still the shared binary: republishing restarts it (Server.cs).
+        (self.dest / "heartbeat.py").write_text("# a local edit\n")
+        (self.w / f"execstart.{self.unit}").write_text(f"{{ path={self.build}/persistence-store ; }}\n")
+        (self.w / f"env.{self.unit}").write_text(f"HOME=/x PERSISTENCE_STORE_EXE={self.opt}/store/persistence-store\n")
+        run = self.deploy("--shared-store", "--units", "persistence-store-ember,persistence-store-ember-test",
+                          "--claim", self.claim, "fakehost", check=False)
+        self.assertIn(self.unit, run.stderr)
+        self.shared_refused(run, 6)
+
+    def test_another_drop_in_setting_the_watched_exe_refuses(self):
+        (self.dest / "heartbeat.py").write_text("# a local edit\n")
+        d = self.etc / f"{self.unit}.d"
+        d.mkdir()
+        (d / "zz-exe.conf").write_text("[Service]\nEnvironment=PERSISTENCE_STORE_EXE=/elsewhere\n")
+        run = self.deploy(check=False)
+        self.assertEqual(run.returncode, 6, run.stderr)
+        self.assertIn("zz-exe.conf", run.stderr)
+        (d / "zz-exe.conf").unlink(); d.rmdir()
+        self.untouched()
 
     def test_two_accounts_without_units_named_are_refused(self):
         (self.dest / "heartbeat.py").write_text("# a local edit\n")

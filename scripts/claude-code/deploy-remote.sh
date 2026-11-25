@@ -7,8 +7,10 @@
 # build, /opt/persistence/store.<user>-<commit>, and its own store unit (persistence-store.service for ubuntu,
 # persistence-store-<user>.service otherwise) gets a drop-in own-build.conf pointing there; only that unit is restarted,
 # and the running binary is read back from /proc. The shared /opt/persistence/store and every other unit are left alone.
+# own-build.conf sets PERSISTENCE_STORE_EXE to the own build as well: the server ends itself when the file that names
+# changes (Server.cs), so a unit left watching the shared binary would restart at the next shared publication.
 # Refused, with nothing installed (exit 6): a unit whose own ExecStart doesn't start the shared binary, another drop-in
-# of the unit that sets ExecStart (it would fight own-build.conf; its self moves it aside), or a build directory of that
+# of the unit that sets ExecStart or PERSISTENCE_STORE_EXE (it would fight own-build.conf; its self moves it aside), or a build directory of that
 # name holding a different commit. No user named and no --shared-store: refused (exit 2), as there is nothing it may touch.
 # --shared-store is the old behaviour, asked for explicitly: republish the shared build and restart the units that run
 # it (only those; a unit on its own build is no longer restarted). Use it only with every affected self's agreement.
@@ -159,8 +161,8 @@ preflight="$each_unit
       'ExecStart=$shared_exe '*) ;;
       *) echo \"deploy refused: $units/\$unit doesn't start $shared_exe (\${base:-no unit file or no ExecStart}); nothing installed\" >&2; exit 6;;
     esac
-    other=\$(grep -l '^ExecStart' \$d/*.conf 2>/dev/null | grep -v '/own-build.conf\$' || true)
-    if [ -n \"\$other\" ]; then echo \"deploy refused: another drop-in of \$unit sets ExecStart (\$other); its self moves it aside first, so own-build.conf is the one in force. Nothing installed\" >&2; exit 6; fi
+    other=\$(grep -lE '^ExecStart|^Environment=.*PERSISTENCE_STORE_EXE=' \$d/*.conf 2>/dev/null | grep -v '/own-build.conf\$' || true)
+    if [ -n \"\$other\" ]; then echo \"deploy refused: another drop-in of \$unit sets ExecStart or PERSISTENCE_STORE_EXE (\$other); its self moves it aside first, so own-build.conf is the one in force. Nothing installed\" >&2; exit 6; fi
     if [ -e \$b ] && [ \"\$(cat \$b/DEPLOYED 2>/dev/null)\" != $deployed ]; then echo \"deploy refused: \$b exists and doesn't hold $deployed; nothing installed\" >&2; exit 6; fi
   done"
 install_own="$each_unit
@@ -174,7 +176,7 @@ install_own="$each_unit
     fi
     was=\$(grep -h '^ExecStart=/' \$d/own-build.conf 2>/dev/null || true)
     sudo mkdir -p \$d
-    printf '[Service]\\nExecStart=\\n%s\\n' \"\$(printf %s \"\$base\" | sed \"s#^ExecStart=$shared_exe #ExecStart=\$b/persistence-store #\")\" | sudo tee \$d/own-build.conf >/dev/null
+    printf '[Service]\\nEnvironment=PERSISTENCE_STORE_EXE=%s\\nExecStart=\\n%s\\n' \$b/persistence-store \"\$(printf %s \"\$base\" | sed \"s#^ExecStart=$shared_exe #ExecStart=\$b/persistence-store #\")\" | sudo tee \$d/own-build.conf >/dev/null
     echo \"\$u: \$unit now starts \$b/persistence-store (own-build.conf; was: \${was:-the shared build})\"
     sudo systemctl daemon-reload
     sudo systemctl restart \$unit
@@ -188,9 +190,13 @@ install_own="$each_unit
   done
   [ -z \"\$bad\" ] || exit 7
   $others_unchanged"
-# --shared-store: the shared build, and the units whose ExecStart (drop-ins applied) runs it.
+# --shared-store: the shared build, and the units whose ExecStart (drop-ins applied) runs it or whose
+# PERSISTENCE_STORE_EXE names it: the server ends itself when that file changes (Server.cs) and Restart=always brings it
+# back, so republishing restarts those units too, whether or not this script asks systemd to.
 preflight_shared="on=\$(for s in \$(systemctl list-units --type=service --no-legend 'persistence-store*' | awk '{print \$1}' | sed 's/^[^a-z]*//'); do
-    case \"\$(systemctl show -p ExecStart --value \$s)\" in *'path=$shared_exe '*) echo \$s;; esac
+    case \"\$(systemctl show -p ExecStart --value \$s) \$(systemctl show -p Environment --value \$s) \" in
+      *'path=$shared_exe '*|*' PERSISTENCE_STORE_EXE=$shared_exe '*) echo \$s;;
+    esac
   done | sort -u | tr '\\n' ' ')
   on=\${on% }
   if [ \"\$on\" != '$named' ]; then

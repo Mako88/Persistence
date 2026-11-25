@@ -26,10 +26,16 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
   `--shared-store` run and for any run naming more than one user (exit 2 without it). It must equal the set the run
   would restart, or the run is refused before anything is installed (exit 6). For `--shared-store` that set is read on
   the host under the lock.
+- **`own-build.conf` also sets `PERSISTENCE_STORE_EXE`** to the account's build (found preparing Ember's rollback). The
+  server ends itself when the file that variable names changes (Server.cs), and `Restart=always` brings it back, so a
+  unit left watching the shared binary would restart at the next shared publication without being named. Preflight
+  also refuses another drop-in that sets it, and `--shared-store` counts a unit that watches the shared binary as one
+  it restarts, so it has to be named.
 - **Verification checks the others too, read-only:** every other `persistence-store*` unit's MainPID and start time are
   read before the install and after the restarts; one that changed fails the deploy (exit 7) and is named.
-- Tests: `AccountOnlyDeploy` in test_heartbeat_optin.py, 14 tests. All 7 of 59aaf10's are red on main's script; 8 of
-  the 9 added or changed for the unit naming are red on 59aaf10 (the ninth, `--release` taking no other flag, is a guard).
+- Tests: `AccountOnlyDeploy` in test_heartbeat_optin.py, 16 tests. All 7 of 59aaf10's are red on main's script; 8 of
+  the 9 added or changed for the unit naming are red on 59aaf10 (the ninth, `--release` taking no other flag, is a guard);
+  the 3 for `PERSISTENCE_STORE_EXE` are red on d7cba87.
 
 ## 2026-11-25 — install-hooks.sh: root never reads the stage, every problem found before any change (#93 review)
 
