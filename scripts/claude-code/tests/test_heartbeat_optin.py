@@ -429,7 +429,7 @@ class FakeHost:
                     f'cp "${{a[@]}}" "$d"'),
             "ssh": (f'c="$2"; c=${{c//\\/tmp\\//{self.tmp}/}}; c=${{c//\\/home\\//{w}/home/}}; '
                     f'c=${{c//\\/opt\\/persistence\\//{self.opt}/}}; exec bash -c "$c"'),
-            "sudo": '[ "$1" = -u ] && shift 2; case "$1" in chown|chmod|systemctl) exit 0;; esac; exec "$@"',
+            "sudo": '[ "$1" = -u ] && shift 2 || export SUDO_USER=$(id -un); case "$1" in chown|chmod|systemctl) exit 0;; esac; exec "$@"',
             "systemctl": "exit 0", "sleep": "exit 0"}
         for name, body in fakes.items():
             (bins / name).write_text(f"#!/bin/bash\n{body}\n")
@@ -467,7 +467,7 @@ class DeployRemote(FakeHost, unittest.TestCase):
         # Ember's point 6: it overwrote every file with no compare and no copy. Now a differing file is kept first. The
         # per-user step is install-hooks.sh, run on the host (test_install_hooks.py covers who owns what it makes).
         text = (REPO / "install-hooks.sh").read_text()
-        keep, install = text.find("cmp -s"), text.find('mv -f -T "$tmp" "$d/$f"\necho replaced')
+        keep, install = text.find("cmp -s"), text.find("mv -f -T -- \"$tmp\" \"$t\"")
         self.assertGreater(keep, 0)
         self.assertLess(keep, install)
         self.assertIn("previous/", text)
@@ -481,7 +481,7 @@ class DeployRemote(FakeHost, unittest.TestCase):
         self.assertEqual(len(kept), 1, out)
         self.assertEqual(kept[0].read_text(), "# a local edit\n")
         self.assertEqual([p.name for p in kept[0].parent.iterdir()], ["heartbeat.py"])  # identical files aren't kept
-        self.assertIn("replaced heartbeat.py", out)
+        self.assertIn("replaced: heartbeat.py", out)
         self.assertEqual((self.dest / "heartbeat.py").read_bytes(), (REPO / "heartbeat.py").read_bytes())
         self.assertIn(f"{self.user}: ledger-since written", out)  # an empty ledger: the time of this deploy
         since = (self.dest / "state" / "ledger-since").read_text()

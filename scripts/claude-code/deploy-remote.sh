@@ -71,7 +71,7 @@ tar -czf "$work/store.tgz" -C "$work/pub" .
 # off exits at its first line, so deploying it turns nothing on): all seven go beside it. A file that differs from the one
 # it replaces is copied first to ~/.claude/persistence/previous/<UTC stamp>/ and named in the output, so nothing is
 # overwritten silently and the way back is a copy, not a guess. install-hooks.sh does this part on the host, doing
-# everything in a peer's home as that peer (root only reads the staged files, #49). Each user's ledger-since is then
+# everything in a peer's home as that peer (#49; the stage is read as its owner, never by root, #93). Each user's ledger-since is then
 # written if it isn't there yet (coordination.py, seed-ledger-since: once, never rewritten), so the heartbeat knows where its ledger begins;
 # a seeding that fails says "ledger-since NOT written" and the deploy goes on (no file: every firing judged as before).
 # Every user named gets every file: a self whose heartbeat is live gets its running heartbeat.py replaced, so name only

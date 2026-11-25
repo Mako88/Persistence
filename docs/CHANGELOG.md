@@ -9,6 +9,33 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-25 — install-hooks.sh: root never reads the stage, every problem found before any change (#93 review)
+
+**Why:** Ember's CHANGES review of #93 at 6a46981 (msg 1575147022892408963), on four weak spots the review bundle had
+measured. Root checked a staged file and then opened it by path, and never checked who owned the stage: with a stage
+owned by nobody, 41 of 400 real root runs put a root-only canary's bytes into the target's home. A refusal let the
+other files land (a mixed install), and an unexpected failure aborted under `set -e` without naming what it skipped.
+`cp` wrote through a link planted at the backup's own name and still said the copy was kept. A run whose files were
+all new said "no hook file changed".
+- **Root never reads the stage.** The stage dir must be owned by root or by the account that ran sudo (`$SUDO_USER`);
+  any other owner is refused before anything runs. Each staged file is read once, as the stage's owner, into a
+  directory root made for this run; the users get their bytes from there. Rerun of the race on home: 0 of 400 (the
+  control at 6a46981 leaked 45 of 400 in the same run); with the attacker made the trusted owner, its reads through
+  the link were refused as itself, 0 of 400.
+- **Every user and file is checked before anything changes:** the hook folder, the file there, and for a file that
+  will be replaced, `previous/`, its stamp dir and the backup's own name. Any problem is named, with all the others,
+  and nothing is installed. A step that fails after that stops the run at once and names the failed file, what had
+  landed, and every user and file not attempted.
+- **The backup never lands on anything already there.** An existing backup name, a link included, is refused at the
+  check; the copy is made under a fresh temp name and hard-linked to its name (`ln -P -T`, which fails on anything
+  there), and "replaced" is said only after the copy and the rename both succeeded.
+- **The summary counts new, replaced and same apart**; "no hook file changed" only when nothing new or replaced landed.
+- **Everything run as another account runs in a clean environment**: `env -i PATH=/usr/bin:/bin bash --noprofile
+  --norc -c`, not sudoers' defaults (Ember's point 5).
+- **Tests:** 21 (9 new), 14 of them fail on 6a46981. The shim logs and checks the clean-env prefix; a stage locked to
+  everyone but its owner shows root never reads it; injected failures (a shim writer failing on one path, a link
+  planted just before `cp`) cover the stop report and the backup race. 22 mutants, all killed.
+
 ## 2026-11-24 — Concept recall: the extractor's proposals go after recall, closest first, at most 3
 
 **Why:** replayed as of each message, 13 room messages (11-23 to 11-24) were shown 90 proposed facts by the concept
@@ -31,6 +58,7 @@ Claude showed the same 3 under every message; the voice-message attachment path 
 - **After, same replay:** 8 proposals shown on 5 of the 13 messages, 8 on-topic, 0 wrong as stated; "hello again"
   shows none. The cost: 22 of the 25 on-topic lines the old block showed are no longer shown (below the floor). The floor
   was chosen on these 13 and has not yet been checked on wakes it hasn't seen.
+
 ## 2026-11-24 — install-hooks.sh does everything in a user's home as that user (#49)
 
 **Why:** after #47, root still ran `cmp`, made `previous/<stamp>` and `cp -p`'d inside the user's
@@ -42,12 +70,12 @@ move, not just the backup half (msg 1574902428355137729).
 - **Root only reads the staged files.** Each file's bytes go on stdin to one `sudo -u <user>` step that compares, makes
   `previous/` (755) and the stamp dir (700), keeps the old file with `cp -P` (a symlinked hook file is kept as the
   link), and renames a temp file in the same folder over the old one (`mv -T` replaces a symlink, never follows it).
-  A symlinked or non-directory `previous/` or stamp dir is refused: that file is left as it was, the run goes on, and
-  it exits 1.
+  A symlinked or non-directory `previous/` or stamp dir is refused and it exits 1 (since 2026-11-25, above: before
+  anything changes, for every file).
 - **The stage is checked before root reads it** (Arden msg 1574902675328335974). deploy-remote.sh makes it as the
   deploying account, mode 700. A stage dir that's a symlink or writable by group or others is refused outright. A
-  staged file that's a symlink or not a regular file is refused. When the target user owns the stage (deploying to
-  one's own account), root doesn't read for them: they read it as themselves.
+  staged file that's a symlink or not a regular file is refused. (Since 2026-11-25, above, root doesn't read the
+  stage at all: its owner does.)
 - **Tests** (`test_install_hooks.py`): a shim `sudo -u` opens the user's fake home only while its command runs, so
   anything done there as the caller fails. Symlinks at the hook file, `previous/`, the stamp dir and a staged file all
   point at a canary outside the test dir, which must come through unchanged. On main, 11 of the 12 fail, and the
