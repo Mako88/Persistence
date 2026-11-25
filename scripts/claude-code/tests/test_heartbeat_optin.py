@@ -444,7 +444,8 @@ class FakeHost:
             # MainPID: per unit (from its name) plus one per restart, remembered in pid.<pid> so readlink can find the
             # unit; 0 while the unit is inactive or failed. list-units without --all leaves out inactive units, as
             # systemd does; list-unit-files answers from `unitfiles` (installed, maybe not loaded). ActiveState is the
-            # unit's third column in `units` (inactive when it isn't listed); restart or start makes it active.
+            # unit's third column in `units` (inactive when it isn't listed), SubState its fourth; restart or start
+            # makes it active.
             # ExecStart is what own-build.conf starts once a deploy wrote one (as daemon-reload would make it), else
             # execstart.<unit>.
             "systemctl": (f'echo "$*" >> {w}/systemctl.log; st() {{ awk -v u="$1" \'$1 == u {{print $3; f=1}} END {{if (!f) print "inactive"}}\' {w}/units 2>/dev/null || echo inactive; }}; '
@@ -454,6 +455,7 @@ class FakeHost:
                           f'"restart "*|"start "*) u=$2; grep -v "^$u " {w}/units > {w}/units.new 2>/dev/null; echo "$u loaded active running x" >> {w}/units.new; mv {w}/units.new {w}/units;; '
                           f'"show -p Environment") cat "{w}/env.${{@: -1}}" 2>/dev/null;; '
                           f'"show -p ActiveState") st "${{@: -1}}";; '
+                          f'"show -p SubState") awk -v u="${{@: -1}}" \'$1 == u {{print $4; f=1}} END {{if (!f) print "dead"}}\' {w}/units;; '
                           f'"show -p MainPID") u=${{@: -1}}; case $(st "$u") in inactive|failed) echo 0; exit 0;; esac; '
                           f'p=$(( $(printf %s "$u" | cksum | cut -d" " -f1) % 10000 * 100 + $(grep -cx "restart $u" {w}/systemctl.log) )); '
                           f'echo "$u" > {w}/pid.$p; echo $p;; '
@@ -1105,6 +1107,92 @@ class AccountOnlyDeploy(FakeHost, unittest.TestCase):
     def test_release_takes_no_other_flag(self):
         run = self.deploy("--release", "--units", "none", "--claim", self.claim, "fakehost", check=False)
         self.assertEqual(run.returncode, 2, run.stderr)
+
+    # Ember's review of c699bb4 (room msg 1575212869975539827): only `active` may be restarted, `inactive|failed` stay
+    # stopped, and any other state (in transition, or one this script doesn't know) refuses under the lock before
+    # anything is installed (exit 6). A unit recorded active is re-checked immediately before its restart; if it has
+    # stopped or gone into transition it is neither restarted nor started, and the run exits 7.
+
+    def flip_on(self, fake, when, unit, to):
+        """Make the fake `fake` (systemctl or sudo) move `unit` to state `to` when it is called with first word `when`."""
+        f = self.w / "bin" / fake
+        units = self.w / "units"
+        hook = f'[ "$1" = {when} ] && sed -i "s/^{unit} loaded [a-z-]* [a-z-]* x$/{unit} loaded {to} x/" {units}; '
+        first, rest = f.read_text().split("\n", 1)
+        f.write_text(first + "\n" + hook + rest)
+
+    def test_a_deactivating_account_unit_at_preflight_refuses_before_anything_is_installed(self):
+        (self.dest / "heartbeat.py").write_text("# a local edit\n")
+        self.stopped(self.unit, "deactivating stop-sigterm")
+        run = self.deploy(check=False)
+        self.assertIn(f"{self.unit} is deactivating", run.stderr)
+        self.shared_refused(run, 6)
+        self.assertFalse(self.build.exists())
+        self.assertEqual(self.active_state(self.unit), "deactivating")
+
+    def test_every_transitional_or_unknown_state_refuses_an_account_run(self):
+        for state in ("activating start", "activating auto-restart", "reloading running", "maintenance cleaning",
+                      "refreshing x", "something-new x"):
+            with self.subTest(state):
+                (self.dest / "heartbeat.py").write_text("# a local edit\n")
+                self.stopped(self.unit, state)
+                run = self.deploy(check=False)
+                self.assertIn(f"{self.unit} is {state.split()[0]}", run.stderr)
+                self.shared_refused(run, 6)
+                self.assertFalse(self.build.exists())
+
+    def test_a_deactivating_unit_on_the_shared_build_refuses_a_shared_run_before_publication(self):
+        (self.dest / "heartbeat.py").write_text("# a local edit\n")
+        self.on_own_build(self.unit)
+        self.stopped("persistence-store-ember-test.service", "deactivating stop-sigterm")
+        run = self.deploy("--shared-store", "--units", "persistence-store-ember,persistence-store-ember-test",
+                          "--claim", self.claim, "fakehost", check=False)
+        self.assertIn("persistence-store-ember-test.service is deactivating", run.stderr)
+        self.shared_refused(run, 6)
+
+    def test_an_account_unit_that_stops_after_preflight_is_not_restarted(self):
+        for to in ("inactive dead", "deactivating stop-sigterm", "failed failed", "activating start"):
+            with self.subTest(to):
+                self.setUp()  # a fresh fake host for each state
+                self.flip_on("systemctl", "daemon-reload", self.unit, to)
+                run = self.deploy(check=False)
+                self.assertEqual(run.returncode, 7, run.stdout + run.stderr)
+                self.assertEqual(self.restarted(), [])
+                self.assertFalse(any(c.startswith("start ") for c in self.systemctl_calls()))
+                self.assertEqual(self.active_state(self.unit), to.split()[0])
+                self.assertIn(f"{self.unit}: was active under the lock and is now {to.split()[0]}; not restarted or started",
+                              run.stderr)
+
+    def test_shared_store_a_unit_that_stops_after_preflight_is_not_restarted(self):
+        self.on_own_build(self.unit)
+        self.flip_on("sudo", "tar", "persistence-store-ember-test.service", "inactive dead")
+        run = self.deploy("--shared-store", "--units", "persistence-store-ember,persistence-store-ember-test",
+                          "--claim", self.claim, "fakehost", check=False)
+        self.assertEqual(run.returncode, 7, run.stdout + run.stderr)
+        self.assertNotIn("persistence-store-ember-test.service", self.restarted())
+        self.assertFalse(any(c.startswith("start ") for c in self.systemctl_calls()))
+        self.assertEqual(self.active_state("persistence-store-ember-test.service"), "inactive")
+        self.assertIn("persistence-store-ember-test.service: was active under the lock and is now inactive; "
+                      "not restarted or started", run.stderr)
+
+    def test_shared_store_a_unit_coming_back_by_itself_after_publication_is_restarted(self):
+        # The server ends itself when the shared binary it watches changes (Server.cs) and Restart=always brings it
+        # back after RestartSec: activating/auto-restart is the publication's own effect, so it is restarted as named.
+        self.on_own_build(self.unit)
+        self.flip_on("sudo", "tar", "persistence-store-ember-test.service", "activating auto-restart")
+        out = self.deploy("--shared-store", "--units", "persistence-store-ember,persistence-store-ember-test",
+                          "--claim", self.claim, "fakehost").stdout
+        self.assertEqual(sorted(self.restarted()), ["persistence-store-ember-test.service", "persistence-store-ember.service"])
+        self.assertIn("every other persistence-store unit kept its MainPID and start time", out)
+
+    def test_shared_store_a_unit_being_started_by_another_hand_after_publication_is_not_restarted(self):
+        # activating/start is not the publication's restart: something else is starting it; leave it be.
+        self.on_own_build(self.unit)
+        self.flip_on("sudo", "tar", "persistence-store-ember-test.service", "activating start")
+        run = self.deploy("--shared-store", "--units", "persistence-store-ember,persistence-store-ember-test",
+                          "--claim", self.claim, "fakehost", check=False)
+        self.assertEqual(run.returncode, 7, run.stdout + run.stderr)
+        self.assertNotIn("persistence-store-ember-test.service", self.restarted())
 
 
 if __name__ == "__main__":

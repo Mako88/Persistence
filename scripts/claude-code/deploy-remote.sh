@@ -9,6 +9,10 @@
 # and the running binary is read back from /proc. The shared /opt/persistence/store and every other unit are left alone.
 # A stopped unit (inactive or failed) is never started (Ember's review of 4664fc2): its build and drop-in change, it is
 # checked still stopped with its next start naming the new build, and starting it is a separate, explicit step.
+# Unit states (Ember's review of c699bb4): only `active` is restarted, `inactive|failed` stay stopped, and any other
+# ActiveState (activating, deactivating, reloading, refreshing, maintenance, or one this script doesn't know) refuses
+# under the lock before anything is installed (exit 6). A unit recorded active is read again immediately before its
+# restart: if it has stopped or gone into transition it is neither restarted nor started, and the run exits 7.
 # own-build.conf sets PERSISTENCE_STORE_EXE to the own build as well: the server ends itself when the file that names
 # changes (Server.cs), so a unit left watching the shared binary would restart at the next shared publication.
 # Refused, with nothing installed (exit 6): a unit whose own ExecStart doesn't start the shared binary, another drop-in
@@ -147,9 +151,34 @@ shared_exe=/opt/persistence/store/persistence-store
 # Every persistence-store* unit there is, loaded (any state) or only installed (list-unit-files), templates aside
 # (Ember's review of 4664fc2: an inactive unit configured to run or watch the shared binary counts too).
 all_units="{ systemctl list-units --type=service --all --no-legend 'persistence-store*' | awk '{print \$1}' | sed 's/^[^a-z]*//'; systemctl list-unit-files --type=service --no-legend 'persistence-store*' | awk '{print \$1}'; } | grep -v '@\\.service\$' | sort -u"
-# A unit counts as running unless systemd says inactive or failed; only running units are ever restarted. Starting a
-# stopped unit is a separate, explicit step this script never takes.
+# A unit is stopped when systemd says inactive or failed; starting a stopped unit is a separate, explicit step this
+# script never takes.
 stopped="case \"\$(systemctl show -p ActiveState --value \$s)\" in inactive|failed) true;; *) false;; esac"
+# Under the lock, before anything is installed, each unit \$s is sorted (Ember's review of c699bb4): active ones join
+# \$restarting, stopped ones \$left; any other state refuses, since restarting a unit that is deactivating would start
+# something that was being stopped, and one that is activating or reloading is in someone else's hands.
+classify="st=\$(systemctl show -p ActiveState --value \$s)
+    case \"\$st\" in
+      active) restarting=\"\${restarting:+\$restarting }\$s\";;
+      inactive|failed) left=\"\${left:+\$left }\$s\";;
+      *) echo \"deploy refused: \$s is \$st/\$(systemctl show -p SubState --value \$s), neither active nor stopped; run again once it has settled. Nothing installed\" >&2; exit 6;;
+    esac"
+# Immediately before restarting \$s, recorded active under the lock: its ActiveState/SubState must match the pattern
+# $1, or it is neither restarted nor started and the run exits 7, saying $2 about where that leaves it.
+recheck() {
+  echo "now=\$(systemctl show -p ActiveState --value \$s)/\$(systemctl show -p SubState --value \$s)
+    case \"\$now\" in
+      $1) ;;
+      *) echo \"\$s: was active under the lock and is now \${now%%/*}; not restarted or started (substate \${now#*/}; $2)\" >&2; exit 7;;
+    esac"
+}
+# Account-only: nothing this run does makes a unit leave `active` before its restart, so only `active` passes.
+recheck_own=$(recheck 'active/*' "its build and drop-in are in place, so its next start runs them; the units after it in this run were not installed")
+# --shared-store: publication itself ends every server watching the shared binary (Server.cs) and Restart=always
+# brings it back after RestartSec, so between publication and the restart a unit can be activating/auto-restart (or
+# auto-restart-queued) by this run's own doing; that one is restarted as named. Anything else (deactivating,
+# inactive, failed, activating/start) is someone else's change and refuses.
+recheck_shared=$(recheck 'active/*|activating/auto-restart|activating/auto-restart-queued' "the shared build is already republished; the units after it in this run were not restarted")
 snapshot="$all_units | while read -r s; do echo \"\$s pid=\$(systemctl show -p MainPID --value \$s) since=\$(systemctl show -p ActiveEnterTimestamp --value \$s) state=\$(systemctl show -p ActiveState --value \$s)\"; done"
 others_unchanged="after=\$($snapshot)
   changed=
@@ -176,11 +205,12 @@ preflight="$each_unit
     if [ -n \"\$other\" ]; then echo \"deploy refused: another drop-in of \$unit sets ExecStart or PERSISTENCE_STORE_EXE (\$other); its self moves it aside first, so own-build.conf is the one in force. Nothing installed\" >&2; exit 6; fi
     if [ -e \$b ] && [ \"\$(cat \$b/DEPLOYED 2>/dev/null)\" != $deployed ]; then echo \"deploy refused: \$b exists and doesn't hold $deployed; nothing installed\" >&2; exit 6; fi
   done
-  restarting=
+  restarting= left=
   $each_unit
     s=\$unit
-    if $stopped; then echo \"\$unit: \$(systemctl show -p ActiveState --value \$unit) before this run; its build and drop-in change, it is not started\"; else restarting=\"\${restarting:+\$restarting }\$unit\"; fi
-  done"
+    $classify
+  done
+  for s in \$left; do echo \"\$s: \$(systemctl show -p ActiveState --value \$s) before this run; its build and drop-in change, it is not started\"; done"
 install_own="$each_unit
     base=\$(grep -m1 '^ExecStart=/' $units/\$unit)
     if [ -e \$b ]; then echo \"\$u: \$b already holds $deployed, reused\"; else
@@ -195,7 +225,7 @@ install_own="$each_unit
     printf '[Service]\\nEnvironment=PERSISTENCE_STORE_EXE=%s\\nExecStart=\\n%s\\n' \$b/persistence-store \"\$(printf %s \"\$base\" | sed \"s#^ExecStart=$shared_exe #ExecStart=\$b/persistence-store #\")\" | sudo tee \$d/own-build.conf >/dev/null
     echo \"\$u: \$unit now starts \$b/persistence-store (own-build.conf; was: \${was:-the shared build})\"
     sudo systemctl daemon-reload
-    case \" \$restarting \" in *\" \$unit \"*) sudo systemctl restart \$unit;; esac
+    case \" \$restarting \" in *\" \$unit \"*) s=\$unit; $recheck_own; sudo systemctl restart \$unit;; esac
   done
   sleep 5
   bad=
@@ -232,13 +262,15 @@ preflight_shared="on=\$(for s in \$($all_units); do
     exit 6
   fi
   restarting= left=
-  for s in \$on; do if $stopped; then left=\"\${left:+\$left }\$s\"; else restarting=\"\${restarting:+\$restarting }\$s\"; fi; done"
+  for s in \$on; do
+    $classify
+  done"
 install_shared="sudo tar -xzf $stage/store.tgz -C /opt/persistence/store
   sudo chown -R root:root /opt/persistence/store
   sudo chmod -R a+rX /opt/persistence/store
   sudo chmod 755 $shared_exe
   echo \"--shared-store: republished /opt/persistence/store ($deployed); the units named, which run or watch it: \${on:-none}; restarting the running ones: \${restarting:-none}; left stopped: \${left:-none}\"
-  for s in \$restarting; do sudo systemctl restart \$s; done
+  for s in \$restarting; do $recheck_shared; sudo systemctl restart \$s; done
   sleep 5
   [ -z \"\$restarting\" ] || systemctl is-active \$restarting
   for s in \$left; do

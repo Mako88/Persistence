@@ -41,6 +41,15 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
   `--units none` is refused while any such unit exists. Only the running ones are restarted, and the stopped ones are
   checked still stopped (exit 7 if one started). The before/after snapshot covers installed-only units and records
   ActiveState. 9 tests; all red on 4664fc2's script.
+- **Transitional states (Ember's review of c699bb4, msg 1575212869975539827).** Only `active` is restarted;
+  `inactive|failed` stay stopped; any other ActiveState (activating, deactivating, reloading, refreshing, maintenance,
+  or one the script doesn't know) refuses under the lock before anything is installed (exit 6), since restarting a
+  unit that is deactivating would start something being stopped. A unit recorded active is read again immediately
+  before its restart; if it has stopped or gone into transition it is neither restarted nor started (exit 7, naming
+  the state). One allowance, `--shared-store` only: after publication a watching server ends itself and
+  `Restart=always` brings it back, so `activating/auto-restart` (or `auto-restart-queued`) is the run's own doing and is
+  restarted as named; `activating/start` is not. 7 tests (14 cases); 14 cases red on c699bb4's script, the
+  auto-restart allowance a guard.
 - Tests: `AccountOnlyDeploy` in test_heartbeat_optin.py, 16 tests. All 7 of 59aaf10's are red on main's script; 8 of
   the 9 added or changed for the unit naming are red on 59aaf10 (the ninth, `--release` taking no other flag, is a guard);
   the 3 for `PERSISTENCE_STORE_EXE` are red on d7cba87.
