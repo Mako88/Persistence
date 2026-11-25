@@ -50,6 +50,15 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
   `Restart=always` brings it back, so `activating/auto-restart` (or `auto-restart-queued`) is the run's own doing and is
   restarted as named; `activating/start` is not. 7 tests (14 cases); 14 cases red on c699bb4's script, the
   auto-restart allowance a guard.
+- **A unit coming back by itself isn't restarted again (Ember's review of 60e40dc, msg 1575217084324126801).**
+  `--shared-store` only. After publication, each unit recorded active is read again. If it is still active on the old
+  binary (its pid is the one from before publication, or /proc shows `… (deleted)`), it is restarted. If it is already
+  active on the new binary, it is left alone. If it is in `activating/auto-restart(-queued)`, it isn't touched: the run
+  waits up to 30 s for it to be active again (`activating/start` in that wait is the same restart). Anything else, or
+  running out of time, exits 7 with it neither restarted nor started, and the units after it aren't restarted.
+  The check afterwards is now /proc on every one of those units, reading the new shared binary, instead of
+  `is-active`. 5 tests, all red on 60e40dc's script, each mutation-checked; they replace 60e40dc's
+  restart-on-auto-restart test. The fake host's /proc now tells the old shared binary from the new one.
 - Tests: `AccountOnlyDeploy` in test_heartbeat_optin.py, 16 tests. All 7 of 59aaf10's are red on main's script; 8 of
   the 9 added or changed for the unit naming are red on 59aaf10 (the ninth, `--release` taking no other flag, is a guard);
   the 3 for `PERSISTENCE_STORE_EXE` are red on d7cba87.

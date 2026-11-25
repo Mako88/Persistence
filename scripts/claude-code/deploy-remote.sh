@@ -175,10 +175,41 @@ recheck() {
 # Account-only: nothing this run does makes a unit leave `active` before its restart, so only `active` passes.
 recheck_own=$(recheck 'active/*' "its build and drop-in are in place, so its next start runs them; the units after it in this run were not installed")
 # --shared-store: publication itself ends every server watching the shared binary (Server.cs) and Restart=always
-# brings it back after RestartSec, so between publication and the restart a unit can be activating/auto-restart (or
-# auto-restart-queued) by this run's own doing; that one is restarted as named. Anything else (deactivating,
-# inactive, failed, activating/start) is someone else's change and refuses.
-recheck_shared=$(recheck 'active/*|activating/auto-restart|activating/auto-restart-queued' "the shared build is already republished; the units after it in this run were not restarted")
+# brings it back after RestartSec, so after publication each unit recorded active under the lock is, by this run's own
+# doing, either still active on the old binary, already back on the new one, or activating/auto-restart(-queued) on its
+# way back. Only the first is restarted (Ember's review of 60e40dc, msg 1575217084324126801). One coming back is waited
+# for, up to $settle seconds, without being touched: active again settles it; activating/start in that wait is the same
+# restart going on (Type=simple passes through it); anything else, or the time running out, exits 7 with it neither
+# restarted nor started. Any other state when it is first read (deactivating, inactive, failed, activating/start) is
+# someone else's change and exits 7 too. Every unit is then read back from /proc on the new shared binary.
+settle=30
+restart_shared="now=\$(systemctl show -p ActiveState --value \$s)/\$(systemctl show -p SubState --value \$s)
+    case \"\$now\" in
+      active/*)
+        pid=\$(systemctl show -p MainPID --value \$s)
+        exe=\$(sudo readlink /proc/\$pid/exe 2>/dev/null || true)
+        was=\$(printf '%s\\n' \"\$before\" | awk -v s=\"\$s\" '\$1 == s {print \$2}')
+        if [ \"pid=\$pid\" != \"\$was\" ] && [ \"\$exe\" = $shared_exe ]; then
+          echo \"\$s: already active on the new shared build (pid \$pid, was \${was#pid=}); not restarted\"
+        else
+          echo \"\$s: active on the old shared build; restarting (pid \$pid runs \${exe:-nothing readable})\"
+          sudo systemctl restart \$s
+        fi;;
+      activating/auto-restart|activating/auto-restart-queued)
+        echo \"\$s: coming back by itself after publication (\$now); not restarted, waiting up to ${settle}s for it\"
+        waited=0
+        while :; do
+          sleep 1; waited=\$((waited + 1))
+          now=\$(systemctl show -p ActiveState --value \$s)/\$(systemctl show -p SubState --value \$s)
+          case \"\$now\" in
+            active/*) echo \"\$s: active again by itself after \${waited}s\"; break;;
+            activating/auto-restart|activating/auto-restart-queued|activating/start) ;;
+            *) echo \"\$s: was coming back by itself and is now \${now%%/*}; not restarted or started (substate \${now#*/}; the shared build is already republished; the units after it in this run were not restarted)\" >&2; exit 7;;
+          esac
+          if [ \$waited -ge $settle ]; then echo \"\$s: still \$now after ${settle}s; not restarted or started (the shared build is already republished; the units after it in this run were not restarted)\" >&2; exit 7; fi
+        done;;
+      *) echo \"\$s: was active under the lock and is now \${now%%/*}; not restarted or started (substate \${now#*/}; the shared build is already republished; the units after it in this run were not restarted)\" >&2; exit 7;;
+    esac"
 snapshot="$all_units | while read -r s; do echo \"\$s pid=\$(systemctl show -p MainPID --value \$s) since=\$(systemctl show -p ActiveEnterTimestamp --value \$s) state=\$(systemctl show -p ActiveState --value \$s)\"; done"
 others_unchanged="after=\$($snapshot)
   changed=
@@ -270,9 +301,17 @@ install_shared="sudo tar -xzf $stage/store.tgz -C /opt/persistence/store
   sudo chmod -R a+rX /opt/persistence/store
   sudo chmod 755 $shared_exe
   echo \"--shared-store: republished /opt/persistence/store ($deployed); the units named, which run or watch it: \${on:-none}; restarting the running ones: \${restarting:-none}; left stopped: \${left:-none}\"
-  for s in \$restarting; do $recheck_shared; sudo systemctl restart \$s; done
+  for s in \$restarting; do
+    $restart_shared
+  done
   sleep 5
-  [ -z \"\$restarting\" ] || systemctl is-active \$restarting
+  bad=
+  for s in \$restarting; do
+    pid=\$(systemctl show -p MainPID --value \$s)
+    exe=\$(sudo readlink /proc/\$pid/exe 2>/dev/null || true)
+    if [ \"\$exe\" = $shared_exe ]; then echo \"\$s: running \$exe\"; else echo \"\$s: NOT verified: it runs \${exe:-nothing readable}, not the new $shared_exe\"; bad=1; fi
+  done
+  [ -z \"\$bad\" ] || exit 7
   for s in \$left; do
     if $stopped && [ \"\$(systemctl show -p MainPID --value \$s)\" = 0 ]; then echo \"\$s: still \$(systemctl show -p ActiveState --value \$s), not started\"; else echo \"\$s: NOT verified: it was stopped and is now \$(systemctl show -p ActiveState --value \$s)\"; exit 7; fi
   done
