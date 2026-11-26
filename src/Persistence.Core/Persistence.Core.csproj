@@ -52,6 +52,13 @@
     <EmbeddedResource Include="Data\Migrations\011_AddTouchedSessionId.sql" />
     <EmbeddedResource Include="Data\Migrations\012_AddSpeakerAttribution.sql" />
     <EmbeddedResource Include="Data\Migrations\013_AddConceptGraph.sql" />
+    <EmbeddedResource Include="Data\Migrations\014_AddClosedUtc.sql" />
+    <EmbeddedResource Include="Data\Migrations\015_AddCloseReason.sql" />
+    <EmbeddedResource Include="Data\Migrations\016_AddEndedBy.sql" />
+    <EmbeddedResource Include="Data\Migrations\017_AddReopenReason.sql" />
+    <EmbeddedResource Include="Data\Migrations\018_AddIsState.sql" />
+    <EmbeddedResource Include="Data\Migrations\019_AddSplitFromId.sql" />
+    <EmbeddedResource Include="Data\Migrations\020_AddCloseIndexes.sql" />
   </ItemGroup>
 
   <ItemGroup>

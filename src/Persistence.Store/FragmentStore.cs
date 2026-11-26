@@ -158,7 +158,7 @@ internal sealed partial class FragmentStore(
 
     public async Task<ContextFragmentEntity> AddAsync(
         string typeName, string content, string? summary, float? importance, float? confidence,
-        IReadOnlyList<string> tagPaths, bool isProtected, string? project = null)
+        IReadOnlyList<string> tagPaths, bool isProtected, string? project = null, bool isState = false)
     {
         var (type, authorable) = FragmentTypeRules.ParseAuthorable(typeName);
         // A personal fragment is about the work in hand far more often than about everything: unscoped, the
