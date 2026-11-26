@@ -37,15 +37,29 @@ internal sealed partial class FragmentStore
     /// <summary>
     /// Closes <paramref name="id"/>: the state it records ended, because of <paramref name="endedBy"/> (required unless it
     /// was written with <c>--state</c>), for <paramref name="reason"/> (always required). Each refusal says what to do.
+    /// The input is checked before anything is read, so a malformed command is a <see cref="UsageException"/> (exit 1)
+    /// whatever the store holds; everything after is the store's <see cref="RefusedException"/> (exit 2).
     /// </summary>
     public async Task<ContextFragmentEntity> CloseAsync(long id, string? endedBy, string? reason)
     {
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            throw new UsageException("close needs --reason: why this event ended this state. An ended-by alone proves an event exists, not that it ended anything.");
+        }
+
+        endedBy = string.IsNullOrWhiteSpace(endedBy) ? null : endedBy.Trim();
+        var form = endedBy is null ? null : EndedByForm.Match(endedBy);
+        if (form is { Success: false })
+        {
+            throw new UsageException($"'{endedBy}' isn't an ended-by: use #<fragment id>, commit:<repo>@<7 to 40 hex> or msg:<room message id>.");
+        }
+
         if (await OpenPassAsync(includeExpired: false) is not null)
         {
             throw new RefusedException(CloseAsleep);
         }
 
-        var fragment = await WritableAsync(id);
+        var fragment = await RememberedAsync(id, "closed");
         if (fragment.FragmentType == ContextFragmentType.WorkingNote)
         {
             throw new RefusedException($"#{id} is the working note: `note` replaces it, it isn't closed.");
@@ -54,6 +68,12 @@ internal sealed partial class FragmentStore
         if (fragment.FragmentType == ContextFragmentType.Identity)
         {
             throw new RefusedException($"#{id} is Identity: values and positions change by supersede, they don't end.");
+        }
+
+        if (fragment.FragmentType == ContextFragmentType.ChatMessage)
+        {
+            throw new RefusedException($"#{id} is a ChatMessage: what was said stays said. Write the state it carried as its own "
+                + "fragment (`add --state`) and close that.");
         }
 
         if (fragment.ClosedUtc is { } at)
@@ -73,25 +93,14 @@ internal sealed partial class FragmentStore
             throw new RefusedException($"#{id} is superseded: close the head of its chain, #{head}.");
         }
 
-        if (string.IsNullOrWhiteSpace(reason))
+        // Every close, cited #id or not (call (a), the merged plan): a broken chain refuses before anything is written.
+        var asserted = await AssertionDateOrRefuseAsync(id);
+        if (endedBy is null && !fragment.IsState)
         {
-            throw new UsageException("close needs --reason: why this event ended this state. An ended-by alone proves an event exists, not that it ended anything.");
+            throw new RefusedException($"close needs --ended-by (#<id>, commit:<repo>@<sha> or msg:<id>): #{id} wasn't written with --state, so name the event that ended it.");
         }
 
-        var asserted = await AssertionDateOrRefuseAsync(id);
-        endedBy = string.IsNullOrWhiteSpace(endedBy) ? null : endedBy.Trim();
-        if (endedBy is null)
-        {
-            if (!fragment.IsState)
-            {
-                throw new RefusedException($"close needs --ended-by (#<id>, commit:<repo>@<sha> or msg:<id>): #{id} wasn't written with --state, so name the event that ended it.");
-            }
-        }
-        else if (EndedByForm.Match(endedBy) is not { Success: true } form)
-        {
-            throw new UsageException($"'{endedBy}' isn't an ended-by: use #<fragment id>, commit:<repo>@<7 to 40 hex> or msg:<room message id>.");
-        }
-        else if (form.Groups["id"].Success)
+        if (form is { Success: true } && form.Groups["id"].Success)
         {
             var cited = long.Parse(form.Groups["id"].Value);
             var ending = await fragments.GetByIdAsync(cited) ?? throw new RefusedException($"There is no fragment #{cited} to have ended #{id}.");
@@ -118,7 +127,7 @@ internal sealed partial class FragmentStore
         fragment.Reason = reason.Trim();
         fragment.EndedBy = endedBy;
         fragment.ReopenReason = null;
-        fragment.LastModifiedUtc = DateTimeOffset.UtcNow;
+        Touch(fragment);
         await fragments.SaveAsync(fragment);
         return fragment;
     }
@@ -126,29 +135,48 @@ internal sealed partial class FragmentStore
     /// <summary>Undoes a close, with its own why: the columns clear, the why is kept on <c>ReopenReason</c> and in the log.</summary>
     public async Task<ContextFragmentEntity> ReopenAsync(long id, string? reason)
     {
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            throw new UsageException("reopen needs --reason: why the state holds again (for example, the merge was reverted).");
+        }
+
         if (await OpenPassAsync(includeExpired: false) is not null)
         {
             throw new RefusedException(CloseAsleep);
         }
 
-        var fragment = await WritableAsync(id);
+        var fragment = await RememberedAsync(id, "reopened");
         if (fragment.ClosedUtc is null)
         {
             throw new RefusedException($"#{id} isn't closed.");
-        }
-
-        if (string.IsNullOrWhiteSpace(reason))
-        {
-            throw new UsageException("reopen needs --reason: why the state holds again (for example, the merge was reverted).");
         }
 
         fragment.ClosedUtc = null;
         fragment.Reason = null;
         fragment.EndedBy = null;
         fragment.ReopenReason = reason.Trim();
-        fragment.LastModifiedUtc = DateTimeOffset.UtcNow;
+        Touch(fragment);
         await fragments.SaveAsync(fragment);
         return fragment;
+    }
+
+    /// <summary>
+    /// <see cref="WritableAsync"/> and not forgotten: a forgotten fragment was deliberately taken out of reads, so close
+    /// and reopen don't change it behind that (Ember, #96 point 1); `unforget` first, as a cited ending already needs.
+    /// </summary>
+    private async Task<ContextFragmentEntity> RememberedAsync(long id, string done)
+    {
+        var fragment = await WritableAsync(id);
+        return fragment.IsDeleted
+            ? throw new RefusedException($"#{id} is forgotten: `unforget {id}` first if it should be {done}.")
+            : fragment;
+    }
+
+    /// <summary>An edit, so it moves both fields together: <c>TouchedSessionId</c> is the session that last added or edited it.</summary>
+    private void Touch(ContextFragmentEntity fragment)
+    {
+        fragment.LastModifiedUtc = DateTimeOffset.UtcNow;
+        fragment.TouchedSessionId = Session ?? fragment.TouchedSessionId;
     }
 
     /// <summary>
@@ -301,11 +329,18 @@ internal sealed partial class FragmentStore
             linked++;
             if (apply)
             {
-                foreach (var part in parts)
+                // One transaction per note (Ember, #96 point 4): a failed write leaves every part of this note
+                // unlinked, never the partial state a later run refuses to repair. Notes before it stay committed.
+                await fragments.RunInTransactionAsync(async transaction =>
                 {
-                    part.SplitFromId = original.Id;
-                    await fragments.SaveAsync(part);
-                }
+                    foreach (var part in parts)
+                    {
+                        part.SplitFromId = original.Id;
+                        await fragments.SaveAsync(part, transaction);
+                    }
+
+                    return parts.Count;
+                });
             }
 
             lines.Add($"#{original.Id}: {(apply ? "linked" : "would link")} {parts.Count} parts ({list})");

@@ -485,6 +485,7 @@ raised is done.
   them, and any command that makes a tag refreshes `TagPaths`. Two stores in one process (tests, or a server holding
   more than one) read each other's tag paths: CloseTests running beside FragmentStoreTests made the sleep tests' inbox
   and `sleep/open` checks misread. Worked around by a test collection. Fix: per store, with `Render` taking them.
+  Ember accepted the workaround for #96 on the understanding that this gets its own fix (room 1575474728984907817).
 - **The migration runner's already-applied rule (2026-11-26, from the close build plan A1).** `IsAlreadyApplied`
   records a whole migration as applied when any one statement hits "duplicate column name" / "no such column" /
   "already exists". Close's migrations work around it (one ADD COLUMN per file). Narrowing it, or checking the schema

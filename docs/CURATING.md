@@ -76,7 +76,8 @@ is listed by id and is a `show` or a recall away. Read it with `persistence-stor
   for Y") that stopped being true. It isn't supersede (nothing replaces it) or archive (recall would still show it as
   current). It keeps its words, leaves the core, and comes back from recall labelled `closed <date>: <why>`. Only for
   states: an event report stays true as history, and there's no event that ended it. If the fragment mixes an event
-  with a state, `split` it and close the state part. The reason is the claim that this event ended this state, so
+  with a state, `split` it and close the state part. A conversation message is never closed (what was said stays said): write the state it
+  carried as its own fragment and close that. A forgotten fragment has to be unforgotten first. The reason is the claim that this event ended this state, so
   make it one you'd defend. `reopen <id> --reason` undoes it. When you write a wait, write it on its own with
   `add --state`; then it can be closed with only a reason.
 - `archive`: out of the core and recent lists, still searchable. For what no longer earns a place.

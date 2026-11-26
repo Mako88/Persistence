@@ -17,8 +17,11 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
   written with **`add --state`**, and **`reopen <id> --reason`**. A closed fragment keeps its content, type and status,
   leaves the core (loaded groups included), and is labelled `closed <date>: <reason> (ended by <ref>)` in recall,
   search, list and show. `show` lists every close and reopen, read from the audit log. Refused: Identity, the working
-  note, protected, already closed, superseded (names the head), a split original (names every part), an empty reason,
-  a missing ended-by on a non-state fragment, a malformed ref, and any close or reopen during a sleep pass.
+  note, a ChatMessage (an utterance stays said: write the state as its own `--state` fragment), forgotten (close and
+  reopen both: `unforget` first), protected, already closed, superseded (names the head), a split original (names every
+  part), a missing ended-by on a non-state fragment, and any close or reopen during a sleep pass. The input is checked
+  first: an empty reason or a malformed ref is a usage error (exit 1) whatever the store holds; every other refusal
+  exits 2. Close and reopen are edits, so they set `TouchedSessionId` with `LastModifiedUtc` (Ember's review of #96).
 - **Assertion date:** a `#id` ending must be strictly newer than the state, both dated by following `SplitFromId` to the
   unsplit fragment, never back through supersede (a split part asserts nothing new; a supersede is a new assertion).
   A broken chain (missing parent, self-link, cycle, past the hop limit) refuses the close; no date is guessed.
@@ -27,7 +30,8 @@ day's work under a dated heading; a short bold lead-in per change beats a bare b
   fragment is refused (reopen first). Supersede of a closed fragment is allowed and inherits neither.
 - **`backfill-splits [--apply]`** links splits made before this, from the anchored `Split into #a, #b` note, only when
   every check passes; otherwise it names the fragment, the note and the failed check. Parts already linked to their
-  original read "already correct"; partial, differently linked and mixed sets are skipped loudly, never completed.
+  original read "already correct"; partial, differently linked and mixed sets are skipped loudly, never completed. Each
+  note's links are written in one transaction, so a failure part-way leaves that note's parts all unlinked.
   Dry run by default.
 - **Migrations 014 to 020:** one `ADD COLUMN` per file, then the indexes, because the runner records a migration that
   hits "duplicate column name" as applied without running the rest of it (Ember). Tested with a column pre-added by
