@@ -481,6 +481,15 @@ and the kept-by-session section, the small case of (2) by speaker attribution (a
 this harness), and (3) by the sleep pass's record, which shows what a night let go; every item the work Claude
 raised is done.
 
+- **`FragmentStore.TagPaths` and `Heads` are static (2026-11-26, Arden, close PR A).** Every store in a process shares
+  them, and any command that makes a tag refreshes `TagPaths`. Two stores in one process (tests, or a server holding
+  more than one) read each other's tag paths: CloseTests running beside FragmentStoreTests made the sleep tests' inbox
+  and `sleep/open` checks misread. Worked around by a test collection. Fix: per store, with `Render` taking them.
+- **The migration runner's already-applied rule (2026-11-26, from the close build plan A1).** `IsAlreadyApplied`
+  records a whole migration as applied when any one statement hits "duplicate column name" / "no such column" /
+  "already exists". Close's migrations work around it (one ADD COLUMN per file). Narrowing it, or checking the schema
+  after a rollback, changes how every past migration re-runs, so it gets its own PR and review.
+
 ## Open observations
 
 - **Self-recorded lessons can encode mistakes.** When coached to "save what you learned," a peer can save

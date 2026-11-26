@@ -9,6 +9,34 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-26 — close: marking a recorded state no longer true (PR A of the close build)
+- **Why:** most stale records are a present state ("PR waits on X") still standing after X happened. Supersede needs a
+  replacement and archive leaves recall showing it as current. Design: docs/design/close-state.md (Ember approved
+  f5abc6b); build plan: docs/design/close-build-plan.md (Ember approved 8e179e4, F1 to F4 as recommended).
+- **`close <id> --ended-by <#id|commit:<repo>@<sha>|msg:<id>> --reason <why>`**, `close <id> --reason` for a fragment
+  written with **`add --state`**, and **`reopen <id> --reason`**. A closed fragment keeps its content, type and status,
+  leaves the core (loaded groups included), and is labelled `closed <date>: <reason> (ended by <ref>)` in recall,
+  search, list and show. `show` lists every close and reopen, read from the audit log. Refused: Identity, the working
+  note, protected, already closed, superseded (names the head), a split original (names every part), an empty reason,
+  a missing ended-by on a non-state fragment, a malformed ref, and any close or reopen during a sleep pass.
+- **Assertion date:** a `#id` ending must be strictly newer than the state, both dated by following `SplitFromId` to the
+  unsplit fragment, never back through supersede (a split part asserts nothing new; a supersede is a new assertion).
+  A broken chain (missing parent, self-link, cycle, past the hop limit) refuses the close; no date is guessed.
+  `commit:` and `msg:` are stored as given and the output says they weren't checked.
+- **Split** now sets `SplitFromId` on every part, the first included, and passes `IsState` on; split of a closed
+  fragment is refused (reopen first). Supersede of a closed fragment is allowed and inherits neither.
+- **`backfill-splits [--apply]`** links splits made before this, from the anchored `Split into #a, #b` note, only when
+  every check passes; otherwise it names the fragment, the note and the failed check. Parts already linked to their
+  original read "already correct"; partial, differently linked and mixed sets are skipped loudly, never completed.
+  Dry run by default.
+- **Migrations 014 to 020:** one `ADD COLUMN` per file, then the indexes, because the runner records a migration that
+  hits "duplicate column name" as applied without running the rest of it (Ember). Tested with a column pre-added by
+  hand: only its file is recorded unrun, the rest really run.
+- **The sleep prompt** asks for a close as a draft (split, close, how the ref was checked), or `may have ended` when it
+  can't check the ref.
+- **Tests:** CloseTests now runs serially with FragmentStoreTests. `FragmentStore.TagPaths` is static, and running in
+  parallel it made FragmentStoreTests' sleep tests flaky (2 failures in 8 runs). Making it per-store is in TODO.
+
 ## 2026-11-25 — deploy-remote.sh is account-only by default
 - **Why:** the 15:06Z deploy of d00f8e1, meant for ubuntu only, republished the shared `/opt/persistence/store` and
   restarted every `persistence-store*` unit, so Ember's two units moved from d44a423 to d00f8e1 without their say (Arden,

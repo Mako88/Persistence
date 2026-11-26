@@ -632,9 +632,14 @@ public sealed class CloseTests : IDisposable
         var tb = await LegacySplitAsync(store, twiceB);
         await SqlAsync("UPDATE ContextFragments SET Notes = @n WHERE Id = @o", new { n = $"Split into #{tb[0].Id}, #{ta[1].Id}.", o = twiceB.Id });
 
-        // #502's shape: "split" inside a supersede reason, not a split note.
+        // #502's shape: "split into" inside a supersede reason, not a split note. Read unanchored it would pass every
+        // other check (first id = the successor, the other part newer and the same type), so only the anchor stops it.
+        // Mutation: match "split into #a, #b" anywhere → s502 and extra are linked.
         var o502 = await Add(store, "a view");
-        var s502 = await store.SupersedeAsync([o502.Id], "a better view", null, null, null, [], $"the old one should have been split into #{wrongFirst.Id}, #{missing.Id}");
+        var s502 = await store.SupersedeAsync([o502.Id], "a better view", null, null, null, [], "merged");
+        var extra = await Add(store, "another view, written after");
+        await SqlAsync("UPDATE ContextFragments SET Notes = @n WHERE Id = @o",
+            new { n = $"Merged; the old one should have been split into #{s502.Id}, #{extra.Id} but wasn't.", o = o502.Id });
 
         var report = await store.BackfillSplitsAsync(apply: true);
         foreach (var skipped in new[] { wrongFirst, missing, later, forgot, twiceA, twiceB })
@@ -642,13 +647,14 @@ public sealed class CloseTests : IDisposable
             Assert.Contains(report.Split('\n'), l => l.Contains($"#{skipped.Id}:") && l.Contains("skipped"));
         }
 
-        Assert.DoesNotContain(report.Split('\n'), l => l.StartsWith($"#{o502.Id}:") && l.Contains("link"));
+        Assert.Contains(report.Split('\n'), l => l.StartsWith($"#{o502.Id}: not read"));
         foreach (var p in wf.Concat(mp).Concat(lp).Concat(fp).Concat(ta).Concat(tb))
         {
             Assert.Null((await store.GetAsync(p.Id)).SplitFromId);
         }
 
         Assert.Null((await store.GetAsync(s502.Id)).SplitFromId);
+        Assert.Null((await store.GetAsync(extra.Id)).SplitFromId);
         Assert.Null((await store.GetAsync(wrongFirst.Id)).SplitFromId);
     }
 }
