@@ -13,6 +13,12 @@ namespace Persistence.Tests;
 /// inventing a date; the split backfill links only what every check passes and is idempotent by state. Each test
 /// names, in its comment, the mutation that turns it red.
 /// </summary>
+/// <remarks>
+/// In <see cref="FragmentStoreStaticsCollection"/>: <c>FragmentStore.TagPaths</c> is static and any command that makes a
+/// tag refreshes it (a sleep pass makes <c>sleep/open</c>), so run beside FragmentStoreTests this class's stores
+/// overwrote the paths that class's sleep tests were reading (2 failures in 8 full runs; 0 in 12 with this collection).
+/// </remarks>
+[Collection(nameof(FragmentStoreStaticsCollection))]
 public sealed class CloseTests : IDisposable
 {
     private readonly string db = Path.Combine(Path.GetTempPath(), $"close-{Guid.NewGuid():N}.db");
@@ -23,9 +29,7 @@ public sealed class CloseTests : IDisposable
     {
         var config = new AppConfig { PeerName = "Arden" };
         config.DatabasePath = db;
-        var store = await FragmentStore.OpenAsync(config);
-        await store.RefreshTagPathsAsync();
-        return store;
+        return await FragmentStore.OpenAsync(config);
     }
 
     private static Task<ContextFragmentEntity> Add(FragmentStore store, string content, bool state = false, string type = "Personal", IReadOnlyList<string>? tags = null) =>
@@ -50,7 +54,11 @@ public sealed class CloseTests : IDisposable
     private async Task<IReadOnlyList<ContextFragmentEntity>> LegacySplitAsync(FragmentStore store, ContextFragmentEntity original, int parts = 2)
     {
         var made = await store.SplitAsync(original.Id, Enumerable.Range(1, parts).Select(i => $"part {i} of #{original.Id}").ToList(), null);
-        await SqlAsync("UPDATE ContextFragments SET SplitFromId = NULL WHERE SplitFromId = @id", new { id = original.Id });
+        foreach (var part in made)
+        {
+            await SqlAsync("UPDATE ContextFragments SET SplitFromId = NULL WHERE Id = @id", new { id = part.Id });
+        }
+
         return made;
     }
 
@@ -259,9 +267,9 @@ public sealed class CloseTests : IDisposable
     public async Task A_sleep_pass_neither_closes_nor_reopens(bool propose)
     {
         var store = await OpenAsync();
-        var e0 = await Add(store, "the ending, for the reopen case");
         var open = await Add(store, "Waiting.", state: true);
         var closed = await Add(store, "Waited.", state: true);
+        var e0 = await Add(store, "the ending, for the reopen case");
         await store.CloseAsync(closed.Id, $"#{e0.Id}", "ended");
         var e = await Add(store, "Ended it.");
         store.Now = () => DateTimeOffset.UtcNow + TimeSpan.FromDays(8);
@@ -644,3 +652,10 @@ public sealed class CloseTests : IDisposable
         Assert.Null((await store.GetAsync(wrongFirst.Id)).SplitFromId);
     }
 }
+
+/// <summary>
+/// Test classes whose stores write <c>FragmentStore</c>'s static tag paths, run one at a time. The statics are shared by
+/// every store in the process; making them per-store is the real fix, and a change of its own.
+/// </summary>
+[CollectionDefinition(nameof(FragmentStoreStaticsCollection))]
+public sealed class FragmentStoreStaticsCollection;

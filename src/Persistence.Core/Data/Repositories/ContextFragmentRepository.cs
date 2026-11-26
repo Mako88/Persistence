@@ -101,6 +101,14 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
     public async Task<IEnumerable<ContextFragmentEntity>> GetSupersededByAsync(long id) =>
         await QueryAsync($"SELECT * FROM ContextFragments WHERE SupersededById = {id} AND IsDeleted = 0");
 
+    /// <inheritdoc />
+    public async Task<IEnumerable<ContextFragmentEntity>> GetSplitPartsAsync(long id) =>
+        await QueryAsync($"SELECT * FROM ContextFragments WHERE SplitFromId = {id} ORDER BY Id");
+
+    /// <inheritdoc />
+    public async Task<IEnumerable<ContextFragmentEntity>> GetByNotesContainingAsync(string word) =>
+        await QueryAsync($"SELECT * FROM ContextFragments WHERE Notes LIKE {"%" + word + "%"} ORDER BY Id");
+
     /// <summary>Longest chain of supersessions followed: a guard against a cycle, far past any real chain.</summary>
     private const int MaxHops = 1000;
 
@@ -315,8 +323,8 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
     /// </summary>
     protected override FormattableString GetInsertSql(ContextFragmentEntity entity) =>
         $"""
-        INSERT INTO ContextFragments (FragmentType, Status, Content, Summary, LastAccessedUtc, Importance, Confidence, IsProtected, IsDeleted, CreatedUtc, LastModifiedUtc, Notes, AddressedTo, MessageId, RelayDepth, SupersededById, SessionId, TouchedSessionId, EnteredBy, AttributedNote)
-        VALUES ({entity.FragmentType}, {entity.Status}, {entity.Content}, {entity.Summary}, {entity.LastAccessedUtc}, {entity.Importance}, {entity.Confidence}, {entity.IsProtected}, {entity.IsDeleted}, {entity.CreatedUtc}, {entity.LastModifiedUtc}, {entity.Notes}, {entity.AddressedTo}, {entity.MessageId}, {entity.RelayDepth}, {entity.SupersededById}, {entity.SessionId}, {entity.TouchedSessionId}, {entity.EnteredBy}, {entity.AttributedNote})
+        INSERT INTO ContextFragments (FragmentType, Status, Content, Summary, LastAccessedUtc, Importance, Confidence, IsProtected, IsDeleted, CreatedUtc, LastModifiedUtc, Notes, AddressedTo, MessageId, RelayDepth, SupersededById, SessionId, TouchedSessionId, EnteredBy, AttributedNote, ClosedUtc, Reason, EndedBy, ReopenReason, IsState, SplitFromId)
+        VALUES ({entity.FragmentType}, {entity.Status}, {entity.Content}, {entity.Summary}, {entity.LastAccessedUtc}, {entity.Importance}, {entity.Confidence}, {entity.IsProtected}, {entity.IsDeleted}, {entity.CreatedUtc}, {entity.LastModifiedUtc}, {entity.Notes}, {entity.AddressedTo}, {entity.MessageId}, {entity.RelayDepth}, {entity.SupersededById}, {entity.SessionId}, {entity.TouchedSessionId}, {entity.EnteredBy}, {entity.AttributedNote}, {entity.ClosedUtc}, {entity.Reason}, {entity.EndedBy}, {entity.ReopenReason}, {entity.IsState}, {entity.SplitFromId})
         """;
 
     /// <summary>
@@ -330,7 +338,9 @@ public class ContextFragmentRepository : EntityRepository<ContextFragmentEntity>
             Confidence = {entity.Confidence}, IsProtected = {entity.IsProtected}, IsDeleted = {entity.IsDeleted},
             LastModifiedUtc = {entity.LastModifiedUtc}, Notes = {entity.Notes}, AddressedTo = {entity.AddressedTo},
             MessageId = {entity.MessageId}, RelayDepth = {entity.RelayDepth}, SupersededById = {entity.SupersededById}, SessionId = {entity.SessionId},
-            TouchedSessionId = {entity.TouchedSessionId}, EnteredBy = {entity.EnteredBy}, AttributedNote = {entity.AttributedNote}
+            TouchedSessionId = {entity.TouchedSessionId}, EnteredBy = {entity.EnteredBy}, AttributedNote = {entity.AttributedNote},
+            ClosedUtc = {entity.ClosedUtc}, Reason = {entity.Reason}, EndedBy = {entity.EndedBy}, ReopenReason = {entity.ReopenReason},
+            IsState = {entity.IsState}, SplitFromId = {entity.SplitFromId}
         WHERE Id = {entity.Id}
         """;
 

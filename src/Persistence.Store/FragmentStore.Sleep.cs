@@ -42,6 +42,8 @@ internal sealed partial class FragmentStore
         ["attribute"] = "A sleep pass doesn't change who said what; propose it in the pass's record.",
         ["context set"] = "A sleep pass changes fragments only by supersede, add, and `edit <id> --tag recall-only`; propose a group's head in the record.",
         ["cue set"] = "A sleep pass doesn't set cues; propose one in the pass's record.",
+        ["close"] = CloseAsleep,
+        ["reopen"] = CloseAsleep,
         ["cue remove"] = "A sleep pass doesn't remove cues; propose it in the pass's record.",
         // The pass may add facts (they wait as proposals when they are about who someone is); judging them is awake work.
         ["concept accept"] = "Accepting a fact is the waking self's: it stays a proposal for the morning's `concept review`.",
