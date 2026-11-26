@@ -62,14 +62,14 @@ public sealed class CloseTests : IDisposable
         return made;
     }
 
-    private static async Task<string> RefusedAsync(Func<Task> act) =>
-        (await Assert.ThrowsAnyAsync<Exception>(act)) switch
-        {
-            RefusedException r => r.Message,
-            ProvenanceException p => p.Message,
-            UsageException u => u.Message,
-            var other => throw new Xunit.Sdk.XunitException($"expected a refusal, got {other.GetType().Name}: {other.Message}"),
-        };
+    /// <summary>
+    /// Exactly a <see cref="RefusedException"/> (exit 2: the command was well formed and the store said no). Exact
+    /// class, not a family: a refusal that turns into a usage error, or a leaked ProvenanceException, fails (Ember, #96 point 5).
+    /// </summary>
+    private static async Task<string> RefusedAsync(Func<Task> act) => (await Assert.ThrowsAsync<RefusedException>(act)).Message;
+
+    /// <summary>Exactly a <see cref="UsageException"/> (exit 1: the command itself is malformed, whatever the store holds).</summary>
+    private static async Task<string> UsageAsync(Func<Task> act) => (await Assert.ThrowsAsync<UsageException>(act)).Message;
 
     // ---- Design tests (close-state.md §2, Ember's notes) ----
 
@@ -176,6 +176,122 @@ public sealed class CloseTests : IDisposable
     }
 
     [Fact]
+    public async Task Close_and_reopen_refuse_a_forgotten_fragment_until_it_is_unforgotten()
+    {
+        // Mutation: drop the IsDeleted check on the fragment being closed → the forgotten fragment closes (#96 point 1).
+        var store = await OpenAsync();
+        var f = await Add(store, "Waiting on the review.", state: true);
+        await store.SetForgottenAsync(f.Id, true, "slip");
+        Assert.Contains($"unforget {f.Id}", await RefusedAsync(() => store.CloseAsync(f.Id, "msg:1", "it ended")));
+        Assert.Null((await store.GetAsync(f.Id)).ClosedUtc);
+
+        await store.SetForgottenAsync(f.Id, false, null);
+        await store.CloseAsync(f.Id, "msg:1", "it ended");
+
+        // Reopen too: forgetting a closed fragment and reopening it would mutate what reads no longer see.
+        await store.SetForgottenAsync(f.Id, true, "slip");
+        Assert.Contains($"unforget {f.Id}", await RefusedAsync(() => store.ReopenAsync(f.Id, "it didn't end")));
+        Assert.NotNull((await store.GetAsync(f.Id)).ClosedUtc);
+    }
+
+    [Fact]
+    public async Task Close_and_reopen_make_the_session_that_ran_them_the_toucher()
+    {
+        // Mutation: close or reopen sets only LastModifiedUtc → TouchedSessionId still names the writer (#96 point 2).
+        var store = await OpenAsync();
+        store.Session = "session-writer";
+        var f = await Add(store, "Waiting on the deploy.", state: true);
+        Assert.Equal("session-writer", (await store.GetAsync(f.Id)).TouchedSessionId);
+
+        store.Session = "session-closer";
+        await store.CloseAsync(f.Id, null, "deployed");
+        var closed = await store.GetAsync(f.Id);
+        Assert.Equal("session-closer", closed.TouchedSessionId);
+        Assert.Equal("session-writer", closed.SessionId);
+
+        store.Session = "session-reopener";
+        await store.ReopenAsync(f.Id, "rolled back");
+        var reopened = await store.GetAsync(f.Id);
+        Assert.Equal("session-reopener", reopened.TouchedSessionId);
+        Assert.Equal("session-writer", reopened.SessionId);
+    }
+
+    [Fact]
+    public async Task Close_refuses_a_chat_message_whatever_the_ended_by()
+    {
+        // Mutation: drop the ChatMessage check → an utterance closes, and close becomes a soft forget (#96 point 3).
+        var store = await OpenAsync();
+        var said = await Add(store, "John: I'm waiting on the build.");
+        await SqlAsync("UPDATE ContextFragments SET FragmentType = @t WHERE Id = @id", new { t = (int)ContextFragmentType.ChatMessage, id = said.Id });
+        var later = await Add(store, "The build finished.");
+
+        var why = await RefusedAsync(() => store.CloseAsync(said.Id, $"#{later.Id}", "the build finished"));
+        Assert.Contains("ChatMessage", why);
+        Assert.Contains("--state", why);
+        await RefusedAsync(() => store.CloseAsync(said.Id, "msg:1", "the build finished"));
+        Assert.Null((await store.GetAsync(said.Id)).ClosedUtc);
+    }
+
+    [Theory]
+    [InlineData(ContextFragmentType.Personal)]
+    [InlineData(ContextFragmentType.Relational)]
+    [InlineData(ContextFragmentType.Summary)]
+    [InlineData(ContextFragmentType.System)]
+    [InlineData(ContextFragmentType.ActionResponse)]
+    [InlineData(ContextFragmentType.Thought)]
+    public async Task Every_other_type_still_closes_with_an_ended_by(ContextFragmentType type)
+    {
+        // Mutation: refuse every non-state type → these stop closing. Ember asked for ChatMessage only; ended-by is the friction.
+        var store = await OpenAsync();
+        var f = await Add(store, "PR waits on X.");
+        await SqlAsync("UPDATE ContextFragments SET FragmentType = @t WHERE Id = @id", new { t = (int)type, id = f.Id });
+        await store.CloseAsync(f.Id, "msg:1", "X happened");
+        Assert.NotNull((await store.GetAsync(f.Id)).ClosedUtc);
+    }
+
+    // ---- Precedence: syntax first, then the store (#96 point 5) ----
+
+    [Theory]
+    [InlineData(Broken.MissingParent)]
+    [InlineData(Broken.SelfCycle)]
+    [InlineData(Broken.TwoCycle)]
+    [InlineData(Broken.HopLimit)]
+    public async Task A_malformed_ended_by_is_a_usage_error_even_on_a_broken_chain(Broken kind)
+    {
+        // Mutation: assertion date before the ended-by syntax check → a provenance refusal instead.
+        var store = await OpenAsync();
+        var x = await BrokenChainAsync(store, kind);
+        Assert.Contains("isn't an ended-by", await UsageAsync(() => store.CloseAsync(x.Id, "pr:95", "it ended")));
+        Assert.Contains("isn't an ended-by", await UsageAsync(() => store.CloseAsync(x.Id, "#12a", "it ended")));
+
+        // Well formed, the same close is the store's refusal.
+        Assert.Contains("provenance", await RefusedAsync(() => store.CloseAsync(x.Id, "msg:1", "it ended")));
+    }
+
+    [Fact]
+    public async Task An_empty_reason_comes_before_a_malformed_ended_by_and_both_before_any_store_refusal()
+    {
+        // Mutation: check the fragment (type, forgotten, closed, chain) before the input → the same bad command
+        // reports differently depending on what the store holds.
+        var store = await OpenAsync();
+        Assert.Contains("--reason", await UsageAsync(() => store.CloseAsync(1, "pr:95", " ")));
+
+        var x = await BrokenChainAsync(store, Broken.MissingParent);
+        Assert.Contains("--reason", await UsageAsync(() => store.CloseAsync(x.Id, "pr:95", "")));
+
+        var who = await Add(store, "I care about being right.", type: "Identity");
+        Assert.Contains("isn't an ended-by", await UsageAsync(() => store.CloseAsync(who.Id, "pr:95", "it ended")));
+
+        var gone = await Add(store, "Waiting.", state: true);
+        await store.SetForgottenAsync(gone.Id, true, "slip");
+        Assert.Contains("isn't an ended-by", await UsageAsync(() => store.CloseAsync(gone.Id, "pr:95", "it ended")));
+        Assert.Contains("--reason", await UsageAsync(() => store.ReopenAsync(gone.Id, "")));
+
+        Assert.Contains("isn't an ended-by", await UsageAsync(() => store.CloseAsync(999_999, "commit:x@zz", "it ended")));
+        Assert.Contains("no fragment", await RefusedAsync(() => store.CloseAsync(999_999, "msg:1", "it ended")));
+    }
+
+    [Fact]
     public async Task Close_refuses_a_split_original_naming_every_part()
     {
         var store = await OpenAsync();
@@ -199,8 +315,8 @@ public sealed class CloseTests : IDisposable
     {
         var store = await OpenAsync();
         var state = await Add(store, "Waiting.", state: true);
-        await RefusedAsync(() => store.CloseAsync(state.Id, "msg:12", reason));
-        await RefusedAsync(() => store.CloseAsync(state.Id, null, reason));
+        Assert.Contains("--reason", await UsageAsync(() => store.CloseAsync(state.Id, "msg:12", reason)));
+        Assert.Contains("--reason", await UsageAsync(() => store.CloseAsync(state.Id, null, reason)));
         Assert.Null((await store.GetAsync(state.Id)).ClosedUtc);
     }
 
@@ -236,7 +352,7 @@ public sealed class CloseTests : IDisposable
     {
         var store = await OpenAsync();
         var plain = await Add(store, "PR waits on X.");
-        await RefusedAsync(() => store.CloseAsync(plain.Id, endedBy, "X happened"));
+        Assert.Contains("isn't an ended-by", await UsageAsync(() => store.CloseAsync(plain.Id, endedBy, "X happened")));
         Assert.Null((await store.GetAsync(plain.Id)).ClosedUtc);
     }
 
@@ -346,7 +462,7 @@ public sealed class CloseTests : IDisposable
         var store = await OpenAsync();
         var f = await Add(store, "The wallaby gate waits.", state: true);
         await store.CloseAsync(f.Id, null, "opened");
-        await RefusedAsync(() => store.ReopenAsync(f.Id, "  "));
+        Assert.Contains("--reason", await UsageAsync(() => store.ReopenAsync(f.Id, "  ")));
 
         var reopened = await store.ReopenAsync(f.Id, "it shut again");
         Assert.Null(reopened.ClosedUtc);
@@ -532,6 +648,36 @@ public sealed class CloseTests : IDisposable
     }
 
     // ---- The split backfill (A2) ----
+
+    [Fact]
+    public async Task A_failure_mid_note_leaves_every_part_of_that_note_unlinked()
+    {
+        // Mutation: save the parts one at a time → part 1 stays linked when part 2's write fails, the partial state a
+        // later run refuses to repair (#96 point 4).
+        var store = await OpenAsync();
+        var o = await Add(store, "a. b. c.");
+        var parts = await LegacySplitAsync(store, o, parts: 3);
+        var other = await Add(store, "d. e.");
+        var otherParts = await LegacySplitAsync(store, other);
+        await SqlAsync($"""
+            CREATE TRIGGER fail_part BEFORE UPDATE OF SplitFromId ON ContextFragments
+            WHEN NEW.Id = {parts[1].Id} BEGIN SELECT RAISE(ABORT, 'injected failure'); END
+            """);
+        var audit = await AuditRowsAsync();
+
+        await Assert.ThrowsAnyAsync<SqliteException>(() => store.BackfillSplitsAsync(apply: true));
+        Assert.All(parts, p => Assert.Null(store.GetAsync(p.Id).Result.SplitFromId));
+
+        // The note before the failure, if any, committed whole; nothing of the failing note reached the audit log.
+        var otherLinked = otherParts.Select(p => store.GetAsync(p.Id).Result.SplitFromId).Distinct().ToList();
+        Assert.Single(otherLinked);
+        Assert.Equal(audit + (otherLinked[0] is null ? 0 : otherParts.Count), await AuditRowsAsync());
+
+        await SqlAsync("DROP TRIGGER fail_part");
+        var report = await store.BackfillSplitsAsync(apply: true);
+        Assert.Contains($"#{o.Id}: linked 3 parts", report);
+        Assert.All(parts, p => Assert.Equal(o.Id, store.GetAsync(p.Id).Result.SplitFromId));
+    }
 
     [Fact]
     public async Task The_backfill_links_a_clean_split_only_with_apply_and_a_second_apply_writes_nothing()
