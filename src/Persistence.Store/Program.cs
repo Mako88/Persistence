@@ -13,6 +13,9 @@ const string Usage = """
           [--summary <text>] [--importance 0-1] [--confidence 0-1] [--tag <a/b>]... [--protected]
           [--project <name> | --everywhere]  a Personal fragment takes project/<the repository it is written
                                             in> unless it is tagged project/<name> already or --everywhere
+          [--state]                          the whole fragment is a present state ("waiting on X"): it can be
+                                            closed with only a --reason. Write a wait as its own --state fragment
+                                            rather than tacking it onto an event report
       edit <id> [--type] [--content <text|->] [--summary] [--importance] [--confidence] [--tag <a/b>]... [--untag <a/b>]...
       supersede <id>[,<id>...] --content <text|-> [--reason <text>] [--type] [--summary] [--importance] [--confidence] [--tag <a/b>]...
       split <id> --content <part> --content <part>... [--reason <text>]   one catch-all into several, each part a fragment
@@ -58,7 +61,19 @@ const string Usage = """
                                             checks for a view written twice (it names a near one after saving)
       cued <moment> --text <text|-> [--exclude <id,id>] [--snippet 600]
                                             the fragments of the cues the text matches, as the hooks show them
-      archive <id> | restore <id>           out of the core and recent lists, still searchable; reversible
+      close <id> --ended-by <#id|commit:<repo>@<sha>|msg:<id>> --reason <text>
+      close <id> --reason <text>            (only for a fragment written with `add --state`)
+      reopen <id> --reason <text>           close: the state this fragment records stopped being true. It keeps
+                                            its content, type and status, leaves the core, and comes back from
+                                            recall labelled `closed <date>: <reason> (ended by <ref>)`. A #id must
+                                            be newer by assertion date (a split part dates from its original;
+                                            supersede is a new assertion); commit: and msg: are stored unchecked.
+                                            Split first if the fragment mixes an event with a state; close the
+                                            state part. Reopen undoes it, with its own reason; `show` lists every
+                                            close and reopen (docs/design/close-state.md)
+      backfill-splits [--apply]             link splits made before SplitFromId, from their "Split into #a, #b"
+                                            notes; reports what links, what is already correct and every skip
+                                            with why. Without --apply nothing is written
       forget <id> [--reason <text>]         soft-delete, hidden everywhere; unforget <id> brings it back
       show <id>
       list [--type <type>] [--tag <a/b>] [--archived] [--limit 50] [--after <id>]  --after: newer ids only, oldest first
@@ -265,7 +280,7 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
                 line.Text() ?? throw new UsageException("add needs --content (or --content -, or --content-file)."),
                 line.Text("summary"), line.GetFloat("importance"), line.GetFloat("confidence"),
                 line.GetAll("tag"), line.Has("protected"),
-                line.Has("everywhere") ? null : line.Get("project") ?? store.AmbientProject?.Invoke());
+                line.Has("everywhere") ? null : line.Get("project") ?? store.AmbientProject?.Invoke(), line.Has("state"));
             Print(line, [fresh]);
             // Saved first, so nothing is lost; then the nearest existing view is named, with the merge ready.
             // Duplication is how a store comes to disagree with itself (two fragments, one stale), and the
@@ -497,6 +512,37 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
             }
 
             break;
+        case "close":
+            var closed = await store.CloseAsync(line.Id(), line.Get("ended-by"), line.Get("reason"));
+            if (line.Has("json"))
+            {
+                Print(line, [closed]);
+                break;
+            }
+
+            // The whole fragment back, with its new label: the closer sees what they just marked untrue (close-state.md §4).
+            Console.WriteLine(await store.ShowAsync(closed.Id));
+            if (closed.EndedBy is { } given && !given.StartsWith('#'))
+            {
+                Console.WriteLine($"(Stored as given, not checked: the store holds no repo or room credentials. Check {given} yourself.)");
+            }
+
+            break;
+        case "reopen":
+            var opened = await store.ReopenAsync(line.Id(), line.Get("reason"));
+            if (line.Has("json"))
+            {
+                Print(line, [opened]);
+            }
+            else
+            {
+                Console.WriteLine(await store.ShowAsync(opened.Id));
+            }
+
+            break;
+        case "backfill-splits":
+            Console.WriteLine(await store.BackfillSplitsAsync(line.Has("apply")));
+            break;
         case "archive":
             Print(line, [await store.SetStatusAsync(line.Id(), ContextFragmentStatus.Archived)]);
             break;
@@ -652,6 +698,11 @@ static void Print(CommandLine line, IReadOnlyList<ContextFragmentEntity> found, 
             isProtected = f.IsProtected,
             forgotten = f.IsDeleted,
             supersededBy = f.SupersededById,
+            closed = f.ClosedUtc,
+            reason = f.Reason,
+            endedBy = f.EndedBy,
+            isState = f.IsState,
+            splitFrom = f.SplitFromId,
             session = f.SessionId,
             notes = f.Notes,
             tags = f.Tags.Select(t => t.Name),

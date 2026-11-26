@@ -10,6 +10,7 @@ namespace Persistence.Tests;
 /// conversation (the words said, mid-turn messages included, the harness's blocks and the work left out,
 /// and a re-read adding nothing).
 /// </summary>
+[Collection(nameof(FragmentStoreStaticsCollection))]
 public sealed class FragmentStoreTests : IDisposable
 {
     private readonly string db = Path.Combine(Path.GetTempPath(), $"store-{Guid.NewGuid():N}.db");

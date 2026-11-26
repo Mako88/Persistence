@@ -78,4 +78,10 @@ public interface IContextFragmentRepository : IEntityRepository<ContextFragmentE
     /// (separately) archived-but-not-deleted ones. Feeds the sensory block's curation line.
     /// </summary>
     Task<(int Forgotten, int Archived)> CountAsideAsync(CancellationToken ct = default);
+
+    /// <summary>The parts split from <paramref name="id"/> (their <c>SplitFromId</c>), forgotten ones included, by id.</summary>
+    Task<IEnumerable<ContextFragmentEntity>> GetSplitPartsAsync(long id);
+
+    /// <summary>Fragments whose <c>Notes</c> contain <paramref name="word"/> (SQLite LIKE: ASCII case-insensitive), forgotten ones included.</summary>
+    Task<IEnumerable<ContextFragmentEntity>> GetByNotesContainingAsync(string word);
 }

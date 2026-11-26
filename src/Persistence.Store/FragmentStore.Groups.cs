@@ -164,13 +164,13 @@ internal sealed partial class FragmentStore
         var lines = new List<string>();
         foreach (var child in groups.Parents.Where(p => p.Value == id).Select(p => p.Key).OrderBy(c => groups.Paths[c]))
         {
-            var count = (await fragments.GetByTagAsync(child)).Count(f => f.Status == ContextFragmentStatus.Active);
+            var count = (await fragments.GetByTagAsync(child)).Count(f => f.Status == ContextFragmentStatus.Active && f.ClosedUtc is null);
             lines.Add($"- subgroup {groups.Paths[child]} ({count} fragments)"
                 + (groups.Heads.TryGetValue(child, out var h) ? $": {FirstLine(h, 160)}" : ""));
         }
 
         var members = (await fragments.GetByTagAsync(id))
-            .Where(f => f.Status == ContextFragmentStatus.Active && !shown.Contains(f.Id) && !groups.HeadIds.Contains(f.Id)
+            .Where(f => f.Status == ContextFragmentStatus.Active && f.ClosedUtc is null && !shown.Contains(f.Id) && !groups.HeadIds.Contains(f.Id)
                 && f.FragmentType is not (ContextFragmentType.WorkingNote or ContextFragmentType.ChatMessage))
             .OrderByDescending(f => f.Importance).ThenByDescending(f => f.LastModifiedUtc).ToList();
         foreach (var f in members.Take(MembersListed))

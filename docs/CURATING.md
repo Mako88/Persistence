@@ -72,6 +72,14 @@ is listed by id and is a `show` or a recall away. Read it with `persistence-stor
   and an earlier, different view is history, not a duplicate: leave both. Don't distill a distillation;
   the reason is what goes first, because it looks like elaboration once its need is forgotten.
 - `split`: one catch-all into several fragments, each about one thing.
+- `close <id> --ended-by <ref> --reason <why>`: a record written as a present state ("waiting on X", "the PR holds
+  for Y") that stopped being true. It isn't supersede (nothing replaces it) or archive (recall would still show it as
+  current). It keeps its words, leaves the core, and comes back from recall labelled `closed <date>: <why>`. Only for
+  states: an event report stays true as history, and there's no event that ended it. If the fragment mixes an event
+  with a state, `split` it and close the state part. A conversation message is never closed (what was said stays said): write the state it
+  carried as its own fragment and close that. A forgotten fragment has to be unforgotten first. The reason is the claim that this event ended this state, so
+  make it one you'd defend. `reopen <id> --reason` undoes it. When you write a wait, write it on its own with
+  `add --state`; then it can be closed with only a reason.
 - `archive`: out of the core and recent lists, still searchable. For what no longer earns a place.
 - `forget`: hidden everywhere, reversible with `unforget`. Rarely right; never to make room.
 - **Unused is not unimportant.** A fragment never recalled may be in the core already, or recall may be

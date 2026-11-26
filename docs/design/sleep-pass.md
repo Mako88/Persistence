@@ -127,3 +127,19 @@ fragments. Both are in the worklist and the prompt.
   pinned by a test: a night whose earlier handoff is still live joins that claim (`amend`, old task kept in the
   history), so there's no second one; the inbox holds only the id; and the wake is `alone`, so run-due holds it
   while any other claimed work session is running.
+
+## Close drafts (2026-11-26, close PR A)
+
+The store refuses `close` and `reopen` during a pass, with or without `--propose` (docs/design/close-state.md §5;
+build plan A4.1, A6). The night's part is a draft, handed on down the issue #67 path like any proposal, and only
+when it can check the ended-by itself (the commit is on the named repo's main, the message id resolves, or the
+`#id` exists and is newer by assertion date). The prompt in `hook.py` (`SLEEP_PROMPT`) asks for:
+
+```
+split <id> --content "<event>" --content "<state>"   (if mixed)
+close <part> --ended-by <ref> --reason "<why this event ended this state>"
+checked: <how the ref was resolved: commit on <repo>/main | msg resolves | #id newer by assertion date>
+```
+
+If it can't check the ref, it writes `may have ended: <why>` and drafts no close command. The waking self runs a
+draft or drops it; there is no apply-all.

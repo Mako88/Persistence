@@ -77,6 +77,32 @@ public record ContextFragmentEntity : BaseEntity
     /// </summary>
     public string? AttributedNote { get; set; }
 
+    /// <summary>
+    /// When the state this fragment records stopped being true (<c>close</c>); <c>null</c> while it is open. A closed
+    /// fragment keeps its content, type and status: it leaves the core and comes back from recall labelled. The
+    /// columns hold the current close only; the audit log keeps every close and reopen. See migrations 014 to 020 and
+    /// docs/design/close-state.md.
+    /// </summary>
+    public DateTimeOffset? ClosedUtc { get; set; }
+
+    /// <summary>The current close's why: the claim that <see cref="EndedBy"/> ended this state. Cleared by reopen.</summary>
+    public string? Reason { get; set; }
+
+    /// <summary>What ended it: <c>#&lt;id&gt;</c>, <c>commit:&lt;repo&gt;@&lt;sha&gt;</c> or <c>msg:&lt;id&gt;</c>; null for a <c>--state</c> close without one.</summary>
+    public string? EndedBy { get; set; }
+
+    /// <summary>The most recent reopen's why, so the audit log's snapshot carries it; the next close clears it.</summary>
+    public string? ReopenReason { get; set; }
+
+    /// <summary>Written with <c>add --state</c>: the whole fragment is a present state, closable with only a reason.</summary>
+    public bool IsState { get; set; }
+
+    /// <summary>
+    /// The fragment this one was split from. A split part asserts nothing new, so it inherits its original's assertion
+    /// date by following this link; supersede is a new assertion and is never followed back.
+    /// </summary>
+    public long? SplitFromId { get; set; }
+
     public required float Importance { get; set; }
 
     public required float Confidence { get; set; }

@@ -1,5 +1,3 @@
-using System.Diagnostics;
-
 namespace Persistence.Tests;
 
 /// <summary>
@@ -42,33 +40,5 @@ public sealed class ConceptFlagCliTests : IDisposable
         Assert.DoesNotContain("flagged", shown.Out);
     }
 
-    private async Task<(int Code, string Out, string Err)> CliAsync(params string[] args)
-    {
-        var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            WorkingDirectory = dir,
-        };
-        start.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "persistence-store.dll"));
-        foreach (var arg in args)
-        {
-            start.ArgumentList.Add(arg);
-        }
-
-        start.ArgumentList.Add("--db");
-        start.ArgumentList.Add(Path.Combine(dir, "store.db"));
-        foreach (var key in start.Environment.Keys.Where(k => k.StartsWith("PERSISTENCE_") || k == "CLAUDE_CODE_SESSION_ID").ToList())
-        {
-            start.Environment.Remove(key);
-        }
-
-        start.Environment["PERSISTENCE_EMBEDDING_ENABLED"] = "false";
-
-        using var process = Process.Start(start)!;
-        var output = process.StandardOutput.ReadToEndAsync();
-        var errors = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(60));
-        return (process.ExitCode, await output, await errors);
-    }
+    private Task<(int Code, string Out, string Err)> CliAsync(params string[] args) => StoreCli.RunAsync(dir, args);
 }

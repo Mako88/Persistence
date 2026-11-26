@@ -2815,6 +2815,15 @@ The worklist follows. Work through it in this order:
 
 Identity fragments: propose, don't change. Don't forget anything, don't archive, don't write the working note.
 
+A state that has ended ("waiting on X", "PR holds for Y", then X happened): you don't close it, the store refuses.
+Draft the close as a proposal, and only when you can check its ended-by yourself: the commit is on the named
+repo's main, the message id resolves, or the #id exists and is newer by assertion date (a split part dates from
+its original; a supersede is a new assertion). Shape it as:
+    split <id> --content "<the event>" --content "<the state>"   (only if the fragment mixes them)
+    close <part> --ended-by <ref> --reason "<why this event ended this state>"
+    checked: <how the ref was resolved>
+If you can only guess that it ended, write `may have ended: <why>` and draft no close command.
+
 End with `pstore sleep-end --content <the record>`: a line saying what the night was, each change as
 `#old → #new: what was dropped`, and each proposal as a command a waking session can run, with its reason.
 If you propose nothing, the record says so in a line of its own, exactly `Proposals: none`: any other record

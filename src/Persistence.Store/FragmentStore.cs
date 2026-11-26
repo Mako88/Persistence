@@ -27,7 +27,8 @@ internal sealed partial class FragmentStore(
     IFragmentEmbeddingRepository vectors,
     IEmbeddingClient embeddings,
     IConceptRepository concepts,
-    QueryEmbedder queryEmbedder)
+    QueryEmbedder queryEmbedder,
+    IAuditLogRepository audits)
 {
     /// <summary>The parent tag of the projects: a fragment tagged <c>project/&lt;name&gt;</c> belongs to that project.</summary>
     public const string ProjectTag = "project";
@@ -158,7 +159,7 @@ internal sealed partial class FragmentStore(
 
     public async Task<ContextFragmentEntity> AddAsync(
         string typeName, string content, string? summary, float? importance, float? confidence,
-        IReadOnlyList<string> tagPaths, bool isProtected, string? project = null)
+        IReadOnlyList<string> tagPaths, bool isProtected, string? project = null, bool isState = false)
     {
         var (type, authorable) = FragmentTypeRules.ParseAuthorable(typeName);
         // A personal fragment is about the work in hand far more often than about everything: unscoped, the
@@ -193,6 +194,7 @@ internal sealed partial class FragmentStore(
             Importance = importance ?? 0.5f,
             Confidence = confidence ?? 0.5f,
             IsProtected = isProtected,
+            IsState = isState,
             CreatedUtc = DateTimeOffset.UtcNow,
             LastModifiedUtc = DateTimeOffset.UtcNow,
             SessionId = Session,
@@ -279,7 +281,7 @@ internal sealed partial class FragmentStore(
     /// </summary>
     public async Task<ContextFragmentEntity> SupersedeAsync(
         IReadOnlyList<long> ids, string content, string? summary, float? importance, float? confidence,
-        IReadOnlyList<string> tagPaths, string? reason, string? typeName = null)
+        IReadOnlyList<string> tagPaths, string? reason, string? typeName = null, long? splitFrom = null, bool isState = false)
     {
         var type = typeName is null ? (ContextFragmentType?)null : FragmentTypeRules.ParseAuthorable(typeName) switch
         {
@@ -333,6 +335,10 @@ internal sealed partial class FragmentStore(
             Summary = summary,
             Importance = importance ?? old.Max(f => f.Importance),
             Confidence = confidence ?? old[0].Confidence,
+            // Set only by split, for its first part: a superseding fragment is a new assertion, and its writer says
+            // --state again if it is one (build plan A2).
+            SplitFromId = splitFrom,
+            IsState = isState,
             CreatedUtc = DateTimeOffset.UtcNow,
             LastModifiedUtc = DateTimeOffset.UtcNow,
             SessionId = Session,
@@ -374,10 +380,18 @@ internal sealed partial class FragmentStore(
         }
 
         var old = await WritableAsync(id);
+        // Its parts would put an ended state back in the core as open fragments (build plan F4).
+        if (old.ClosedUtc is not null)
+        {
+            throw new RefusedException($"#{id} is closed: reopen it first (`reopen {id} --reason <why>`), then split.");
+        }
+
         var tagPaths = old.Tags.Select(t => TagPaths.GetValueOrDefault(t.Id, t.Name)).ToList();
+        // Every part points back at the original, the first included: a part asserts nothing new, so it keeps the
+        // original's assertion date (close-state.md §2). A part of a state is part of a state.
         var parts = new List<ContextFragmentEntity>
         {
-            await SupersedeAsync([id], contents[0], null, null, null, [], reason),
+            await SupersedeAsync([id], contents[0], null, null, null, [], reason, splitFrom: id, isState: old.IsState),
         };
         foreach (var content in contents.Skip(1))
         {
@@ -388,6 +402,8 @@ internal sealed partial class FragmentStore(
                 Content = content,
                 Importance = old.Importance,
                 Confidence = old.Confidence,
+                SplitFromId = id,
+                IsState = old.IsState,
                 CreatedUtc = DateTimeOffset.UtcNow,
                 LastModifiedUtc = DateTimeOffset.UtcNow,
                 SessionId = Session,
@@ -414,7 +430,7 @@ internal sealed partial class FragmentStore(
     {
         var fragment = await GetAsync(id);
         var heads = await NoteHeadsAsync([fragment]);
-        var text = new StringBuilder(Render(fragment));
+        var text = new StringBuilder(Render(fragment, maxReason: int.MaxValue));
         if (fragment.SupersededById is { } by)
         {
             var reason = fragment.Notes is { Length: > 0 } why ? $": {why}" : "";
@@ -428,6 +444,15 @@ internal sealed partial class FragmentStore(
         {
             text.Append($"\n(Supersedes #{earlier.Id}, from {earlier.CreatedUtc.ToUniversalTime():yyyy-MM-dd}"
                 + $"{(earlier.Notes is { Length: > 0 } why ? $", because: {why}" : "")}.)");
+        }
+
+        if (await CloseHistoryAsync(id) is { Count: > 0 } history)
+        {
+            text.Append("\nClose history (from the audit log, oldest first):");
+            foreach (var line in history)
+            {
+                text.Append($"\n- {line}");
+            }
         }
 
         return text.ToString();
@@ -861,7 +886,9 @@ internal sealed partial class FragmentStore(
                 .Select(f => f.Id).ToList();
             // Tagged recall-only: a lookup (a token's shape, a tool's gotcha) that earns a recall by association
             // but not a place in every core; archiving it hid it from recall too (the work Claude, 2026-11-09).
-            byType.Add((await HydratedAsync(ofType)).Where(f => !f.Tags.Any(t => t.ParentTagId is null && t.Name == RecallOnlyTag)).ToList());
+            // Closed: no longer a current fact of its own, so out of every section built from these (close-state.md §6).
+            byType.Add((await HydratedAsync(ofType))
+                .Where(f => f.ClosedUtc is null && !f.Tags.Any(t => t.ParentTagId is null && t.Name == RecallOnlyTag)).ToList());
         }
 
         // What this session kept itself has room of its own: after a compaction it is what was in hand, and
@@ -1181,7 +1208,7 @@ internal sealed partial class FragmentStore(
     /// <summary>Reads the tags' paths afresh, before a command renders anything.</summary>
     public async Task RefreshTagPathsAsync() => TagPaths = (await GroupsAsync(heads: false)).Paths;
 
-    public static string Render(ContextFragmentEntity f, int maxContent = int.MaxValue, string? self = null, DateTimeOffset? now = null)
+    public static string Render(ContextFragmentEntity f, int maxContent = int.MaxValue, string? self = null, DateTimeOffset? now = null, int maxReason = 80)
     {
         var flags = new List<string>();
         if (self is not null && f.SessionId is not null && f.SessionId != self) flags.Add($"session {Short(f.SessionId)}");
@@ -1189,6 +1216,7 @@ internal sealed partial class FragmentStore(
         if (f.SupersededById is { } by)
             flags.Add(Heads.TryGetValue(f.Id, out var head) && head.Hops >= 1 ? $"superseded, current #{head.Head}" : $"superseded by #{by}");
         else if (f.Status == ContextFragmentStatus.Archived) flags.Add("archived");
+        if (f.ClosedUtc is { } closed) flags.Add(ClosedLabel(closed, f.Reason, f.EndedBy, maxReason));
         if (f.IsDeleted) flags.Add("forgotten");
         if (f.Tags.Count > 0) flags.Add("tags: " + string.Join(", ", f.Tags.Select(t => TagPaths.GetValueOrDefault(t.Id, t.Name))));
 
