@@ -136,6 +136,35 @@ CHECK_SHA = hashlib.sha256((CHECK_PROMPT + READ_PROMPT).encode("utf-8")).hexdige
 FLAG_RULE = 2
 
 
+OWNER_VAR = "PERSISTENCE_PEERNAME"   # the name every store unit and the hook use for whose store this is
+LEGACY_OWNER_VAR = "PERSISTENCE_PEER_NAME"   # what this file read until the fix; nothing set it, so it fell to "Claude"
+
+
+class NoOwner(RuntimeError):
+    """Nobody says whose store this is, or two places disagree: extracting would file the self's own actions under a guess."""
+
+
+def owner_of(store):
+    """Whose store this is: PERSISTENCE_PEERNAME, else the old misspelling with a warning, checked against the store's
+    own `whoami` ("Arden /home/arden/store/arden.db"), which answers alone when no variable is set. Never a default:
+    the "Claude" this used to fall back to filed 3 of 4 of Arden's own actions under Claude (msg 1575884298655899741)."""
+    name = os.environ.get(OWNER_VAR, "").strip()
+    if not name:
+        name = os.environ.get(LEGACY_OWNER_VAR, "").strip()  # LEGACY_OWNER_VAR: read only here, as a warned fallback
+        if name:
+            print(f"concepts: {LEGACY_OWNER_VAR} is the old spelling; set {OWNER_VAR}={name} instead", file=sys.stderr)
+    try:
+        said = (store("whoami") or "").strip()
+    except Exception:  # an older store, or one that is down: the variable alone decides
+        said = ""
+    stored = said.rsplit(" ", 1)[0].strip() if " " in said else said
+    if name and stored and name.lower() != stored.lower():
+        raise NoOwner(f"{OWNER_VAR} says {name} but the store says it is {stored}'s: not extracting until they agree")
+    if not (name or stored):
+        raise NoOwner(f"no owner: set {OWNER_VAR} for the hook, or run a store whose `whoami` names its peer")
+    return name or stored
+
+
 def on():
     return os.environ.get("PERSISTENCE_CONCEPTS", "").strip().lower() in ("1", "true", "yes", "on")
 
@@ -148,11 +177,18 @@ class Extractor:
         self.dir = Path(state_dir) / "concepts"
         self.store = store
         self.call = call or call_haiku
-        self.owner = owner or os.environ.get("PERSISTENCE_PEER_NAME") or "Claude"
+        self._owner = owner
         self.ambiguous = load_ambiguous(self.dir / "ambiguous.json") if ambiguous is None else ambiguous
         self.split_runs = split_runs
         self.confirm_runs = confirm_runs
         self.read_runs = read_runs
+
+    @property
+    def owner(self):
+        """Asked of the environment and the store on first use, so building an extractor never touches the store."""
+        if self._owner is None:
+            self._owner = owner_of(self.store)
+        return self._owner
 
     @property
     def floor_file(self):
@@ -209,6 +245,11 @@ class Extractor:
             floor = self.floor()
             if floor is None:
                 return ["no floor: `hook.py concepts start` sets one"]
+            try:
+                self.owner
+            except NoOwner as e:  # before any fragment is read, so the floor stays where it is
+                print(f"concepts: {e}", file=sys.stderr)
+                return [f"refused: {e}"]
             done = []
             for frag in self.above(floor, limit):
                 if replaced(frag):
