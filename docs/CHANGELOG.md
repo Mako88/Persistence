@@ -9,6 +9,33 @@ work lives in [TODO.md](TODO.md); the *why* behind big choices lives in [adr/](a
 remembering, a behaviour or config change). Skip purely mechanical commits (formatting, a typo). Group a
 day's work under a dated heading; a short bold lead-in per change beats a bare bullet.
 
+## 2026-11-28 — close PR B: concept facts whose sources are all closed
+
+Built to docs/design/close-build-plan.md B1 to B4, after PR A had been live on my store a day with real closes
+(three, two of them run from a sleep pass's split-and-close drafts).
+
+- **`[sources closed]`, derived when read (B1).** A fact that stands, with at least one source, every one closed,
+  shows `[sources closed]` in `concept show`, concept recall and the proposed tier. Nothing is stored, so a reopen
+  clears it with no write. It stays in current facts. Zero sources is never "all closed". `concept show` lists each
+  source with its own ended-by (or "no ref") and reason, and its pending draft or which of three reasons there's none.
+- **End drafts (B2).** Migration 021 adds `FactEndDrafts` and `FactEndDraftBasis`. The close that closes a fact's
+  last source drafts its end in the same transaction, only when every source has an ended-by and they're all the same
+  string. A source closed without a ref (a `--state` close) means a flag but no draft. Reopening a source drops
+  exactly the pending drafts resting on it; a re-close drafts a new row. At most one pending draft per fact (a partial
+  unique index). Attaching a source drops the pending draft through a trigger on `FactSources`: at 46df15d no command
+  adds a source to an existing fact, so a trigger holds for whatever path does it later.
+- **Approving ends the fact (B3, F3 option a).** Migrations 022 to 024 add `Facts.EndedUtc`, `EndReason`, `EndedBy`,
+  one `ADD COLUMN` each. `concept end-draft <id> --approve --reason` revalidates in its own transaction (still
+  pending and the fact unended; the source set equals the basis; each basis close unchanged; each ended-by
+  unchanged). If any fails, the draft is dropped as `stale: <which>` and the fact is untouched. `EndReason` is the
+  approval reason; the sources' reasons stay on the draft and `concept show --history` prints them. An ended fact
+  leaves current facts, and as-of recall shows it only before `EndedUtc`. `--drop --reason` keeps the fact standing,
+  still flagged. Both are refused in a sleep pass; `concept end-drafts` (the list) isn't.
+- **Not backfilled.** Closes made before this build drafted nothing, so a fact whose sources closed earlier shows the
+  flag and says so ("closed before end drafts existed"). On my store that's one fact (#85, PR #78's "not merged yet").
+- **Tests:** 19 in `EndDraftTests`, 1 in `EndDraftCliTests`. Of 22 mutations, 21 go red. The survivor is equivalent:
+  `SharedEnding`'s "every source has an ended-by" clause, which the single-distinct-value check already implies.
+
 ## 2026-11-26 — close: marking a recorded state no longer true (PR A of the close build)
 - **Why:** most stale records are a present state ("PR waits on X") still standing after X happened. Supersede needs a
   replacement and archive leaves recall showing it as current. Design: docs/design/close-state.md (Ember approved

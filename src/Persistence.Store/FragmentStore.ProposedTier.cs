@@ -65,12 +65,13 @@ internal sealed partial class FragmentStore
 
         var names = await NamesAsync(shown.Select(c => c.Fact).ToList());
         var sources = await concepts.SourcesAsync(shown.Select(c => c.Fact.Id).ToList());
+        var closes = await concepts.SourceClosesAsync(shown.Select(c => c.Fact.Id).ToList());
         var sb = new StringBuilder($"Proposed facts closest to this message (the extractor's reading of a fragment, not yet accepted; "
             + $"at most {cap}, none when nothing is close; `concept show <name>` lists the rest):");
         foreach (var c in shown)
         {
             var from = sources.GetValueOrDefault(c.Fact.Id) ?? [];
-            var line = RenderFact(c.Fact, null, names, from);
+            var line = RenderFact(c.Fact, null, names, from, closes: closes.GetValueOrDefault(c.Fact.Id));
             sb.Append("\n  " + (line.Length > 200 ? line[..199] + "…" : line));
             if (from.Count > 0 && await EvidenceAsync(from[0], c.Fact.Text, snippet) is { } evidence)
             {

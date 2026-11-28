@@ -59,6 +59,10 @@
     <EmbeddedResource Include="Data\Migrations\018_AddIsState.sql" />
     <EmbeddedResource Include="Data\Migrations\019_AddSplitFromId.sql" />
     <EmbeddedResource Include="Data\Migrations\020_AddCloseIndexes.sql" />
+    <EmbeddedResource Include="Data\Migrations\021_AddFactEndDrafts.sql" />
+    <EmbeddedResource Include="Data\Migrations\022_AddFactEndedUtc.sql" />
+    <EmbeddedResource Include="Data\Migrations\023_AddFactEndReason.sql" />
+    <EmbeddedResource Include="Data\Migrations\024_AddFactEndedBy.sql" />
   </ItemGroup>
 
   <ItemGroup>

@@ -42,6 +42,10 @@ const string Usage = """
               [--state] [--as-of <date>] [--supersedes <fact id>] [--kind <thing|person|self|value>] [--by <extractor>] [--flag <reason>]
               | accept <fact id> [--reason] | reject <fact id> --reason | reopen <fact id> --reason | flag <fact id> --reason [--by]
               | kind <name> <thing|person|self|value> | alias <name> <alias> [--note] [--move --reason <why>]
+              | end-drafts | end-draft <id> --approve|--drop --reason <why>
+                                            a fact whose sources are all closed shows [sources closed]; when they share
+                                            one ended-by, the close drafts its end, and only the waking self approves
+                                            (it leaves current facts, kept in --history) or drops it
               | touched --text <text|-> [--json] [--concepts 5] [--facts 3] [--budget 3300] [--ambiguous <json>] | list
                                             the concept graph (docs/design/concept-graph.md): facts about concepts,
                                             each citing its fragments. A fact about a person, a self or a value (or
@@ -439,6 +443,14 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
                         await store.FlagFactAsync(flagId, line.Get("by") ?? Environment.GetEnvironmentVariable("PERSISTENCE_SPEAKER") ?? "unknown", line.Get("reason") ?? "");
                         Console.WriteLine($"#{flagId} is flagged; it waits in the owner's `concept review`.");
                         break;
+                    case "end-drafts":
+                        Console.WriteLine(await store.EndDraftsAsync());
+                        break;
+                    case "end-draft":
+                        Console.WriteLine(await store.DecideEndDraftAsync(
+                            long.TryParse(Arg(1, "<draft id>").TrimStart('#'), out var draftId) ? draftId : throw new UsageException($"'{line.Positional[1]}' is not a draft id."),
+                            line.Has("approve"), line.Has("drop"), line.Get("reason")));
+                        break;
                     case "kind":
                         var kinded = await store.ConfirmKindAsync(Arg(1, "<name>"), Arg(2, $"<{string.Join("|", FragmentStore.ConceptKinds)}>"));
                         Console.WriteLine($"{kinded.Name} is a {kinded.Kind}, confirmed.");
@@ -525,6 +537,12 @@ static async Task<int> Run(CommandLine line, FragmentStore store)
             if (closed.EndedBy is { } given && !given.StartsWith('#'))
             {
                 Console.WriteLine($"(Stored as given, not checked: the store holds no repo or room credentials. Check {given} yourself.)");
+            }
+
+            foreach (var draft in await store.EndDraftsRestingOnAsync(closed.Id))
+            {
+                Console.WriteLine($"Drafted the end of fact #{draft.FactId} (end draft #{draft.Id}): every source is now closed under {draft.EndedBy}. "
+                    + $"`concept end-draft {draft.Id} --approve --reason <why>` ends it; `--drop --reason <why>` keeps it standing.");
             }
 
             break;

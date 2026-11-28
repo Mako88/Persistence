@@ -143,3 +143,6 @@ checked: <how the ref was resolved: commit on <repo>/main | msg resolves | #id n
 
 If it can't check the ref, it writes `may have ended: <why>` and drafts no close command. The waking self runs a
 draft or drops it; there is no apply-all.
+
+A close run in the morning may draft the end of a concept fact (close PR B). The pass may list pending end drafts
+(`concept end-drafts`) in its record; approving or dropping one is refused during a pass, like `concept accept`.
