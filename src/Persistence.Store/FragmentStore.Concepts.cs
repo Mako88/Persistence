@@ -291,10 +291,14 @@ internal sealed partial class FragmentStore
         }
 
         var flags = await OpenFlagsByFactAsync();
+        var closes = await concepts.SourceClosesAsync(facts.Select(f => f.Id).ToList());
+        var drafts = await concepts.EndDraftsOfAsync(facts.Select(f => f.Id).ToList());
         foreach (var f in facts)
         {
             var open = flags.GetValueOrDefault(f.Id) ?? [];
-            sb.Append("\n  " + RenderFact(f, c.Id, names, sources.GetValueOrDefault(f.Id) ?? [], open) + FlagLines(open));
+            var closed = closes.GetValueOrDefault(f.Id);
+            sb.Append("\n  " + RenderFact(f, c.Id, names, sources.GetValueOrDefault(f.Id) ?? [], open, closed) + FlagLines(open)
+                + ClosedLines(f, closed, drafts.Where(d => d.FactId == f.Id).ToList()));
         }
 
         if (facts.Count == 0)
@@ -384,7 +388,7 @@ internal sealed partial class FragmentStore
     /// when it was known, so a stale belief looks stale (Arden); an event shows when it happened when the text says.
     /// </summary>
     public static string RenderFact(FactRow f, long? about, IReadOnlyDictionary<long, string> names, IReadOnlyList<long> sources,
-        IReadOnlyList<FactFlagRow>? flags = null)
+        IReadOnlyList<FactFlagRow>? flags = null, IReadOnlyList<FactSourceCloseRow>? closes = null)
     {
         var who = OneLine(names.GetValueOrDefault(f.SubjectId, $"concept {f.SubjectId}"));
         var link = f.ObjectId is { } o ? $"{who} → {OneLine(names.GetValueOrDefault(o, $"concept {o}"))}: " : about == f.SubjectId ? "" : $"{who}: ";
@@ -400,8 +404,10 @@ internal sealed partial class FragmentStore
         }
 
         var status = f.SupersededById is { } by ? $"superseded by #{by}" : f.Status == "active" ? null : f.Status;
-        var tail = string.Join("; ", dates.Concat(status is null ? [] : [status]).Concat(f.Supersedes is { } s && f.Status == "proposed" ? [$"would replace #{s}"] : []));
-        return $"#{f.Id} {FlagMark(flags)}{link}{OneLine(f.Text)} [{string.Join(", ", sources.Select(s => $"#{s}"))}]" + (tail.Length > 0 ? $" ({tail})" : "");
+        var ended = f.Ended ? [$"ended {Day(f.EndedUtc)}: {OneLine(f.EndReason ?? "")} (ended by {f.EndedBy ?? "no ref"})"] : Array.Empty<string>();
+        var tail = string.Join("; ", dates.Concat(status is null ? [] : [status]).Concat(ended)
+            .Concat(f.Supersedes is { } s && f.Status == "proposed" ? [$"would replace #{s}"] : []));
+        return $"#{f.Id} {FlagMark(flags)}{ClosedMark(f, closes)}{link}{OneLine(f.Text)} [{string.Join(", ", sources.Select(s => $"#{s}"))}]" + (tail.Length > 0 ? $" ({tail})" : "");
     }
 
     /// <summary><c>[flagged: referent unsure] </c>, right after the id so a line cut for length keeps it: the flag's

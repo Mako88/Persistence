@@ -49,6 +49,7 @@ internal sealed partial class FragmentStore
         ["concept accept"] = "Accepting a fact is the waking self's: it stays a proposal for the morning's `concept review`.",
         ["concept reject"] = "Rejecting a fact is the waking self's; flag it (`concept flag`) for the morning's review.",
         ["concept reopen"] = "Taking back a rejection is the waking self's; flag the fact for the morning's review.",
+        ["concept end-draft"] = EndDraftAsleep,
         ["concept kind"] = "What a concept is (a person, a self, a value) is decided awake; it counts as a person until then.",
     };
 

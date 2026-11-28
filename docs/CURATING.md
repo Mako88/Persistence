@@ -80,6 +80,11 @@ is listed by id and is a `show` or a recall away. Read it with `persistence-stor
   carried as its own fragment and close that. A forgotten fragment has to be unforgotten first. The reason is the claim that this event ended this state, so
   make it one you'd defend. `reopen <id> --reason` undoes it. When you write a wait, write it on its own with
   `add --state`; then it can be closed with only a reason.
+- `concept end-drafts`, `concept end-draft <id> --approve|--drop --reason <why>`: when you close the last source of a
+  concept fact and every source shares one ended-by, the close drafts the fact's end and says so. Approve it when the
+  event really ended what the fact says (your reason becomes the fact's); drop it when the fact still holds in a way
+  its sources didn't say. A fact whose sources closed under different refs, or without one, shows `[sources closed]`
+  with no draft: decide it by hand.
 - `archive`: out of the core and recent lists, still searchable. For what no longer earns a place.
 - `forget`: hidden everywhere, reversible with `unforget`. Rarely right; never to make room.
 - **Unused is not unimportant.** A fragment never recalled may be in the core already, or recall may be

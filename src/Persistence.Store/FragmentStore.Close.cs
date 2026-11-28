@@ -128,7 +128,13 @@ internal sealed partial class FragmentStore
         fragment.EndedBy = endedBy;
         fragment.ReopenReason = null;
         Touch(fragment);
-        await fragments.SaveAsync(fragment);
+        // The close and any fact-end draft it makes go in together (close-build-plan.md B2): a fact never shows
+        // all sources closed under one ref without its draft, and a draft never outlives a close that failed.
+        await fragments.RunInTransactionAsync(async transaction =>
+        {
+            await fragments.SaveAsync(fragment, transaction);
+            return await concepts.DraftEndsAsync(fragment.Id, transaction);
+        });
         return fragment;
     }
 
@@ -156,7 +162,12 @@ internal sealed partial class FragmentStore
         fragment.EndedBy = null;
         fragment.ReopenReason = reason.Trim();
         Touch(fragment);
-        await fragments.SaveAsync(fragment);
+        // A draft resting on this close no longer has its basis: drop exactly those, in the same transaction (B2).
+        await fragments.RunInTransactionAsync(async transaction =>
+        {
+            await fragments.SaveAsync(fragment, transaction);
+            return await concepts.DropEndDraftsRestingOnAsync(id, $"source #{id} reopened: {fragment.ReopenReason}", transaction);
+        });
         return fragment;
     }
 

@@ -262,8 +262,10 @@ internal sealed partial class FragmentStore
         }
 
         var written = facts.ToDictionary(f => f.Id, f => DateTimeOffset.Parse(f.CreatedUtc, System.Globalization.CultureInfo.InvariantCulture));
+        // An ended fact stood before it ended, and only then (close-build-plan.md B3).
         return facts.Where(f => written[f.Id] < at && (f.Status is "active" or "proposed")
-                && (f.SupersededById is not { } by || (written.TryGetValue(by, out var w) && w >= at)))
+                && (f.SupersededById is not { } by || (written.TryGetValue(by, out var w) && w >= at))
+                && (f.EndedUtc is not { } end || DateTimeOffset.Parse(end, System.Globalization.CultureInfo.InvariantCulture) >= at))
             .ToList();
     }
 
@@ -382,11 +384,13 @@ internal sealed partial class FragmentStore
                 : $"; '{OneLine(t.Via)}' may mean this or {string.Join(" or ", t.Others.Select(OneLine))}";
         var sb = new StringBuilder($"\n\n{OneLine(c.Name)} ({kind}{(t.Aliases.Count > 0 ? "; aka " + string.Join(", ", t.Aliases.Select(OneLine)) : "")}{ambiguity}): ");
         sb.Append(t.Facts.Count == 0 ? "no facts yet" : $"{accepted} accepted, {proposed} proposed, from {fragments} fragment{(fragments == 1 ? "" : "s")}");
+        // 'sources closed' is derived when read (close-build-plan.md B1), so a reopen clears it with no write.
+        var closes = await concepts.SourceClosesAsync(t.Facts.Take(facts).Select(f => f.Id).ToList());
         foreach (var f in t.Facts.Take(facts))
         {
             var sources = t.Sources.GetValueOrDefault(f.Id) ?? [];
             var open = flags.GetValueOrDefault(f.Id) ?? [];
-            var line = RenderFact(f, c.Id, names, sources, open);
+            var line = RenderFact(f, c.Id, names, sources, open, closes.GetValueOrDefault(f.Id));
             sb.Append("\n  " + (line.Length > 200 ? line[..199] + "…" : line) + FlagLines(open));
             // The words in the fragment that back this fact, not its opening line: a fragment's first line is usually
             // its date and who asked (seen on the first live run, 2026-11-16).

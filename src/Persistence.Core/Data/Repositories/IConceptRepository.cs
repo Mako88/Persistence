@@ -14,11 +14,25 @@ public record ConceptRow(long Id, string Name, string Kind, long KindConfirmed, 
 /// <summary>A fact about a concept (and, with an object, a link to another): a view of the fragments it cites.</summary>
 public record FactRow(
     long Id, long SubjectId, long? ObjectId, string Text, string Status, long IsState,
-    string? AsOfUtc, string? RecordedAtUtc, long? SupersededById, long? Supersedes, string ExtractedBy, string? Resolution, string CreatedUtc)
+    string? AsOfUtc, string? RecordedAtUtc, long? SupersededById, long? Supersedes, string ExtractedBy, string? Resolution, string CreatedUtc,
+    string? EndedUtc = null, string? EndReason = null, string? EndedBy = null)
 {
     /// <summary>A state ("running", "held") rather than an event: only as true as when it was known.</summary>
     public bool State => IsState != 0;
+
+    /// <summary>Ended by approving an end draft (close-build-plan.md B3): it was true and stopped being true.</summary>
+    public bool Ended => EndedUtc is not null;
 }
+
+/// <summary>One source fragment of a fact, with its close (all null while the fragment is open).</summary>
+public record FactSourceCloseRow(long FactId, long FragmentId, string? ClosedUtc, string? EndedBy, string? Reason)
+{
+    public bool Closed => ClosedUtc is not null;
+}
+
+/// <summary>A drafted end of a fact whose sources are all closed under one ended-by (close-build-plan.md B2).</summary>
+public record FactEndDraftRow(long Id, long FactId, string EndedBy, string Reasons, string CreatedUtc, string Status,
+    string? ResolvedUtc, string? Resolution);
 
 /// <summary>A flag on a fact: someone (anyone) says it may be wrong; the self resolves it.</summary>
 public record FactFlagRow(long Id, long FactId, string FlaggedBy, string Reason, string CreatedUtc);
@@ -80,4 +94,35 @@ public interface IConceptRepository
 
     /// <summary>The fragment types of <paramref name="fragmentIds"/>, and which of them do not exist.</summary>
     Task<IReadOnlyDictionary<long, int>> FragmentTypesAsync(IReadOnlyCollection<long> fragmentIds);
+
+    /// <summary>Every source of each fact, with its close, ordered by fragment id.</summary>
+    Task<IReadOnlyDictionary<long, IReadOnlyList<FactSourceCloseRow>>> SourceClosesAsync(IReadOnlyCollection<long> factIds);
+
+    /// <summary>
+    /// Inside the close's own <paramref name="transaction"/>, after <paramref name="fragmentId"/> was closed: drafts an
+    /// end for each standing fact citing it whose sources are now all closed under one shared ended-by, and that has no
+    /// pending draft. Returns the new draft ids.
+    /// </summary>
+    Task<IReadOnlyList<long>> DraftEndsAsync(long fragmentId, System.Data.IDbTransaction transaction);
+
+    /// <summary>Inside the reopen's <paramref name="transaction"/>: drops exactly the pending drafts whose basis holds
+    /// <paramref name="fragmentId"/>, with <paramref name="resolution"/>.</summary>
+    Task<int> DropEndDraftsRestingOnAsync(long fragmentId, string resolution, System.Data.IDbTransaction transaction);
+
+    Task<FactEndDraftRow?> GetEndDraftAsync(long id);
+
+    /// <summary>The drafts of <paramref name="factIds"/> (every status), newest first per fact.</summary>
+    Task<IReadOnlyList<FactEndDraftRow>> EndDraftsOfAsync(IReadOnlyCollection<long> factIds);
+
+    Task<IReadOnlyList<FactEndDraftRow>> PendingEndDraftsAsync();
+
+    /// <summary>
+    /// Approves draft <paramref name="id"/> in one transaction that first revalidates it (B2's four checks). On success
+    /// the fact gets EndedUtc, EndReason (= <paramref name="reason"/>) and EndedBy, and null is returned. If a check
+    /// fails, nothing on the fact changes, the draft is dropped as stale, and the failed check is returned.
+    /// </summary>
+    Task<string?> ApproveEndDraftAsync(long id, string reason);
+
+    /// <summary>Drops a pending draft with the self's reason. False if it wasn't pending.</summary>
+    Task<bool> DropEndDraftAsync(long id, string resolution);
 }
